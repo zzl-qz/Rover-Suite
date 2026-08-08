@@ -1,0 +1,74 @@
+# ===== Maven 构建产物 =====
+target/
+*/target/
+dependency-reduced-pom.xml
+**/dependency-reduced-pom.xml
+*.jar.original
+*.war.original
+
+# ===== 日志文件 =====
+*.log
+logs/
+**/logs/
+*.log.*
+*.out.log
+nohup.out
+
+# ===== 敏感信息 / 凭据 =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+secrets/
+credentials
+.credentials
+application-local.yml
+application-local.yaml
+application-private.yml
+application-private.yaml
+application-dev.yml
+application-secret.yml
+*.password
+*.secret
+id_rsa
+id_rsa.pub
+*.p8
+*.crt
+
+# ===== IDE 配置 =====
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
+# ===== 操作系统 / 编辑器 =====
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.~lock.*
+.history
+
+# ===== 临时文件 =====
+*.tmp
+*.temp
+*.bak
+*.orig
+.attach_*
+.vscode-server/
+
+# ===== Java 生成产物 =====
+hs_err_pid*
+replay_pid*
+*.hprof
