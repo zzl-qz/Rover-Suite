@@ -85,8 +85,8 @@ graph TD
 ### 1. Build
 
 ```bash
-git clone <your-repo-url>
-cd surge-gateway
+git clone <your-repo-url> rover-suite
+cd rover-suite
 mvn clean package
 ```
 
