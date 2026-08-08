@@ -1,8 +1,3 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 14:22:00
- * 描述：提供轮询负载均衡策略的骨架实现
- */
 package com.rover.gateway.core.loadbalance;
 
 import com.rover.common.model.ServiceInstance;
@@ -11,12 +6,17 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 14:22:00
+ * Description: 按服务名维护计数器，实现轮询负载均衡
+ */
 public class RoundRobinLoadBalancer implements LoadBalancer {
 
     private final Map<String, AtomicInteger> counters = new ConcurrentHashMap<>();
 
     /**
-     * 按轮询策略选择健康服务实例，当前用于静态配置路由的最小可用版本。
+     * 按轮询策略从实例列表中选择一个目标实例。
      */
     @Override
     public ServiceInstance choose(String serviceName, List<ServiceInstance> instances) {

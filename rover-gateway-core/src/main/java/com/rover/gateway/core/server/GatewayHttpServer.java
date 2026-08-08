@@ -1,10 +1,8 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 14:22:00
- * 描述：负责启动和关闭 Gateway 对外 HTTP 服务
- */
 package com.rover.gateway.core.server;
 
+import com.rover.common.spi.Filter;
+import com.rover.gateway.core.filter.FilterSettings;
+import com.rover.gateway.core.filter.GatewayFilterAssembler;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
@@ -23,21 +21,29 @@ import java.util.List;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
-
 /**
- * 接收外部Http请求
+ * Author: Daylight
+ * Created: 2026-08-08 14:22:00
+ * Description: 启动 Gateway HTTP 服务，组装过滤器链并监听外部请求
  */
 @Slf4j
 public class GatewayHttpServer {
 
+    /** 业务线程数：至少 4，默认跟 CPU 核数对齐。 */
     private static final int BIZ_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
 
     @Getter
     private final int port;
+    /** 启动时加载好的静态路由。 */
     private final List<RouteConfig> routes;
+    /** 允许的最大请求体字节数，超过会返回 413。 */
     private final int maxContentLengthBytes;
     private final int connectTimeoutMillis;
     private final int requestTimeoutMillis;
+    /** 过滤器加载配置，例如 plugins 目录。 */
+    private final FilterSettings filterSettings;
+    /** 启动时组装好的过滤器链，后续每个请求复用这份列表。 */
+    private final List<Filter> filters;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -45,11 +51,11 @@ public class GatewayHttpServer {
     private Channel serverChannel;
 
     public GatewayHttpServer(int port) {
-        this(port, List.of(), 1024 * 1024, 3000, 30000);
+        this(port, List.of(), 1024 * 1024, 3000, 30000, new FilterSettings());
     }
 
     public GatewayHttpServer(int port, List<RouteConfig> routes) {
-        this(port, routes, 1024 * 1024, 3000, 30000);
+        this(port, routes, 1024 * 1024, 3000, 30000, new FilterSettings());
     }
 
     public GatewayHttpServer(
@@ -57,18 +63,26 @@ public class GatewayHttpServer {
             List<RouteConfig> routes,
             int maxContentLengthBytes,
             int connectTimeoutMillis,
-            int requestTimeoutMillis) {
+            int requestTimeoutMillis,
+            FilterSettings filterSettings) {
         this.port = port;
         this.routes = routes;
         this.maxContentLengthBytes = maxContentLengthBytes;
         this.connectTimeoutMillis = connectTimeoutMillis;
         this.requestTimeoutMillis = requestTimeoutMillis;
+        this.filterSettings = filterSettings == null ? new FilterSettings() : filterSettings;
+        // 启动阶段就把内置过滤器 + plugins 外挂过滤器组装好。
+        this.filters = new GatewayFilterAssembler().assemble(
+                this.filterSettings,
+                new RouteMatcher(routes),
+                new HttpProxyClient(connectTimeoutMillis, requestTimeoutMillis));
     }
 
     /**
      * 启动 Gateway HTTP 服务，负责监听外部 HTTP 请求。
      */
     public void start() {
+        // boss 只负责接收连接，worker 负责网络读写。
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup();
         // 业务线程池承载路由、过滤器和代理转发编排，避免阻塞 Netty IO 线程。
@@ -86,8 +100,8 @@ public class GatewayHttpServer {
                                     .addLast(new HttpServerCodec())
                                     // 聚合器负责把分段 HTTP 消息聚合成 FullHttpRequest。
                                     .addLast(new HttpObjectAggregator(maxContentLengthBytes))
-                                    // http请求处理器
-                                    .addLast(bizGroup, newGatewayHandler());
+                                    // 业务处理器跑在 bizGroup，内部会启动过滤器链。
+                                    .addLast(bizGroup, new GatewayHttpServerHandler(filters));
                         }
                     });
 
@@ -119,11 +133,5 @@ public class GatewayHttpServer {
         if (bossGroup != null) {
             bossGroup.shutdownGracefully();
         }
-    }
-
-    private GatewayHttpServerHandler newGatewayHandler() {
-        return new GatewayHttpServerHandler(
-                new RouteMatcher(routes),
-                new HttpProxyClient(connectTimeoutMillis, requestTimeoutMillis));
     }
 }

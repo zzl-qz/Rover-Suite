@@ -1,10 +1,10 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 10:34:00
- * 描述：维护 Rover 框架名称、版本和默认超时等基础常量
- */
 package com.rover.common.constants;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 10:34:00
+ * Description: 维护 Rover 框架名称、版本和默认超时等基础常量
+ */
 public final class RoverConstants {
 
     private RoverConstants() {

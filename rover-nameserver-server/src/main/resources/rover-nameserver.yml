@@ -5,3 +5,11 @@ rover:
     healthCheckIntervalMillis: 5000
     instanceExpireMillis: 30000
     pushEnabled: true
+    # IMMEDIATE / MAJORITY / ALL
+    writeAckMode: IMMEDIATE
+    allowClientAckOverride: false
+    cluster:
+      enabled: false
+      nodeId: ""
+      nodes: []
+      replicationFactor: 1

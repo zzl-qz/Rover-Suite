@@ -6,6 +6,10 @@ rover:
     proxy:
       connectTimeoutMillis: 3000
       requestTimeoutMillis: 30000
+    filters:
+      enabled: true
+      pluginDir: plugins
+      classes: []
     rewrite:
       stripPrefix: /api
     routes:

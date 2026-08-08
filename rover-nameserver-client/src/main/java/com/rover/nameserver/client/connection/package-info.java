@@ -1,6 +1,6 @@
 /**
- * 作者：Daylight
- * 创建时间：2026-08-08 10:34:00
- * 描述：定义 nameserver 客户端连接管理包
+ * Author: Daylight
+ * Created: 2026-08-08 10:34:00
+ * Description: 定义 nameserver 客户端连接管理包
  */
 package com.rover.nameserver.client.connection;

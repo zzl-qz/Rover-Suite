@@ -1,8 +1,3 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 11:37:00
- * 描述：聚合核心组件暴露给管理端的配置项
- */
 package com.rover.admin.service;
 
 import com.rover.common.config.ConfigApplyMode;
@@ -15,6 +10,11 @@ import java.util.ArrayList;
 import java.util.List;
 import org.springframework.stereotype.Service;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 11:37:00
+ * Description: 聚合核心组件暴露给管理端的配置项
+ */
 @Service
 public class AdminConfigService {
 

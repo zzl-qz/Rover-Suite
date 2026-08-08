@@ -1,15 +1,12 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 14:22:00
- * 描述：定义 Gateway 选择后端服务实例的负载均衡契约
- */
 package com.rover.gateway.core.loadbalance;
 
 import com.rover.common.model.ServiceInstance;
 import java.util.List;
 
 /**
- * 负载均衡核心逻辑
+ * Author: Daylight
+ * Created: 2026-08-08 14:22:00
+ * Description: 定义 Gateway 选择后端服务实例的负载均衡契约
  */
 public interface LoadBalancer {
 

@@ -1,8 +1,3 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 14:22:00
- * 描述：负责将 Gateway 接收到的 HTTP 请求代理到目标 URL
- */
 package com.rover.gateway.core.proxy;
 
 import io.netty.buffer.Unpooled;
@@ -28,13 +23,20 @@ import java.util.Map;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 14:22:00
+ * Description: 使用 HTTP/1.1 将请求真实转发到目标 URL，并回写后端响应
+ */
 @Slf4j
 public class HttpProxyClient {
 
     private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
     private static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 30000;
 
+    /** 复用同一个 HttpClient，避免每次请求都新建连接池。 */
     private final HttpClient httpClient;
+    /** 单次请求超时时间。 */
     private final Duration requestTimeout;
 
     public HttpProxyClient() {
@@ -43,6 +45,7 @@ public class HttpProxyClient {
 
     public HttpProxyClient(int connectTimeoutMillis, int requestTimeoutMillis) {
         this.requestTimeout = Duration.ofMillis(requestTimeoutMillis);
+        // 强制 HTTP/1.1，避免部分后端对协议升级兼容不好。
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(connectTimeoutMillis))
                 .version(HttpClient.Version.HTTP_1_1)
@@ -51,10 +54,12 @@ public class HttpProxyClient {
 
     /**
      * 转发请求到目标 URL，并将后端响应写回当前客户端连接。
+     * 返回值是最终给客户端的 HTTP 状态码，方便链路日志统计。
      */
     public int forward(ChannelHandlerContext ctx, FullHttpRequest request, String targetUrl) {
         try {
             HttpRequest proxyRequest = buildProxyRequest(ctx, request, targetUrl);
+            // 同步发送；当前跑在业务线程池，不会直接堵死 Netty IO 线程。
             HttpResponse<byte[]> proxyResponse = httpClient.send(
                     proxyRequest,
                     HttpResponse.BodyHandlers.ofByteArray());
@@ -84,6 +89,7 @@ public class HttpProxyClient {
         }
     }
 
+    /** 把客户端原始请求改造成发给后端的代理请求。 */
     private HttpRequest buildProxyRequest(
             ChannelHandlerContext ctx,
             FullHttpRequest request,
@@ -93,9 +99,11 @@ public class HttpProxyClient {
                 .timeout(requestTimeout)
                 .version(HttpClient.Version.HTTP_1_1);
 
+        // 先复制业务 Header，再补网关自己的转发头。
         copyRequestHeaders(request, builder);
         addForwardedHeaders(ctx, request, builder);
 
+        // 原样带上请求体，支持 POST/PUT 等带 body 的方法。
         byte[] body = new byte[request.content().readableBytes()];
         request.content().getBytes(request.content().readerIndex(), body);
         HttpRequest.BodyPublisher bodyPublisher = body.length == 0
@@ -105,6 +113,11 @@ public class HttpProxyClient {
         return builder.method(request.method().name(), bodyPublisher).build();
     }
 
+    /**
+     * 复制客户端业务 Header。
+     * Authorization、Cookie、Content-Type 等会保留；
+     * Host、Content-Length、X-Forwarded-* 等由网关自己处理，不原样透传。
+     */
     private void copyRequestHeaders(FullHttpRequest request, HttpRequest.Builder builder) {
         for (Map.Entry<String, String> header : request.headers()) {
             if (isHopByHopHeader(header.getKey()) || isManagedForwardHeader(header.getKey())) {
@@ -114,6 +127,7 @@ public class HttpProxyClient {
         }
     }
 
+    /** 补充网关标准转发头，方便后端识别原始来源。 */
     private void addForwardedHeaders(
             ChannelHandlerContext ctx,
             FullHttpRequest request,
@@ -133,10 +147,12 @@ public class HttpProxyClient {
 
         String clientIp = clientIp(ctx);
         if (clientIp != null && !clientIp.isBlank()) {
+            // 如果上游已经带了 X-Forwarded-For，就追加当前客户端 IP。
             builder.setHeader("X-Forwarded-For", forwardedFor(request, clientIp));
         }
     }
 
+    /** 把后端响应原样回写给调用方。 */
     private void writeProxyResponse(ChannelHandlerContext ctx, HttpResponse<byte[]> proxyResponse) {
         byte[] body = proxyResponse.body();
         FullHttpResponse response = new DefaultFullHttpResponse(
@@ -153,6 +169,7 @@ public class HttpProxyClient {
         ctx.writeAndFlush(response);
     }
 
+    /** 代理失败时返回统一 JSON 错误，方便排查目标地址。 */
     private void writeProxyError(
             ChannelHandlerContext ctx,
             HttpResponseStatus status,
@@ -185,6 +202,9 @@ public class HttpProxyClient {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
+    /**
+     * 这些是协议层 Header，代理时不该原样转发，否则容易出兼容问题。
+     */
     private boolean isHopByHopHeader(String name) {
         String normalizedName = name.toLowerCase(Locale.ROOT);
         return "connection".equals(normalizedName)
@@ -201,6 +221,7 @@ public class HttpProxyClient {
                 || "upgrade".equals(normalizedName);
     }
 
+    /** 这些转发头由 Gateway 统一生成，避免和客户端原始值冲突。 */
     private boolean isManagedForwardHeader(String name) {
         String normalizedName = name.toLowerCase(Locale.ROOT);
         return "x-request-id".equals(normalizedName)
@@ -209,6 +230,7 @@ public class HttpProxyClient {
                 || "x-forwarded-proto".equals(normalizedName);
     }
 
+    /** 组装 X-Forwarded-For：保留上游链路，再追加当前直连客户端 IP。 */
     private String forwardedFor(FullHttpRequest request, String clientIp) {
         String forwardedFor = request.headers().get("X-Forwarded-For");
         if (forwardedFor == null || forwardedFor.isBlank()) {

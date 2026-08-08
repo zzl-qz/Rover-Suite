@@ -1,0 +1,81 @@
+package com.rover.gateway.core.filter;
+
+import com.rover.common.spi.Filter;
+import com.rover.gateway.core.proxy.HttpProxyClient;
+import com.rover.gateway.core.route.RouteMatcher;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 16:53:00
+ * Description: 组装内置过滤器、配置过滤器和 plugins 外挂过滤器
+ */
+@Slf4j
+public class GatewayFilterAssembler {
+
+    private final PluginFilterLoader pluginFilterLoader = new PluginFilterLoader();
+
+    /**
+     * 拼最终过滤器列表：
+     * 访问日志 -> 用户插件/配置指定的 Filter -> 路由转发
+     */
+    public List<Filter> assemble(
+            FilterSettings settings,
+            RouteMatcher routeMatcher,
+            HttpProxyClient proxyClient) {
+        // key 用类名，避免同名过滤器被重复加入。
+        Map<String, Filter> filters = new LinkedHashMap<>();
+
+        // 内置访问日志始终开启，保证主链路可观测。
+        AccessLogFilter accessLogFilter = new AccessLogFilter();
+        filters.put(accessLogFilter.getClass().getName(), accessLogFilter);
+
+        if (settings == null || settings.isEnabled()) {
+            // 1) 从 plugins 目录自动发现 SPI 过滤器。
+            String pluginDir = settings == null ? "plugins" : settings.getPluginDir();
+            for (Filter pluginFilter : pluginFilterLoader.loadFromDirectory(pluginDir)) {
+                filters.putIfAbsent(pluginFilter.getClass().getName(), pluginFilter);
+            }
+
+            // 2) 再加载配置文件里显式指定的过滤器类名。
+            List<String> classes = settings == null ? List.of() : settings.getClasses();
+            if (classes != null) {
+                for (String className : classes) {
+                    if (className == null || className.isBlank()) {
+                        continue;
+                    }
+                    Filter configuredFilter = pluginFilterLoader.createFilter(className.trim());
+                    filters.put(configuredFilter.getClass().getName(), configuredFilter);
+                    log.info(
+                            "Loaded configured filter: name={}, order={}, class={}",
+                            configuredFilter.getName(),
+                            configuredFilter.getOrder(),
+                            configuredFilter.getClass().getName());
+                }
+            }
+        } else {
+            log.info("External filters disabled by config, only builtin filters will run");
+        }
+
+        // 先按 order 排序，数值越小越先执行。
+        List<Filter> orderedFilters = new ArrayList<>(filters.values());
+        orderedFilters.sort(Comparator.comparingInt(Filter::getOrder));
+
+        // 终端过滤器固定放最后，负责路由匹配和真实转发。
+        orderedFilters.add(new RouteAndProxyFilter(routeMatcher, proxyClient));
+
+        log.info("Gateway filter chain ready, size={}", orderedFilters.size());
+        for (Filter filter : orderedFilters) {
+            log.info("Filter chain item: order={}, name={}, class={}",
+                    filter.getOrder(),
+                    filter.getName(),
+                    filter.getClass().getName());
+        }
+        return List.copyOf(orderedFilters);
+    }
+}

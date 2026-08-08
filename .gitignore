@@ -78,3 +78,7 @@ Thumbs.db
 hs_err_pid*
 replay_pid*
 *.hprof
+
+# ===== Gateway 用户扩展插件 =====
+plugins/*.jar
+!plugins/.gitkeep

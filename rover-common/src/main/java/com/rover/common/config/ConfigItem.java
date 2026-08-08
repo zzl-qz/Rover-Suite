@@ -1,14 +1,14 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 11:37:00
- * 描述：描述可在管理端展示和修改的配置项
- */
 package com.rover.common.config;
 
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 11:37:00
+ * Description: 描述可在管理端展示和修改的配置项
+ */
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

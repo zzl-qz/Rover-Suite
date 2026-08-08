@@ -1,8 +1,3 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 15:13:00
- * 描述：加载 Gateway YAML 配置文件
- */
 package com.rover.gateway.bootstrap.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -13,6 +8,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 15:13:00
+ * Description: 加载 Gateway YAML 配置文件
+ */
 @Slf4j
 public class GatewayConfigLoader {
 

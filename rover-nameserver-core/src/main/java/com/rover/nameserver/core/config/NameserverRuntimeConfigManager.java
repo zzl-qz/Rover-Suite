@@ -1,8 +1,3 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 14:59:00
- * 描述：维护 Nameserver 可热更新运行时配置
- */
 package com.rover.nameserver.core.config;
 
 import com.rover.common.config.ConfigApplyMode;
@@ -14,7 +9,13 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 14:59:00
+ * Description: 维护 Nameserver 可热更新运行时配置
+ */
 public class NameserverRuntimeConfigManager implements RuntimeConfigManager {
 
     private final Map<String, ConfigItem> configs = new ConcurrentHashMap<>();

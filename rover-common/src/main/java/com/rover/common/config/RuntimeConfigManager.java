@@ -1,12 +1,12 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 14:59:00
- * 描述：定义组件运行时配置查询和修改契约
- */
 package com.rover.common.config;
 
 import java.util.List;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 14:59:00
+ * Description: 定义组件运行时配置查询和修改契约
+ */
 public interface RuntimeConfigManager {
 
     /**

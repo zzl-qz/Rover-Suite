@@ -1,6 +1,6 @@
 /**
- * 作者：Daylight
- * 创建时间：2026-08-08 10:34:00
- * 描述：定义网关核心过滤器相关能力包
+ * Author: Daylight
+ * Created: 2026-08-08 16:53:00
+ * Description: 定义 Gateway 过滤器链、内置过滤器，以及 plugins 外挂加载能力
  */
 package com.rover.gateway.core.filter;

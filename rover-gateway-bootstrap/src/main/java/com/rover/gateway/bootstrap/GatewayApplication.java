@@ -1,8 +1,3 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 10:34:00
- * 描述：启动 Rover 网关应用
- */
 package com.rover.gateway.bootstrap;
 
 import com.rover.gateway.bootstrap.config.GatewayConfig;
@@ -10,6 +5,11 @@ import com.rover.gateway.bootstrap.config.GatewayConfigLoader;
 import com.rover.gateway.core.server.GatewayHttpServer;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 10:34:00
+ * Description: 加载 Gateway 配置、组装过滤器链并启动 HTTP 服务
+ */
 @Slf4j
 public class GatewayApplication {
 
@@ -22,7 +22,8 @@ public class GatewayApplication {
                 config.toRouteConfigs(),
                 config.getMaxContentLengthBytesOrDefault(),
                 config.getConnectTimeoutMillisOrDefault(),
-                config.getRequestTimeoutMillisOrDefault());
+                config.getRequestTimeoutMillisOrDefault(),
+                config.toFilterSettings());
         server.start();
     }
 }

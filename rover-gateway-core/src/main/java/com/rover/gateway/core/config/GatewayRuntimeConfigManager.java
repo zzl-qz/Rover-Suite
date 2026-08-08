@@ -1,8 +1,3 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 14:59:00
- * 描述：维护 Gateway 可热更新运行时配置
- */
 package com.rover.gateway.core.config;
 
 import com.rover.common.config.ConfigApplyMode;
@@ -15,6 +10,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 14:59:00
+ * Description: 维护 Gateway 可热更新运行时配置
+ */
 public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
 
     private final Map<String, ConfigItem> configs = new ConcurrentHashMap<>();

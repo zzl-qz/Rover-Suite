@@ -1,14 +1,14 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 14:22:00
- * 描述：根据外部请求路径匹配 Gateway 路由规则
- */
 package com.rover.gateway.core.route;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 14:22:00
+ * Description: 按业务前缀匹配 Gateway 路由，长前缀优先
+ */
 public class RouteMatcher {
 
     private final List<RouteConfig> routes;

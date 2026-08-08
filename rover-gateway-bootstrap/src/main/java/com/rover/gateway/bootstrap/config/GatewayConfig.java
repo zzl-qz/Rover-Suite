@@ -1,10 +1,6 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 15:13:00
- * 描述：描述 Gateway 启动配置
- */
 package com.rover.gateway.bootstrap.config;
 
+import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.route.RouteConfig;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -14,6 +10,11 @@ import java.util.List;
 import java.util.Set;
 import lombok.Data;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 15:13:00
+ * Description: 描述 Gateway 启动配置，包含端口、代理、过滤器和静态路由
+ */
 @Data
 public class GatewayConfig {
 
@@ -41,6 +42,23 @@ public class GatewayConfig {
     }
 
     /**
+     * 转换为运行时过滤器加载配置。
+     */
+    public FilterSettings toFilterSettings() {
+        FilterProperties filterProperties = gatewayProperties().getFilters();
+        FilterSettings settings = new FilterSettings();
+        if (filterProperties == null) {
+            return settings;
+        }
+        settings.setEnabled(filterProperties.isEnabled());
+        settings.setPluginDir(filterProperties.getPluginDir());
+        settings.setClasses(filterProperties.getClasses() == null
+                ? List.of()
+                : List.copyOf(filterProperties.getClasses()));
+        return settings;
+    }
+
+    /**
      * 校验用户配置，尽量在 Gateway 启动阶段暴露配置错误。
      */
     public void validate() {
@@ -49,6 +67,7 @@ public class GatewayConfig {
         validatePositive("server.maxContentLengthBytes", getMaxContentLengthBytesOrDefault());
         validatePositive("proxy.connectTimeoutMillis", getConnectTimeoutMillisOrDefault());
         validatePositive("proxy.requestTimeoutMillis", getRequestTimeoutMillisOrDefault());
+        validateFilterSettings(gateway.getFilters());
 
         List<RouteProperties> routes = gateway.getRoutes();
         if (routes == null || routes.isEmpty()) {
@@ -100,6 +119,9 @@ public class GatewayConfig {
         if (rover.getGateway().getProxy() == null) {
             rover.getGateway().setProxy(new ProxyProperties());
         }
+        if (rover.getGateway().getFilters() == null) {
+            rover.getGateway().setFilters(new FilterProperties());
+        }
         return rover.getGateway();
     }
 
@@ -122,6 +144,15 @@ public class GatewayConfig {
     private void validatePositive(String configName, int value) {
         if (value <= 0) {
             throw new IllegalStateException("Gateway 配置必须大于 0：" + configName + "=" + value);
+        }
+    }
+
+    private void validateFilterSettings(FilterProperties filters) {
+        if (filters == null) {
+            return;
+        }
+        if (filters.getPluginDir() == null || filters.getPluginDir().isBlank()) {
+            throw new IllegalStateException("Gateway 配置 filters.pluginDir 不能为空");
         }
     }
 
@@ -186,8 +217,23 @@ public class GatewayConfig {
         private int port = DEFAULT_PORT;
         private ServerProperties server = new ServerProperties();
         private ProxyProperties proxy = new ProxyProperties();
+        private FilterProperties filters = new FilterProperties();
         private RewriteProperties rewrite = new RewriteProperties();
         private List<RouteProperties> routes = new ArrayList<>();
+    }
+
+    /**
+     * 过滤器加载配置：是否启用外挂、插件目录、显式类名列表。
+     */
+    @Data
+    public static class FilterProperties {
+
+        /** 是否加载 plugins 目录和配置中的扩展过滤器。 */
+        private boolean enabled = true;
+        /** 用户扩展 jar 目录，默认 plugins。 */
+        private String pluginDir = "plugins";
+        /** 额外按全限定类名加载的过滤器，可为空。 */
+        private List<String> classes = new ArrayList<>();
     }
 
     @Data

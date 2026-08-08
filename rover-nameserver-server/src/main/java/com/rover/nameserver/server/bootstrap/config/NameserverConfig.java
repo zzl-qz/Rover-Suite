@@ -1,12 +1,15 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 15:13:00
- * 描述：描述 Nameserver 启动配置
- */
 package com.rover.nameserver.server.bootstrap.config;
 
+import com.rover.common.protocol.AckMode;
+import java.util.ArrayList;
+import java.util.List;
 import lombok.Data;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 15:13:00
+ * Description: Nameserver 配置
+ */
 @Data
 public class NameserverConfig {
 
@@ -20,6 +23,10 @@ public class NameserverConfig {
             return DEFAULT_PORT;
         }
         return port;
+    }
+
+    public AckMode resolveWriteAckMode() {
+        return AckMode.fromName(rover.getNameserver().getWriteAckMode());
     }
 
     @Data
@@ -36,5 +43,23 @@ public class NameserverConfig {
         private long healthCheckIntervalMillis = 5000L;
         private long instanceExpireMillis = 30000L;
         private boolean pushEnabled = true;
+
+        // IMMEDIATE / MAJORITY / ALL，单机先都当本地确认
+        private String writeAckMode = AckMode.IMMEDIATE.name();
+
+        // 一般别让客户端自己改 ack 强度
+        private boolean allowClientAckOverride = false;
+
+        private ClusterProperties cluster = new ClusterProperties();
+    }
+
+    @Data
+    public static class ClusterProperties {
+
+        // 先关着，后面真做集群再开
+        private boolean enabled = false;
+        private String nodeId;
+        private List<String> nodes = new ArrayList<>();
+        private int replicationFactor = 1;
     }
 }

@@ -1,8 +1,3 @@
-/**
- * 作者：Daylight
- * 创建时间：2026-08-08 11:37:00
- * 描述：提供 HTMX 配置管理页面和局部刷新接口
- */
 package com.rover.admin.web;
 
 import com.rover.admin.service.AdminConfigService;
@@ -21,6 +16,11 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.HtmlUtils;
 
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 11:37:00
+ * Description: 提供 HTMX 配置管理页面和局部刷新接口
+ */
 @Controller
 public class AdminConfigController {
 
