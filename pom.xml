@@ -21,6 +21,7 @@
         <module>rover-gateway-core</module>
         <module>rover-gateway-bootstrap</module>
         <module>rover-gateway-adapter-nacos</module>
+        <module>rover-admin</module>
         <module>rover-demo</module>
     </modules>
 
@@ -36,7 +37,6 @@
         <protostuff.version>1.8.0</protostuff.version>
         <spring-boot.version>3.2.0</spring-boot.version>
         <slf4j.version>2.0.9</slf4j.version>
-        <logback.version>1.4.14</logback.version>
         <junit.version>5.10.1</junit.version>
         <nacos.version>2.3.0</nacos.version>
     </properties>
@@ -110,12 +110,6 @@
             </dependency>
 
             <dependency>
-                <groupId>ch.qos.logback</groupId>
-                <artifactId>logback-classic</artifactId>
-                <version>${logback.version}</version>
-            </dependency>
-
-            <dependency>
                 <groupId>com.alibaba.nacos</groupId>
                 <artifactId>nacos-client</artifactId>
                 <version>${nacos.version}</version>
@@ -170,6 +164,11 @@
             </dependency>
             <dependency>
                 <groupId>com.rover</groupId>
+                <artifactId>rover-admin</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.rover</groupId>
                 <artifactId>rover-demo</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -177,6 +176,15 @@
     </dependencyManagement>
 
     <dependencies>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

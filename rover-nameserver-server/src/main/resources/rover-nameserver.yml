@@ -1,0 +1,7 @@
+rover:
+  nameserver:
+    port: 8888
+    heartbeatTimeoutMillis: 15000
+    healthCheckIntervalMillis: 5000
+    instanceExpireMillis: 30000
+    pushEnabled: true

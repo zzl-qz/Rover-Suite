@@ -1,32 +1,16 @@
+/**
+ * 作者：Daylight
+ * 创建时间：2026-08-08 10:34:00
+ * 描述：封装 Rover 网关响应的请求标识、状态和响应体
+ */
 package com.rover.common.model;
 
+import lombok.Data;
+
+@Data
 public class RoverResponse {
 
     private String requestId;
     private byte status;
     private byte[] body;
-
-    public String getRequestId() {
-        return requestId;
-    }
-
-    public void setRequestId(String requestId) {
-        this.requestId = requestId;
-    }
-
-    public byte getStatus() {
-        return status;
-    }
-
-    public void setStatus(byte status) {
-        this.status = status;
-    }
-
-    public byte[] getBody() {
-        return body;
-    }
-
-    public void setBody(byte[] body) {
-        this.body = body;
-    }
 }

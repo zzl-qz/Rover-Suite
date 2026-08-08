@@ -40,6 +40,12 @@ id_rsa.pub
 *.p8
 *.crt
 
+# ===== 本地规划 / 非开源资料 =====
+docs/
+.cursor/
+*.local.md
+*.private.md
+
 # ===== IDE 配置 =====
 .idea/
 *.iml

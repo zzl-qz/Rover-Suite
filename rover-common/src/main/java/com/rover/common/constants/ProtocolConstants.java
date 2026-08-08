@@ -1,3 +1,8 @@
+/**
+ * 作者：Daylight
+ * 创建时间：2026-08-08 10:34:00
+ * 描述：维护 Rover 通信协议的魔数、版本和消息类型常量
+ */
 package com.rover.common.constants;
 
 public final class ProtocolConstants {

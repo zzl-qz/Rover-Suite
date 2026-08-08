@@ -1,0 +1,21 @@
+rover:
+  gateway:
+    port: 80
+    server:
+      maxContentLengthBytes: 1048576
+    proxy:
+      connectTimeoutMillis: 3000
+      requestTimeoutMillis: 30000
+    rewrite:
+      stripPrefix: /api
+    routes:
+      - id: user-api
+        businessPrefix: /api/user
+        targetUrl: http://127.0.0.1:8081
+      - id: order-api
+        businessPrefix: /api/order
+        targetUrl: http://127.0.0.1:8082
+      - id: test-api
+        businessPrefix: /api/uu
+        targetUrl: http://127.0.0.1:8070/api
+        stripPrefix: /api/uu
