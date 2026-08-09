@@ -10,6 +10,61 @@
 
 Rover-Suite 是一套完全自研的轻量级微服务基础中间件套件，包含基于 Netty 实现的 TCP 注册中心（Nameserver）与轻量级网关（Gateway）。它面向"去框架套壳"的轻量场景，采用严格的 Maven 多模块分层架构，业务服务只需引入一个 Spring Boot Starter 即可完成注册与发现，网关则通过订阅注册中心动态感知实例变更。适用于对部署体积敏感、希望理解底层原理或需要私有化定制的场景。
 
+> 配套文档：[完整架构模型（含时序图/模块依赖/演进路线）](./docs/ARCHITECTURE.md)
+
+---
+
+## 🗺️ 一图看懂
+
+```mermaid
+graph TB
+    subgraph CLIENTS[1. 调用方]
+        WEB[浏览器 / H5]
+        APP[App / 小程序]
+        ORG[外部系统]
+    end
+
+    subgraph GATEWAY["2. Rover-Gateway 网关<br/>(rover-gateway-bootstrap · 端口 8080)"]
+        SRV["Netty 服务器<br/>HttpServerCodec → Aggregator → 业务线程池"]
+        FW["过滤器链<br/>AccessLog ✅ → 鉴权/限流/熔断/灰度 🔜 → 终端路由转发"]
+        PRX["HttpProxyClient 反向代理<br/>复头 + body 透传 · 30s 超时→504 · 1MB→413"]
+        SUB["注册中心订阅客户端<br/>实例列表本地缓存 + 变更推送更新"]
+    end
+
+    subgraph NS["3. Nameserver 注册中心<br/>(rover-nameserver-server · 端口 8888)"]
+        REG["注册表 / 心跳刷新<br/>健康检查(剔除/降级) / 主动推送 / 运行时配置"]
+    end
+
+    subgraph SVCS[4. 业务服务层]
+        S1["业务服务 A<br/>(rover-demo + SDK)"]
+        S2["业务服务 B<br/>(rover-demo + SDK)"]
+        S3["第三方服务<br/>(经 Nacos 适配 🧩)"]
+    end
+
+    subgraph OPS[5. 治理与工具层]
+        ADM["Rover-Admin 管理后台<br/>配置查看/下发 · 灰度开关 · 监控(🔜 增强)"]
+        TK["proxy-test 测试套件<br/>31 个企业场景回归用例"]
+    end
+
+    WEB --> GATEWAY
+    APP --> GATEWAY
+    ORG --> GATEWAY
+
+    GATEWAY -->|反向代理 HTTP| S1
+    GATEWAY -->|反向代理 HTTP| S2
+    GATEWAY -.->|ServiceDiscovery SPI| S3
+
+    S1 ---|注册 / 心跳 / 订阅| REG
+    S2 ---|注册 / 心跳 / 订阅| REG
+    REG -.->|实例变更推送| GATEWAY
+
+    ADM -.->|配置下发| GATEWAY
+    ADM -.->|配置下发| REG
+    TK -->|全链路回归| GATEWAY
+```
+
+> 图例：✅ 已实现　🔶 规划中　🧩 占位。完整架构模型（部署拓扑 / 模块依赖 / 核心时序 / SPI 扩展点 / 演进路线）请见 **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**。
+
 ---
 
 ## ✨ 核心特性
@@ -18,7 +73,7 @@ Rover-Suite 是一套完全自研的轻量级微服务基础中间件套件，�
 - ✅ **分层架构**：基础层 → 通信层 → 核心层 → 接入层 → 部署层，模块依赖严格自底向上，无循环依赖。
 - ✅ **独立进程部署**：Nameserver 与 Gateway 各自打包为可执行 Jar 独立运行，核心逻辑与启动入口完全分离。
 - ✅ **业务无侵入**：业务服务仅需引入 `rover-nameserver-starter` 并配置 YAML，零代码接入注册与发现。
-- ✅ **SPI 可扩展**：预留 `ServiceDiscovery`、`Filter` 等 SPI 扩展点，已提供 Nacos 适配模块，可按需接入其他注册中心。
+- ✅ **SPI 可扩展**：预留 `ServiceDiscovery`、`Filter` 等 SPI 扩展点（Nacos 适配模块为占位，待实现），可按需接入其他注册中心。
 
 ---
 
@@ -54,6 +109,10 @@ graph TD
     GatewayCore --> Bootstrap[rover-gateway-bootstrap]
     GatewayCore --> Adapter[rover-gateway-adapter-nacos]
 
+    Common --> Admin[rover-admin]
+    Core --> Admin
+    GatewayCore --> Admin
+
     Starter --> Demo[rover-demo]
     GatewayCore --> Demo
 ```
@@ -69,8 +128,11 @@ graph TD
 | `rover-nameserver-starter` | Spring Boot Starter：自动装配，业务服务接入 SDK（唯一依赖 Spring Boot 的模块） |
 | `rover-gateway-core` | 网关核心能力：过滤器链、路由匹配、负载均衡、反向代理、SPI |
 | `rover-gateway-bootstrap` | 网关独立启动入口（可执行 Jar，shade 打包） |
-| `rover-gateway-adapter-nacos` | Nacos 适配扩展：实现 `ServiceDiscovery` SPI，接入 Nacos 注册中心 |
-| `rover-demo` | 功能测试 Demo：业务服务示例（service / controller） |
+| `rover-gateway-adapter-nacos` | Nacos 适配扩展：实现 `ServiceDiscovery` SPI，接入 Nacos 注册中心（占位，待实现） |
+| `rover-admin` | 管理后台：Gateway / Nameserver 运行时配置的查看与提交 |
+| `rover-demo` | 功能测试 Demo：业务服务示例（占位，待实现） |
+
+> 另有独立的网关代理测试工程 `proxy-test/`（自带 pom 的 Spring Boot 项目，不属于 Maven 模块，不参与 rover 构建与发布），用于验证网关反向代理能力，详见「网关代理测试」章节。
 
 ---
 
@@ -90,13 +152,15 @@ cd rover-suite
 mvn clean package
 ```
 
-> 当前版本 `1.0.0-SNAPSHOT`，将打包产出 9 个模块的 Jar，其中 `rover-nameserver-server` 与 `rover-gateway-bootstrap` 为可直接运行的独立可执行 Jar。
+> 当前版本 `1.0.0-SNAPSHOT`，将打包产出 10 个模块的 Jar，其中 `rover-nameserver-server` 与 `rover-gateway-bootstrap` 为可直接运行的独立可执行 Jar。
 
 ### 2. 启动注册中心
 
 ```bash
 java -jar rover-nameserver-server/target/rover-nameserver-server-1.0.0-SNAPSHOT.jar
 ```
+
+> 监听端口 8888（`rover-nameserver-server` 内的 `rover-nameserver.yml` 配置）。
 
 预期输出：
 
@@ -109,6 +173,8 @@ Rover Nameserver starting...
 ```bash
 java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.jar
 ```
+
+> 默认监听 8080（`rover-gateway-bootstrap` 内的 `rover-gateway.yml` 配置 `rover.gateway.port`；若本机 80 端口空闲，可改回 80）。
 
 预期输出：
 
@@ -125,6 +191,27 @@ mvn -pl rover-demo spring-boot:run
 ```
 
 ---
+
+## 🧪 网关代理测试（proxy-test）
+
+`proxy-test/` 是一个**独立于 rover 项目的 Spring Boot 测试工程**（自带 pom，不参与 rover 构建与发布，纳入 git 管理），用于验证网关反向代理能力，覆盖 31 个企业场景用例。
+
+### 启动（IDE 直接 Run main，无需打包）
+
+1. 后端实例一（默认 8081，同时托管测试页）：`com.rover.test.MockBackendApplication`
+2. 后端实例二（对应网关 `test-api` 路由）：Run 配置追加参数 `--server.port=8070`
+3. 被测对象：`com.rover.gateway.bootstrap.GatewayApplication`（网关，8080）
+
+### 请求链路
+
+```
+浏览器(测试页 http://127.0.0.1:8081/) → 网关(8080) → MockBackend(8081 / 8070) → 网关 → 浏览器
+```
+
+### 覆盖场景
+
+- **基础透传**：GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS、JSON / 表单 / 中文 query、状态码 201/204/404/500、慢请求、1MB 大响应、无路由 404
+- **企业场景规格校验**（后端逐项断言，期望值经 `X-Verify-Spec` 头下发）：认证凭证、租户头、链路追踪、标准转发头、Host 改写、Accept 协商、gzip 请求体、256KB 大 body、复杂嵌套 JSON、multipart 上传、Cookie 回传、路由重写、query 逐值校验
 
 ## 📝 使用示例
 
@@ -173,13 +260,14 @@ rover:
 
 - [x] 工程骨架与 Maven 多模块结构
 - [x] `rover-common` 公共基础模块（工具类、常量、事件总线、SPI 骨架）
-- [ ] 注册中心核心：注册表、心跳检测、主动推送、健康检查
-- [ ] Nameserver 独立进程启动与协议编解码
-- [ ] 通用 TCP 客户端（连接管理、本地缓存）
-- [ ] Spring Boot Starter 自动装配
-- [ ] 网关核心：路由匹配、过滤器链、负载均衡、反向代理
-- [ ] Nacos 适配模块
-- [ ] Demo 端到端联调验证
+- [x] 注册中心核心：注册表、心跳检测、主动推送、健康检查
+- [x] Nameserver 独立进程启动与协议编解码（TCP + Protostuff）
+- [x] 通用 TCP 客户端（连接管理、本地缓存、订阅推送）
+- [x] 网关核心：路由匹配、过滤器链、反向代理、负载均衡
+- [x] 网关代理测试工具箱（`proxy-test`，31 个企业场景用例）
+- [ ] Spring Boot Starter 自动装配（占位，待实现）
+- [ ] Nacos 适配模块（占位，待实现）
+- [ ] Demo 端到端联调验证（占位，待实现）
 
 ---
 

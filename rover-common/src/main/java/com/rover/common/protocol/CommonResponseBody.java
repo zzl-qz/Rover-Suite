@@ -5,7 +5,7 @@ import lombok.Data;
 /**
  * Author: Daylight
  * Created: 2026-08-08 17:30:00
- * Description: 通用响应
+ * Description: nameserver 内部 RPC 协议对象
  */
 @Data
 public class CommonResponseBody {

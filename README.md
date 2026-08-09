@@ -10,6 +10,63 @@
 
 Rover-Suite is a fully self-developed lightweight microservice infrastructure suite, consisting of a Netty-based TCP registry center (Nameserver) and a lightweight gateway (Gateway). It targets lightweight scenarios without heavy framework wrapping, follows a strict layered Maven multi-module architecture, and lets business services register and discover instances by simply importing one Spring Boot Starter. The gateway dynamically learns about instance changes by subscribing to the registry. It fits scenarios that are sensitive to deployment footprint, want to understand the underlying internals, or need private/customized deployment.
 
+> Companion docs: [Full architecture model (sequence diagrams / module deps / roadmap)](./docs/ARCHITECTURE.md)
+
+---
+
+## 🗺️ The Project at a Glance
+
+> Diagram annotations are in Chinese; ✅ implemented, 🔜 planned, 🧩 placeholder.
+
+```mermaid
+graph TB
+    subgraph CLIENTS[1. 调用方]
+        WEB[浏览器 / H5]
+        APP[App / 小程序]
+        ORG[外部系统]
+    end
+
+    subgraph GATEWAY["2. Rover-Gateway 网关<br/>(rover-gateway-bootstrap · 端口 8080)"]
+        SRV["Netty 服务器<br/>HttpServerCodec → Aggregator → 业务线程池"]
+        FW["过滤器链<br/>AccessLog ✅ → 鉴权/限流/熔断/灰度 🔜 → 终端路由转发"]
+        PRX["HttpProxyClient 反向代理<br/>复头 + body 透传 · 30s 超时→504 · 1MB→413"]
+        SUB["注册中心订阅客户端<br/>实例列表本地缓存 + 变更推送更新"]
+    end
+
+    subgraph NS["3. Nameserver 注册中心<br/>(rover-nameserver-server · 端口 8888)"]
+        REG["注册表 / 心跳刷新<br/>健康检查(剔除/降级) / 主动推送 / 运行时配置"]
+    end
+
+    subgraph SVCS[4. 业务服务层]
+        S1["业务服务 A<br/>(rover-demo + SDK)"]
+        S2["业务服务 B<br/>(rover-demo + SDK)"]
+        S3["第三方服务<br/>(经 Nacos 适配 🧩)"]
+    end
+
+    subgraph OPS[5. 治理与工具层]
+        ADM["Rover-Admin 管理后台<br/>配置查看/下发 · 灰度开关 · 监控(🔜 增强)"]
+        TK["proxy-test 测试套件<br/>31 个企业场景回归用例"]
+    end
+
+    WEB --> GATEWAY
+    APP --> GATEWAY
+    ORG --> GATEWAY
+
+    GATEWAY -->|反向代理 HTTP| S1
+    GATEWAY -->|反向代理 HTTP| S2
+    GATEWAY -.->|ServiceDiscovery SPI| S3
+
+    S1 ---|注册 / 心跳 / 订阅| REG
+    S2 ---|注册 / 心跳 / 订阅| REG
+    REG -.->|实例变更推送| GATEWAY
+
+    ADM -.->|配置下发| GATEWAY
+    ADM -.->|配置下发| REG
+    TK -->|全链路回归| GATEWAY
+```
+
+> The full architecture model (deployment topology / module dependencies / core sequence diagrams / SPI extension points / roadmap) lives in **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**.
+
 ---
 
 ## ✨ Core Features
@@ -18,7 +75,7 @@ Rover-Suite is a fully self-developed lightweight microservice infrastructure su
 - ✅ **Layered Architecture**: Base → Communication → Core → Integration → Deployment; module dependencies strictly flow bottom-up with no cycles.
 - ✅ **Independent Processes**: Nameserver and Gateway are each packaged as executable Jars running standalone; core logic is fully separated from bootstrap entry points.
 - ✅ **Zero-Intrusion Integration**: Business services only need to add `rover-nameserver-starter` and configure a YAML file — registration and discovery require no business code.
-- ✅ **SPI Extensibility**: SPI extension points such as `ServiceDiscovery` and `Filter` are pre-designed; a Nacos adapter module is provided, and other registries can be plugged in as needed.
+- ✅ **SPI Extensibility**: SPI extension points such as `ServiceDiscovery` and `Filter` are pre-designed (the Nacos adapter module is a placeholder for now); other registries can be plugged in as needed.
 
 ---
 
@@ -54,6 +111,10 @@ graph TD
     GatewayCore --> Bootstrap[rover-gateway-bootstrap]
     GatewayCore --> Adapter[rover-gateway-adapter-nacos]
 
+    Common --> Admin[rover-admin]
+    Core --> Admin
+    GatewayCore --> Admin
+
     Starter --> Demo[rover-demo]
     GatewayCore --> Demo
 ```
@@ -69,8 +130,11 @@ graph TD
 | `rover-nameserver-starter` | Spring Boot Starter: autoconfiguration; the business-facing SDK (the only module depending on Spring Boot) |
 | `rover-gateway-core` | Gateway core capabilities: filter chain, route matching, load balancing, reverse proxy, SPI |
 | `rover-gateway-bootstrap` | Standalone bootstrap for the gateway (executable Jar, shaded) |
-| `rover-gateway-adapter-nacos` | Nacos adapter: implements the `ServiceDiscovery` SPI to connect Nacos |
-| `rover-demo` | Functional demo: example business service (service / controller) |
+| `rover-gateway-adapter-nacos` | Nacos adapter: implements the `ServiceDiscovery` SPI to connect Nacos (placeholder, not yet implemented) |
+| `rover-admin` | Admin dashboard: view & submit runtime config for Gateway / Nameserver |
+| `rover-demo` | Functional demo: example business service (placeholder, not yet implemented) |
+
+> There is also a standalone gateway proxy test project `proxy-test/` (a Spring Boot project with its own pom; not a Maven module, excluded from rover build & release). It verifies the gateway's reverse-proxy capability — see the "Gateway Proxy Test" section below.
 
 ---
 
@@ -90,13 +154,15 @@ cd rover-suite
 mvn clean package
 ```
 
-> Current version is `1.0.0-SNAPSHOT`. This produces Jars for all 9 modules; `rover-nameserver-server` and `rover-gateway-bootstrap` are standalone executable Jars.
+> Current version is `1.0.0-SNAPSHOT`. This produces Jars for all 10 modules; `rover-nameserver-server` and `rover-gateway-bootstrap` are standalone executable Jars.
 
 ### 2. Start Nameserver
 
 ```bash
 java -jar rover-nameserver-server/target/rover-nameserver-server-1.0.0-SNAPSHOT.jar
 ```
+
+> Listens on port 8888 (configured in `rover-nameserver.yml` inside `rover-nameserver-server`).
 
 Expected output:
 
@@ -109,6 +175,8 @@ Rover Nameserver starting...
 ```bash
 java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.jar
 ```
+
+> Listens on port 8080 by default (`rover.gateway.port` in `rover-gateway.yml` inside `rover-gateway-bootstrap`; switch back to 80 if it's free on your machine).
 
 Expected output:
 
@@ -125,6 +193,27 @@ mvn -pl rover-demo spring-boot:run
 ```
 
 ---
+
+## 🧪 Gateway Proxy Test (proxy-test)
+
+`proxy-test/` is a **standalone Spring Boot test project, independent of the rover project** (own pom, excluded from rover build & release, tracked in git). It verifies the gateway's reverse-proxy capability with 31 enterprise-scenario test cases.
+
+### Start (Run `main` directly in IDE, no packaging needed)
+
+1. Backend instance 1 (port 8081 by default, also serves the test page): `com.rover.test.MockBackendApplication`
+2. Backend instance 2 (target of the gateway's `test-api` route): add `--server.port=8070` to the Run configuration
+3. The system under test: `com.rover.gateway.bootstrap.GatewayApplication` (gateway on 8080)
+
+### Request Flow
+
+```
+Browser(test page http://127.0.0.1:8081/) → Gateway(8080) → MockBackend(8081 / 8070) → Gateway → Browser
+```
+
+### Coverage
+
+- **Basic passthrough**: GET/POST/PUT/PATCH/DELETE/HEAD/OPTIONS, JSON / form / Chinese query, status codes 201/204/404/500, slow requests, 1MB big response, no-route 404
+- **Enterprise scenario verification** (backend asserts field by field; expectations delivered via the `X-Verify-Spec` header): auth credentials, tenant headers, trace IDs, standard forwarding headers, Host rewriting, Accept negotiation, gzip request body, 256KB large body, deeply nested JSON, multipart upload, cookie round-trip, route rewriting, per-value query checks
 
 ## 📝 Usage Example
 
@@ -173,13 +262,14 @@ rover:
 
 - [x] Project skeleton and Maven multi-module structure
 - [x] `rover-common` base module (utilities, constants, event bus, SPI skeleton)
-- [ ] Registry core: registry table, heartbeat detection, active push, health checks
-- [ ] Nameserver standalone process with protocol codec
-- [ ] Generic TCP client (connection management, local cache)
-- [ ] Spring Boot Starter autoconfiguration
-- [ ] Gateway core: route matching, filter chain, load balancing, reverse proxy
-- [ ] Nacos adapter module
-- [ ] End-to-end demo verification
+- [x] Registry core: registry table, heartbeat detection, active push, health checks
+- [x] Nameserver standalone process with protocol codec (TCP + Protostuff)
+- [x] Generic TCP client (connection management, local cache, subscription push)
+- [x] Gateway core: route matching, filter chain, load balancing, reverse proxy
+- [x] Gateway proxy test kit (`proxy-test`, 31 enterprise-scenario cases)
+- [ ] Spring Boot Starter autoconfiguration (placeholder, not yet implemented)
+- [ ] Nacos adapter module (placeholder, not yet implemented)
+- [ ] End-to-end demo verification (placeholder, not yet implemented)
 
 ---
 

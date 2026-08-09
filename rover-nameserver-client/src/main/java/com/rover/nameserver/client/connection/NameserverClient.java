@@ -55,17 +55,15 @@ import lombok.extern.slf4j.Slf4j;
 public class NameserverClient implements AutoCloseable {
 
     @Getter
-    private final NameserverClientOptions options;
+    private final NameserverClientOptions options; // 客户端配置
     @Getter
-    private final InstanceCache instanceCache = new InstanceCache();
-
+    private final InstanceCache instanceCache = new InstanceCache(); // 本地实例缓存
     private final RequestIdGenerator requestIdGenerator = new RequestIdGenerator();
-    private final PendingRequestTable<CommonResponseBody> pendingRequests;
+    private final PendingRequestTable<CommonResponseBody> pendingRequests; // 挂起请求表
     private final Map<String, RegisterRequest> registeredInstances = new ConcurrentHashMap<>();
     private final Map<String, SubscribeRequest> subscriptions = new ConcurrentHashMap<>();
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
-
     private EventLoopGroup workerGroup;
     private volatile Channel channel;
     private PeriodicTask heartbeatTask;
@@ -115,6 +113,9 @@ public class NameserverClient implements AutoCloseable {
         return response;
     }
 
+    /**
+     * 心跳任务
+     */
     public CommonResponseBody heartbeat(String serviceName, String instanceId) {
         HeartbeatRequest request = new HeartbeatRequest();
         request.setServiceName(serviceName);
@@ -273,6 +274,9 @@ public class NameserverClient implements AutoCloseable {
         }
     }
 
+    /**
+     * 心跳任务注册
+     */
     private void heartbeatRegistered() {
         if (!isActive() || registeredInstances.isEmpty()) {
             return;

@@ -24,6 +24,10 @@ public final class ProtostuffSerializer {
     private ProtostuffSerializer() {
     }
 
+
+    /**
+     * 序列化
+     */
     @SuppressWarnings("unchecked")
     public static <T> byte[] serialize(T obj) {
         if (obj == null) {
@@ -42,6 +46,9 @@ public final class ProtostuffSerializer {
         }
     }
 
+    /**
+     * 反序列化
+     */
     public static <T> T deserialize(byte[] data, Class<T> clazz) {
         if (clazz == null) {
             throw new ProtocolException("反序列化目标类型不能为空");
@@ -65,6 +72,9 @@ public final class ProtostuffSerializer {
         }
     }
 
+    /**
+     * 取出缓存的 schema，不存在则创建
+     */
     @SuppressWarnings("unchecked")
     private static <T> Schema<T> schemaOf(Class<T> clazz) {
         return (Schema<T>) SCHEMA_CACHE.computeIfAbsent(clazz, RuntimeSchema::createFrom);
