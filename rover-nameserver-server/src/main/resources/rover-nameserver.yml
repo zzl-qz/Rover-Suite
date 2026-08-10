@@ -1,6 +1,8 @@
 rover:
   nameserver:
     port: 8888
+    # Admin 调这个 HTTP 管理口，不是 TCP 8888
+    managePort: 8889
     heartbeatTimeoutMillis: 15000
     healthCheckIntervalMillis: 5000
     instanceExpireMillis: 30000

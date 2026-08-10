@@ -1,18 +1,19 @@
 package com.rover.admin.service;
 
-import com.rover.common.config.ConfigChangeEvent;
-import com.rover.common.config.ConfigItem;
+import java.util.Map;
+import lombok.AllArgsConstructor;
 import lombok.Data;
 
 /**
  * Author: Daylight
  * Created: 2026-08-08 11:37:00
- * Description: 封装管理端配置更新后的结果
+ * Description: 配置更新结果
  */
 @Data
+@AllArgsConstructor
 public class ConfigUpdateResult {
 
-    private final ConfigItem item;
-    private final ConfigChangeEvent event;
-    private final String message;
+    private String component;
+    private Map<String, Object> payload;
+    private String message;
 }

@@ -1,6 +1,9 @@
 package com.rover.gateway.core.filter;
 
 import com.rover.common.spi.Filter;
+import com.rover.gateway.core.discovery.DiscoveryType;
+import com.rover.gateway.core.discovery.ServiceDiscovery;
+import com.rover.gateway.core.loadbalance.LoadBalancer;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteMatcher;
 import java.util.ArrayList;
@@ -28,6 +31,16 @@ public class GatewayFilterAssembler {
             FilterSettings settings,
             RouteMatcher routeMatcher,
             HttpProxyClient proxyClient) {
+        return assemble(settings, routeMatcher, proxyClient, DiscoveryType.STATIC, null, null);
+    }
+
+    public List<Filter> assemble(
+            FilterSettings settings,
+            RouteMatcher routeMatcher,
+            HttpProxyClient proxyClient,
+            DiscoveryType discoveryType,
+            ServiceDiscovery serviceDiscovery,
+            LoadBalancer loadBalancer) {
         // key 用类名，避免同名过滤器被重复加入。
         Map<String, Filter> filters = new LinkedHashMap<>();
 
@@ -67,7 +80,8 @@ public class GatewayFilterAssembler {
         orderedFilters.sort(Comparator.comparingInt(Filter::getOrder));
 
         // 终端过滤器固定放最后，负责路由匹配和真实转发。
-        orderedFilters.add(new RouteAndProxyFilter(routeMatcher, proxyClient));
+        orderedFilters.add(new RouteAndProxyFilter(
+                routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer));
 
         log.info("Gateway filter chain ready, size={}", orderedFilters.size());
         for (Filter filter : orderedFilters) {

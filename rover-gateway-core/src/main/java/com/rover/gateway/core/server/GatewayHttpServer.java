@@ -1,11 +1,14 @@
 package com.rover.gateway.core.server;
 
-import com.rover.common.spi.Filter;
+import com.rover.gateway.core.config.GatewayRuntimeConfigManager;
+import com.rover.gateway.core.discovery.DiscoverySettings;
+import com.rover.gateway.core.discovery.DiscoveryType;
+import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
+import com.rover.gateway.core.discovery.NoopServiceDiscovery;
+import com.rover.gateway.core.discovery.ServiceDiscovery;
 import com.rover.gateway.core.filter.FilterSettings;
-import com.rover.gateway.core.filter.GatewayFilterAssembler;
-import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
-import com.rover.gateway.core.route.RouteMatcher;
+import com.rover.gateway.core.runtime.GatewayRuntime;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
@@ -24,26 +27,19 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-08 14:22:00
- * Description: 启动 Gateway HTTP 服务，组装过滤器链并监听外部请求
+ * Description: 启动 Gateway HTTP 服务，按发现模式组装过滤器链
  */
 @Slf4j
 public class GatewayHttpServer {
 
-    /** 业务线程数：至少 4，默认跟 CPU 核数对齐。 */
     private static final int BIZ_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
 
     @Getter
     private final int port;
-    /** 启动时加载好的静态路由。 */
-    private final List<RouteConfig> routes;
-    /** 允许的最大请求体字节数，超过会返回 413。 */
     private final int maxContentLengthBytes;
-    private final int connectTimeoutMillis;
-    private final int requestTimeoutMillis;
-    /** 过滤器加载配置，例如 plugins 目录。 */
-    private final FilterSettings filterSettings;
-    /** 启动时组装好的过滤器链，后续每个请求复用这份列表。 */
-    private final List<Filter> filters;
+    private final ServiceDiscovery serviceDiscovery;
+    @Getter
+    private final GatewayRuntime runtime;
 
     private EventLoopGroup bossGroup;
     private EventLoopGroup workerGroup;
@@ -51,11 +47,11 @@ public class GatewayHttpServer {
     private Channel serverChannel;
 
     public GatewayHttpServer(int port) {
-        this(port, List.of(), 1024 * 1024, 3000, 30000, new FilterSettings());
+        this(port, List.of(), 1024 * 1024, 3000, 30000, new FilterSettings(), defaultStaticDiscovery());
     }
 
     public GatewayHttpServer(int port, List<RouteConfig> routes) {
-        this(port, routes, 1024 * 1024, 3000, 30000, new FilterSettings());
+        this(port, routes, 1024 * 1024, 3000, 30000, new FilterSettings(), defaultStaticDiscovery());
     }
 
     public GatewayHttpServer(
@@ -65,27 +61,50 @@ public class GatewayHttpServer {
             int connectTimeoutMillis,
             int requestTimeoutMillis,
             FilterSettings filterSettings) {
-        this.port = port;
-        this.routes = routes;
-        this.maxContentLengthBytes = maxContentLengthBytes;
-        this.connectTimeoutMillis = connectTimeoutMillis;
-        this.requestTimeoutMillis = requestTimeoutMillis;
-        this.filterSettings = filterSettings == null ? new FilterSettings() : filterSettings;
-        // 启动阶段就把内置过滤器 + plugins 外挂过滤器组装好。
-        this.filters = new GatewayFilterAssembler().assemble(
-                this.filterSettings,
-                new RouteMatcher(routes),
-                new HttpProxyClient(connectTimeoutMillis, requestTimeoutMillis));
+        this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
+                filterSettings, defaultStaticDiscovery());
     }
 
-    /**
-     * 启动 Gateway HTTP 服务，负责监听外部 HTTP 请求。
-     */
+    public GatewayHttpServer(
+            int port,
+            List<RouteConfig> routes,
+            int maxContentLengthBytes,
+            int connectTimeoutMillis,
+            int requestTimeoutMillis,
+            FilterSettings filterSettings,
+            DiscoverySettings discoverySettings) {
+        this.port = port;
+        this.maxContentLengthBytes = maxContentLengthBytes;
+        DiscoverySettings settings = discoverySettings == null ? defaultStaticDiscovery() : discoverySettings;
+        this.serviceDiscovery = createServiceDiscovery(settings);
+
+        GatewayRuntimeConfigManager configManager = new GatewayRuntimeConfigManager();
+        configManager.seed("gateway.filter.enabled", String.valueOf(
+                filterSettings == null || filterSettings.isEnabled()));
+        configManager.seed("gateway.request.timeoutMillis", String.valueOf(requestTimeoutMillis));
+        configManager.seed("gateway.loadbalance.strategy", "round_robin");
+        // YAML 之后叠 Admin 落盘的配置
+        configManager.loadOverlayIfPresent();
+
+        this.runtime = new GatewayRuntime(
+                port,
+                routes,
+                connectTimeoutMillis,
+                requestTimeoutMillis,
+                filterSettings,
+                settings,
+                serviceDiscovery,
+                configManager);
+        configManager.getApplier().bind(runtime);
+        // 把 overlay/当前值真正打进运行时（超时、过滤器、LB）
+        configManager.reapplyAll();
+    }
+
     public void start() {
-        // boss 只负责接收连接，worker 负责网络读写。
+        serviceDiscovery.start();
+
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup();
-        // 业务线程池承载路由、过滤器和代理转发编排，避免阻塞 Netty IO 线程。
         bizGroup = new DefaultEventExecutorGroup(BIZ_THREADS);
 
         try {
@@ -96,17 +115,15 @@ public class GatewayHttpServer {
                         @Override
                         protected void initChannel(SocketChannel ch) {
                             ch.pipeline()
-                                    // HTTP 编解码器负责把字节流转换成 HTTP 请求/响应对象。
                                     .addLast(new HttpServerCodec())
-                                    // 聚合器负责把分段 HTTP 消息聚合成 FullHttpRequest。
                                     .addLast(new HttpObjectAggregator(maxContentLengthBytes))
-                                    // 业务处理器跑在 bizGroup，内部会启动过滤器链。
-                                    .addLast(bizGroup, new GatewayHttpServerHandler(filters));
+                                    .addLast(bizGroup, new GatewayHttpServerHandler(runtime));
                         }
                     });
 
             serverChannel = bootstrap.bind(port).sync().channel();
-            log.info("Rover Gateway HTTP server listening on port {}", port);
+            log.info("Rover Gateway HTTP server listening on port {}, discovery={}, managePrefix=/_manage",
+                    port, runtime.getDiscoveryType());
         } catch (InterruptedException err) {
             Thread.currentThread().interrupt();
             shutdown();
@@ -117,9 +134,6 @@ public class GatewayHttpServer {
         }
     }
 
-    /**
-     * 关闭 Gateway HTTP 服务，释放 Netty 线程组和监听端口。
-     */
     public void shutdown() {
         if (serverChannel != null) {
             serverChannel.close();
@@ -133,5 +147,23 @@ public class GatewayHttpServer {
         if (bossGroup != null) {
             bossGroup.shutdownGracefully();
         }
+        try {
+            serviceDiscovery.close();
+        } catch (Exception ex) {
+            log.warn("关闭服务发现失败", ex);
+        }
+    }
+
+    private static ServiceDiscovery createServiceDiscovery(DiscoverySettings settings) {
+        if (settings.getType() == DiscoveryType.NAMESERVER) {
+            return new NameserverServiceDiscovery(settings);
+        }
+        return new NoopServiceDiscovery();
+    }
+
+    private static DiscoverySettings defaultStaticDiscovery() {
+        DiscoverySettings settings = new DiscoverySettings();
+        settings.setType(DiscoveryType.STATIC);
+        return settings;
     }
 }

@@ -36,20 +36,31 @@ public class HttpProxyClient {
 
     /** 复用同一个 HttpClient，避免每次请求都新建连接池。 */
     private final HttpClient httpClient;
-    /** 单次请求超时时间。 */
-    private final Duration requestTimeout;
+    /** 单次请求超时，可热更新。 */
+    private final java.util.concurrent.atomic.AtomicLong requestTimeoutMillis;
 
     public HttpProxyClient() {
         this(DEFAULT_CONNECT_TIMEOUT_MILLIS, DEFAULT_REQUEST_TIMEOUT_MILLIS);
     }
 
     public HttpProxyClient(int connectTimeoutMillis, int requestTimeoutMillis) {
-        this.requestTimeout = Duration.ofMillis(requestTimeoutMillis);
+        this.requestTimeoutMillis = new java.util.concurrent.atomic.AtomicLong(requestTimeoutMillis);
         // 强制 HTTP/1.1，避免部分后端对协议升级兼容不好。
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(connectTimeoutMillis))
                 .version(HttpClient.Version.HTTP_1_1)
                 .build();
+    }
+
+    public long getRequestTimeoutMillis() {
+        return requestTimeoutMillis.get();
+    }
+
+    public void setRequestTimeoutMillis(long timeoutMillis) {
+        if (timeoutMillis <= 0) {
+            throw new IllegalArgumentException("requestTimeoutMillis 必须大于 0");
+        }
+        this.requestTimeoutMillis.set(timeoutMillis);
     }
 
     /**
@@ -96,7 +107,7 @@ public class HttpProxyClient {
             String targetUrl) {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(targetUrl))
-                .timeout(requestTimeout)
+                .timeout(Duration.ofMillis(requestTimeoutMillis.get()))
                 .version(HttpClient.Version.HTTP_1_1);
 
         // 先复制业务 Header，再补网关自己的转发头。

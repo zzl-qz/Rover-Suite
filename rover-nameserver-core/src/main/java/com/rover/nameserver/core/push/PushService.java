@@ -5,6 +5,7 @@ import com.rover.nameserver.client.codec.RoverMessageCodecSupport;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
 import io.netty.channel.Channel;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 
@@ -17,16 +18,24 @@ import lombok.extern.slf4j.Slf4j;
 public class PushService {
 
     private final SubscriptionManager subscriptionManager;
-    private final boolean pushEnabled;
+    private final AtomicBoolean pushEnabled;
     private final AtomicLong pushIdGenerator = new AtomicLong(1);
 
     public PushService(SubscriptionManager subscriptionManager, boolean pushEnabled) {
         this.subscriptionManager = subscriptionManager;
-        this.pushEnabled = pushEnabled;
+        this.pushEnabled = new AtomicBoolean(pushEnabled);
+    }
+
+    public boolean isPushEnabled() {
+        return pushEnabled.get();
+    }
+
+    public void setPushEnabled(boolean enabled) {
+        this.pushEnabled.set(enabled);
     }
 
     public void pushSnapshot(RegistrySnapshot snapshot) {
-        if (!pushEnabled || snapshot == null) {
+        if (!pushEnabled.get() || snapshot == null) {
             return;
         }
         Set<Channel> subscribers =

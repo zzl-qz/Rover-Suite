@@ -1,19 +1,23 @@
 package com.rover.gateway.bootstrap.config;
 
+import com.rover.gateway.core.discovery.DiscoverySettings;
+import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.route.RouteConfig;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import lombok.Data;
 
 /**
  * Author: Daylight
  * Created: 2026-08-08 15:13:00
- * Description: 描述 Gateway 启动配置，包含端口、代理、过滤器和静态路由
+ * Description: Gateway 启动配置（端口、发现模式、路由等）
  */
 @Data
 public class GatewayConfig {
@@ -22,6 +26,7 @@ public class GatewayConfig {
     private static final int DEFAULT_MAX_CONTENT_LENGTH_BYTES = 1024 * 1024;
     private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
     private static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 30000;
+    private static final long DEFAULT_RECONCILE_INTERVAL_MS = 30000L;
 
     private RoverProperties rover = new RoverProperties();
 
@@ -41,9 +46,10 @@ public class GatewayConfig {
         return gatewayProperties().getProxy().getRequestTimeoutMillis();
     }
 
-    /**
-     * 转换为运行时过滤器加载配置。
-     */
+    public DiscoveryType getDiscoveryType() {
+        return DiscoveryType.from(gatewayProperties().getDiscovery().getType());
+    }
+
     public FilterSettings toFilterSettings() {
         FilterProperties filterProperties = gatewayProperties().getFilters();
         FilterSettings settings = new FilterSettings();
@@ -58,9 +64,6 @@ public class GatewayConfig {
         return settings;
     }
 
-    /**
-     * 校验用户配置，尽量在 Gateway 启动阶段暴露配置错误。
-     */
     public void validate() {
         GatewayProperties gateway = gatewayProperties();
         validatePort(gateway.getPort());
@@ -69,6 +72,11 @@ public class GatewayConfig {
         validatePositive("proxy.requestTimeoutMillis", getRequestTimeoutMillisOrDefault());
         validateFilterSettings(gateway.getFilters());
 
+        DiscoveryType discoveryType = getDiscoveryType();
+        if (discoveryType == DiscoveryType.NAMESERVER) {
+            validateNameserverAddress(gateway.getDiscovery().getNameserver());
+        }
+
         List<RouteProperties> routes = gateway.getRoutes();
         if (routes == null || routes.isEmpty()) {
             return;
@@ -76,23 +84,28 @@ public class GatewayConfig {
 
         Set<String> businessPrefixes = new HashSet<>();
         for (RouteProperties route : routes) {
-            validateRoute(route, businessPrefixes);
+            validateRoute(route, businessPrefixes, discoveryType);
         }
     }
 
-    /**
-     * 将 YAML 路由配置转换为 Gateway 运行时路由对象。
-     */
     public List<RouteConfig> toRouteConfigs() {
         List<RouteProperties> routes = gatewayProperties().getRoutes();
         if (routes == null || routes.isEmpty()) {
             return List.of();
         }
 
+        DiscoveryType discoveryType = getDiscoveryType();
         List<RouteConfig> routeConfigs = new ArrayList<>(routes.size());
         for (RouteProperties route : routes) {
-            if (route.getBusinessPrefix() == null || route.getBusinessPrefix().isBlank()
-                    || route.getTargetUrl() == null || route.getTargetUrl().isBlank()) {
+            if (route.getBusinessPrefix() == null || route.getBusinessPrefix().isBlank()) {
+                continue;
+            }
+            if (discoveryType == DiscoveryType.STATIC
+                    && (route.getTargetUrl() == null || route.getTargetUrl().isBlank())) {
+                continue;
+            }
+            if (discoveryType == DiscoveryType.NAMESERVER
+                    && (route.getServiceName() == null || route.getServiceName().isBlank())) {
                 continue;
             }
 
@@ -100,10 +113,51 @@ public class GatewayConfig {
             routeConfig.setId(route.getId());
             routeConfig.setBusinessPrefix(route.getBusinessPrefix());
             routeConfig.setTargetUrl(route.getTargetUrl());
+            routeConfig.setServiceName(route.getServiceName());
+            routeConfig.setGroup(route.getGroup());
             routeConfig.setStripPrefix(resolveStripPrefix(route));
             routeConfigs.add(routeConfig);
         }
         return routeConfigs;
+    }
+
+    public DiscoverySettings toDiscoverySettings() {
+        DiscoverySettings settings = new DiscoverySettings();
+        DiscoveryType type = getDiscoveryType();
+        settings.setType(type);
+
+        NameserverProperties nameserver = gatewayProperties().getDiscovery().getNameserver();
+        if (nameserver != null) {
+            Address address = Address.parse(nameserver.getAddress(), type == DiscoveryType.NAMESERVER);
+            if (address != null) {
+                settings.setNameserverHost(address.host());
+                settings.setNameserverPort(address.port());
+            }
+            long reconcile = nameserver.getReconcileIntervalMs() <= 0
+                    ? DEFAULT_RECONCILE_INTERVAL_MS
+                    : nameserver.getReconcileIntervalMs();
+            settings.setReconcileIntervalMs(reconcile);
+        }
+
+        if (type == DiscoveryType.NAMESERVER) {
+            settings.setSubscribeServices(collectSubscribeServices());
+        }
+        return settings;
+    }
+
+    private List<DiscoverySettings.ServiceSubscribeSpec> collectSubscribeServices() {
+        Map<String, DiscoverySettings.ServiceSubscribeSpec> unique = new LinkedHashMap<>();
+        for (RouteConfig route : toRouteConfigs()) {
+            if (route.getServiceName() == null || route.getServiceName().isBlank()) {
+                continue;
+            }
+            String key = route.getServiceName() + "#" + (route.getGroup() == null ? "" : route.getGroup());
+            DiscoverySettings.ServiceSubscribeSpec spec = new DiscoverySettings.ServiceSubscribeSpec();
+            spec.setServiceName(route.getServiceName());
+            spec.setGroup(route.getGroup());
+            unique.putIfAbsent(key, spec);
+        }
+        return new ArrayList<>(unique.values());
     }
 
     private GatewayProperties gatewayProperties() {
@@ -113,16 +167,23 @@ public class GatewayConfig {
         if (rover.getGateway() == null) {
             rover.setGateway(new GatewayProperties());
         }
-        if (rover.getGateway().getServer() == null) {
-            rover.getGateway().setServer(new ServerProperties());
+        GatewayProperties gateway = rover.getGateway();
+        if (gateway.getServer() == null) {
+            gateway.setServer(new ServerProperties());
         }
-        if (rover.getGateway().getProxy() == null) {
-            rover.getGateway().setProxy(new ProxyProperties());
+        if (gateway.getProxy() == null) {
+            gateway.setProxy(new ProxyProperties());
         }
-        if (rover.getGateway().getFilters() == null) {
-            rover.getGateway().setFilters(new FilterProperties());
+        if (gateway.getFilters() == null) {
+            gateway.setFilters(new FilterProperties());
         }
-        return rover.getGateway();
+        if (gateway.getDiscovery() == null) {
+            gateway.setDiscovery(new DiscoveryProperties());
+        }
+        if (gateway.getDiscovery().getNameserver() == null) {
+            gateway.getDiscovery().setNameserver(new NameserverProperties());
+        }
+        return gateway;
     }
 
     private String resolveStripPrefix(RouteProperties route) {
@@ -156,7 +217,14 @@ public class GatewayConfig {
         }
     }
 
-    private void validateRoute(RouteProperties route, Set<String> businessPrefixes) {
+    private void validateNameserverAddress(NameserverProperties nameserver) {
+        if (nameserver == null || nameserver.getAddress() == null || nameserver.getAddress().isBlank()) {
+            throw new IllegalStateException("discovery.type=nameserver 时必须配置 discovery.nameserver.address");
+        }
+        Address.parse(nameserver.getAddress(), true);
+    }
+
+    private void validateRoute(RouteProperties route, Set<String> businessPrefixes, DiscoveryType discoveryType) {
         if (route.getBusinessPrefix() == null || route.getBusinessPrefix().isBlank()) {
             throw new IllegalStateException("Gateway 路由 businessPrefix 不能为空，routeId=" + route.getId());
         }
@@ -168,12 +236,20 @@ public class GatewayConfig {
             throw new IllegalStateException("Gateway 路由 businessPrefix 重复："
                     + route.getBusinessPrefix());
         }
-        if (route.getTargetUrl() == null || route.getTargetUrl().isBlank()) {
-            throw new IllegalStateException("Gateway 路由 targetUrl 不能为空，businessPrefix="
-                    + route.getBusinessPrefix());
+
+        if (discoveryType == DiscoveryType.STATIC) {
+            if (route.getTargetUrl() == null || route.getTargetUrl().isBlank()) {
+                throw new IllegalStateException("static 模式下 targetUrl 不能为空，businessPrefix="
+                        + route.getBusinessPrefix());
+            }
+            validateTargetUrl(route.getTargetUrl());
+        } else {
+            if (route.getServiceName() == null || route.getServiceName().isBlank()) {
+                throw new IllegalStateException("nameserver 模式下 serviceName 不能为空，businessPrefix="
+                        + route.getBusinessPrefix());
+            }
         }
 
-        validateTargetUrl(route.getTargetUrl());
         validateStripPrefix(resolveStripPrefix(route), route.getBusinessPrefix());
     }
 
@@ -205,62 +281,87 @@ public class GatewayConfig {
         }
     }
 
+    private record Address(String host, int port) {
+        static Address parse(String raw, boolean required) {
+            if (raw == null || raw.isBlank()) {
+                if (required) {
+                    throw new IllegalStateException("discovery.nameserver.address 不能为空");
+                }
+                return null;
+            }
+            String value = raw.trim();
+            int idx = value.lastIndexOf(':');
+            if (idx <= 0 || idx == value.length() - 1) {
+                throw new IllegalStateException("discovery.nameserver.address 格式应为 host:port，当前=" + raw);
+            }
+            String host = value.substring(0, idx).trim();
+            int port = Integer.parseInt(value.substring(idx + 1).trim());
+            if (host.isBlank() || port <= 0 || port > 65535) {
+                throw new IllegalStateException("discovery.nameserver.address 非法: " + raw);
+            }
+            return new Address(host, port);
+        }
+    }
+
     @Data
     public static class RoverProperties {
-
         private GatewayProperties gateway = new GatewayProperties();
     }
 
     @Data
     public static class GatewayProperties {
-
         private int port = DEFAULT_PORT;
         private ServerProperties server = new ServerProperties();
         private ProxyProperties proxy = new ProxyProperties();
         private FilterProperties filters = new FilterProperties();
         private RewriteProperties rewrite = new RewriteProperties();
+        private DiscoveryProperties discovery = new DiscoveryProperties();
         private List<RouteProperties> routes = new ArrayList<>();
     }
 
-    /**
-     * 过滤器加载配置：是否启用外挂、插件目录、显式类名列表。
-     */
+    @Data
+    public static class DiscoveryProperties {
+        /** static | nameserver */
+        private String type = "static";
+        private NameserverProperties nameserver = new NameserverProperties();
+    }
+
+    @Data
+    public static class NameserverProperties {
+        private String address = "127.0.0.1:8888";
+        private long reconcileIntervalMs = DEFAULT_RECONCILE_INTERVAL_MS;
+    }
+
     @Data
     public static class FilterProperties {
-
-        /** 是否加载 plugins 目录和配置中的扩展过滤器。 */
         private boolean enabled = true;
-        /** 用户扩展 jar 目录，默认 plugins。 */
         private String pluginDir = "plugins";
-        /** 额外按全限定类名加载的过滤器，可为空。 */
         private List<String> classes = new ArrayList<>();
     }
 
     @Data
     public static class ServerProperties {
-
         private int maxContentLengthBytes = DEFAULT_MAX_CONTENT_LENGTH_BYTES;
     }
 
     @Data
     public static class ProxyProperties {
-
         private int connectTimeoutMillis = DEFAULT_CONNECT_TIMEOUT_MILLIS;
         private int requestTimeoutMillis = DEFAULT_REQUEST_TIMEOUT_MILLIS;
     }
 
     @Data
     public static class RewriteProperties {
-
         private String stripPrefix;
     }
 
     @Data
     public static class RouteProperties {
-
         private String id;
         private String businessPrefix;
         private String targetUrl;
+        private String serviceName;
+        private String group;
         private String stripPrefix;
     }
 }

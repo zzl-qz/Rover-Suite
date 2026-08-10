@@ -39,6 +39,8 @@ public class NameserverConfig {
     public static class NameserverProperties {
 
         private int port = DEFAULT_PORT;
+        /** HTTP 管理口，Admin 调这里 */
+        private int managePort = 8889;
         private long heartbeatTimeoutMillis = 15000L;
         private long healthCheckIntervalMillis = 5000L;
         private long instanceExpireMillis = 30000L;

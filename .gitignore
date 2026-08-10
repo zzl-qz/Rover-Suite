@@ -6,6 +6,11 @@ dependency-reduced-pom.xml
 *.jar.original
 *.war.original
 
+# ===== 本地运行时覆盖（Admin 热更新落盘）=====
+config/routes.overlay.json
+config/gateway-runtime.overlay.json
+config/nameserver-runtime.overlay.json
+
 # ===== 日志文件 =====
 *.log
 logs/

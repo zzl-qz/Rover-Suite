@@ -35,6 +35,11 @@ public class RouteMatcher {
         return null;
     }
 
+    /** 管理口只读展示用 */
+    public List<RouteConfig> listRoutes() {
+        return List.copyOf(routes);
+    }
+
     private boolean matches(String pattern, String path) {
         if (pattern == null || pattern.isBlank() || path == null || path.isBlank()) {
             return false;

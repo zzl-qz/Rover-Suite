@@ -10,16 +10,23 @@ rover:
       enabled: true
       pluginDir: plugins
       classes: []
+    # static: 只用 targetUrl，不连 Nameserver
+    # nameserver: 读下面 nameserver 配置并订阅 serviceName
+    discovery:
+      type: nameserver
+      nameserver:
+        address: 127.0.0.1:8888
+        reconcileIntervalMs: 30000
     rewrite:
       stripPrefix: /api
     routes:
-      - id: user-api
-        businessPrefix: /api/user
-        targetUrl: http://127.0.0.1:8081
-      - id: order-api
-        businessPrefix: /api/order
-        targetUrl: http://127.0.0.1:8082
-      - id: test-api
-        businessPrefix: /api/uu
-        targetUrl: http://127.0.0.1:8070/api
-        stripPrefix: /api/uu
+      # 动态发现：转发到 demo-service（Starter 自动注册）
+      - id: demo-api
+        businessPrefix: /api/demo
+        serviceName: demo-service
+        stripPrefix: /api/demo
+      # 如需切回 static，把 discovery.type 改成 static，并给路由补 targetUrl，例如：
+      # - id: demo-api
+      #   businessPrefix: /api/demo
+      #   targetUrl: http://127.0.0.1:8081
+      #   stripPrefix: /api/demo

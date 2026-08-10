@@ -20,6 +20,7 @@ public class NameserverApplication {
 
         NameserverServerOptions options = NameserverServerOptions.builder()
                 .port(config.getPortOrDefault())
+                .managePort(props.getManagePort())
                 .writeAckMode(config.resolveWriteAckMode())
                 .allowClientAckOverride(props.isAllowClientAckOverride())
                 .clusterEnabled(props.getCluster().isEnabled())
@@ -28,12 +29,14 @@ public class NameserverApplication {
                 .pushEnabled(props.isPushEnabled())
                 .heartbeatTimeoutMillis(props.getHeartbeatTimeoutMillis())
                 .healthCheckIntervalMillis(props.getHealthCheckIntervalMillis())
+                .instanceExpireMillis(props.getInstanceExpireMillis())
                 .build();
 
         NameserverTcpServer server = new NameserverTcpServer(options);
         Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown, "nameserver-shutdown"));
 
-        log.info("Rover Nameserver starting on port {}...", options.getPort());
+        log.info("Rover Nameserver starting on port {}, managePort={}...",
+                options.getPort(), options.getManagePort());
         server.start();
     }
 }

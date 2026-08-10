@@ -1,31 +1,50 @@
 package com.rover.gateway.core.filter;
 
+import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.Filter;
 import com.rover.common.spi.FilterChain;
 import com.rover.common.spi.RequestContext;
+import com.rover.gateway.core.discovery.DiscoveryType;
+import com.rover.gateway.core.discovery.ServiceDiscovery;
+import com.rover.gateway.core.loadbalance.LoadBalancer;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
- * Description: 内置终端过滤器，负责路由匹配、前缀重写和真实代理转发
+ * Description: 终端过滤器：路由匹配 + 选上游 + 真实转发
  */
 @Slf4j
 public class RouteAndProxyFilter implements Filter {
 
-    /** 固定放到过滤器链最后执行。 */
     public static final int ORDER = Integer.MAX_VALUE;
 
     private final RouteMatcher routeMatcher;
     private final HttpProxyClient proxyClient;
+    private final DiscoveryType discoveryType;
+    private final ServiceDiscovery serviceDiscovery;
+    private final LoadBalancer loadBalancer;
 
     public RouteAndProxyFilter(RouteMatcher routeMatcher, HttpProxyClient proxyClient) {
+        this(routeMatcher, proxyClient, DiscoveryType.STATIC, null, null);
+    }
+
+    public RouteAndProxyFilter(
+            RouteMatcher routeMatcher,
+            HttpProxyClient proxyClient,
+            DiscoveryType discoveryType,
+            ServiceDiscovery serviceDiscovery,
+            LoadBalancer loadBalancer) {
         this.routeMatcher = routeMatcher;
         this.proxyClient = proxyClient;
+        this.discoveryType = discoveryType == null ? DiscoveryType.STATIC : discoveryType;
+        this.serviceDiscovery = serviceDiscovery;
+        this.loadBalancer = loadBalancer;
     }
 
     @Override
@@ -38,10 +57,6 @@ public class RouteAndProxyFilter implements Filter {
         return ORDER;
     }
 
-    /**
-     * 终端过滤器：匹配路由 -> 计算目标 URL -> 真实转发后端。
-     * 这里一般不再调用 chain.doFilter，因为后面已经没有过滤器了。
-     */
     @Override
     public void doFilter(RequestContext context, FilterChain chain) {
         GatewayRequestContext gatewayContext = (GatewayRequestContext) context;
@@ -50,24 +65,29 @@ public class RouteAndProxyFilter implements Filter {
         }
 
         String requestPath = gatewayContext.getRequestPath();
-        // 按业务前缀匹配路由，例如 /api/uu/**
         RouteConfig route = routeMatcher.match(requestPath);
         if (route == null) {
             gatewayContext.writeText(HttpResponseStatus.NOT_FOUND, "No route matched: " + requestPath);
             return;
         }
 
-        // 结合 stripPrefix 生成最终后端地址。
-        String targetUrl = buildTargetUrl(route, gatewayContext.getRequest().uri(), requestPath);
+        String targetUrl = resolveTargetUrl(route, gatewayContext.getRequest().uri(), requestPath);
+        if (targetUrl == null) {
+            gatewayContext.writeText(
+                    HttpResponseStatus.SERVICE_UNAVAILABLE,
+                    "No available upstream for route: " + route.getId());
+            return;
+        }
+
         gatewayContext.setRoute(route);
         gatewayContext.setTargetUrl(targetUrl);
         log.info(
-                "Gateway route matched: routeId={}, businessPrefix={}, targetUrl={}",
+                "Gateway route matched: routeId={}, businessPrefix={}, serviceName={}, targetUrl={}",
                 route.getId(),
                 route.getBusinessPrefix(),
+                route.getServiceName(),
                 targetUrl);
 
-        // 真实发起 HTTP 请求，并把后端响应写回客户端。
         int statusCode = proxyClient.forward(
                 gatewayContext.getChannelContext(),
                 gatewayContext.getRequest(),
@@ -76,24 +96,51 @@ public class RouteAndProxyFilter implements Filter {
         gatewayContext.markCompleted();
     }
 
-    /**
-     * 计算真实转发地址：
-     * targetUrl + 去掉前缀后的路径 + 原始 query。
-     */
-    private String buildTargetUrl(RouteConfig route, String requestUri, String requestPath) {
+    private String resolveTargetUrl(RouteConfig route, String requestUri, String requestPath) {
+        String baseUrl;
+        if (discoveryType == DiscoveryType.NAMESERVER) {
+            baseUrl = resolveDynamicBaseUrl(route);
+            if (baseUrl == null) {
+                return null;
+            }
+        } else {
+            baseUrl = route.getTargetUrl();
+            if (baseUrl == null || baseUrl.isBlank()) {
+                return null;
+            }
+        }
+        return joinUrl(baseUrl, requestUri, requestPath, route.getStripPrefix());
+    }
+
+    private String resolveDynamicBaseUrl(RouteConfig route) {
+        if (serviceDiscovery == null || loadBalancer == null) {
+            return null;
+        }
+        String serviceName = route.getServiceName();
+        if (serviceName == null || serviceName.isBlank()) {
+            return null;
+        }
+        List<ServiceInstance> instances = serviceDiscovery.getInstances(serviceName, route.getGroup());
+        ServiceInstance chosen = loadBalancer.choose(serviceName, instances);
+        if (chosen == null) {
+            log.warn("动态发现无可用实例: serviceName={}, group={}", serviceName, route.getGroup());
+            return null;
+        }
+        return "http://" + chosen.getHost() + ":" + chosen.getPort();
+    }
+
+    private String joinUrl(String baseUrl, String requestUri, String requestPath, String stripPrefix) {
         String query = extractQuery(requestUri);
         String forwardPath = requestPath;
-        if (shouldStripPrefix(route.getStripPrefix(), requestPath)) {
-            // 例如 stripPrefix=/api/uu，请求 /api/uu/admin/list -> /admin/list
-            forwardPath = requestPath.substring(route.getStripPrefix().length());
+        if (shouldStripPrefix(stripPrefix, requestPath)) {
+            forwardPath = requestPath.substring(stripPrefix.length());
             if (forwardPath.isBlank()) {
                 forwardPath = "/";
             }
         }
-        return trimTrailingSlash(route.getTargetUrl()) + normalizeForwardPath(forwardPath) + query;
+        return trimTrailingSlash(baseUrl) + normalizeForwardPath(forwardPath) + query;
     }
 
-    /** 只有请求路径确实以 stripPrefix 开头时才去掉前缀。 */
     private boolean shouldStripPrefix(String stripPrefix, String requestPath) {
         if (stripPrefix == null || stripPrefix.isBlank()) {
             return false;
@@ -101,7 +148,6 @@ public class RouteAndProxyFilter implements Filter {
         return requestPath.equals(stripPrefix) || requestPath.startsWith(stripPrefix + "/");
     }
 
-    /** 保留原始 query，例如 ?id=1。 */
     private String extractQuery(String requestUri) {
         int queryIndex = requestUri.indexOf('?');
         if (queryIndex < 0) {
@@ -110,7 +156,6 @@ public class RouteAndProxyFilter implements Filter {
         return requestUri.substring(queryIndex);
     }
 
-    /** 去掉 targetUrl 末尾多余斜杠，避免拼出双斜杠。 */
     private String trimTrailingSlash(String targetUrl) {
         if (targetUrl.endsWith("/")) {
             return targetUrl.substring(0, targetUrl.length() - 1);
@@ -118,7 +163,6 @@ public class RouteAndProxyFilter implements Filter {
         return targetUrl;
     }
 
-    /** 保证转发路径以 / 开头。 */
     private String normalizeForwardPath(String forwardPath) {
         if (forwardPath.startsWith("/")) {
             return forwardPath;

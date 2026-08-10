@@ -1,0 +1,18 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: demo-service
+
+rover:
+  nameserver:
+    enabled: true
+    address: 127.0.0.1:8888
+    # 本地联调固定 127.0.0.1，避免注册成不可达的网卡 IP
+    host: 127.0.0.1
+    # service-name 不填时用 spring.application.name
+    # port 不填时用 server.port
+    weight: 100
+    ephemeral: true
+    heartbeat-interval-ms: 5000

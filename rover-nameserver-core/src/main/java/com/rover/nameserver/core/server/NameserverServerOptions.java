@@ -13,8 +13,11 @@ import lombok.Getter;
 @Builder
 public class NameserverServerOptions {
 
-    /** 监听端口 */
+    /** TCP 注册发现端口 */
     private final int port;
+    /** HTTP 管理口端口，0 表示关闭 */
+    @Builder.Default
+    private final int managePort = 8889;
     /** 写确认模式，集群预留 */
     private final AckMode writeAckMode;
     /** 是否允许客户端覆盖 ack */
@@ -31,4 +34,7 @@ public class NameserverServerOptions {
     private final long heartbeatTimeoutMillis;
     /** 健康检查间隔 */
     private final long healthCheckIntervalMillis;
+    /** 临时实例过期时间 */
+    @Builder.Default
+    private final long instanceExpireMillis = 30000L;
 }
