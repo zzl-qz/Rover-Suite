@@ -13,11 +13,14 @@ import lombok.Data;
 @Data
 public class ServicePushBody {
 
+    /** 服务名 */
     private String serviceName;
+    /** 分组 */
     private String group;
+    /** 当前全量实例 */
     private List<ServiceInstance> instances = new ArrayList<>();
+    /** 版本号 */
     private long revision;
-
-    // 目前先推全量，增量以后再说
+    /** 推送类型，目前固定 SNAPSHOT */
     private String pushType = "SNAPSHOT";
 }

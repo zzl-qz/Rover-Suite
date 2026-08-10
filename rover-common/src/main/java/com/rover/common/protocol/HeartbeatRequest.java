@@ -12,10 +12,12 @@ import lombok.Data;
 @Data
 public class HeartbeatRequest {
 
+    /** 服务名 */
     private String serviceName;
+    /** 实例 ID */
     private String instanceId;
+    /** 客户端时间，仅排查用 */
     private long clientTimeMillis;
-
-    // 现在基本不用，后面有需要再填
+    /** 扩展信息，预留 */
     private Map<String, String> metadata = new HashMap<>();
 }

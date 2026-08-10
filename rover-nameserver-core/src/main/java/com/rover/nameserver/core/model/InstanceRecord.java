@@ -13,7 +13,9 @@ import lombok.Data;
 @Data
 public class InstanceRecord {
 
+    /** 对外实例信息 */
     private ServiceInstance instance;
+    /** 最近心跳时间 */
     private long lastHeartbeatMillis;
 
     public static InstanceRecord from(RegisterRequest request) {

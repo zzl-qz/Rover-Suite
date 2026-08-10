@@ -13,8 +13,8 @@ import lombok.Data;
 @Data
 public class QueryResponseBody {
 
+    /** 实例列表 */
     private List<ServiceInstance> instances = new ArrayList<>();
-
-    // 版本号，客户端可以拿去判断有没有变化
+    /** 服务版本号 */
     private long revision;
 }

@@ -16,54 +16,64 @@ Rover-Suite 是一套完全自研的轻量级微服务基础中间件套件，�
 
 ## 🗺️ 一图看懂
 
+> 图例：✅ 已实现　🔜 规划中　🧩 占位
+
 ```mermaid
-graph TB
-    subgraph CLIENTS[1. 调用方]
+flowchart TB
+    subgraph CLIENTS["1. 调用方"]
         WEB[浏览器 / H5]
         APP[App / 小程序]
         ORG[外部系统]
     end
 
-    subgraph GATEWAY["2. Rover-Gateway 网关<br/>(rover-gateway-bootstrap · 端口 8080)"]
-        SRV["Netty 服务器<br/>HttpServerCodec → Aggregator → 业务线程池"]
-        FW["过滤器链<br/>AccessLog ✅ → 鉴权/限流/熔断/灰度 🔜 → 终端路由转发"]
-        PRX["HttpProxyClient 反向代理<br/>复头 + body 透传 · 30s 超时→504 · 1MB→413"]
-        SUB["注册中心订阅客户端<br/>实例列表本地缓存 + 变更推送更新"]
+    subgraph GATEWAY["2. Rover-Gateway · HTTP 入口"]
+        direction TB
+        SRV["Netty HTTP Server<br/>编解码 · 聚合 · 业务线程池"]
+        FW["FilterChain<br/>AccessLog ✅ · 鉴权/限流/熔断 🔜 · 路由转发 ✅"]
+        PRX["HttpProxyClient<br/>HTTP/1.1 · Header 整理 · 超时"]
+        SUB["Nameserver 客户端<br/>订阅 · 本地缓存 🔜"]
+        SRV --> FW --> PRX
+        SUB -.-> PRX
     end
 
-    subgraph NS["3. Nameserver 注册中心<br/>(rover-nameserver-server · 端口 8888)"]
-        REG["注册表 / 心跳刷新<br/>健康检查(剔除/降级) / 主动推送 / 运行时配置"]
+    subgraph NS["3. Rover-Nameserver · TCP :8888"]
+        REG["注册表 · 心跳 · 健康检查<br/>推送 · 断连清理 ✅"]
     end
 
-    subgraph SVCS[4. 业务服务层]
-        S1["业务服务 A<br/>(rover-demo + SDK)"]
-        S2["业务服务 B<br/>(rover-demo + SDK)"]
-        S3["第三方服务<br/>(经 Nacos 适配 🧩)"]
+    subgraph SVCS["4. 业务服务层"]
+        S1["业务服务 A + SDK"]
+        S2["业务服务 B + SDK"]
+        S3["第三方服务 / Nacos 适配 🧩"]
     end
 
-    subgraph OPS[5. 治理与工具层]
-        ADM["Rover-Admin 管理后台<br/>配置查看/下发 · 灰度开关 · 监控(🔜 增强)"]
-        TK["proxy-test 测试套件<br/>31 个企业场景回归用例"]
+    subgraph OPS["5. 治理与工具"]
+        ADM["Rover-Admin 🔜"]
+        TK["proxy-test"]
     end
 
     WEB --> GATEWAY
     APP --> GATEWAY
     ORG --> GATEWAY
 
-    GATEWAY -->|反向代理 HTTP| S1
-    GATEWAY -->|反向代理 HTTP| S2
+    PRX -->|HTTP 反向代理| S1
+    PRX -->|HTTP 反向代理| S2
     GATEWAY -.->|ServiceDiscovery SPI| S3
 
-    S1 ---|注册 / 心跳 / 订阅| REG
-    S2 ---|注册 / 心跳 / 订阅| REG
-    REG -.->|实例变更推送| GATEWAY
+    S1 -->|TCP 注册 / 心跳| REG
+    S2 -->|TCP 注册 / 心跳| REG
+    REG -.->|实例变更推送| SUB
 
-    ADM -.->|配置下发| GATEWAY
-    ADM -.->|配置下发| REG
-    TK -->|全链路回归| GATEWAY
+    ADM -.-> GATEWAY
+    ADM -.-> REG
+    TK --> GATEWAY
+
+    classDef done fill:#042f2e,stroke:#14b8a6,color:#ecfeff;
+    classDef plan fill:#1f2937,stroke:#64748b,color:#e2e8f0,stroke-dasharray: 5 5;
+    class GATEWAY,NS,REG,SRV,FW,PRX,S1,S2 done;
+    class SUB,S3,ADM plan;
 ```
 
-> 图例：✅ 已实现　🔶 规划中　🧩 占位。完整架构模型（部署拓扑 / 模块依赖 / 核心时序 / SPI 扩展点 / 演进路线）请见 **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**。
+> 完整架构模型（部署拓扑 / 模块依赖 / 核心时序 / SPI 扩展点 / 演进路线）请见 **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**。
 
 ---
 

@@ -18,6 +18,7 @@ public class RoverMessageDecoder extends ByteToMessageDecoder {
 
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
+        // 半包：头都不够，等更多字节
         if (in.readableBytes() < ProtocolConstants.HEADER_LENGTH) {
             return;
         }

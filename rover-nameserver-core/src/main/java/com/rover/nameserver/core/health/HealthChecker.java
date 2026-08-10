@@ -79,6 +79,7 @@ public class HealthChecker {
                 continue;
             }
 
+            // 临时实例：超时直接剔除；非临时：先标不健康留在表里
             if (instance.isEphemeral()) {
                 RegistrySnapshot snapshot =
                         registry.removeExpired(instance.getServiceName(), instance.getInstanceId());

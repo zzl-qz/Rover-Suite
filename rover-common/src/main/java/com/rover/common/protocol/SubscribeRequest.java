@@ -10,9 +10,10 @@ import lombok.Data;
 @Data
 public class SubscribeRequest {
 
+    /** 服务名 */
     private String serviceName;
+    /** 分组，空表示全收 */
     private String group;
-
-    // 客户端当前看到的版本，后面做增量也许用得上
+    /** 客户端已知版本 */
     private long knownRevision;
 }

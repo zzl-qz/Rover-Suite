@@ -20,7 +20,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class InMemoryServiceRegistry implements ServiceRegistry {
 
+    /** serviceName -> (instanceId -> 记录) */
     private final Map<String, Map<String, InstanceRecord>> services = new ConcurrentHashMap<>();
+    /** 每个服务自己的版本号，变更时 +1 */
     private final Map<String, AtomicLong> revisions = new ConcurrentHashMap<>();
 
     @Override

@@ -10,9 +10,10 @@ import lombok.Data;
 @Data
 public class UnregisterRequest {
 
+    /** 服务名 */
     private String serviceName;
+    /** 实例 ID */
     private String instanceId;
-
-    // 可选，方便排障
+    /** 注销原因，可选 */
     private String reason;
 }

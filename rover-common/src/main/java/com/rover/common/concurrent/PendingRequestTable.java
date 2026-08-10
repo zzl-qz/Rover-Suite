@@ -89,6 +89,7 @@ public class PendingRequestTable<T> implements AutoCloseable {
     /**
      * 请求成功
      */
+    /** @return false 表示已超时或根本不认识这个 requestId */
     public boolean complete(long requestId, T value) {
         Entry<T> entry = pending.remove(requestId);
         if (entry == null) {

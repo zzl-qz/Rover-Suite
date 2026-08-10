@@ -35,6 +35,7 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class NameserverRequestDispatcher {
 
+    /** 挂在 channel 上：这条连接注册过哪些 service#instance */
     static final AttributeKey<Set<String>> BOUND_INSTANCES =
             AttributeKey.valueOf("nameserverBoundInstances");
 
@@ -80,6 +81,7 @@ public class NameserverRequestDispatcher {
         }
     }
 
+    /** 连接断了：清订阅，并把这条连接绑过的实例摘掉 */
     public void onChannelInactive(Channel channel) {
         subscriptionManager.removeChannel(channel);
         Set<String> bound = channel.attr(BOUND_INSTANCES).getAndSet(null);
@@ -107,6 +109,7 @@ public class NameserverRequestDispatcher {
 
         AckMode ackMode = resolveAck(message);
         RegistrySnapshot snapshot = registry.register(request);
+        // 绑到连接上，进程挂了来不及 unregister 也能清掉
         bindInstance(channel, request.getServiceName(), request.getInstanceId());
         pushService.pushSnapshot(snapshot);
 
@@ -187,7 +190,7 @@ public class NameserverRequestDispatcher {
         }
         subscriptionManager.subscribe(request.getServiceName(), request.getGroup(), channel);
 
-        // 订上后先丢一份当前快照，省得客户端再查一次
+        // 订上立刻推当前全量，客户端不用再 query 一次
         RegistrySnapshot snapshot = RegistrySnapshot.of(
                 request.getServiceName(),
                 request.getGroup(),
@@ -224,6 +227,7 @@ public class NameserverRequestDispatcher {
         if (request.oneway()) {
             return;
         }
+        // 必须带回原 requestId，客户端 pending 才能对上
         channel.writeAndFlush(RoverMessageCodecSupport.response(request.getRequestId(), body));
     }
 
@@ -241,6 +245,7 @@ public class NameserverRequestDispatcher {
                 && request.getPort() > 0;
     }
 
+    /** register 成功后调用 */
     private void bindInstance(Channel channel, String serviceName, String instanceId) {
         Set<String> bound = channel.attr(BOUND_INSTANCES).get();
         if (bound == null) {
@@ -250,6 +255,7 @@ public class NameserverRequestDispatcher {
         bound.add(serviceName + "#" + instanceId);
     }
 
+    /** 主动 unregister 时同步摘掉绑定，避免断连时重复清理 */
     private void unbindInstance(Channel channel, String serviceName, String instanceId) {
         Set<String> bound = channel.attr(BOUND_INSTANCES).get();
         if (bound != null) {

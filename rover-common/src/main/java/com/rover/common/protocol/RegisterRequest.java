@@ -12,18 +12,24 @@ import lombok.Data;
 @Data
 public class RegisterRequest {
 
+    /** 服务名 */
     private String serviceName;
+    /** 实例地址 */
     private String host;
+    /** 实例端口 */
     private int port;
+    /** 实例 ID */
     private String instanceId;
+    /** 注册时间；0 表示服务端填写 */
     private long registerTime;
+    /** 权重 */
     private int weight = 100;
+    /** 分组 */
     private String group;
+    /** 机房/可用区 */
     private String zone;
-
-    // 断连后能不能直接摘掉
+    /** 临时实例，默认 true */
     private boolean ephemeral = true;
-
-    // 额外信息往这里塞，少改字段
+    /** 扩展 KV */
     private Map<String, String> metadata = new HashMap<>();
 }

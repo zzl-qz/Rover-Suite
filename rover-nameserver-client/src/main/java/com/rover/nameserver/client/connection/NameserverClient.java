@@ -54,17 +54,26 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class NameserverClient implements AutoCloseable {
 
+    /** 客户端配置 */
     @Getter
-    private final NameserverClientOptions options; // 客户端配置
+    private final NameserverClientOptions options;
+    /** 本地实例缓存 */
     @Getter
-    private final InstanceCache instanceCache = new InstanceCache(); // 本地实例缓存
+    private final InstanceCache instanceCache = new InstanceCache();
+    /** requestId 生成器 */
     private final RequestIdGenerator requestIdGenerator = new RequestIdGenerator();
-    private final PendingRequestTable<CommonResponseBody> pendingRequests; // 挂起请求表
+    /** 在途请求表 */
+    private final PendingRequestTable<CommonResponseBody> pendingRequests;
+    /** 已注册实例，重连恢复用 */
     private final Map<String, RegisterRequest> registeredInstances = new ConcurrentHashMap<>();
+    /** 已订阅关系，重连恢复用 */
     private final Map<String, SubscribeRequest> subscriptions = new ConcurrentHashMap<>();
+    /** 是否已 start */
     private final AtomicBoolean started = new AtomicBoolean(false);
+    /** 是否待重连 */
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
     private EventLoopGroup workerGroup;
+    /** 当前 TCP 连接 */
     private volatile Channel channel;
     private PeriodicTask heartbeatTask;
     private PeriodicTask reconnectTask;
@@ -99,6 +108,7 @@ public class NameserverClient implements AutoCloseable {
     public CommonResponseBody register(RegisterRequest request) {
         CommonResponseBody response = requestSync(ProtocolConstants.REGISTER_REQUEST, request);
         ensureSuccess(response, "注册失败");
+        // 本地也记一份，断线重连后才能自动补注册
         registeredInstances.put(instanceKey(request.getServiceName(), request.getInstanceId()), copyRegister(request));
         return response;
     }
@@ -176,10 +186,12 @@ public class NameserverClient implements AutoCloseable {
         ensureStarted();
         Channel current = requireActiveChannel();
         long requestId = requestIdGenerator.next();
+        // 先挂 pending 再写出，避免响应太快对不上号
         CompletableFuture<CommonResponseBody> future = pendingRequests.create(requestId, timeoutMs);
         RoverMessage message = RoverMessageCodecSupport.request(type, requestId, ackMode, timeoutMs, body);
         current.writeAndFlush(message).addListener(writeFuture -> {
             if (!writeFuture.isSuccess()) {
+                // 没写出成功就别让调用方干等到超时
                 pendingRequests.fail(requestId, writeFuture.cause() == null
                         ? new IllegalStateException("写入失败")
                         : writeFuture.cause());
@@ -188,6 +200,7 @@ public class NameserverClient implements AutoCloseable {
         return future;
     }
 
+    /** 异步转同步：堵住当前线程，等 Future 被响应 complete */
     public CommonResponseBody requestSync(byte type, Object body) {
         try {
             return requestAsync(type, body).get(options.getRequestTimeoutMs() + 1000L, TimeUnit.MILLISECONDS);
@@ -256,8 +269,8 @@ public class NameserverClient implements AutoCloseable {
         connect();
     }
 
+    /** 重连成功后：服务端可能已清实例，按本地记录补注册/订阅 */
     private void recoverState() {
-        // 重连后把本地记住的注册和订阅补回去
         for (RegisterRequest request : registeredInstances.values()) {
             try {
                 requestSync(ProtocolConstants.REGISTER_REQUEST, request);
@@ -274,9 +287,7 @@ public class NameserverClient implements AutoCloseable {
         }
     }
 
-    /**
-     * 心跳任务注册
-     */
+    /** 定时给本客户端注册过的实例打心跳 */
     private void heartbeatRegistered() {
         if (!isActive() || registeredInstances.isEmpty()) {
             return;

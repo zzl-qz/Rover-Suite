@@ -19,50 +19,58 @@ Rover-Suite is a fully self-developed lightweight microservice infrastructure su
 > Diagram annotations are in Chinese; ✅ implemented, 🔜 planned, 🧩 placeholder.
 
 ```mermaid
-graph TB
-    subgraph CLIENTS[1. 调用方]
-        WEB[浏览器 / H5]
-        APP[App / 小程序]
-        ORG[外部系统]
+flowchart TB
+    subgraph CLIENTS["1. Callers / 调用方"]
+        WEB[Browser / H5]
+        APP[App / Mini Program]
+        ORG[External System]
     end
 
-    subgraph GATEWAY["2. Rover-Gateway 网关<br/>(rover-gateway-bootstrap · 端口 8080)"]
-        SRV["Netty 服务器<br/>HttpServerCodec → Aggregator → 业务线程池"]
-        FW["过滤器链<br/>AccessLog ✅ → 鉴权/限流/熔断/灰度 🔜 → 终端路由转发"]
-        PRX["HttpProxyClient 反向代理<br/>复头 + body 透传 · 30s 超时→504 · 1MB→413"]
-        SUB["注册中心订阅客户端<br/>实例列表本地缓存 + 变更推送更新"]
+    subgraph GATEWAY["2. Rover-Gateway · HTTP entry"]
+        direction TB
+        SRV["Netty HTTP Server<br/>codec · aggregator · biz threads"]
+        FW["FilterChain<br/>AccessLog ✅ · auth/limit/break 🔜 · route+proxy ✅"]
+        PRX["HttpProxyClient<br/>HTTP/1.1 · headers · timeout"]
+        SUB["Nameserver Client<br/>subscribe · local cache 🔜"]
+        SRV --> FW --> PRX
+        SUB -.-> PRX
     end
 
-    subgraph NS["3. Nameserver 注册中心<br/>(rover-nameserver-server · 端口 8888)"]
-        REG["注册表 / 心跳刷新<br/>健康检查(剔除/降级) / 主动推送 / 运行时配置"]
+    subgraph NS["3. Rover-Nameserver · TCP :8888"]
+        REG["Registry · heartbeat · health check<br/>push · disconnect cleanup ✅"]
     end
 
-    subgraph SVCS[4. 业务服务层]
-        S1["业务服务 A<br/>(rover-demo + SDK)"]
-        S2["业务服务 B<br/>(rover-demo + SDK)"]
-        S3["第三方服务<br/>(经 Nacos 适配 🧩)"]
+    subgraph SVCS["4. Business Services"]
+        S1["Service A + SDK"]
+        S2["Service B + SDK"]
+        S3["3rd party via Nacos adapter 🧩"]
     end
 
-    subgraph OPS[5. 治理与工具层]
-        ADM["Rover-Admin 管理后台<br/>配置查看/下发 · 灰度开关 · 监控(🔜 增强)"]
-        TK["proxy-test 测试套件<br/>31 个企业场景回归用例"]
+    subgraph OPS["5. Ops / Tools"]
+        ADM["Rover-Admin 🔜"]
+        TK["proxy-test"]
     end
 
     WEB --> GATEWAY
     APP --> GATEWAY
     ORG --> GATEWAY
 
-    GATEWAY -->|反向代理 HTTP| S1
-    GATEWAY -->|反向代理 HTTP| S2
+    PRX -->|HTTP proxy| S1
+    PRX -->|HTTP proxy| S2
     GATEWAY -.->|ServiceDiscovery SPI| S3
 
-    S1 ---|注册 / 心跳 / 订阅| REG
-    S2 ---|注册 / 心跳 / 订阅| REG
-    REG -.->|实例变更推送| GATEWAY
+    S1 -->|TCP register / heartbeat| REG
+    S2 -->|TCP register / heartbeat| REG
+    REG -.->|instance push| SUB
 
-    ADM -.->|配置下发| GATEWAY
-    ADM -.->|配置下发| REG
-    TK -->|全链路回归| GATEWAY
+    ADM -.-> GATEWAY
+    ADM -.-> REG
+    TK --> GATEWAY
+
+    classDef done fill:#042f2e,stroke:#14b8a6,color:#ecfeff;
+    classDef plan fill:#1f2937,stroke:#64748b,color:#e2e8f0,stroke-dasharray: 5 5;
+    class GATEWAY,NS,REG,SRV,FW,PRX,S1,S2 done;
+    class SUB,S3,ADM plan;
 ```
 
 > The full architecture model (deployment topology / module dependencies / core sequence diagrams / SPI extension points / roadmap) lives in **[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)**.

@@ -13,9 +13,13 @@ import lombok.Data;
 @Data
 public class RegistrySnapshot {
 
+    /** 服务名 */
     private String serviceName;
+    /** 分组 */
     private String group;
+    /** 版本号 */
     private long revision;
+    /** 当前实例列表 */
     private List<ServiceInstance> instances = new ArrayList<>();
 
     public static RegistrySnapshot of(

@@ -5,25 +5,26 @@ import lombok.Data;
 /**
  * Author: Daylight
  * Created: 2026-08-08 17:30:00
- * Description: nameserver 内部 RPC 协议对象
+ * Description: 通用响应 body
  */
 @Data
 public class CommonResponseBody {
 
+    /** 状态码 */
     private int code;
+    /** 说明文案 */
     private String message;
+    /** 附加数据 */
     private byte[] data;
-
+    /** 实际 ack 模式，集群预留 */
     private byte appliedAckMode = AckMode.IMMEDIATE.getCode();
-
-    // 单机先写 1，集群再填真实确认数
+    /** 已确认副本数，单机为 1 */
     private int replicaAcked = 1;
-
+    /** 服务版本号 */
     private long revision;
-
-    // 集群非 leader 时可以捎一句该去哪
+    /** leader 提示，集群预留 */
     private String leaderHint;
-
+    /** 处理节点 ID */
     private String nodeId;
 
     public static CommonResponseBody success() {

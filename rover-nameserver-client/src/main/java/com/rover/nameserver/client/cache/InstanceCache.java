@@ -16,7 +16,9 @@ import java.util.function.Consumer;
  */
 public class InstanceCache {
 
+    /** serviceName#group -> 缓存项 */
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
+    /** 推送回调 */
     private final List<Consumer<ServicePushBody>> listeners = new CopyOnWriteArrayList<>();
 
     public void putSnapshot(String serviceName, String group, long revision, List<ServiceInstance> instances) {
@@ -74,7 +76,9 @@ public class InstanceCache {
     }
 
     private static final class CacheEntry {
+        /** 版本号 */
         private final long revision;
+        /** 实例列表 */
         private final List<ServiceInstance> instances;
 
         private CacheEntry(long revision, List<ServiceInstance> instances) {

@@ -36,12 +36,14 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
 
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RoverMessage msg) {
+        // 服务端主动推：更新缓存，不走 pending
         if (msg.getType() == ProtocolConstants.PUSH_RESPONSE) {
             ServicePushBody pushBody = RoverMessageCodecSupport.decodeBody(msg, ServicePushBody.class);
             instanceCache.onPush(pushBody);
             return;
         }
 
+        // 普通 RPC 响应：按 requestId 唤醒等待中的 Future
         if (msg.getType() == ProtocolConstants.COMMON_RESPONSE) {
             CommonResponseBody body = RoverMessageCodecSupport.decodeBody(msg, CommonResponseBody.class);
             boolean matched = pendingRequests.complete(msg.getRequestId(), body);
@@ -57,6 +59,7 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         log.warn("与 Nameserver 连接断开: {}", ctx.channel().remoteAddress());
+        // 在途请求立刻失败，避免业务线程一直卡在 get()
         pendingRequests.failAll(new IllegalStateException("连接已断开"));
         client.onDisconnected();
     }
