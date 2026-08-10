@@ -88,6 +88,9 @@ public class GatewayConfig {
         }
     }
 
+    /**
+     * 把配置的路由代理封装成集合
+     */
     public List<RouteConfig> toRouteConfigs() {
         List<RouteProperties> routes = gatewayProperties().getRoutes();
         if (routes == null || routes.isEmpty()) {

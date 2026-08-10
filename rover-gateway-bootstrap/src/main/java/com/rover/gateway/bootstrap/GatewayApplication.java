@@ -23,9 +23,9 @@ public class GatewayApplication {
 
     public static void main(String[] args) {
         log.info("Rover Gateway starting...");
-        GatewayConfig config = new GatewayConfigLoader().load();
+        GatewayConfig config = new GatewayConfigLoader().load(); // 加载配置
 
-        List<RouteConfig> routes = config.toRouteConfigs();
+        List<RouteConfig> routes = config.toRouteConfigs(); // 把配置的路由代理封装成集合
         RouteOverlayStore overlayStore = new RouteOverlayStore();
         if (overlayStore.exists()) {
             routes = overlayStore.loadOrEmpty();

@@ -12,20 +12,35 @@ import io.netty.handler.codec.MessageToByteEncoder;
  * Author: Daylight
  * Created: 2026-08-08 17:30:00
  * Description: 消息编码
+ *
+ * 核心职责：Netty 出站编码器，将 RoverMessage 对象按协议帧格式写入 ByteBuf，
+ * 与 {@link RoverMessageDecoder} 的解析格式严格对应：
+ * magic(2) + version(1) + type(1) + flags(2) + requestId(8) + timeoutMs(4)
+ * + bodyLength(4) + body(可变)。
  */
 public class RoverMessageEncoder extends MessageToByteEncoder<RoverMessage> {
 
+    /**
+     * 将单条消息编码为帧字节写入 out。
+     *
+     * @param ctx 通道上下文
+     * @param msg 待发送消息；为 null 时抛协议异常
+     * @param out 存放帧字节的输出缓冲
+     * @throws ProtocolException 消息为 null、消息体超限或 flags 非法时抛出
+     */
     @Override
     protected void encode(ChannelHandlerContext ctx, RoverMessage msg, ByteBuf out) {
         if (msg == null) {
             throw new ProtocolException("编码消息不能为空");
         }
+        // 消息体长度取实际字节数，写出前先做上限校验
         byte[] body = msg.getBody();
         int bodyLength = body == null ? 0 : body.length;
         if (bodyLength > ProtocolConstants.MAX_BODY_LENGTH) {
             throw new ProtocolException("消息体过大: " + bodyLength);
         }
 
+        // 出站前同样校验 flags 合法性，避免发出非法帧
         short flags = msg.getFlags();
         try {
             ProtocolFlags.validateSupported(flags);
@@ -33,9 +48,11 @@ public class RoverMessageEncoder extends MessageToByteEncoder<RoverMessage> {
             throw new ProtocolException(ex.getMessage(), ex);
         }
 
+        // version 未显式设置时写默认版本；timeout 负值归零
         byte version = msg.getVersion() == 0 ? ProtocolConstants.VERSION : msg.getVersion();
         int timeoutMs = Math.max(msg.getTimeoutMs(), 0);
 
+        // 按帧头顺序写：魔数 -> 版本 -> 类型 -> flags -> requestId -> 超时 -> 长度 -> body
         out.writeShort(ProtocolConstants.MAGIC_NUMBER);
         out.writeByte(version);
         out.writeByte(msg.getType());

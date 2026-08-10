@@ -12,21 +12,34 @@ import java.util.concurrent.ConcurrentHashMap;
  * Author: Daylight
  * Created: 2026-08-08 17:30:00
  * Description: Protostuff 序列化工具
+ *
+ * 核心职责：提供基于 Protostuff 的对象序列化/反序列化能力，供编解码模块
+ * （RoverMessageCodecSupport、Decoder/Encoder）与 NameserverClient 使用。
+ *
+ * 关键设计：RuntimeSchema 按目标类缓存（SCHEMA_CACHE），避免每次序列化都做一次
+ * 反射构建；LinkedBuffer 不能跨线程并发复用，故用 ThreadLocal 为每个线程持有一份，
+ * 用完 clear 归还，下次继续复用。
  */
 public final class ProtostuffSerializer {
 
+    /** 按目标类缓存的 RuntimeSchema，computeIfAbsent 保证每个类只创建一次 */
     private static final Map<Class<?>, Schema<?>> SCHEMA_CACHE = new ConcurrentHashMap<>();
 
     // LinkedBuffer 不能并发用，搞个线程本地的
     private static final ThreadLocal<LinkedBuffer> BUFFER =
             ThreadLocal.withInitial(() -> LinkedBuffer.allocate(LinkedBuffer.DEFAULT_BUFFER_SIZE));
 
+    /** 工具类，禁止实例化 */
     private ProtostuffSerializer() {
     }
 
 
     /**
-     * 序列化
+     * 将对象序列化为字节数组。
+     *
+     * @param obj 待序列化对象；目标类需有无参构造且字段可公开访问（Protostuff 约束）
+     * @return 序列化后的字节数组；obj 为 null 时返回 null
+     * @throws ProtocolException 序列化过程出错时抛出，包装底层异常
      */
     @SuppressWarnings("unchecked")
     public static <T> byte[] serialize(T obj) {
@@ -35,6 +48,7 @@ public final class ProtostuffSerializer {
         }
         Class<T> clazz = (Class<T>) obj.getClass();
         Schema<T> schema = schemaOf(clazz);
+        // 从 ThreadLocal 取出本线程专属 buffer 复用，避免 LinkedBuffer 并发写坏
         LinkedBuffer buffer = BUFFER.get();
         try {
             return ProtostuffIOUtil.toByteArray(obj, schema, buffer);
@@ -47,13 +61,19 @@ public final class ProtostuffSerializer {
     }
 
     /**
-     * 反序列化
+     * 将字节数组反序列化为指定类型对象。
+     *
+     * @param data  待反序列化的字节；null 或空数组时走"空对象"分支（用无参构造返回新实例）
+     * @param clazz 目标类型，不能为 null
+     * @return 反序列化得到的对象
+     * @throws ProtocolException clazz 为 null、无法创建空对象或反序列化失败时抛出
      */
     public static <T> T deserialize(byte[] data, Class<T> clazz) {
         if (clazz == null) {
             throw new ProtocolException("反序列化目标类型不能为空");
         }
         if (data == null || data.length == 0) {
+            // 空 body 表示无内容，按空协议对象处理，避免对空数组解析
             try {
                 return clazz.getDeclaredConstructor().newInstance();
             } catch (Exception ex) {
@@ -62,6 +82,7 @@ public final class ProtostuffSerializer {
         }
         try {
             Schema<T> schema = schemaOf(clazz);
+            // 先按 schema 建新对象，再把字节合并进去
             T message = schema.newMessage();
             ProtostuffIOUtil.mergeFrom(data, message, schema);
             return message;

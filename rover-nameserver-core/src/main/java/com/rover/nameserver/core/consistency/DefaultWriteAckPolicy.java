@@ -6,18 +6,42 @@ import com.rover.common.protocol.AckMode;
  * Author: Daylight
  * Created: 2026-08-08 17:40:00
  * Description: 默认写确认策略
+ *
+ * {@link WriteAckPolicy} 的默认实现，对应单机/简单部署场景：</p>
+ * <ul>
+ *     <li>{@link #resolve}：服务端默认值兜底，仅当允许客户端覆盖且客户端明确指定时才采用客户端模式；</li>
+ *     <li>{@link #requiredAcks}：单机（集群未开启或副本数 1）一律返回 1；
+ *     集群模式下 IMMEDIATE=1、MAJORITY=过半（factor/2+1）、ALL=全部副本。</li>
+ * </ul>
+ *
+ * 被 NameserverTcpServer 默认装配并传给请求分发器；后续集群实现可替换本类。</p>
  */
 public class DefaultWriteAckPolicy implements WriteAckPolicy {
 
+    /**
+     * 协商 ACK 模式：默认以服务端配置为准，覆盖需同时满足
+     * 「允许客户端覆盖」且「客户端显式指定」两个条件。
+     *
+     * @return 最终 ACK 模式；serverDefault 为 null 时回退为 {@link AckMode#IMMEDIATE}（非 null）
+     */
     @Override
     public AckMode resolve(AckMode serverDefault, AckMode requestMode, boolean allowClientOverride) {
         AckMode fallback = serverDefault == null ? AckMode.IMMEDIATE : serverDefault;
+        // 不允许覆盖或客户端未指定：一律用服务端默认
         if (!allowClientOverride || requestMode == null) {
             return fallback;
         }
         return requestMode;
     }
 
+    /**
+     * 计算需要确认的数量。
+     *
+     * @param mode            ACK 模式；null 按 IMMEDIATE 处理
+     * @param replicationFactor 副本数（取 max(值,1) 防止非法配置）
+     * @param clusterEnabled  集群开关
+     * @return 需要的确认数：单机恒为 1；集群下依模式为 1 / 过半 / 全副本
+     */
     @Override
     public int requiredAcks(AckMode mode, int replicationFactor, boolean clusterEnabled) {
         int factor = Math.max(replicationFactor, 1);
