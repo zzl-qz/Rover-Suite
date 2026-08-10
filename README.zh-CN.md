@@ -67,9 +67,13 @@ flowchart TB
     ADM -.-> REG
     TK --> GATEWAY
 
-    classDef done fill:#042f2e,stroke:#14b8a6,color:#ecfeff;
-    classDef plan fill:#1f2937,stroke:#64748b,color:#e2e8f0,stroke-dasharray: 5 5;
-    class GATEWAY,NS,REG,SRV,FW,PRX,S1,S2 done;
+    classDef core fill:#eff6ff,stroke:#3b82f6,color:#1e3a8a;
+    classDef registry fill:#fff7ed,stroke:#ea580c,color:#9a3412;
+    classDef service fill:#f0fdf4,stroke:#16a34a,color:#14532d;
+    classDef plan fill:#f8fafc,stroke:#94a3b8,color:#64748b,stroke-dasharray: 5 5;
+    class GATEWAY,SRV,FW,PRX core;
+    class NS,REG registry;
+    class S1,S2 service;
     class SUB,S3,ADM plan;
 ```
 
