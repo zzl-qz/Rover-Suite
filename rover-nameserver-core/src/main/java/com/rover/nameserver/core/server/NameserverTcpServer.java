@@ -29,17 +29,11 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 17:50:00
  * Description: Nameserver TCP 服务 + HTTP 管理口
  *
- * 核心职责：Nameserver 服务的总装配器与生命周期管理者：</p>
- * <ol>
- *     <li>构造全部业务组件（注册表、订阅管理、推送、健康检查、请求分发器、运行时）；</li>
- *     <li>组装并启动 Netty TCP 服务端（pipeline：解码器 → 编码器 → 业务 Handler）；</li>
- *     <li>启动健康检查线程与 HTTP 管理口；提供优雅关闭。</li>
- * </ol>
- *
- * 被 {@link com.rover.nameserver.server.bootstrap.NameserverApplication} 作为
- * 服务入口调用；内部的组件关系：注册表/推送/健康检查组成数据面，
- * dispatcher 是其上的控制面，{@code NameserverRuntime} 把这些组件包装成
- * 一个整体供管理口与管理配置热更新引用。</p>
+ * 这个类是什么：Nameserver 服务的总装配器与生命周期管理者。
+ * 核心职责：①构造全部业务组件（注册表、订阅、推送、健康检查、分发器、运行时）；
+ * ②组装并启动 Netty TCP 服务端（解码器 → 编码器 → 业务 Handler）；
+ * ③启动健康检查与管理口，提供优雅关闭。
+ * 被谁用：NameserverApplication 作为服务入口；NameserverRuntime 供管理口与配置热更新引用。
  */
 @Slf4j
 public class NameserverTcpServer {
@@ -66,7 +60,7 @@ public class NameserverTcpServer {
     private EventExecutorGroup bizGroup;
     private Channel serverChannel;
 
-    /** 便捷构造：使用默认内存注册表与默认写确认策略 */
+    /** 便捷构造：默认内存注册表 + 默认写确认策略 */
     public NameserverTcpServer(NameserverServerOptions options) {
         this(options, new InMemoryServiceRegistry(), new DefaultWriteAckPolicy());
     }

@@ -14,13 +14,10 @@ import java.util.List;
  * Created: 2026-08-08 17:30:00
  * Description: 消息解码，顺手处理粘包半包
  *
- * 核心职责：Netty 入站解码器，将字节流按协议帧头解析为 RoverMessage。
- * 基于 {@link ByteToMessageDecoder} 的累积缓冲机制处理 TCP 粘包/半包：帧头不足或
- * 消息体未收齐时直接 return，保留 readerIndex，等下次可读字节到达后再解析。
- *
- * 帧格式（22 字节帧头 + 可选消息体）：magic(2) + version(1) + type(1) + flags(2)
- * + requestId(8) + timeoutMs(4) + bodyLength(4)。任何字段非法（魔数错误、版本不符、
- * flags 不支持、超时/长度越界）都会 resetReaderIndex 后抛 ProtocolException。
+ * 这个类是什么：Netty 入站解码器，将字节流按协议帧头解析为 RoverMessage。
+ * 核心职责：基于 ByteToMessageDecoder 累积缓冲处理粘包/半包；帧头不足或 body
+ * 未收齐时保留 readerIndex 等待；魔数/版本/flags/长度非法时抛 ProtocolException。
+ * 被谁用：NameserverClient 连接 pipeline 最外层，位于 Encoder 之前。
  */
 public class RoverMessageDecoder extends ByteToMessageDecoder {
 

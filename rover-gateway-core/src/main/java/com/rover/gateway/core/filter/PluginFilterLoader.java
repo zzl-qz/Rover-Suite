@@ -19,6 +19,11 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
  * Description: 从 plugins 目录加载用户扩展 jar，并通过 SPI 发现 Filter
+ *
+ * 这个类是什么：Gateway 插件 Filter 的 ClassLoader + SPI 加载器。
+ * 核心职责：①扫描 plugins 目录下 jar 并建 URLClassLoader；②ServiceLoader 发现 Filter 实现；
+ * ③按全限定类名反射实例化配置里指定的 Filter。
+ * 被谁用：GatewayFilterAssembler 组装过滤器链时调用。
  */
 @Slf4j
 public class PluginFilterLoader {
@@ -32,6 +37,9 @@ public class PluginFilterLoader {
     /**
      * 扫 plugins 目录下的 jar，靠 SPI 找 Filter。
      * jar 里要有 META-INF/services/com.rover.common.spi.Filter
+     *
+     * @param pluginDir 插件目录路径，null 或空时用默认 "plugins"
+     * @return 去重后的 Filter 列表；目录不存在或无 jar 时返回空列表
      */
     public List<Filter> loadFromDirectory(String pluginDir) {
         Path directory = Path.of(pluginDir == null || pluginDir.isBlank() ? "plugins" : pluginDir);
@@ -69,6 +77,10 @@ public class PluginFilterLoader {
     /**
      * 按全限定类名实例化 Filter。
      * 优先用插件 ClassLoader，这样既能加载 plugins 里的类，也能加载 classpath 里的类。
+     *
+     * @param className Filter 全限定类名
+     * @return 新创建的 Filter 实例
+     * @throws IllegalStateException 类不存在、未实现 Filter 接口或无无参构造
      */
     public Filter createFilter(String className) {
         try {

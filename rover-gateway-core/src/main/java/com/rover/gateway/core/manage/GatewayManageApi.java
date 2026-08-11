@@ -28,22 +28,45 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-10 16:40:00
  * Description: Gateway 同口管理 API（/_manage/**）
+ *
+ * 这个类是什么：Gateway 内置的管理 HTTP 接口，与业务流量共用端口。
+ * 核心职责：提供 status、routes、configs 等 REST 风格端点；
+ * 路由和配置变更委托 GatewayRuntime 热更新并落盘 overlay。
+ * 被谁用：GatewayHttpServerHandler 在 /_manage 前缀请求时短路调用。
  */
 @Slf4j
 public class GatewayManageApi {
 
+    /** 管理 API 路径前缀。 */
     public static final String PREFIX = "/_manage";
 
+    /** 网关运行时，路由/配置热更新的实际操作对象。 */
     private final GatewayRuntime runtime;
 
+    /**
+     * @param runtime 网关运行时
+     */
     public GatewayManageApi(GatewayRuntime runtime) {
         this.runtime = runtime;
     }
 
+    /**
+     * 判断路径是否属于管理 API。
+     *
+     * @param path 请求路径（不含 query）
+     * @return true 表示走管理口
+     */
     public boolean supports(String path) {
         return path != null && path.startsWith(PREFIX);
     }
 
+    /**
+     * 分发管理请求到具体端点，统一 JSON 响应。
+     *
+     * @param ctx     Netty 通道上下文
+     * @param request HTTP 请求
+     * @param path    请求路径
+     */
     public void handle(ChannelHandlerContext ctx, FullHttpRequest request, String path) {
         try {
             if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/status").equals(path)) {
@@ -75,6 +98,7 @@ public class GatewayManageApi {
         }
     }
 
+    /** 处理 /_manage/routes：GET 列表、PUT 整表、POST 单条、DELETE 按 id 或 prefix。 */
     private void handleRoutes(ChannelHandlerContext ctx, FullHttpRequest request) {
         if (HttpMethod.GET.equals(request.method())) {
             writeJson(ctx, HttpResponseStatus.OK, routesJson(runtime.getRouteMatcher().listRoutes()));
@@ -113,6 +137,7 @@ public class GatewayManageApi {
                 ManageJson.object(Map.of("message", "routes 支持 GET/PUT/POST/DELETE")));
     }
 
+    /** 处理 POST /_manage/configs，热更新单个配置项。 */
     private void handleUpdateConfig(ChannelHandlerContext ctx, FullHttpRequest request) {
         String body = request.content().toString(StandardCharsets.UTF_8);
         String contentType = request.headers().get(HttpHeaderNames.CONTENT_TYPE);
@@ -143,6 +168,7 @@ public class GatewayManageApi {
         writeJson(ctx, HttpResponseStatus.OK, ManageJson.object(resp));
     }
 
+    /** 组装 GET /_manage/status 的 JSON 内容。 */
     private String statusJson() {
         Map<String, Object> status = new LinkedHashMap<>();
         status.put("component", "gateway");
@@ -159,6 +185,7 @@ public class GatewayManageApi {
         return ManageJson.object(status);
     }
 
+    /** 路由变更成功响应 JSON。 */
     private String routesApplyResponse(List<RouteConfig> routes, String message) {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("message", message);
@@ -168,10 +195,12 @@ public class GatewayManageApi {
         return ManageJson.object(resp);
     }
 
+    /** 路由列表 JSON 数组。 */
     private String routesJson(List<RouteConfig> routes) {
         return ManageJson.arrayOfObjects(routeMaps(routes));
     }
 
+    /** 把 RouteConfig 列表转成 Map 行，供 JSON 序列化。 */
     private List<Map<String, Object>> routeMaps(List<RouteConfig> routes) {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (RouteConfig route : routes) {
@@ -187,6 +216,7 @@ public class GatewayManageApi {
         return rows;
     }
 
+    /** 取 query 参数第一个值。 */
     private static String firstQuery(QueryStringDecoder decoder, String name) {
         List<String> values = decoder.parameters().get(name);
         if (values == null || values.isEmpty()) {
@@ -199,6 +229,7 @@ public class GatewayManageApi {
         return value == null ? "" : value;
     }
 
+    /** 写 JSON 响应到客户端。 */
     private static void writeJson(ChannelHandlerContext ctx, HttpResponseStatus status, String json) {
         byte[] body = json.getBytes(StandardCharsets.UTF_8);
         FullHttpResponse response = new DefaultFullHttpResponse(

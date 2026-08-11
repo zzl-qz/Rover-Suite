@@ -18,11 +18,10 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 17:55:00
  * Description: 客户端收包处理
  *
- * 核心职责：位于客户端 Netty 流水线（Decoder -> Encoder -> 本 handler）的最内层，
- * 处理所有入站 RoverMessage：服务端推送（PUSH_RESPONSE）落到 InstanceCache 并通知
- * 监听器；RPC 响应（COMMON_RESPONSE）按 requestId 到 PendingRequestTable 里 complete
- * 对应的 Future，完成请求响应的配对；连接断开时快速失败在途请求并通知
- * NameserverClient 进入重连状态。由 NameserverClient.connect 创建。
+ * 这个类是什么：客户端 Netty 流水线最内层的业务收包处理器。
+ * 核心职责：①推送消息落到 InstanceCache；②RPC 响应按 requestId 配对 complete；
+ * ③连接断开时快速失败在途请求并触发重连。
+ * 被谁用：NameserverClient.connect 创建并加入 pipeline。
  */
 @Slf4j
 public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMessage> {

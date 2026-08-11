@@ -10,15 +10,10 @@ import lombok.Data;
  * Created: 2026-08-08 17:50:00
  * Description: 某次变更后的服务快照
  *
- * 核心职责：描述一次注册/注销/剔除变更完成后，某个服务在某个分组下的
- * 完整实例状态与版本信息，是注册表与推送/查询之间的标准数据载体。</p>
- *
- * 被 {@link InMemoryServiceRegistry} 在每次变更后生成、被
- * {@link com.rover.nameserver.core.push.PushService} 作为推送体数据源、
- * 被请求分发器在新订阅建立时用「当前全量」构造成初始推送。</p>
- *
- * revision 字段是关键：随每次变更递增，订阅方客户端以此做新旧判断与去重；
- * group 标注变更发生时的分组上下文（通配订阅仍会收到，由客户端侧自行过滤）。</p>
+ * 这个类是什么：一次注册/注销/剔除变更完成后的服务状态载体。
+ * 核心职责：携带 serviceName、group、revision 与实例全量列表，
+ * 供推送与查询之间传递；revision 用于客户端去重。
+ * 被谁用：InMemoryServiceRegistry 生成、PushService 推送、RequestDispatcher 订阅初始推送。
  */
 @Data
 public class RegistrySnapshot {

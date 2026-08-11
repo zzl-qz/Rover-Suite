@@ -14,13 +14,11 @@ import java.util.function.Consumer;
  * Created: 2026-08-08 17:55:00
  * Description: 客户端本地实例缓存
  *
- * 核心职责：在客户端本地以服务维度缓存 Nameserver 返回的实例快照，
- * 供查询 API 与订阅推送共用一份数据，并对外提供变更监听回调。
- * 由 NameserverClient 持有使用：query 成功后写入快照，服务端推送到达时
- * 由 onPush 更新缓存并触发监听器。
- *
- * 线程安全：cache 用 ConcurrentHashMap，listeners 用 CopyOnWriteArrayList，可被
- * Netty IO 线程与业务线程并发访问。实例列表在写入/读取时均做防御性拷贝，避免外部修改。
+ * 这个类是什么：客户端本地以服务维度缓存 Nameserver 返回的实例快照，
+ * 供查询 API 与订阅推送共用一份数据。
+ * 核心职责：①query 成功后写入快照；②推送到达时更新缓存并触发监听器；
+ * ③提供 revision 供增量订阅；④实例列表防御性拷贝，保证线程安全。
+ * 被谁用：NameserverClient 持有；query/getCachedInstances/addPushListener 共用。
  */
 public class InstanceCache {
 
@@ -84,6 +82,8 @@ public class InstanceCache {
     /**
      * 读取某服务当前缓存的版本号，供订阅时携带 knownRevision 做增量判断。
      *
+     * @param serviceName 服务名
+     * @param group       分组名，可为 null
      * @return 缓存版本号；无缓存时返回 0
      */
     public long revision(String serviceName, String group) {

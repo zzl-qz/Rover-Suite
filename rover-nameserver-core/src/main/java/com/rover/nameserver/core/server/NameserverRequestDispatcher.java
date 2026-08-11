@@ -32,19 +32,12 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 17:50:00
  * Description: 按消息类型分发处理
  *
- * 核心职责：Nameserver 的请求处理中枢。接收解码后的 {@link RoverMessage}，
- * 按消息类型 switch 分发到注册、注销、心跳、查询、订阅、退订六类业务处理，
- * 统一负责参数校验、ACK 协商、结果响应与变更推送的触发。</p>
- *
- * 被 {@link NameserverServerHandler}（Netty 业务线程组）调用；
- * 依赖的兄弟组件：{@link ServiceRegistry}（数据面）、{@link SubscriptionManager}
- * 与 {@link PushService}（订阅推送链路）、{@link WriteAckPolicy}（确认语义）、
- * {@link NameserverServerOptions}（服务端参数）。</p>
- *
- * 连接状态管理：每个连接在 channel 属性上登记它注册过的实例集合
- * （{@link #BOUND_INSTANCES}）。连接断开时 {@link #onChannelInactive}
- * 据此自动注销这些实例并广播——这是「客户端进程崩溃来不及主动注销」
- * 场景下的恢复机制。</p>
+ * 这个类是什么：Nameserver 的请求处理中枢。
+ * 核心职责：按消息类型分发到注册/注销/心跳/查询/订阅/退订六类业务；
+ * 统一参数校验、ACK 协商、结果响应与变更推送触发。
+ * 连接断开时按 channel 属性自动注销该连接绑定的实例（断线恢复）。
+ * 被谁用：NameserverServerHandler 在 biz 线程组调用；
+ * 依赖 ServiceRegistry、SubscriptionManager、PushService、WriteAckPolicy、NameserverServerOptions。
  */
 @Slf4j
 public class NameserverRequestDispatcher {
@@ -120,14 +113,10 @@ public class NameserverRequestDispatcher {
     }
 
     /**
-     * 连接断开恢复逻辑：先清理该连接的全部订阅关系，再按
-     * channel 属性里登记的实例（service#instance 集合）逐一注销，
-     * 每次注销产生快照即推送——保证客户端进程崩溃后其实例
-     * 不会长期残留占用注册表。
+     * 连接断开恢复：清订阅，并把这条连接绑过的实例逐一注销并推送。
      *
      * @param channel 已断开的连接
      */
-    /** 连接断了：清订阅，并把这条连接绑过的实例摘掉 */
     public void onChannelInactive(Channel channel) {
         subscriptionManager.removeChannel(channel);
         // 取并清空绑定集合，防止重复回调时二次清理
@@ -330,10 +319,8 @@ public class NameserverRequestDispatcher {
     }
 
     /**
-     * 把 (serviceName, instanceId) 登记到连接的 BOUND_INSTANCES 属性。
-     * 连接断开时据此自动注销实例（断线恢复机制的数据基础）。
+     * register 成功后把实例绑到连接，断线时可自动清理。
      */
-    /** register 成功后调用 */
     private void bindInstance(Channel channel, String serviceName, String instanceId) {
         Set<String> bound = channel.attr(BOUND_INSTANCES).get();
         if (bound == null) {
@@ -344,9 +331,8 @@ public class NameserverRequestDispatcher {
     }
 
     /**
-     * 主动注销时同步摘除连接绑定，避免断线回调再次注销同一实例（幂等保护）。
+     * 主动 unregister 时同步摘掉绑定，避免断连时重复清理。
      */
-    /** 主动 unregister 时同步摘掉绑定，避免断连时重复清理 */
     private void unbindInstance(Channel channel, String serviceName, String instanceId) {
         Set<String> bound = channel.attr(BOUND_INSTANCES).get();
         if (bound != null) {

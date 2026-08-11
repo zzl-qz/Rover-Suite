@@ -13,15 +13,13 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 15:13:00
  * Description: 加载 Nameserver YAML 配置文件
  *
- * 核心职责：按优先级把 rover-nameserver.yml 读取为 {@link NameserverConfig}：</p>
- * <ol>
- *     <li>优先加载工作目录下的外部配置 {@code config/rover-nameserver.yml}（便于部署环境覆盖）；</li>
- *     <li>其次加载 classpath 内的同名配置文件；</li>
- *     <li>以上都不存在时返回全默认配置对象，服务仍可启动。</li>
- * </ol>
- *
- * 被 {@link com.rover.nameserver.server.bootstrap.NameserverApplication} 调用；
- * 解析失败（文件损坏/格式错误）抛出 IllegalStateException 终止启动。</p>
+ * 这个类是什么：把 rover-nameserver.yml 读成 {@link NameserverConfig} 的加载器。
+ * 核心职责：按优先级加载——
+ * ①工作目录外部配置 {@code config/rover-nameserver.yml}（方便部署覆盖）；
+ * ②classpath 内同名文件；
+ * ③都没有就返回全默认配置，服务仍可启动。
+ * 被谁用：{@link com.rover.nameserver.server.bootstrap.NameserverApplication}；
+ * 解析失败（文件坏了/格式错）抛 IllegalStateException，直接终止启动。
  */
 @Slf4j
 public class NameserverConfigLoader {

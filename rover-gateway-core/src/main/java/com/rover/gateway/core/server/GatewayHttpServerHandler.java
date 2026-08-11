@@ -22,18 +22,35 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 14:22:00
  * Description: 接收外部 HTTP 请求；管理口短路，其余走过滤器链
+ *
+ * 这个类是什么：Netty 入站 Handler，Gateway 请求分发入口。
+ * 核心职责：/_manage/** 交给 GatewayManageApi；其余请求创建 GatewayRequestContext
+ * 并启动 DefaultFilterChain；异常时写 500 或关闭连接。
+ * 被谁用：GatewayHttpServer 在 child pipeline 里注册，跑在业务线程池。
  */
 @Slf4j
 public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
+    /** 网关运行时可变状态，含当前过滤器链和路由表。 */
     private final GatewayRuntime runtime;
+
+    /** 同口管理 API 处理器。 */
     private final GatewayManageApi manageApi;
 
+    /**
+     * @param runtime 网关运行时
+     */
     public GatewayHttpServerHandler(GatewayRuntime runtime) {
         this.runtime = runtime;
         this.manageApi = new GatewayManageApi(runtime);
     }
 
+    /**
+     * 收到完整 HTTP 请求后的入口：管理口短路，业务请求走过滤器链。
+     *
+     * @param ctx     Netty 通道上下文
+     * @param request 完整 HTTP 请求
+     */
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) {
         String requestPath = new QueryStringDecoder(request.uri()).path();
@@ -56,6 +73,12 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
         }
     }
 
+    /**
+     * 管道异常处理：body 过大返回 413，其它异常打日志并关连接。
+     *
+     * @param ctx   Netty 通道上下文
+     * @param cause 异常原因
+     */
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         if (cause instanceof TooLongFrameException) {
@@ -66,6 +89,7 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
         ctx.close();
     }
 
+    /** 向客户端写纯文本响应。 */
     private void writeText(ChannelHandlerContext ctx, HttpResponseStatus status, String responseBody) {
         byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
         FullHttpResponse response = new DefaultFullHttpResponse(

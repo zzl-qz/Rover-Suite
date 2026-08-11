@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class PendingRequestTable<T> implements AutoCloseable {
 
     private final Map<Long, Entry<T>> pending = new ConcurrentHashMap<>(); // 等待列表
-    private final ScheduledExecutorService timeoutScheduler; // 执行线程池
+    private final ScheduledExecutorService timeoutScheduler; // 过期删除执行线程池
     private final int maxPending; // 最大等待数
     private final AtomicBoolean closed = new AtomicBoolean(false); // 是否已关闭
     private final boolean ownsScheduler; // 是否拥有线程池
@@ -165,6 +165,7 @@ public class PendingRequestTable<T> implements AutoCloseable {
             return;
         }
         failAll(new IllegalStateException("PendingRequestTable 已关闭"));
+        // 只有当这个线程池是我们自己创建的，不是业务方传递进来的才要去掉
         if (ownsScheduler) {
             timeoutScheduler.shutdownNow();
         }

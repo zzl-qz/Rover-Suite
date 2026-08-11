@@ -7,14 +7,10 @@ import com.rover.common.protocol.AckMode;
  * Created: 2026-08-08 17:40:00
  * Description: 默认写确认策略
  *
- * {@link WriteAckPolicy} 的默认实现，对应单机/简单部署场景：</p>
- * <ul>
- *     <li>{@link #resolve}：服务端默认值兜底，仅当允许客户端覆盖且客户端明确指定时才采用客户端模式；</li>
- *     <li>{@link #requiredAcks}：单机（集群未开启或副本数 1）一律返回 1；
- *     集群模式下 IMMEDIATE=1、MAJORITY=过半（factor/2+1）、ALL=全部副本。</li>
- * </ul>
- *
- * 被 NameserverTcpServer 默认装配并传给请求分发器；后续集群实现可替换本类。</p>
+ * 这个类是什么：WriteAckPolicy 的默认实现，对应单机/简单部署场景。
+ * 核心职责：①resolve 以服务端默认为准，允许覆盖且客户端显式指定时才用客户端模式；
+ * ②requiredAcks 单机恒为 1，集群下 IMMEDIATE=1、MAJORITY=过半、ALL=全副本。
+ * 被谁用：NameserverTcpServer 默认装配并传给请求分发器；后续集群实现可替换本类。
  */
 public class DefaultWriteAckPolicy implements WriteAckPolicy {
 

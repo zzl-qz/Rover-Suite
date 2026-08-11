@@ -9,14 +9,10 @@ import lombok.Getter;
  * Created: 2026-08-08 17:50:00
  * Description: 服务端运行参数
  *
- * 核心职责：以不可变 POJO 集中承载 Nameserver 服务端的全部启动参数，
- * 由 {@link NameserverTcpServer} 在构造时消费，并通过 Builder 模式
- * 供上层应用（如 NameserverApplication 从 YAML）灵活装配。</p>
- *
- * 被谁用：{@link NameserverTcpServer}（端口、超时、开关）、
- * {@link NameserverRequestDispatcher}（ACK 协商、节点标注、副本/集群参数）。
- * 与 {@link com.rover.nameserver.server.bootstrap.config.NameserverConfig}
- * 是「配置源 → 运行参数」的上下游关系。</p>
+ * 这个类是什么：不可变 POJO，集中承载 Nameserver 服务端全部启动参数。
+ * 核心职责：由 Builder 供上层（NameserverApplication / YAML）装配，
+ * 供 NameserverTcpServer 与 NameserverRequestDispatcher 消费端口、超时、ACK 等配置。
+ * 被谁用：NameserverTcpServer、NameserverRequestDispatcher、NameserverRuntime。
  */
 @Getter
 @Builder

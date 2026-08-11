@@ -8,6 +8,10 @@ import lombok.Data;
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
  * Description: 描述 Gateway 过滤器加载配置
+ *
+ * 这个类是什么：过滤器链组装时的配置载体，来自 YAML 或管理端。
+ * 核心职责：控制是否加载外挂 Filter、plugins 目录位置、额外指定类名列表。
+ * 被谁用：GatewayRuntime、GatewayFilterAssembler 读取并决定加载哪些 Filter。
  */
 @Data
 public class FilterSettings {

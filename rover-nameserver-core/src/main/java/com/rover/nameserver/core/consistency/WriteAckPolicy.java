@@ -7,17 +7,11 @@ import com.rover.common.protocol.AckMode;
  * Created: 2026-08-08 17:40:00
  * Description: 写确认策略，后面集群可以换实现
  *
- * 核心职责：定义「写请求需要多少个确认才算成功」的决策抽象，包含两层能力：</p>
- * <ol>
- *     <li>{@link #resolve}：在服务端默认、客户端请求、是否允许客户端覆盖之间
- *     协商出本次写请求实际生效的 ACK 模式；</li>
- *     <li>{@link #requiredAcks}：把 ACK 模式换算成具体需要等待的确认数量。</li>
- * </ol>
- *
- * 被 {@link com.rover.nameserver.core.server.NameserverRequestDispatcher} 在
- * 注册/注销时调用，结果随响应返回给客户端。当前单机部署由
- * {@link DefaultWriteAckPolicy} 实现（单机一律 1 个确认）；后续做集群时
- * 可替换为基于副本同步的实现，上层分发逻辑无需改动。</p>
+ * 这个接口是什么：写确认（Write-Ack）策略抽象。
+ * 核心职责：①resolve 在服务端默认、客户端请求、是否允许覆盖之间协商 ACK 模式；
+ * ②requiredAcks 把 ACK 模式换算成具体需要等待的确认数量。
+ * 被谁用：NameserverRequestDispatcher 注册/注销时调用；当前 DefaultWriteAckPolicy 实现，
+ * 后续集群可替换实现，上层分发逻辑无需改动。
  */
 public interface WriteAckPolicy {
 

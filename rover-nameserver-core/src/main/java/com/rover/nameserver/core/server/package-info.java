@@ -7,6 +7,6 @@
  * （解码/编码/业务 handler 的 pipeline 与线程模型），
  * {@link NameserverServerHandler} 承接连接生命周期与消息进入点，
  * {@link NameserverRequestDispatcher} 按消息类型分发到注册表/订阅/推送等业务组件，
- * {@link NameserverServerOptions} 是服务端全部运行参数的不可变载体。</p>
+ * {@link NameserverServerOptions} 是服务端全部运行参数的不可变载体。
  */
 package com.rover.nameserver.core.server;

@@ -9,13 +9,11 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 14:59:00
  * Description: 把配置变更应用到 Nameserver 运行时
  *
- * 核心职责：把一条 {@link ConfigChangeEvent}（某个配置项的新旧值）翻译成
- * 对运行时组件的实际 setter 调用，是配置「热更新」的落点执行器。</p>
- *
- * 被 {@link NameserverRuntimeConfigManager} 调用（updateConfig / reapplyAll 时触发），
- * 持有并操作运行时顶层组件 {@link NameserverRuntime}（由启动装配时通过
- * {@link #bind(NameserverRuntime)} 注入）。不支持热更新的配置项在此被忽略并告警，
- * 不修改任何运行时状态。</p>
+ * 这个类是什么：配置热更新的落点执行器。
+ * 核心职责：把 ConfigChangeEvent 翻译成对 HealthChecker、PushService 等组件的 setter 调用；
+ * runtime 未绑定或 event 为 null 时直接跳过。
+ * 被谁用：NameserverRuntimeConfigManager 在 updateConfig / reapplyAll 时调用；
+ * NameserverTcpServer 启动时 bind(runtime)。
  */
 @Slf4j
 public class NameserverRuntimeConfigApplier {

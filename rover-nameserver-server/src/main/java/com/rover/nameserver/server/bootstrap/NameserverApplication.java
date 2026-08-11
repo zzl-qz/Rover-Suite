@@ -11,16 +11,13 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 10:34:00
  * Description: 启动 Rover nameserver 服务
  *
- * 核心职责：Nameserver 进程的入口类。main 方法执行启动编排：</p>
- * <ol>
- *     <li>用 {@link NameserverConfigLoader} 加载 rover-nameserver.yml 配置；</li>
- *     <li>把配置映射为核心模块的运行参数 {@link NameserverServerOptions}；</li>
- *     <li>构造并启动 {@link NameserverTcpServer}（TCP 注册发现 + HTTP 管理口）；</li>
- *     <li>注册 JVM 关闭钩子，进程退出（含 Ctrl+C）时优雅关闭。</li>
- * </ol>
- *
- * 被运维/部署方以 java 命令直接启动；装配的组装细节全部在核心模块完成，
- * 本类只负责「读取配置 → 启动」两层。</p>
+ * 这个类是什么：Nameserver 进程入口。
+ * 核心职责：main 里做启动编排——
+ * ①用 {@link NameserverConfigLoader} 加载 rover-nameserver.yml；
+ * ②映射成核心模块的 {@link NameserverServerOptions}；
+ * ③构造并启动 {@link NameserverTcpServer}（TCP 注册发现 + HTTP 管理口）；
+ * ④注册 JVM 关闭钩子，进程退出（含 Ctrl+C）时优雅关闭。
+ * 被谁用：运维/部署方用 java 命令直接启动；装配细节在核心模块，本类只管「读配置 → 启动」。
  */
 @Slf4j
 public class NameserverApplication {

@@ -11,16 +11,10 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 17:50:00
  * Description: Nameserver 连接处理器
  *
- * 核心职责：Netty pipeline 的末端业务 Handler，承接连接生命周期事件
- * （建立/断开/异常）与解码后的协议消息，是网络层与业务分发层之间的桥。</p>
- *
- * 被 {@link NameserverTcpServer} 挂到 {@code ChannelInitializer} 的 pipeline 上，
- * 且运行在独立业务线程组（bizGroup）上，避免业务耗时阻塞 IO 线程。
- * 业务真正执行交给 {@link NameserverRequestDispatcher}——本类保持轻薄，
- * 只做事件转发与日志。</p>
- *
- * 消息流：RoverMessageDecoder 解码 → 本 Handler 的 channelRead0 →
- * dispatcher.dispatch → 响应经 RoverMessageEncoder 编码返回。</p>
+ * 这个类是什么：Netty pipeline 末端业务 Handler，网络层与业务分发层之间的桥。
+ * 核心职责：承接连接建立/断开/异常与解码后的协议消息，转交 NameserverRequestDispatcher；
+ * 运行在独立 biz 线程组，避免业务耗时阻塞 IO 线程。
+ * 被谁用：NameserverTcpServer 挂到 ChannelInitializer pipeline 上。
  */
 @Slf4j
 public class NameserverServerHandler extends SimpleChannelInboundHandler<RoverMessage> {

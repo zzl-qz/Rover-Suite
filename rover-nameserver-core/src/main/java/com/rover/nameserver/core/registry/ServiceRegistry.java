@@ -10,16 +10,10 @@ import java.util.List;
  * Created: 2026-08-08 17:50:00
  * Description: 服务注册表
  *
- * 核心职责：服务注册中心的数据面抽象，定义实例生命周期管理
- * （注册/注销/心跳）与查询（按服务、按组、健康过滤）的契约，
- * 并暴露服务版本号与内部记录枚举能力。</p>
- *
- * 被谁用：{@link com.rover.nameserver.core.server.NameserverRequestDispatcher}
- * 处理注册/注销/心跳/查询请求时调用；{@link com.rover.nameserver.core.health.HealthChecker}
- * 扫描与剔除过期实例时调用；push 链路经由 dispatch 间接消费返回值快照。</p>
- *
- * 当前唯一实现为单机内存版 {@link InMemoryServiceRegistry}；
- * 后续集群或多存储实现（如持久化/多副本）实现本接口即可替换，签名约定不变。</p>
+ * 这个接口是什么：服务注册中心的数据面抽象。
+ * 核心职责：实例生命周期（注册/注销/心跳）与查询（按服务、组、健康过滤）；
+ * 暴露服务 revision 与内部记录枚举。
+ * 被谁用：NameserverRequestDispatcher、HealthChecker；当前实现 InMemoryServiceRegistry。
  */
 public interface ServiceRegistry {
 

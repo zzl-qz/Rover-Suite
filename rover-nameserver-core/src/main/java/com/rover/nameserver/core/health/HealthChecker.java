@@ -20,22 +20,14 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 17:50:00
  * Description: 定时扫超时实例，参数可热更新
  *
- * 核心职责：用一个独立守护线程按固定间隔扫描注册表全部实例，按两类规则处理：</p>
- * <ul>
- *     <li><b>临时实例（ephemeral）</b>：静默时间超过 {@code instanceExpireMillis}
- *     直接剔除出注册表，并向订阅方推送变更；</li>
- *     <li><b>非临时实例</b>：静默时间超过 {@code heartbeatTimeoutMillis}
- *     先标记为不健康（不下线），继续保留供查询。</li>
- * </ul>
+ * 这个类是什么：独立守护线程驱动的健康检查器，周期性扫描注册表全部实例。
+ * 核心职责：①临时实例（ephemeral）静默超过 instanceExpireMillis 直接剔除并推送；
+ * ②非临时实例超过 heartbeatTimeoutMillis 先标记不健康不下线；
+ * ③健康检查间隔、心跳超时、过期时间支持热更新（改间隔会重排调度）。
+ * 被谁用：NameserverTcpServer 创建并启停；配置经 NameserverRuntimeConfigApplier 热更新。
+ * 依赖 ServiceRegistry 读记录、PushService 广播剔除变更。
  *
- * 被 NameserverTcpServer 创建并启动/关闭；健康检查间隔、心跳超时、过期时间
- * 三个参数经 {@link com.rover.nameserver.core.config.NameserverRuntimeConfigApplier}
- * 热更新（其中「改间隔」会重新排定调度任务）。依赖 {@link ServiceRegistry} 读取记录、
- * {@link PushService} 广播剔除引发的变更。</p>
- *
- * 时间语义说明：实例的「心跳年龄」idle = now - lastHeartbeatMillis，
- * 由 {@link com.rover.nameserver.core.model.InstanceRecord#touchHeartbeat()}
- * 每次收到心跳时刷新；健康检查仅负责消费该时间做判定，不修改注册表（除剔除外）。</p>
+ * 时间语义：idle = now - lastHeartbeatMillis，由 InstanceRecord#touchHeartbeat 刷新。
  */
 @Slf4j
 public class HealthChecker {
@@ -84,14 +76,17 @@ public class HealthChecker {
         this.instanceExpireMillis = new AtomicLong(instanceExpireMillis);
     }
 
+    /** 当前心跳超时阈值（ms） */
     public long getHeartbeatTimeoutMillis() {
         return heartbeatTimeoutMillis.get();
     }
 
+    /** 当前健康检查间隔（ms） */
     public long getCheckIntervalMillis() {
         return checkIntervalMillis.get();
     }
 
+    /** 当前临时实例过期时间（ms） */
     public long getInstanceExpireMillis() {
         return instanceExpireMillis.get();
     }

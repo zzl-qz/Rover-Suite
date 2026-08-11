@@ -18,24 +18,43 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 14:59:00
  * Description: 维护 Gateway 可热更新运行时配置，并落盘 overlay
+ *
+ * 这个类是什么：RuntimeConfigManager 的 Gateway 实现，管理三项可热更配置。
+ * 核心职责：注册 filter.enabled、loadbalance.strategy、request.timeoutMillis；
+ * 支持 seed/loadOverlay/reapplyAll 启动流程；updateConfig 校验、apply、持久化 overlay。
+ * 被谁用：GatewayHttpServer 创建并绑定 GatewayRuntime；GatewayManageApi 查询/更新配置。
  */
 @Slf4j
 public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
 
+    /** 默认 overlay 文件路径。 */
     public static final Path DEFAULT_OVERLAY = Path.of("config", "gateway-runtime.overlay.json");
 
+    /** 内存中的配置项表，key -> ConfigItem。 */
     private final Map<String, ConfigItem> configs = new ConcurrentHashMap<>();
+
+    /** 配置变更应用到 GatewayRuntime 的桥接器。 */
     private final GatewayRuntimeConfigApplier applier;
+
+    /** overlay 持久化存储。 */
     private final RuntimeConfigOverlayStore overlayStore;
 
+    /** 使用默认 applier 和 overlay 路径构造，并注册三项默认配置。 */
     public GatewayRuntimeConfigManager() {
         this(new GatewayRuntimeConfigApplier(), new RuntimeConfigOverlayStore(DEFAULT_OVERLAY));
     }
 
+    /**
+     * @param applier 配置应用器
+     */
     public GatewayRuntimeConfigManager(GatewayRuntimeConfigApplier applier) {
         this(applier, new RuntimeConfigOverlayStore(DEFAULT_OVERLAY));
     }
 
+    /**
+     * @param applier      配置应用器
+     * @param overlayStore overlay 存储
+     */
     public GatewayRuntimeConfigManager(
             GatewayRuntimeConfigApplier applier, RuntimeConfigOverlayStore overlayStore) {
         this.applier = applier;
@@ -45,15 +64,22 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         addConfig("gateway.request.timeoutMillis", "30000", "30000", "网关请求超时时间");
     }
 
+    /** @return 配置应用器，用于 bind GatewayRuntime */
     public GatewayRuntimeConfigApplier getApplier() {
         return applier;
     }
 
+    /** @return overlay 存储，供 status 接口展示路径 */
     public RuntimeConfigOverlayStore getOverlayStore() {
         return overlayStore;
     }
 
-    /** 启动时用真实 YAML 灌初值，不触发 apply */
+    /**
+     * 启动时用真实 YAML 灌初值，不触发 apply。
+     *
+     * @param key   配置 key
+     * @param value 配置值
+     */
     public void seed(String key, String value) {
         ConfigItem item = configs.get(key);
         if (item != null && value != null) {
@@ -61,7 +87,7 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         }
     }
 
-    /** YAML 之后叠 overlay，仍不 apply */
+    /** YAML 之后叠 overlay 文件，仍不 apply。 */
     public void loadOverlayIfPresent() {
         if (!overlayStore.exists()) {
             return;
@@ -76,7 +102,7 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
                 overlayStore.getPath().toAbsolutePath(), overlay.size());
     }
 
-    /** applier bind 之后，把当前值真正打进运行时 */
+    /** applier bind 之后，把当前值真正打进运行时。 */
     public void reapplyAll() {
         for (ConfigItem item : listConfigs()) {
             ConfigChangeEvent event = new ConfigChangeEvent(
@@ -89,6 +115,11 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         }
     }
 
+    /**
+     * 返回当前组件暴露给管理端的配置项副本。
+     *
+     * @return 按 key 排序的配置项列表
+     */
     @Override
     public List<ConfigItem> listConfigs() {
         List<ConfigItem> items = new ArrayList<>(configs.size());
@@ -99,11 +130,26 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         return items;
     }
 
+    /**
+     * 判断当前组件是否管理指定配置项。
+     *
+     * @param key 配置项 key
+     * @return true 表示该 key 由本组件接管
+     */
     @Override
     public boolean supports(String key) {
         return configs.containsKey(key);
     }
 
+    /**
+     * 更新指定配置项：校验 → 写内存 → apply → 落盘 overlay。
+     *
+     * @param key   配置项 key
+     * @param value 新的配置值
+     * @return 封装了新旧值与生效方式的变更事件
+     * @throws IllegalArgumentException     未知 key 或值非法
+     * @throws UnsupportedOperationException 配置项不支持热更新
+     */
     @Override
     public ConfigChangeEvent updateConfig(String key, String value) {
         ConfigItem item = configs.get(key);
@@ -136,6 +182,7 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         return event;
     }
 
+    /** 把当前全部配置快照写入 overlay 文件。 */
     private void persistOverlay() {
         Map<String, String> snapshot = new LinkedHashMap<>();
         for (ConfigItem item : listConfigs()) {
@@ -144,6 +191,7 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         overlayStore.save(snapshot);
     }
 
+    /** 按 key 校验配置值合法性。 */
     private void validate(String key, String value) {
         if ("gateway.loadbalance.strategy".equals(key)) {
             String strategy = value.toLowerCase();
@@ -164,6 +212,7 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         }
     }
 
+    /** 注册一项可热更配置。 */
     private void addConfig(String key, String value, String defaultValue, String description) {
         configs.put(
                 key,
@@ -176,6 +225,7 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
                         false));
     }
 
+    /** 深拷贝 ConfigItem，避免外部修改内部状态。 */
     private static ConfigItem copyOf(ConfigItem item) {
         return new ConfigItem(
                 item.getKey(),

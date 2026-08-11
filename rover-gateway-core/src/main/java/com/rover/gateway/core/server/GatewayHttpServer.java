@@ -28,16 +28,30 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 14:22:00
  * Description: 启动 Gateway HTTP 服务，按发现模式组装过滤器链
+ *
+ * 这个类是什么：Gateway 进程的 Netty HTTP 服务端入口。
+ * 核心职责：①按发现模式创建 ServiceDiscovery 和 GatewayRuntime；
+ * ②启动 Netty 监听端口，IO 线程收包、业务线程池跑过滤器链；
+ * ③shutdown 时优雅关闭线程池和发现客户端。
+ * 被谁用：rover-gateway 启动模块创建并 start/shutdown。
  */
 @Slf4j
 public class GatewayHttpServer {
 
+    /** 业务线程池大小，至少 4，随 CPU 核数放大。 */
     private static final int BIZ_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
 
+    /** 监听端口。 */
     @Getter
     private final int port;
+
+    /** 单请求最大 body 字节数，超过 TooLongFrameException。 */
     private final int maxContentLengthBytes;
+
+    /** 服务发现客户端，STATIC 时为 NoopServiceDiscovery。 */
     private final ServiceDiscovery serviceDiscovery;
+
+    /** 网关运行时可变状态，含路由、过滤器链、配置管理。 */
     @Getter
     private final GatewayRuntime runtime;
 
@@ -46,14 +60,35 @@ public class GatewayHttpServer {
     private EventExecutorGroup bizGroup;
     private Channel serverChannel;
 
+    /**
+     * 最简构造：仅指定端口，其余用默认值。
+     *
+     * @param port 监听端口
+     */
     public GatewayHttpServer(int port) {
         this(port, List.of(), 1024 * 1024, 3000, 30000, new FilterSettings(), defaultStaticDiscovery());
     }
 
+    /**
+     * 指定端口和初始路由表。
+     *
+     * @param port   监听端口
+     * @param routes 初始路由列表
+     */
     public GatewayHttpServer(int port, List<RouteConfig> routes) {
         this(port, routes, 1024 * 1024, 3000, 30000, new FilterSettings(), defaultStaticDiscovery());
     }
 
+    /**
+     * 指定端口、路由、body 上限和代理超时。
+     *
+     * @param port                   监听端口
+     * @param routes                 初始路由列表
+     * @param maxContentLengthBytes  单请求最大 body 字节
+     * @param connectTimeoutMillis   代理连接超时
+     * @param requestTimeoutMillis   代理请求超时
+     * @param filterSettings         过滤器加载配置
+     */
     public GatewayHttpServer(
             int port,
             List<RouteConfig> routes,
@@ -65,6 +100,17 @@ public class GatewayHttpServer {
                 filterSettings, defaultStaticDiscovery());
     }
 
+    /**
+     * 全参数构造，组装 GatewayRuntime 并加载配置 overlay。
+     *
+     * @param port                   监听端口
+     * @param routes                 初始路由列表
+     * @param maxContentLengthBytes  单请求最大 body 字节
+     * @param connectTimeoutMillis   代理连接超时
+     * @param requestTimeoutMillis   代理请求超时
+     * @param filterSettings         过滤器加载配置
+     * @param discoverySettings      服务发现配置
+     */
     public GatewayHttpServer(
             int port,
             List<RouteConfig> routes,
@@ -100,6 +146,11 @@ public class GatewayHttpServer {
         configManager.reapplyAll();
     }
 
+    /**
+     * 启动服务发现、Netty 服务端并开始监听。
+     *
+     * @throws IllegalStateException 启动被中断或 Netty bind 失败
+     */
     public void start() {
         serviceDiscovery.start();
 
@@ -134,6 +185,7 @@ public class GatewayHttpServer {
         }
     }
 
+    /** 关闭 Netty 通道、线程池和服务发现客户端。 */
     public void shutdown() {
         if (serverChannel != null) {
             serverChannel.close();
@@ -154,6 +206,7 @@ public class GatewayHttpServer {
         }
     }
 
+    /** 按 discovery.type 创建对应的 ServiceDiscovery 实现。 */
     private static ServiceDiscovery createServiceDiscovery(DiscoverySettings settings) {
         if (settings.getType() == DiscoveryType.NAMESERVER) {
             return new NameserverServiceDiscovery(settings);
@@ -161,6 +214,7 @@ public class GatewayHttpServer {
         return new NoopServiceDiscovery();
     }
 
+    /** 返回 type=STATIC 的默认发现配置。 */
     private static DiscoverySettings defaultStaticDiscovery() {
         DiscoverySettings settings = new DiscoverySettings();
         settings.setType(DiscoveryType.STATIC);

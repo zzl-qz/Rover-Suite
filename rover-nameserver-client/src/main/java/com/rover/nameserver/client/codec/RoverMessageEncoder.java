@@ -13,10 +13,10 @@ import io.netty.handler.codec.MessageToByteEncoder;
  * Created: 2026-08-08 17:30:00
  * Description: 消息编码
  *
- * 核心职责：Netty 出站编码器，将 RoverMessage 对象按协议帧格式写入 ByteBuf，
- * 与 {@link RoverMessageDecoder} 的解析格式严格对应：
- * magic(2) + version(1) + type(1) + flags(2) + requestId(8) + timeoutMs(4)
- * + bodyLength(4) + body(可变)。
+ * 这个类是什么：Netty 出站编码器，将 RoverMessage 按协议帧格式写入 ByteBuf。
+ * 核心职责：按 magic/version/type/flags/requestId/timeout/body 顺序写帧，
+ * 写出前校验 body 长度与 flags 合法性。
+ * 被谁用：NameserverClient 连接 pipeline，位于 Decoder 之后、Handler 之前。
  */
 public class RoverMessageEncoder extends MessageToByteEncoder<RoverMessage> {
 

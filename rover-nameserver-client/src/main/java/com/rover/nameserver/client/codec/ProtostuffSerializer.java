@@ -13,12 +13,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * Created: 2026-08-08 17:30:00
  * Description: Protostuff 序列化工具
  *
- * 核心职责：提供基于 Protostuff 的对象序列化/反序列化能力，供编解码模块
- * （RoverMessageCodecSupport、Decoder/Encoder）与 NameserverClient 使用。
- *
- * 关键设计：RuntimeSchema 按目标类缓存（SCHEMA_CACHE），避免每次序列化都做一次
- * 反射构建；LinkedBuffer 不能跨线程并发复用，故用 ThreadLocal 为每个线程持有一份，
- * 用完 clear 归还，下次继续复用。
+ * 这个类是什么：基于 Protostuff 的对象序列化/反序列化工具类。
+ * 核心职责：RuntimeSchema 按类缓存；LinkedBuffer 用 ThreadLocal 线程内复用。
+ * 被谁用：RoverMessageCodecSupport、NameserverClient.query 解码响应体。
  */
 public final class ProtostuffSerializer {
 
@@ -94,7 +91,10 @@ public final class ProtostuffSerializer {
     }
 
     /**
-     * 取出缓存的 schema，不存在则创建
+     * 按类名取或创建并缓存 RuntimeSchema。
+     *
+     * @param clazz 目标类型
+     * @return 对应 Schema
      */
     @SuppressWarnings("unchecked")
     private static <T> Schema<T> schemaOf(Class<T> clazz) {

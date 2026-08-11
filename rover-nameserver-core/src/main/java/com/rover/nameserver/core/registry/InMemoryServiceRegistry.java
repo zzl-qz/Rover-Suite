@@ -17,19 +17,10 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 17:50:00
  * Description: 内存注册表，单机先用这个
  *
- * 核心职责：{@link ServiceRegistry} 的单机内存实现，保存全部服务实例
- * 并支持注册/注销/心跳/查询，同时为每个服务维护一个单调递增的 revision。</p>
- *
- * 并发结构：{@code services} 为双层 ConcurrentHashMap（serviceName →
- * instanceId → InstanceRecord），查改删全部走并发容器原子操作，
- * 可在多线程（Netty 业务线程 + 健康检查线程）下无锁安全读写。</p>
- *
- * revision 机制：每次注册/注销使该服务 revision +1（{@link #bumpRevision}），
- * 变更后生成的快照携带新 revision——这是订阅推送去重的依据：
- * 客户端对比本地 revision，旧于或等于本地的最新推送可直接忽略。</p>
- *
- * 被 NameserverTcpServer 默认装配，供请求分发器与健康检查器使用；
- * 后续集群部署可替换为带复制能力的注册表实现。</p>
+ * 这个类是什么：ServiceRegistry 的单机内存实现。
+ * 核心职责：注册/注销/心跳/查询，并为每个服务维护单调递增 revision；
+ * 双层 ConcurrentHashMap 保证多线程无锁安全读写。
+ * 被谁用：NameserverTcpServer 默认装配；请求分发器与健康检查器使用。
  */
 @Slf4j
 public class InMemoryServiceRegistry implements ServiceRegistry {

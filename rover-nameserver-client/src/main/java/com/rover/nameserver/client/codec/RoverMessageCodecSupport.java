@@ -11,9 +11,10 @@ import com.rover.common.protocol.RoverMessage;
  * Created: 2026-08-08 17:30:00
  * Description: 拼消息的快捷方法
  *
- * 核心职责：为上层（NameserverClient、NameserverClientHandler）提供构造各类
- * RoverMessage 的快捷方法，统一处理 flags、ackMode、超时与 body 的 Protostuff 序列化，
- * 以及响应对 body 的反序列化。所有方法均为静态工具方法，无状态、线程安全。
+ * 这个类是什么：RoverMessage 组装与 body 反序列化的静态工具类。
+ * 核心职责：统一处理 flags、ackMode、超时与 Protostuff 序列化，提供
+ * request/onewayRequest/response/push/decodeBody 快捷方法。
+ * 被谁用：NameserverClient 发请求、NameserverClientHandler 解析推送/响应。
  */
 public final class RoverMessageCodecSupport {
 

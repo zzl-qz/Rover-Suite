@@ -5,8 +5,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
@@ -18,9 +17,8 @@ import org.slf4j.LoggerFactory;
  * 单次执行失败互不影响，并暴露 start/stop 方便启停与随主对象一起关闭。
  * 被谁用：注册中心/网关中需要周期发送心跳、定期清扫的场景。
  */
+@Slf4j
 public class PeriodicTask implements AutoCloseable {
-
-    private static final Logger log = LoggerFactory.getLogger(PeriodicTask.class);
 
     /** 任务名，同时用作内部线程名，方便排查 */
     private final String name;

@@ -15,15 +15,30 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-10 16:20:00
  * Description: 通过 Nameserver 订阅 + 定时对账维护本地实例
+ *
+ * 这个类是什么：ServiceDiscovery 的 Nameserver 实现，维护本地实例缓存。
+ * 核心职责：①启动时连接 Nameserver 并订阅配置里的服务；②getInstances 读本地缓存并过滤健康实例；
+ * ③路由热更新时 ensureWatch 补订；④定时对账防止推送丢失。
+ * 被谁用：GatewayHttpServer 在 discovery.type=NAMESERVER 时创建；RouteAndProxyFilter 查实例。
  */
 @Slf4j
 public class NameserverServiceDiscovery implements ServiceDiscovery {
 
+    /** Nameserver 长连接客户端，负责订阅和 query。 */
     private final NameserverClient client;
+
+    /** 当前已订阅/待订阅的服务列表，路由热更新时会追加。 */
     private final CopyOnWriteArrayList<DiscoverySettings.ServiceSubscribeSpec> subscribeServices;
+
+    /** 定时对账间隔（毫秒），下限 1000ms。 */
     private final long reconcileIntervalMs;
+
+    /** 后台对账任务，周期性 query 并比对 revision。 */
     private final PeriodicTask reconcileTask;
 
+    /**
+     * @param settings 发现配置，含 Nameserver 地址、订阅列表、对账间隔
+     */
     public NameserverServiceDiscovery(DiscoverySettings settings) {
         Objects.requireNonNull(settings, "settings");
         this.subscribeServices = new CopyOnWriteArrayList<>(
@@ -40,6 +55,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         this.reconcileTask = new PeriodicTask("gateway-nameserver-reconcile");
     }
 
+    /** 连接 Nameserver、订阅初始服务列表、启动定时对账。 */
     @Override
     public void start() {
         client.start();
@@ -53,6 +69,13 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
                 reconcileIntervalMs);
     }
 
+    /**
+     * 从本地缓存取实例，优先返回健康实例；全不健康时退回全部缓存。
+     *
+     * @param serviceName 服务名
+     * @param group       分组
+     * @return 可用实例列表，缓存为空时返回空列表
+     */
     @Override
     public List<ServiceInstance> getInstances(String serviceName, String group) {
         List<ServiceInstance> cached = client.getCachedInstances(serviceName, group);
@@ -68,6 +91,12 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         return healthy.isEmpty() ? cached : healthy;
     }
 
+    /**
+     * 路由热更新后补订新服务：已在列表里则重新 subscribe，否则追加并订阅。
+     *
+     * @param serviceName 服务名
+     * @param group       分组
+     */
     @Override
     public void ensureWatch(String serviceName, String group) {
         if (serviceName == null || serviceName.isBlank()) {
@@ -88,12 +117,14 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         subscribeOne(serviceName, group);
     }
 
+    /** 停止对账任务并关闭 Nameserver 客户端。 */
     @Override
     public void close() {
         reconcileTask.stop();
         client.shutdown();
     }
 
+    /** 对单个服务执行 subscribe + query，失败只打 warn 不抛异常。 */
     private void subscribeOne(String serviceName, String group) {
         if (serviceName == null || serviceName.isBlank()) {
             return;
@@ -107,6 +138,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         }
     }
 
+    /** 定时对账：比对本地 revision 和远端，有差异时打 info 日志。 */
     private void reconcile() {
         if (!client.isActive()) {
             return;

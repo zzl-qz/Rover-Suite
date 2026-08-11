@@ -17,15 +17,25 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
  * Description: 组装内置过滤器、配置过滤器和 plugins 外挂过滤器
+ *
+ * 这个类是什么：Gateway 过滤器链的工厂，把各类 Filter 按 order 排好序。
+ * 核心职责：①始终加入 AccessLogFilter；②按配置加载 plugins jar 和显式类名；
+ * ③最后追加 RouteAndProxyFilter 作为终端节点。
+ * 被谁用：GatewayRuntime 在启动和热更新时调用 assemble 重建过滤器链。
  */
 @Slf4j
 public class GatewayFilterAssembler {
 
+    /** 负责从 plugins 目录和 classpath 加载用户扩展 Filter。 */
     private final PluginFilterLoader pluginFilterLoader = new PluginFilterLoader();
 
     /**
-     * 拼最终过滤器列表：
-     * 访问日志 -> 用户插件/配置指定的 Filter -> 路由转发
+     * 静态模式组装过滤器链。
+     *
+     * @param settings     过滤器加载配置
+     * @param routeMatcher 路由匹配器
+     * @param proxyClient  HTTP 代理客户端
+     * @return 按 order 排序后的不可变过滤器列表（含终端 RouteAndProxyFilter）
      */
     public List<Filter> assemble(
             FilterSettings settings,
@@ -34,6 +44,17 @@ public class GatewayFilterAssembler {
         return assemble(settings, routeMatcher, proxyClient, DiscoveryType.STATIC, null, null);
     }
 
+    /**
+     * 全参数组装过滤器链：访问日志 → 插件/配置 Filter → 路由转发。
+     *
+     * @param settings          过滤器加载配置
+     * @param routeMatcher      路由匹配器
+     * @param proxyClient       HTTP 代理客户端
+     * @param discoveryType     上游发现模式
+     * @param serviceDiscovery  服务发现，动态模式使用
+     * @param loadBalancer      负载均衡器，动态模式使用
+     * @return 按 order 排序后的不可变过滤器列表
+     */
     public List<Filter> assemble(
             FilterSettings settings,
             RouteMatcher routeMatcher,

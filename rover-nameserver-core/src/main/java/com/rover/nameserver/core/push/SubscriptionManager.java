@@ -11,18 +11,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * Created: 2026-08-08 17:50:00
  * Description: 订阅关系管理
  *
- * 核心职责：维护「哪些连接订阅了哪些服务」的三级订阅表，
- * 支持订阅/退订/连接失效清理/按服务查询订阅者，是多线程环境下的核心数据结构。</p>
- *
- * 并发结构：{@code ConcurrentHashMap<serviceName, ConcurrentHashMap<group, Set<Channel>>>}
- * 三层嵌套，所有层级均用并发容器，保证注册线程、推送线程、
- * 健康检查线程可同时安全读写，无需全局加锁。</p>
- *
- * 组（group）语义：group 为空字符串表示「通配订阅」——消费该服务下所有组的变更；
- * 指定 group 的订阅只收到该组变更。空组订阅与指定组订阅可同时存在。</p>
- *
- * 被 PushService 查询订阅者、被请求分发器在订阅/退订/断线时更新；
- * 与 {@link PushService} 构成推送链路的两环。</p>
+ * 这个类是什么：serviceName → group → Channel 三级订阅表，并发安全。
+ * 核心职责：订阅/退订/连接失效清理/按服务查询订阅者；
+ * group 为空表示通配订阅（收该服务所有组变更）。
+ * 被谁用：PushService 查订阅者；NameserverRequestDispatcher 在订阅/退订/断线时更新。
  */
 public class SubscriptionManager {
 

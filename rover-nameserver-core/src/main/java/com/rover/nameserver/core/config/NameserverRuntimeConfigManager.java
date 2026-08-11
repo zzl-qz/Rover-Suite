@@ -19,17 +19,11 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 14:59:00
  * Description: 维护 Nameserver 可热更新运行时配置，并落盘 overlay
  *
- * 核心职责：作为 Nameserver 侧 {@link RuntimeConfigManager} 的实现，
- * 注册并维护一组可热更新配置项（健康检查间隔、心跳超时、实例过期时间、推送开关），
- * 对外提供查询/校验/更新能力，每次更新后：</p>
- * <ol>
- *     <li>通过 {@link NameserverRuntimeConfigApplier} 实时应用到运行时组件；</li>
- *     <li>通过 {@link RuntimeConfigOverlayStore} 把全量配置持久化到 overlay 文件，
- *     重启后由 {@link #loadOverlayIfPresent()} 恢复。</li>
- * </ol>
- *
- * 被 NameserverTcpServer 装配时创建和使用；管理侧（HTTP Admin）经其更新配置。
- * 兄弟类 {@link NameserverRuntimeConfigApplier} 负责事件的最终落地。</p>
+ * 这个类是什么：Nameserver 侧 RuntimeConfigManager 的实现。
+ * 核心职责：①注册并维护可热更新配置项（健康检查间隔、心跳超时、过期时间、推送开关）；
+ * ②每次更新经 NameserverRuntimeConfigApplier 实时应用到运行时组件；
+ * ③通过 RuntimeConfigOverlayStore 持久化 overlay，重启后 loadOverlayIfPresent 恢复。
+ * 被谁用：NameserverTcpServer 装配；HTTP Admin 经其 updateConfig 热更新。
  */
 @Slf4j
 public class NameserverRuntimeConfigManager implements RuntimeConfigManager {

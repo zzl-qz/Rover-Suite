@@ -27,11 +27,19 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 14:22:00
  * Description: 使用 HTTP/1.1 将请求真实转发到目标 URL，并回写后端响应
+ *
+ * 这个类是什么：Gateway 的 HTTP 反向代理客户端，基于 java.net.http.HttpClient。
+ * 核心职责：复制请求头/体转发到后端；补充 X-Forwarded-* 等标准头；
+ * 把后端响应写回 Netty 通道；超时/连接失败时返回统一 JSON 错误。
+ * 被谁用：RouteAndProxyFilter 终端转发；GatewayRuntime 持有单例并支持热更新超时。
  */
 @Slf4j
 public class HttpProxyClient {
 
+    /** 默认连接超时（毫秒）。 */
     private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
+
+    /** 默认单次请求超时（毫秒）。 */
     private static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 30000;
 
     /** 复用同一个 HttpClient，避免每次请求都新建连接池。 */
@@ -39,10 +47,15 @@ public class HttpProxyClient {
     /** 单次请求超时，可热更新。 */
     private final java.util.concurrent.atomic.AtomicLong requestTimeoutMillis;
 
+    /** 使用默认连接/请求超时构造。 */
     public HttpProxyClient() {
         this(DEFAULT_CONNECT_TIMEOUT_MILLIS, DEFAULT_REQUEST_TIMEOUT_MILLIS);
     }
 
+    /**
+     * @param connectTimeoutMillis 连接超时（毫秒）
+     * @param requestTimeoutMillis 单次请求超时（毫秒）
+     */
     public HttpProxyClient(int connectTimeoutMillis, int requestTimeoutMillis) {
         this.requestTimeoutMillis = new java.util.concurrent.atomic.AtomicLong(requestTimeoutMillis);
         // 强制 HTTP/1.1，避免部分后端对协议升级兼容不好。
@@ -52,10 +65,17 @@ public class HttpProxyClient {
                 .build();
     }
 
+    /** @return 当前请求超时（毫秒） */
     public long getRequestTimeoutMillis() {
         return requestTimeoutMillis.get();
     }
 
+    /**
+     * 热更新请求超时。
+     *
+     * @param timeoutMillis 新的超时毫秒数，必须大于 0
+     * @throws IllegalArgumentException timeoutMillis 非法
+     */
     public void setRequestTimeoutMillis(long timeoutMillis) {
         if (timeoutMillis <= 0) {
             throw new IllegalArgumentException("requestTimeoutMillis 必须大于 0");
@@ -65,7 +85,11 @@ public class HttpProxyClient {
 
     /**
      * 转发请求到目标 URL，并将后端响应写回当前客户端连接。
-     * 返回值是最终给客户端的 HTTP 状态码，方便链路日志统计。
+     *
+     * @param ctx        Netty 通道上下文
+     * @param request    客户端原始 HTTP 请求
+     * @param targetUrl  完整目标 URL
+     * @return 最终给客户端的 HTTP 状态码，方便链路日志统计
      */
     public int forward(ChannelHandlerContext ctx, FullHttpRequest request, String targetUrl) {
         try {

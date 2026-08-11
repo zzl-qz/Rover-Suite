@@ -10,15 +10,10 @@ import lombok.Data;
  * Created: 2026-08-08 17:50:00
  * Description: 注册表里的实例记录
  *
- * 核心职责：注册表内部对「一个服务实例」的完整描述 = 对外可见的
- * {@link ServiceInstance} + 内部维护的心跳时间。</p>
- *
- * 被 {@link com.rover.nameserver.core.registry.InMemoryServiceRegistry} 创建、
- * 存放与移除；被 {@link com.rover.nameserver.core.health.HealthChecker} 读取心跳时间
- * 做超时判定；字段经 Lombok {@code @Data} 生成 getter/setter。</p>
- *
- * 关键时间语义：{@link #lastHeartbeatMillis} 随每次心跳刷新，
- * 健康检查通过它与当前时间的差值判定实例是否超时。</p>
+ * 这个类是什么：注册表内部对一条实例的完整描述。
+ * 核心职责：绑定对外 ServiceInstance 与内部 lastHeartbeatMillis；
+ * from 构造新记录，touchHeartbeat 刷新心跳并恢复健康。
+ * 被谁用：InMemoryServiceRegistry 存取；HealthChecker 读心跳时间做超时判定。
  */
 @Data
 public class InstanceRecord {

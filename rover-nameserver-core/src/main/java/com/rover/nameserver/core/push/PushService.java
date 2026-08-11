@@ -14,21 +14,10 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 17:50:00
  * Description: 服务变更推送
  *
- * 核心职责：在注册表发生变更（注册/注销/过期剔除）后，把本次变更后的
- * 服务快照（SNAPSHOT 类型，随包携带 serviceName/group/revision 与全量实例列表）
- * 推送给所有相关订阅连接，让客户端免轮询地感知服务变化。</p>
- *
- * 被哪些组件使用：{@link com.rover.nameserver.core.server.NameserverRequestDispatcher}
- * 在注册/注销、订阅建立时调用；{@link com.rover.nameserver.core.health.HealthChecker}
- * 在剔除过期临时实例后调用。</p>
- *
- * 去重与 revision 机制：每张快照携带注册表为服务维护的自增 revision
- * （见 {@link com.rover.nameserver.core.registry.InMemoryServiceRegistry} 的
- * bumpRevision），客户端以 revision 判断是否比本地新，从而丢弃重复/过期推送；
- * 推送本身不在此做业务去重，只通过 pushId 区分单次发送。</p>
- *
- * 兄弟类 {@link SubscriptionManager} 负责订阅关系查询与失效连接清理，
- * 本类只负责「对谁推、推什么」。</p>
+ * 这个类是什么：注册表变更后的订阅推送执行器。
+ * 核心职责：把 SNAPSHOT 类型全量快照推送给相关订阅连接，携带 revision 供客户端去重。
+ * 被谁用：NameserverRequestDispatcher（注册/注销/订阅）、HealthChecker（剔除过期实例）。
+ * 与 SubscriptionManager 配合：后者管订阅关系，本类管「对谁推、推什么」。
  */
 @Slf4j
 public class PushService {
@@ -51,6 +40,7 @@ public class PushService {
         this.pushEnabled = new AtomicBoolean(pushEnabled);
     }
 
+    /** 推送开关当前值 */
     public boolean isPushEnabled() {
         return pushEnabled.get();
     }

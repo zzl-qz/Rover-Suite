@@ -7,6 +7,6 @@
  * {@link NameserverRuntimeConfigManager} 维护配置项注册表（含默认值与中文描述），
  * 支持从 overlay 文件（config/nameserver-runtime.overlay.json）恢复已持久化的配置，
  * 并通过 {@link NameserverRuntimeConfigApplier} 把每次变更实时应用到
- * HealthChecker / PushService 等运行时组件，实现免重启生效。</p>
+ * HealthChecker / PushService 等运行时组件，实现免重启生效。
  */
 package com.rover.nameserver.core.config;

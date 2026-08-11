@@ -51,19 +51,11 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-08 17:55:00
  * Description: Nameserver TCP 客户端，带请求响应匹配和简单心跳
  *
- * 核心职责：面向业务层提供 Nameserver 的注册/注销、心跳、查询、订阅等同步 API，
- * 底层通过 requestAsync/requestSync 走 Netty 长连接+Protostuff 协议，内部维护本地
- * 实例缓存（InstanceCache）。由服务注册/发现的调用方（如注册中心 SDK）使用，
- * 通常单例持有。
- *
- * 请求响应配对：每个请求从 RequestIdGenerator 取全局唯一 requestId，先写入
- * PendingRequestTable 挂一个带超时的 Future，再写通道；响应到达后由
- * NameserverClientHandler 按 requestId 匹配合并 complete。
- *
- * 连接与恢复：start 后立即 connect；断线时 handler 回调 onDisconnected 置
- * reconnecting 标志，定时任务 reconnectTask 周期 tryReconnect；重连成功后
- * recoverState 按本地记录（registeredInstances/subscriptions）自动补注册与补订阅；
- * heartbeatTask 定时对已注册实例续约。
+ * 这个类是什么：面向业务层的 Nameserver 长连接客户端，封装注册/注销、心跳、
+ * 查询、订阅等同步 API，底层走 Netty + Protostuff 协议。
+ * 核心职责：①requestId 配对请求与响应；②维护本地实例缓存；③断线自动重连并
+ * 恢复注册/订阅；④定时对已注册实例续约心跳。
+ * 被谁用：注册中心 SDK、服务注册/发现调用方；通常单例持有。
  */
 @Slf4j
 public class NameserverClient implements AutoCloseable {
@@ -86,10 +78,13 @@ public class NameserverClient implements AutoCloseable {
     private final AtomicBoolean started = new AtomicBoolean(false);
     /** 是否待重连 */
     private final AtomicBoolean reconnecting = new AtomicBoolean(false);
+    /** Netty 工作线程组 */
     private EventLoopGroup workerGroup;
     /** 当前 TCP 连接 */
     private volatile Channel channel;
+    /** 心跳定时任务 */
     private PeriodicTask heartbeatTask;
+    /** 重连定时任务 */
     private PeriodicTask reconnectTask;
 
     /**
@@ -118,6 +113,7 @@ public class NameserverClient implements AutoCloseable {
             heartbeatTask = new PeriodicTask("nameserver-client-heartbeat");
             heartbeatTask.start(this::heartbeatRegistered, options.getHeartbeatIntervalMs(), options.getHeartbeatIntervalMs());
         }
+        // 如果需要短线自动重连的话就是开启一个定时任务
         if (options.isAutoReconnect()) {
             reconnectTask = new PeriodicTask("nameserver-client-reconnect");
             // 周期拉活：连接还活着就跳过；断了则执行 connect 重连
@@ -168,7 +164,11 @@ public class NameserverClient implements AutoCloseable {
     }
 
     /**
-     * 心跳任务
+     * 对指定实例发送心跳（同步）。
+     *
+     * @param serviceName 服务名
+     * @param instanceId  实例 id
+     * @return 心跳响应
      */
     public CommonResponseBody heartbeat(String serviceName, String instanceId) {
         HeartbeatRequest request = new HeartbeatRequest();
@@ -228,6 +228,7 @@ public class NameserverClient implements AutoCloseable {
 
         CommonResponseBody response = requestSync(ProtocolConstants.SUBSCRIBE_REQUEST, request);
         ensureSuccess(response, "订阅失败");
+        // 把请求成功的这些订阅信息存储起来，为的就是后续如果出现和nameserver断开可以快速重新完成订阅
         subscriptions.put(subscribeKey(serviceName, group), request);
         return response;
     }

@@ -3,6 +3,8 @@ package com.rover.nameserver.server.bootstrap.config;
 import com.rover.common.protocol.AckMode;
 import java.util.ArrayList;
 import java.util.List;
+
+import com.rover.nameserver.server.bootstrap.NameserverApplication;
 import lombok.Data;
 
 /**
@@ -10,14 +12,12 @@ import lombok.Data;
  * Created: 2026-08-08 15:13:00
  * Description: Nameserver 配置
  *
- * 核心职责：rover-nameserver.yml 的强类型映射根对象（由 Jackson YAML 反序列化），
- * 按 {@code rover.nameserver.xxx} 结构组织各配置块，并提供两个派生方法：
- * 端口默认值兜底（{@link #getPortOrDefault()}）与 ACK 模式解析（{@link #resolveWriteAckMode()}）。</p>
- *
- * 被 {@link NameserverApplication} 消费，转为核心模块的
- * {@link com.rover.nameserver.core.server.NameserverServerOptions} 运行参数；
- * 与核心模块的运行时热更新配置（core.config 包）是不同层：本类是启动静态配置，
- * 核心模块那套是 Admin 管理口可热更新并落盘 overlay 的动态配置。</p>
+ * 这个类是什么：rover-nameserver.yml 的强类型映射根对象（Jackson YAML 反序列化）。
+ * 核心职责：按 {@code rover.nameserver.xxx} 组织配置块，并提供两个派生方法——
+ * 端口默认值兜底（{@link #getPortOrDefault()}）、ACK 模式解析（{@link #resolveWriteAckMode()}）。
+ * 被谁用：{@link NameserverApplication} 转成核心模块
+ * {@link com.rover.nameserver.core.server.NameserverServerOptions}。
+ * 注意：这是启动静态配置；核心模块 core.config 那套是 Admin 可热更新、落盘 overlay 的动态配置。
  */
 @Data
 public class NameserverConfig {
