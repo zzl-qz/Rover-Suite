@@ -29,8 +29,7 @@ public final class ProtocolConstants {
      */
     public static final int HEADER_LENGTH = 22;
 
-    // 防一手异常大包
-    /** body 最大长度 1MB，超过直接拒绝，防止恶意大包打爆内存 */
+    /** 防一手异常大包，body 最大长度 1MB，超过直接拒绝，防止恶意大包打爆内存 */
     public static final int MAX_BODY_LENGTH = 1024 * 1024;
 
     // 0 表示跟服务端默认走

@@ -23,6 +23,7 @@
     </properties>
 
     <dependencies>
+        <!--重点就是引入这个依赖-->
         <dependency>
             <groupId>com.rover</groupId>
             <artifactId>rover-nameserver-starter</artifactId>
