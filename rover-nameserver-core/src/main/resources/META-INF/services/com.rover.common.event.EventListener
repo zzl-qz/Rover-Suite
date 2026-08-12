@@ -1,0 +1,3 @@
+# Rover Nameserver 事件监听器 SPI 注册文件
+# 每行一个监听器实现类全限定名，由 EventBus#init 通过 ServiceLoader 自动加载
+# 待 NameserverRequestDispatcher 拆分为事件监听器后填充

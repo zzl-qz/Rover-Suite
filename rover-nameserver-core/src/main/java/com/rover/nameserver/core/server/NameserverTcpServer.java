@@ -5,6 +5,7 @@ import com.rover.nameserver.client.codec.RoverMessageEncoder;
 import com.rover.nameserver.core.config.NameserverRuntimeConfigManager;
 import com.rover.nameserver.core.consistency.DefaultWriteAckPolicy;
 import com.rover.nameserver.core.consistency.WriteAckPolicy;
+import com.rover.nameserver.core.event.EventBusBootstrap;
 import com.rover.nameserver.core.health.HealthChecker;
 import com.rover.nameserver.core.manage.NameserverHttpManageServer;
 import com.rover.nameserver.core.push.PushService;
@@ -51,6 +52,7 @@ public class NameserverTcpServer {
     private final SubscriptionManager subscriptionManager;
     private final PushService pushService;
     private final HealthChecker healthChecker;
+    private final EventBusBootstrap eventBus;
     private final NameserverRequestDispatcher dispatcher;
     private final NameserverHttpManageServer manageServer;
 
@@ -103,6 +105,7 @@ public class NameserverTcpServer {
         // runtime 绑定完成后重放全部配置，让 YAML/overlay 的值真正落到组件上
         configManager.reapplyAll();
         this.manageServer = new NameserverHttpManageServer(options.getManagePort(), runtime);
+        this.eventBus = new EventBusBootstrap("rover-nameserver");
         this.dispatcher = new NameserverRequestDispatcher(
                 registry, subscriptionManager, pushService, writeAckPolicy, options);
     }
@@ -138,6 +141,7 @@ public class NameserverTcpServer {
             // 同步等待绑定完成，拿到服务端 channel 句柄供关闭使用
             serverChannel = bootstrap.bind(options.getPort()).sync().channel();
             healthChecker.start();
+            eventBus.start();
             manageServer.start();
             log.info("Rover Nameserver 已启动, port={}, managePort={}, writeAckMode={}, cluster={}",
                     options.getPort(),
@@ -157,6 +161,7 @@ public class NameserverTcpServer {
     public void shutdown() {
         manageServer.shutdown();
         healthChecker.shutdown();
+        eventBus.shutdown();
         if (serverChannel != null) {
             serverChannel.close();
         }
