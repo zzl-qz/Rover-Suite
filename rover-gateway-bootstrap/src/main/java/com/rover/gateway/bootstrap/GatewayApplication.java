@@ -35,6 +35,7 @@ public class GatewayApplication {
             log.info("使用 YAML 路由, routeCount={}", routes.size());
         }
 
+        // todo 这里后续改成工厂模式，然后支持多种注册中心比较好
         DiscoverySettings discoverySettings = config.toDiscoverySettings();
         if (discoverySettings.getType() == DiscoveryType.NAMESERVER) {
             discoverySettings.setSubscribeServices(subscribeSpecsFrom(routes));
