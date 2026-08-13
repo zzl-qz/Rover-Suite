@@ -1,6 +1,5 @@
 package com.rover.common.model;
 
-import com.rover.common.spi.discovery.Instance;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.Data;
@@ -16,7 +15,7 @@ import lombok.Data;
  * 被谁用：注册中心服务端存储与推送、客户端发现缓存、网关负载均衡。
  */
 @Data
-public class ServiceInstance implements Instance {
+public class ServiceInstance {
 
     /** 服务名 */
     private String serviceName;

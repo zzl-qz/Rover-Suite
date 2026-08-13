@@ -134,7 +134,7 @@ graph TD
 
 | Module | Responsibility |
 |---|---|
-| `rover-common` | Shared base: protocol models, TCP codec, utilities, event bus, SPI, exceptions, annotations |
+| `rover-common` | Shared base: protocol models, TCP codec, utilities, event bus, SPI, exceptions |
 | `rover-nameserver-core` | Registry core logic: registry table, heartbeat detection, active push, health checks, data models |
 | `rover-nameserver-server` | Standalone bootstrap for the registry (executable Jar, shaded) |
 | `rover-nameserver-client` | Generic TCP client: connection management, handlers, local cache (codec lives in common) |

@@ -1,6 +1,6 @@
 package com.rover.gateway.core.route;
 
-import com.rover.common.json.ManageJson;
+import com.rover.common.json.JsonCodec;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -64,7 +64,7 @@ public class RouteOverlayStore {
         }
         try {
             String json = Files.readString(path, StandardCharsets.UTF_8);
-            return toRoutes(ManageJson.parseObjectArray(json));
+            return toRoutes(JsonCodec.parseStringMapArray(json));
         } catch (Exception ex) {
             throw new IllegalStateException("读取路由覆盖文件失败: " + path.toAbsolutePath(), ex);
         }
@@ -93,7 +93,7 @@ public class RouteOverlayStore {
                 row.put("stripPrefix", nullToEmpty(route.getStripPrefix()));
                 rows.add(row);
             }
-            Files.writeString(path, ManageJson.arrayOfObjects(rows), StandardCharsets.UTF_8);
+            Files.writeString(path, JsonCodec.toJson(rows), StandardCharsets.UTF_8);
             log.info("路由已写入覆盖文件: {}", path.toAbsolutePath());
         } catch (IOException ex) {
             throw new IllegalStateException("写入路由覆盖文件失败: " + path.toAbsolutePath(), ex);
@@ -103,7 +103,7 @@ public class RouteOverlayStore {
     /**
      * 把 JSON 行列表转成 RouteConfig 列表。
      *
-     * @param rows ManageJson 解析出的键值对列表
+     * @param rows JsonCodec 解析出的键值对列表
      * @return RouteConfig 列表
      */
     public static List<RouteConfig> toRoutes(List<Map<String, String>> rows) {

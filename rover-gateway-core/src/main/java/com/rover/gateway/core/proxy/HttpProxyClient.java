@@ -1,5 +1,6 @@
 package com.rover.gateway.core.proxy;
 
+import com.rover.common.json.JsonCodec;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -18,6 +19,7 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -210,15 +212,16 @@ public class HttpProxyClient {
             HttpResponseStatus status,
             String message,
             String targetUrl) {
-        String responseBody = "{\"code\":" + status.code()
-                + ",\"message\":\"" + escapeJson(message)
-                + "\",\"targetUrl\":\"" + escapeJson(targetUrl) + "\"}";
-        byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
+        Map<String, Object> error = new LinkedHashMap<>();
+        error.put("code", status.code());
+        error.put("message", message);
+        error.put("targetUrl", targetUrl);
+        byte[] body = JsonCodec.toJson(error).getBytes(StandardCharsets.UTF_8);
         FullHttpResponse response = new DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1,
                 status,
                 Unpooled.wrappedBuffer(body));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
         ctx.writeAndFlush(response);
     }
@@ -228,13 +231,6 @@ public class HttpProxyClient {
             return address.getAddress().getHostAddress();
         }
         return null;
-    }
-
-    private String escapeJson(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     /**

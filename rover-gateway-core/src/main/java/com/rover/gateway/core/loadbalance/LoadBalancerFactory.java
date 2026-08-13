@@ -1,10 +1,8 @@
 package com.rover.gateway.core.loadbalance;
 
 import com.rover.common.spi.loadbalance.LoadBalancer;
-import java.net.MalformedURLException;
+import com.rover.gateway.core.plugin.PluginJarScanner;
 import java.net.URL;
-import java.net.URLClassLoader;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -96,13 +94,11 @@ public final class LoadBalancerFactory {
         if (!Files.isDirectory(directory)) {
             return List.of();
         }
-        List<URL> jars = listJars(directory);
+        List<URL> jars = PluginJarScanner.listJars(directory);
         if (jars.isEmpty()) {
             return List.of();
         }
-        URLClassLoader classLoader = new URLClassLoader(
-                jars.toArray(URL[]::new),
-                Thread.currentThread().getContextClassLoader());
+        ClassLoader classLoader = PluginJarScanner.newClassLoader(jars);
         List<LoadBalancer> loaded = new ArrayList<>();
         for (LoadBalancer balancer : ServiceLoader.load(LoadBalancer.class, classLoader)) {
             loaded.add(balancer);
@@ -117,11 +113,9 @@ public final class LoadBalancerFactory {
             ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
             Path directory = Path.of(pluginDir == null || pluginDir.isBlank() ? "plugins" : pluginDir);
             if (Files.isDirectory(directory)) {
-                List<URL> jars = listJars(directory);
+                List<URL> jars = PluginJarScanner.listJars(directory);
                 if (!jars.isEmpty()) {
-                    classLoader = new URLClassLoader(
-                            jars.toArray(URL[]::new),
-                            Thread.currentThread().getContextClassLoader());
+                    classLoader = PluginJarScanner.newClassLoader(jars);
                 }
             }
             Class<?> clazz = Class.forName(className, true, classLoader);
@@ -134,19 +128,4 @@ public final class LoadBalancerFactory {
         }
     }
 
-    private static List<URL> listJars(Path directory) {
-        List<URL> jars = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory, "*.jar")) {
-            for (Path jar : stream) {
-                try {
-                    jars.add(jar.toUri().toURL());
-                } catch (MalformedURLException ex) {
-                    throw new IllegalStateException("插件路径非法: " + jar, ex);
-                }
-            }
-        } catch (Exception ex) {
-            throw new IllegalStateException("扫描负载均衡插件目录失败: " + directory, ex);
-        }
-        return jars;
-    }
 }

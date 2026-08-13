@@ -1,11 +1,9 @@
 package com.rover.nameserver.starter.autoconfigure;
 
 import com.rover.common.protocol.RegisterRequest;
+import com.rover.common.util.IpUtil;
 import com.rover.nameserver.client.connection.NameserverClient;
 import jakarta.annotation.PreDestroy;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.util.Enumeration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -152,26 +150,7 @@ public class RoverNameserverLifecycle implements ApplicationListener<Application
         if (StringUtils.hasText(properties.getHost())) {
             return properties.getHost().trim();
         }
-        try {
-            Enumeration<NetworkInterface> networks = NetworkInterface.getNetworkInterfaces();
-            while (networks.hasMoreElements()) {
-                NetworkInterface network = networks.nextElement();
-                if (!network.isUp() || network.isLoopback() || network.isVirtual()) {
-                    continue;
-                }
-                Enumeration<InetAddress> addresses = network.getInetAddresses();
-                while (addresses.hasMoreElements()) {
-                    InetAddress address = addresses.nextElement();
-                    if (!address.isLoopbackAddress() && address.getHostAddress().indexOf(':') < 0) {
-                        return address.getHostAddress();
-                    }
-                }
-            }
-            return InetAddress.getLocalHost().getHostAddress();
-        } catch (Exception ex) {
-            log.warn("自动探测 host 失败，回退 127.0.0.1", ex);
-            return "127.0.0.1";
-        }
+        return IpUtil.getLocalIp();
     }
 
     private int resolvePort(ApplicationContext context) {

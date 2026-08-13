@@ -1,5 +1,6 @@
 package com.rover.nameserver.core.config;
 
+import com.rover.common.config.ConfigApplier;
 import com.rover.common.config.ConfigChangeEvent;
 import com.rover.nameserver.core.runtime.NameserverRuntime;
 import lombok.extern.slf4j.Slf4j;
@@ -16,7 +17,7 @@ import lombok.extern.slf4j.Slf4j;
  * NameserverTcpServer 启动时 bind(runtime)。
  */
 @Slf4j
-public class NameserverRuntimeConfigApplier {
+public class NameserverRuntimeConfigApplier implements ConfigApplier {
 
     /** 当前绑定的 Nameserver 运行时，volatile 保证多线程可见性（bind 发生在启动阶段） */
     private volatile NameserverRuntime runtime;

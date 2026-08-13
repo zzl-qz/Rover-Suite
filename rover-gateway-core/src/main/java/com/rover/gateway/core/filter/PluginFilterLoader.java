@@ -1,11 +1,9 @@
 package com.rover.gateway.core.filter;
 
 import com.rover.common.spi.filter.Filter;
-import java.io.IOException;
-import java.net.MalformedURLException;
+import com.rover.gateway.core.plugin.PluginJarScanner;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -48,16 +46,14 @@ public class PluginFilterLoader {
             return List.of();
         }
 
-        List<URL> jarUrls = listJarUrls(directory);
+        List<URL> jarUrls = PluginJarScanner.listJars(directory);
         if (jarUrls.isEmpty()) {
             log.info("No filter plugin jars found in {}", directory.toAbsolutePath());
             return List.of();
         }
 
         // 把 plugins 目录下所有 jar 装进同一个 ClassLoader。
-        pluginClassLoader = new URLClassLoader(
-                jarUrls.toArray(URL[]::new),
-                Thread.currentThread().getContextClassLoader());
+        pluginClassLoader = PluginJarScanner.newClassLoader(jarUrls);
         log.info("Loaded {} filter plugin jar(s) from {}", jarUrls.size(), directory.toAbsolutePath());
 
         // 用 LinkedHashMap 去重，避免同一个 Filter 被重复加载。
@@ -98,20 +94,4 @@ public class PluginFilterLoader {
         }
     }
 
-    /** 列出目录下所有 .jar 文件的 URL。 */
-    private List<URL> listJarUrls(Path directory) {
-        List<URL> jarUrls = new ArrayList<>();
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(directory, "*.jar")) {
-            for (Path jarPath : stream) {
-                try {
-                    jarUrls.add(jarPath.toUri().toURL());
-                } catch (MalformedURLException err) {
-                    throw new IllegalStateException("插件 jar 路径非法：" + jarPath, err);
-                }
-            }
-        } catch (IOException err) {
-            throw new IllegalStateException("扫描过滤器插件目录失败：" + directory, err);
-        }
-        return jarUrls;
-    }
 }

@@ -1,5 +1,6 @@
 package com.rover.gateway.core.config;
 
+import com.rover.common.config.ConfigApplier;
 import com.rover.common.config.ConfigChangeEvent;
 import com.rover.gateway.core.runtime.GatewayRuntime;
 import lombok.extern.slf4j.Slf4j;
@@ -15,7 +16,7 @@ import lombok.extern.slf4j.Slf4j;
  * 被谁用：GatewayRuntimeConfigManager 在 updateConfig 和 reapplyAll 时调用。
  */
 @Slf4j
-public class GatewayRuntimeConfigApplier {
+public class GatewayRuntimeConfigApplier implements ConfigApplier {
 
     /** 绑定的网关运行时，volatile 保证 bind 后可见。 */
     private volatile GatewayRuntime runtime;

@@ -1,15 +1,20 @@
 package com.rover.common.util;
 
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.util.Enumeration;
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Author: Daylight
  * Created: 2026-08-08 10:34:00
- * Description: 提供本机 IP 获取和端口可用性检查工具
+ * Description: 提供本机对外 IP 的探测工具
  *
- * 这个类是什么：IP/端口相关的静态工具类。
- * 核心职责：获取本机对外可用的 IP(供实例注册上报地址)与检测端口是否可占用
- * (供服务器/代理端口分配校验)。
- * 被谁用：rover-registry/rover-gateway 启动时确定监听地址与注册地址。
+ * 这个类是什么：本机 IP 探测的静态工具。
+ * 核心职责：返回本机对外可用的 IPv4 地址，供实例注册时自动上报 host 使用。
+ * 被谁用：rover-nameserver-starter 的实例注册装配；其它需要自动探测本机地址的模块。
  */
+@Slf4j
 public final class IpUtil {
 
     /** 工具类不允许实例化 */
@@ -17,23 +22,33 @@ public final class IpUtil {
     }
 
     /**
-     * 获取本机 IP 地址(实现待补全)。
+     * 获取本机对外可用的 IPv4 地址。
      *
-     * @return 本机 IP 字符串
-     * @throws UnsupportedOperationException 尚未实现
+     * 优先取第一个「已启用、非回环、非虚拟」网卡上的 IPv4 地址；
+     * 取不到时回退到 InetAddress.getLocalHost()，仍失败则回退 127.0.0.1。
+     *
+     * @return 本机 IPv4 字符串，如 192.168.1.10
      */
     public static String getLocalIp() {
-        throw new UnsupportedOperationException("TODO");
-    }
-
-    /**
-     * 检测指定端口当前是否可被占用(实现待补全)。
-     *
-     * @param port 待检测端口
-     * @return true 表示端口空闲可用
-     * @throws UnsupportedOperationException 尚未实现
-     */
-    public static boolean isPortAvailable(int port) {
-        throw new UnsupportedOperationException("TODO");
+        try {
+            Enumeration<NetworkInterface> networks = NetworkInterface.getNetworkInterfaces();
+            while (networks.hasMoreElements()) {
+                NetworkInterface network = networks.nextElement();
+                if (!network.isUp() || network.isLoopback() || network.isVirtual()) {
+                    continue;
+                }
+                Enumeration<InetAddress> addresses = network.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+                    if (!address.isLoopbackAddress() && address.getHostAddress().indexOf(':') < 0) {
+                        return address.getHostAddress();
+                    }
+                }
+            }
+            return InetAddress.getLocalHost().getHostAddress();
+        } catch (Exception ex) {
+            log.warn("自动探测本机 IP 失败，回退 127.0.0.1", ex);
+            return "127.0.0.1";
+        }
     }
 }

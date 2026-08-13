@@ -1,6 +1,6 @@
 package com.rover.common.config;
 
-import com.rover.common.json.ManageJson;
+import com.rover.common.json.JsonCodec;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -58,7 +58,7 @@ public class RuntimeConfigOverlayStore {
         }
         try {
             String json = Files.readString(path, StandardCharsets.UTF_8);
-            List<Map<String, String>> rows = ManageJson.parseObjectArray(json);
+            List<Map<String, String>> rows = JsonCodec.parseStringMapArray(json);
             Map<String, String> result = new LinkedHashMap<>();
             // 逐行解析：跳过 key 为空的行，value 为空时落成空串
             for (Map<String, String> row : rows) {
@@ -93,7 +93,7 @@ public class RuntimeConfigOverlayStore {
                 row.put("value", entry.getValue() == null ? "" : entry.getValue());
                 rows.add(row);
             }
-            Files.writeString(path, ManageJson.arrayOfObjects(rows), StandardCharsets.UTF_8);
+            Files.writeString(path, JsonCodec.toJson(rows), StandardCharsets.UTF_8);
             log.info("运行时配置已写入覆盖文件: {}", path.toAbsolutePath());
         } catch (IOException ex) {
             throw new IllegalStateException("写入配置覆盖文件失败: " + path.toAbsolutePath(), ex);
