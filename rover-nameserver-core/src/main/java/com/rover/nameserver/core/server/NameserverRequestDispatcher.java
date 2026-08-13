@@ -2,6 +2,9 @@ package com.rover.nameserver.core.server;
 
 import com.rover.common.constants.ProtocolConstants;
 import com.rover.common.constants.StatusConstants;
+import com.rover.common.event.EventBus;
+import com.rover.common.event.ServiceChangeEvent;
+import com.rover.common.event.ServiceChangeType;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.protocol.AckMode;
 import com.rover.common.protocol.CommonResponseBody;
@@ -37,7 +40,8 @@ import lombok.extern.slf4j.Slf4j;
  * 统一参数校验、ACK 协商、结果响应与变更推送触发。
  * 连接断开时按 channel 属性自动注销该连接绑定的实例（断线恢复）。
  * 被谁用：NameserverServerHandler 在 biz 线程组调用；
- * 依赖 ServiceRegistry、SubscriptionManager、PushService、WriteAckPolicy、NameserverServerOptions。
+ * 依赖 ServiceRegistry、SubscriptionManager、PushService、WriteAckPolicy、NameserverServerOptions、EventBus。
+ * 注册表变更：先 PushService 推 TCP，再 EventBus 异步发本地 ServiceChangeEvent（旁路，不替代推送）。
  */
 @Slf4j
 public class NameserverRequestDispatcher {
@@ -56,6 +60,8 @@ public class NameserverRequestDispatcher {
     private final WriteAckPolicy writeAckPolicy;
     /** 服务端运行参数（节点 ID、副本数、集群开关等） */
     private final NameserverServerOptions options;
+    /** 进程内事件总线；旁路发 ServiceChangeEvent，不替代 PushService */
+    private final EventBus eventBus;
 
     /**
      * 构造分发器，注入全部业务依赖。
@@ -65,18 +71,21 @@ public class NameserverRequestDispatcher {
      * @param pushService          推送服务
      * @param writeAckPolicy       写确认策略
      * @param options              服务端运行参数
+     * @param eventBus             进程内事件总线（必填）
      */
     public NameserverRequestDispatcher(
             ServiceRegistry registry,
             SubscriptionManager subscriptionManager,
             PushService pushService,
             WriteAckPolicy writeAckPolicy,
-            NameserverServerOptions options) {
+            NameserverServerOptions options,
+            EventBus eventBus) {
         this.registry = registry;
         this.subscriptionManager = subscriptionManager;
         this.pushService = pushService;
         this.writeAckPolicy = writeAckPolicy;
         this.options = options;
+        this.eventBus = eventBus;
     }
 
     /**
@@ -134,6 +143,7 @@ public class NameserverRequestDispatcher {
             // 快照非 null 才推送：该实例可能已被主动注销（unbind 已摘绑定，正常不会发生）
             if (snapshot != null) {
                 pushService.pushSnapshot(snapshot);
+                publishServiceChange(snapshot, ServiceChangeType.UNREGISTER);
             }
         }
     }
@@ -154,6 +164,7 @@ public class NameserverRequestDispatcher {
         // 绑到连接上，进程挂了来不及 unregister 也能清掉
         bindInstance(channel, request.getServiceName(), request.getInstanceId());
         pushService.pushSnapshot(snapshot);
+        publishServiceChange(snapshot, ServiceChangeType.REGISTER);
 
         // 随响应带回 ACK 语义与所需确认数，客户端据此判断写入强度
         CommonResponseBody body = CommonResponseBody.success()
@@ -185,6 +196,7 @@ public class NameserverRequestDispatcher {
             return;
         }
         pushService.pushSnapshot(snapshot);
+        publishServiceChange(snapshot, ServiceChangeType.UNREGISTER);
 
         CommonResponseBody body = CommonResponseBody.success()
                 .withAck(ackMode, writeAckPolicy.requiredAcks(
@@ -259,6 +271,7 @@ public class NameserverRequestDispatcher {
                 registry.revisionOf(request.getServiceName()),
                 registry.query(request.getServiceName(), request.getGroup(), false));
         pushService.pushSnapshot(snapshot);
+        publishServiceChange(snapshot, ServiceChangeType.SNAPSHOT);
 
         CommonResponseBody body = CommonResponseBody.success();
         body.setRevision(snapshot.getRevision());
@@ -307,6 +320,22 @@ public class NameserverRequestDispatcher {
         if (options.getNodeId() != null && !options.getNodeId().isBlank()) {
             body.setNodeId(options.getNodeId());
         }
+    }
+
+    /**
+     * 注册表变更后发本地事件（异步）。
+     * TCP 推送仍由 PushService 负责；这里只给进程内副作用留钩子。
+     */
+    private void publishServiceChange(RegistrySnapshot snapshot, ServiceChangeType changeType) {
+        if (snapshot == null) {
+            return;
+        }
+        eventBus.publish(ServiceChangeEvent.of(
+                snapshot.getServiceName(),
+                snapshot.getGroup(),
+                snapshot.getRevision(),
+                changeType,
+                snapshot.getInstances()));
     }
 
     /** 注册参数完整性校验：服务名/主机/实例 ID 非空且端口合法 */

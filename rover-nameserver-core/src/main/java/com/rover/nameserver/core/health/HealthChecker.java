@@ -1,5 +1,8 @@
 package com.rover.nameserver.core.health;
 
+import com.rover.common.event.EventBus;
+import com.rover.common.event.ServiceChangeEvent;
+import com.rover.common.event.ServiceChangeType;
 import com.rover.common.model.ServiceInstance;
 import com.rover.nameserver.core.model.InstanceRecord;
 import com.rover.nameserver.core.push.PushService;
@@ -25,7 +28,7 @@ import lombok.extern.slf4j.Slf4j;
  * ②非临时实例超过 heartbeatTimeoutMillis 先标记不健康不下线；
  * ③健康检查间隔、心跳超时、过期时间支持热更新（改间隔会重排调度）。
  * 被谁用：NameserverTcpServer 创建并启停；配置经 NameserverRuntimeConfigApplier 热更新。
- * 依赖 ServiceRegistry 读记录、PushService 广播剔除变更。
+ * 依赖 ServiceRegistry 读记录、PushService 广播剔除变更；可选 EventBus 发本地 EXPIRE 事件。
  *
  * 时间语义：idle = now - lastHeartbeatMillis，由 InstanceRecord#touchHeartbeat 刷新。
  */
@@ -36,6 +39,8 @@ public class HealthChecker {
     private final ServiceRegistry registry;
     /** 推送服务，剔除实例后广播包含新 revision 的快照 */
     private final PushService pushService;
+    /** 进程内事件总线：过期剔除后旁路发 EXPIRE 事件 */
+    private final EventBus eventBus;
     /** 心跳超时时间(ms)：非临时实例超过即标记不健康；AtomicLong 支持热更新 */
     private final AtomicLong heartbeatTimeoutMillis;
     /** 检查间隔(ms)：每次扫描的周期；AtomicLong 支持热更新 */
@@ -59,6 +64,7 @@ public class HealthChecker {
      *
      * @param registry                 注册表（读取 + 剔除）
      * @param pushService              推送服务（广播剔除变更）
+     * @param eventBus                 本地事件总线（必填，过期剔除后旁路发事件）
      * @param heartbeatTimeoutMillis   初始心跳超时(ms)
      * @param checkIntervalMillis      初始检查间隔(ms)
      * @param instanceExpireMillis     初始临时实例过期时间(ms)
@@ -66,11 +72,13 @@ public class HealthChecker {
     public HealthChecker(
             ServiceRegistry registry,
             PushService pushService,
+            EventBus eventBus,
             long heartbeatTimeoutMillis,
             long checkIntervalMillis,
             long instanceExpireMillis) {
         this.registry = registry;
         this.pushService = pushService;
+        this.eventBus = eventBus;
         this.heartbeatTimeoutMillis = new AtomicLong(heartbeatTimeoutMillis);
         this.checkIntervalMillis = new AtomicLong(checkIntervalMillis);
         this.instanceExpireMillis = new AtomicLong(instanceExpireMillis);
@@ -211,6 +219,12 @@ public class HealthChecker {
         // 剔除完成后再统一推送，减少推送次数且保证推送内容为最终状态
         for (RegistrySnapshot snapshot : changed) {
             pushService.pushSnapshot(snapshot);
+            eventBus.publish(ServiceChangeEvent.of(
+                    snapshot.getServiceName(),
+                    snapshot.getGroup(),
+                    snapshot.getRevision(),
+                    ServiceChangeType.EXPIRE,
+                    snapshot.getInstances()));
         }
     }
 

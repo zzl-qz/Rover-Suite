@@ -80,9 +80,12 @@ public class NameserverTcpServer {
         this.registry = registry;
         this.subscriptionManager = new SubscriptionManager();
         this.pushService = new PushService(subscriptionManager, options.isPushEnabled());
+        // 先建总线，健康检查/分发器才能挂上本地事件
+        this.eventBus = new EventBusBootstrap("rover-nameserver");
         this.healthChecker = new HealthChecker(
                 registry,
                 pushService,
+                eventBus.getEventBus(),
                 options.getHeartbeatTimeoutMillis(),
                 options.getHealthCheckIntervalMillis(),
                 options.getInstanceExpireMillis());
@@ -105,9 +108,8 @@ public class NameserverTcpServer {
         // runtime 绑定完成后重放全部配置，让 YAML/overlay 的值真正落到组件上
         configManager.reapplyAll();
         this.manageServer = new NameserverHttpManageServer(options.getManagePort(), runtime);
-        this.eventBus = new EventBusBootstrap("rover-nameserver");
         this.dispatcher = new NameserverRequestDispatcher(
-                registry, subscriptionManager, pushService, writeAckPolicy, options);
+                registry, subscriptionManager, pushService, writeAckPolicy, options, eventBus.getEventBus());
     }
 
     /**
