@@ -1,58 +1,22 @@
 package com.rover.gateway.bootstrap.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import lombok.extern.slf4j.Slf4j;
+import com.rover.common.config.YamlConfigLoader;
 
 /**
- * Author: Daylight
- * Created: 2026-08-08 15:13:00
- * Description: 加载 Gateway YAML 配置文件
+ * Gateway 配置加载入口。
+ *
+ * 这个类是什么：rover-gateway.yml 的加载门面，委托给通用 YamlConfigLoader。
+ * 核心职责：固定文件名与目标类型，加载后触发 GatewayConfig.validate 校验。
+ * 被谁用：{@link com.rover.gateway.bootstrap.GatewayApplication}。
  */
-@Slf4j
 public class GatewayConfigLoader {
 
     private static final String CONFIG_FILE = "rover-gateway.yml";
-    private static final Path EXTERNAL_CONFIG = Path.of("config", CONFIG_FILE);
 
-    private final ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+    private final YamlConfigLoader<GatewayConfig> delegate =
+            new YamlConfigLoader<>(CONFIG_FILE, GatewayConfig.class, GatewayConfig::validate);
 
     public GatewayConfig load() {
-        if (Files.exists(EXTERNAL_CONFIG)) {
-            return loadFromPath(EXTERNAL_CONFIG);
-        }
-
-        return loadFromClasspath();
-    }
-
-    private GatewayConfig loadFromPath(Path path) {
-        try {
-            log.info("Loading Gateway config from {}", path.toAbsolutePath());
-            return validate(mapper.readValue(path.toFile(), GatewayConfig.class));
-        } catch (IOException err) {
-            throw new IllegalStateException("读取 Gateway 配置文件失败：" + path, err);
-        }
-    }
-
-    private GatewayConfig loadFromClasspath() {
-        try (InputStream input = getClass().getClassLoader().getResourceAsStream(CONFIG_FILE)) {
-            if (input == null) {
-                log.info("Gateway config not found, using default config");
-                return validate(new GatewayConfig());
-            }
-            log.info("Loading Gateway config from classpath:{}", CONFIG_FILE);
-            return validate(mapper.readValue(input, GatewayConfig.class));
-        } catch (IOException err) {
-            throw new IllegalStateException("读取 classpath Gateway 配置文件失败：" + CONFIG_FILE, err);
-        }
-    }
-
-    private GatewayConfig validate(GatewayConfig config) {
-        config.validate();
-        return config;
+        return delegate.load();
     }
 }

@@ -13,7 +13,7 @@
 
     <artifactId>rover-common</artifactId>
     <name>rover-common</name>
-    <description>公共基础模块（协议、编解码、工具类、事件总线、SPI、模型、异常、注解）</description>
+    <description>公共基础模块（协议、编解码、工具类、事件总线、SPI、模型、异常、配置）</description>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -51,6 +51,10 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
         </dependency>
         <dependency>
             <groupId>io.protostuff</groupId>

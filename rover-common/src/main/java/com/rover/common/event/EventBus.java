@@ -166,21 +166,6 @@ public class EventBus {
                 }
             }
         }
-        // 简单父类：class X extends Base&lt;FooEvent&gt;
-        Type superType = listener.getClass().getGenericSuperclass();
-        if (superType instanceof ParameterizedType parameterized) {
-            Type raw = parameterized.getRawType();
-            if (raw instanceof Class<?> rawClass) {
-                for (Type iface : rawClass.getGenericInterfaces()) {
-                    if (iface instanceof ParameterizedType pt && pt.getRawType() == EventListener.class) {
-                        Type arg = parameterized.getActualTypeArguments()[0];
-                        if (arg instanceof Class<?> clazz && Event.class.isAssignableFrom(clazz)) {
-                            return (Class<? extends Event>) clazz;
-                        }
-                    }
-                }
-            }
-        }
         throw new IllegalArgumentException("无法解析监听器事件类型: " + listener.getClass().getName());
     }
 

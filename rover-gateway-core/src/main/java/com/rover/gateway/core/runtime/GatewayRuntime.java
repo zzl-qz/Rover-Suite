@@ -1,6 +1,5 @@
 package com.rover.gateway.core.runtime;
 
-import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.filter.Filter;
 import com.rover.gateway.core.config.GatewayRuntimeConfigManager;
 import com.rover.gateway.core.discovery.DiscoverySettings;
@@ -10,16 +9,13 @@ import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.GatewayFilterAssembler;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.loadbalance.LoadBalancerFactory;
-import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
 import com.rover.gateway.core.route.RouteOverlayStore;
-import java.net.URI;
+import com.rover.gateway.core.route.RouteValidator;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -68,6 +64,9 @@ public class GatewayRuntime {
     /** 路由 overlay 持久化。 */
     private final RouteOverlayStore routeOverlayStore;
 
+    /** 路由清洗校验器。 */
+    private final RouteValidator routeValidator;
+
     /** 当前路由匹配器，热更新时原子替换。 */
     private final AtomicReference<RouteMatcher> routeMatcherRef = new AtomicReference<>();
 
@@ -110,6 +109,7 @@ public class GatewayRuntime {
         this.serviceDiscovery = serviceDiscovery;
         this.configManager = configManager;
         this.routeOverlayStore = new RouteOverlayStore();
+        this.routeValidator = new RouteValidator(this.discoveryType);
         String pluginDir = this.filterSettings.getPluginDir();
         this.loadBalancer.set(LoadBalancerFactory.create("round_robin", pluginDir));
         this.loadBalanceStrategy.set("round_robin");
@@ -169,7 +169,7 @@ public class GatewayRuntime {
      * @throws IllegalArgumentException 路由校验失败
      */
     public synchronized List<RouteConfig> applyRoutes(List<RouteConfig> routes) {
-        List<RouteConfig> normalized = normalizeAndValidate(routes);
+        List<RouteConfig> normalized = routeValidator.normalizeAndValidate(routes);
         routeMatcherRef.set(new RouteMatcher(normalized));
         rebuildFilters();
         watchServices(normalized);
@@ -224,125 +224,6 @@ public class GatewayRuntime {
         for (RouteConfig route : routes) {
             serviceDiscovery.ensureWatch(route.getServiceName(), route.getGroup());
         }
-    }
-
-    /** 清洗并校验路由列表，过滤 null 条目。 */
-    private List<RouteConfig> normalizeAndValidate(List<RouteConfig> routes) {
-        if (routes == null) {
-            return List.of();
-        }
-        List<RouteConfig> normalized = new ArrayList<>(routes.size());
-        Set<String> prefixes = new HashSet<>();
-        for (RouteConfig route : routes) {
-            if (route == null) {
-                continue;
-            }
-            RouteConfig copy = copyRoute(route);
-            validateRoute(copy, prefixes);
-            normalized.add(copy);
-        }
-        return normalized;
-    }
-
-    /** 校验单条路由：前缀格式、唯一性、静态/动态必填字段。 */
-    private void validateRoute(RouteConfig route, Set<String> prefixes) {
-        if (route.getBusinessPrefix() == null || route.getBusinessPrefix().isBlank()) {
-            throw new IllegalArgumentException("businessPrefix 不能为空");
-        }
-        if (!route.getBusinessPrefix().startsWith("/")) {
-            throw new IllegalArgumentException("businessPrefix 必须以 / 开头: " + route.getBusinessPrefix());
-        }
-        if (!prefixes.add(route.getBusinessPrefix())) {
-            throw new IllegalArgumentException("businessPrefix 重复: " + route.getBusinessPrefix());
-        }
-        if (discoveryType == DiscoveryType.STATIC) {
-            if (!StaticUpstreamCluster.hasUpstreams(route)) {
-                throw new IllegalArgumentException(
-                        "static 模式需要 targetUrl 或 targetUrls: " + route.getBusinessPrefix());
-            }
-            // resolve 会解析并校验地址；再对原始配置校验，错误信息更直观
-            List<ServiceInstance> staticInstances = StaticUpstreamCluster.resolve(route);
-            if (staticInstances.isEmpty()) {
-                throw new IllegalArgumentException(
-                        "static 模式没有合法上游: " + route.getBusinessPrefix());
-            }
-            if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
-                validateTargetUrl(stripWeight(route.getTargetUrl()));
-            }
-            if (route.getTargetUrls() != null) {
-                for (String raw : route.getTargetUrls()) {
-                    if (raw != null && !raw.isBlank()) {
-                        validateTargetUrl(stripWeight(raw.trim()));
-                    }
-                }
-            }
-        } else if (route.getServiceName() == null || route.getServiceName().isBlank()) {
-            throw new IllegalArgumentException("nameserver 模式 serviceName 不能为空: " + route.getBusinessPrefix());
-        }
-        if (route.getStripPrefix() != null && !route.getStripPrefix().isBlank()) {
-            if (!route.getStripPrefix().startsWith("/")) {
-                throw new IllegalArgumentException("stripPrefix 必须以 / 开头");
-            }
-        }
-    }
-
-    /** 校验 targetUrl 必须是 http/https 且含主机。 */
-    private void validateTargetUrl(String targetUrl) {
-        try {
-            URI uri = URI.create(targetUrl);
-            String scheme = uri.getScheme();
-            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-                throw new IllegalArgumentException("targetUrl 只支持 http/https: " + targetUrl);
-            }
-            if (uri.getHost() == null || uri.getHost().isBlank()) {
-                throw new IllegalArgumentException("targetUrl 必须包含主机: " + targetUrl);
-            }
-        } catch (IllegalArgumentException ex) {
-            throw ex;
-        } catch (Exception ex) {
-            throw new IllegalArgumentException("targetUrl 非法: " + targetUrl, ex);
-        }
-    }
-
-    /** 拷贝路由并 trim 各字符串字段。 */
-    private static RouteConfig copyRoute(RouteConfig route) {
-        RouteConfig copy = new RouteConfig();
-        copy.setId(trimToNull(route.getId()));
-        copy.setBusinessPrefix(trimToNull(route.getBusinessPrefix()));
-        copy.setTargetUrl(trimToNull(route.getTargetUrl()));
-        copy.setServiceName(trimToNull(route.getServiceName()));
-        copy.setGroup(trimToNull(route.getGroup()));
-        copy.setStripPrefix(trimToNull(route.getStripPrefix()));
-        List<String> urls = new ArrayList<>();
-        if (route.getTargetUrls() != null) {
-            for (String raw : route.getTargetUrls()) {
-                String trimmed = trimToNull(raw);
-                if (trimmed != null) {
-                    urls.add(trimmed);
-                }
-            }
-        }
-        copy.setTargetUrls(urls);
-        return copy;
-    }
-
-    private static String stripWeight(String raw) {
-        int bar = raw.lastIndexOf('|');
-        if (bar > 0 && bar < raw.length() - 1) {
-            String maybeWeight = raw.substring(bar + 1).trim();
-            if (maybeWeight.chars().allMatch(Character::isDigit)) {
-                return raw.substring(0, bar).trim();
-            }
-        }
-        return raw;
-    }
-
-    private static String trimToNull(String value) {
-        if (value == null) {
-            return null;
-        }
-        String trimmed = value.trim();
-        return trimmed.isEmpty() ? null : trimmed;
     }
 
     /** 按当前路由、发现、LB、Filter 配置重新组装过滤器链并原子替换。 */
