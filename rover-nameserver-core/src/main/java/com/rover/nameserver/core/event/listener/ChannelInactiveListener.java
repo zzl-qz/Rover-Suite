@@ -1,4 +1,4 @@
-package com.rover.nameserver.core.event.spi.listener;
+package com.rover.nameserver.core.event.listener;
 
 import com.rover.common.event.EventListener;
 import com.rover.nameserver.core.event.model.ChannelInactiveEvent;

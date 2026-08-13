@@ -1,8 +1,8 @@
 package com.rover.gateway.core.loadbalance;
 
 import com.rover.common.model.ServiceInstance;
-import com.rover.common.spi.LoadBalanceContext;
-import com.rover.common.spi.LoadBalancer;
+import com.rover.common.spi.loadbalance.LoadBalanceContext;
+import com.rover.common.spi.loadbalance.LoadBalancer;
 import java.util.List;
 
 /**

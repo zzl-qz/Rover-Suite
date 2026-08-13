@@ -1,6 +1,6 @@
 package com.rover.gateway.core.filter;
 
-import com.rover.common.spi.Filter;
+import com.rover.common.spi.filter.Filter;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -36,7 +36,7 @@ public class PluginFilterLoader {
 
     /**
      * 扫 plugins 目录下的 jar，靠 SPI 找 Filter。
-     * jar 里要有 META-INF/services/com.rover.common.spi.Filter
+     * jar 里要有 META-INF/services/com.rover.common.spi.filter.Filter
      *
      * @param pluginDir 插件目录路径，null 或空时用默认 "plugins"
      * @return 去重后的 Filter 列表；目录不存在或无 jar 时返回空列表

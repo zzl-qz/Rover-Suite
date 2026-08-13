@@ -1,6 +1,6 @@
 package com.rover.gateway.core.loadbalance;
 
-import com.rover.common.spi.LoadBalancer;
+import com.rover.common.spi.loadbalance.LoadBalancer;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -46,7 +46,7 @@ public final class LoadBalancerFactory {
             return builtins.get(key);
         }
 
-        // plugins SPI：META-INF/services/com.rover.common.spi.LoadBalancer
+        // plugins SPI：META-INF/services/com.rover.common.spi.loadbalance.LoadBalancer
         for (LoadBalancer plugin : loadPlugins(pluginDir)) {
             if (plugin.name() != null && plugin.name().equalsIgnoreCase(normalized)) {
                 log.info("使用插件负载均衡: name={}, class={}", plugin.name(), plugin.getClass().getName());

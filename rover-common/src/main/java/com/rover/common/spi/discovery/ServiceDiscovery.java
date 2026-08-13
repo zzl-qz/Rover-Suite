@@ -1,4 +1,4 @@
-package com.rover.common.spi;
+package com.rover.common.spi.discovery;
 
 import com.rover.common.model.ServiceInstance;
 import java.util.List;

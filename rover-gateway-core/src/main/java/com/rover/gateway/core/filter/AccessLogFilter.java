@@ -1,8 +1,8 @@
 package com.rover.gateway.core.filter;
 
-import com.rover.common.spi.Filter;
-import com.rover.common.spi.FilterChain;
-import com.rover.common.spi.RequestContext;
+import com.rover.common.spi.filter.Filter;
+import com.rover.common.spi.filter.FilterChain;
+import com.rover.common.spi.filter.RequestContext;
 import com.rover.gateway.core.route.RouteConfig;
 import lombok.extern.slf4j.Slf4j;
 

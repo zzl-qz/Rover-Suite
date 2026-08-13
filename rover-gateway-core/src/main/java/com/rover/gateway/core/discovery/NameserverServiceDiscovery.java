@@ -3,7 +3,7 @@ package com.rover.gateway.core.discovery;
 import com.rover.common.concurrent.PeriodicTask;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.protocol.QueryResponseBody;
-import com.rover.common.spi.ServiceDiscovery;
+import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.nameserver.client.connection.NameserverClient;
 import com.rover.nameserver.client.connection.NameserverClientOptions;
 import java.util.ArrayList;

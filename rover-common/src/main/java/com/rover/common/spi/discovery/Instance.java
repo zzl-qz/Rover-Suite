@@ -1,4 +1,4 @@
-package com.rover.common.spi;
+package com.rover.common.spi.discovery;
 
 /**
  * Author: Daylight

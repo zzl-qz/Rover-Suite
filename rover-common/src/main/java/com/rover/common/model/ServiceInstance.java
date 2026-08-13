@@ -1,6 +1,6 @@
 package com.rover.common.model;
 
-import com.rover.common.spi.Instance;
+import com.rover.common.spi.discovery.Instance;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.Data;

@@ -5,7 +5,7 @@ import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
 import com.rover.gateway.core.discovery.NoopServiceDiscovery;
-import com.rover.common.spi.ServiceDiscovery;
+import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.runtime.GatewayRuntime;

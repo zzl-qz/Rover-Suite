@@ -1,9 +1,9 @@
 package com.rover.gateway.core.filter;
 
-import com.rover.common.spi.Filter;
+import com.rover.common.spi.filter.Filter;
 import com.rover.gateway.core.discovery.DiscoveryType;
-import com.rover.common.spi.ServiceDiscovery;
-import com.rover.common.spi.LoadBalancer;
+import com.rover.common.spi.discovery.ServiceDiscovery;
+import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteMatcher;
 import java.util.ArrayList;

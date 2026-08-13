@@ -139,7 +139,7 @@ graph TD
 | `rover-nameserver-server` | Standalone bootstrap for the registry (executable Jar, shaded) |
 | `rover-nameserver-client` | Generic TCP client: connection management, handlers, local cache (codec lives in common) |
 | `rover-nameserver-starter` | Spring Boot Starter: autoconfiguration; the business-facing SDK (the only module depending on Spring Boot) |
-| `rover-gateway-core` | Gateway core capabilities: filter chain, route matching, load balancing, reverse proxy, SPI |
+| `rover-gateway-core` | Gateway core: filters, routes, static multi-upstream / discovery, pluggable load balancing, reverse proxy, SPI |
 | `rover-gateway-bootstrap` | Standalone bootstrap for the gateway (executable Jar, shaded) |
 | `rover-gateway-adapter-nacos` | Nacos adapter: implements the `ServiceDiscovery` SPI to connect Nacos (placeholder, not yet implemented) |
 | `rover-admin` | Admin dashboard: view & submit runtime config for Gateway / Nameserver |

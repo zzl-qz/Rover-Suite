@@ -141,7 +141,7 @@ graph TD
 | `rover-nameserver-server` | 注册中心独立启动入口（可执行 Jar，shade 打包） |
 | `rover-nameserver-client` | 通用 TCP 客户端：连接管理、处理器、本地缓存（编解码在 common） |
 | `rover-nameserver-starter` | Spring Boot Starter：自动装配，业务服务接入 SDK（唯一依赖 Spring Boot 的模块） |
-| `rover-gateway-core` | 网关核心能力：过滤器链、路由匹配、负载均衡、反向代理、SPI |
+| `rover-gateway-core` | 网关核心：过滤器链、路由、静态多上游/动态发现、可插拔负载均衡、反向代理、SPI |
 | `rover-gateway-bootstrap` | 网关独立启动入口（可执行 Jar，shade 打包） |
 | `rover-gateway-adapter-nacos` | Nacos 适配扩展：实现 `ServiceDiscovery` SPI，接入 Nacos 注册中心（占位，待实现） |
 | `rover-admin` | 管理后台：Gateway / Nameserver 运行时配置的查看与提交 |

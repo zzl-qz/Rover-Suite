@@ -1,6 +1,6 @@
 package com.rover.gateway.core.filter;
 
-import com.rover.common.spi.RequestContext;
+import com.rover.common.spi.filter.RequestContext;
 import com.rover.gateway.core.route.RouteConfig;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
