@@ -4,33 +4,23 @@ import com.rover.common.model.ServiceInstance;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 
 /**
  * Author: Daylight
  * Created: 2026-08-08 10:34:00
- * Description: 服务实例变更通知事件（带版本号的全量快照）
+ * Description: 可选领域事件（服务快照变更）；Nameserver 主链路不依赖它做推送
  */
 @Data
-public class ServiceChangeEvent implements Event {
+@EqualsAndHashCode(callSuper = false)
+public class ServiceChangeEvent extends Event {
 
-    /** 发生变更的服务名 */
     private String serviceName;
-
-    /** 分组；可为 null */
     private String group;
-
-    /** 变更后服务版本号，与注册表 revision 对齐 */
     private long revision;
-
-    /** 变更类型 */
     private ServiceChangeType changeType = ServiceChangeType.UNKNOWN;
-
-    /** 变更后的全量实例列表 */
     private List<ServiceInstance> instances = new ArrayList<>();
 
-    /**
-     * 从常用字段快速组装事件（实例列表会拷贝一份）。
-     */
     public static ServiceChangeEvent of(
             String serviceName,
             String group,

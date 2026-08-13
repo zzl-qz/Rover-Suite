@@ -6,6 +6,7 @@ import com.rover.nameserver.core.config.NameserverRuntimeConfigManager;
 import com.rover.nameserver.core.consistency.DefaultWriteAckPolicy;
 import com.rover.nameserver.core.consistency.WriteAckPolicy;
 import com.rover.nameserver.core.event.EventBusBootstrap;
+import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.health.HealthChecker;
 import com.rover.nameserver.core.manage.NameserverHttpManageServer;
 import com.rover.nameserver.core.push.PushService;
@@ -80,15 +81,19 @@ public class NameserverTcpServer {
         this.registry = registry;
         this.subscriptionManager = new SubscriptionManager();
         this.pushService = new PushService(subscriptionManager, options.isPushEnabled());
-        // 先建总线，健康检查/分发器才能挂上本地事件
-        this.eventBus = new EventBusBootstrap("rover-nameserver");
         this.healthChecker = new HealthChecker(
                 registry,
                 pushService,
-                eventBus.getEventBus(),
                 options.getHeartbeatTimeoutMillis(),
                 options.getHealthCheckIntervalMillis(),
                 options.getInstanceExpireMillis());
+
+        // 事件总线：显式注册协议 Listener（Handler 只做 TCP→Event）
+        NameserverServices services = new NameserverServices(
+                registry, subscriptionManager, pushService, writeAckPolicy, options);
+        this.eventBus = new EventBusBootstrap("rover-nameserver");
+        this.eventBus.start(services);
+        this.dispatcher = new NameserverRequestDispatcher(eventBus.getEventBus(), services);
 
         // 配置管理：先用 Options（YAML 来源）灌注初值，再叠加历史持久化的 overlay
         NameserverRuntimeConfigManager configManager = new NameserverRuntimeConfigManager();
@@ -99,17 +104,12 @@ public class NameserverTcpServer {
         configManager.seed("nameserver.instance.expireMillis",
                 String.valueOf(options.getInstanceExpireMillis()));
         configManager.seed("nameserver.push.enabled", String.valueOf(options.isPushEnabled()));
-        // YAML 之后叠 Admin 落盘的配置
         configManager.loadOverlayIfPresent();
 
-        // 组装运行时：管理口与配置热更新都操作这一个对象
         this.runtime = new NameserverRuntime(options, registry, pushService, healthChecker, configManager);
         configManager.getApplier().bind(runtime);
-        // runtime 绑定完成后重放全部配置，让 YAML/overlay 的值真正落到组件上
         configManager.reapplyAll();
         this.manageServer = new NameserverHttpManageServer(options.getManagePort(), runtime);
-        this.dispatcher = new NameserverRequestDispatcher(
-                registry, subscriptionManager, pushService, writeAckPolicy, options, eventBus.getEventBus());
     }
 
     /**
@@ -143,7 +143,6 @@ public class NameserverTcpServer {
             // 同步等待绑定完成，拿到服务端 channel 句柄供关闭使用
             serverChannel = bootstrap.bind(options.getPort()).sync().channel();
             healthChecker.start();
-            eventBus.start();
             manageServer.start();
             log.info("Rover Nameserver 已启动, port={}, managePort={}, writeAckMode={}, cluster={}",
                     options.getPort(),

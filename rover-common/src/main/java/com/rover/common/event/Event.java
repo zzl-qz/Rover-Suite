@@ -3,7 +3,7 @@ package com.rover.common.event;
 /**
  * Author: Daylight
  * Created: 2026-08-08 10:34:00
- * Description: 事件模型的基础标记接口
+ * Description: 进程内事件基类（各模块可再扩展自己的上下文字段）
  */
-public interface Event {
+public abstract class Event {
 }

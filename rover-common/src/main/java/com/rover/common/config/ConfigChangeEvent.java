@@ -3,6 +3,7 @@ package com.rover.common.config;
 import com.rover.common.event.Event;
 import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 
 /**
@@ -11,9 +12,10 @@ import lombok.NoArgsConstructor;
  * Description: 配置更新事件
  */
 @Data
+@EqualsAndHashCode(callSuper = false)
 @NoArgsConstructor
 @AllArgsConstructor
-public class ConfigChangeEvent implements Event {
+public class ConfigChangeEvent extends Event {
 
     /** 变更的配置项 key */
     private String key;

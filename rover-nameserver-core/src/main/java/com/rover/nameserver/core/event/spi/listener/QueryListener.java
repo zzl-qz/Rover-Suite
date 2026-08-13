@@ -1,0 +1,46 @@
+package com.rover.nameserver.core.event.spi.listener;
+
+import com.rover.common.event.EventListener;
+import com.rover.common.model.ServiceInstance;
+import com.rover.common.protocol.CommonResponseBody;
+import com.rover.common.protocol.QueryRequest;
+import com.rover.common.protocol.QueryResponseBody;
+import com.rover.nameserver.client.codec.ProtostuffSerializer;
+import com.rover.nameserver.core.event.model.QueryEvent;
+import com.rover.nameserver.core.event.support.NameserverChannelSupport;
+import com.rover.nameserver.core.event.support.NameserverServices;
+import java.util.List;
+
+/** 处理查询：按服务/组取实例列表回包 */
+public class QueryListener implements EventListener<QueryEvent> {
+
+    private final NameserverServices services;
+
+    public QueryListener(NameserverServices services) {
+        this.services = services;
+    }
+
+    @Override
+    public void onEvent(QueryEvent event) {
+        QueryRequest request = event.getRequest();
+        if (request.getServiceName() == null || request.getServiceName().isBlank()) {
+            NameserverChannelSupport.reply(
+                    event.getChannel(),
+                    event.getRequestId(),
+                    event.isOneway(),
+                    NameserverChannelSupport.badRequest("serviceName 不能为空"));
+            return;
+        }
+        List<ServiceInstance> instances = services.getRegistry()
+                .query(request.getServiceName(), request.getGroup(), request.isHealthyOnly());
+        QueryResponseBody queryBody = new QueryResponseBody();
+        queryBody.setInstances(instances);
+        queryBody.setRevision(services.getRegistry().revisionOf(request.getServiceName()));
+
+        CommonResponseBody body = CommonResponseBody.success(ProtostuffSerializer.serialize(queryBody));
+        body.setRevision(queryBody.getRevision());
+        NameserverChannelSupport.fillNode(services.getOptions(), body);
+        NameserverChannelSupport.reply(
+                event.getChannel(), event.getRequestId(), event.isOneway(), body);
+    }
+}

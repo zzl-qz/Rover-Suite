@@ -1,4 +1,2 @@
-# Rover Nameserver 事件监听器 SPI 注册文件
-# 每行一个监听器实现类全限定名，由 EventBus#init 通过 ServiceLoader 自动加载
-# 也可在代码里 EventBus#register / EventBusBootstrap#register
-# 当前：注册变更已 publish ServiceChangeEvent；监听器按需追加（审计/指标等）
+# 旁路无依赖监听器可写在这里（SPI）
+# 协议业务 Listener 由 EventBusBootstrap.start(NameserverServices) 显式 register，不要写在这里
