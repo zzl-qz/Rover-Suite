@@ -5,7 +5,7 @@ import com.rover.common.spi.Filter;
 import com.rover.common.spi.FilterChain;
 import com.rover.common.spi.RequestContext;
 import com.rover.gateway.core.discovery.DiscoveryType;
-import com.rover.gateway.core.discovery.ServiceDiscovery;
+import com.rover.common.spi.ServiceDiscovery;
 import com.rover.gateway.core.loadbalance.LoadBalancer;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;

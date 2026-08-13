@@ -3,8 +3,8 @@
  * Created: 2026-08-10 16:20:00
  * Description: 定义 Gateway 上游服务发现能力包
  *
- * 这个包是什么：Gateway 查后端实例的发现层，支持静态和 Nameserver 动态两种模式。
- * 核心职责：ServiceDiscovery 契约、Nameserver 订阅对账、发现配置模型。
- * 被谁用：GatewayHttpServer 启动时创建；RouteAndProxyFilter 动态选上游。
+ * 这个包是什么：Gateway 侧发现实现（Nameserver / 静态空实现）与发现配置。
+ * 核心职责：实现 common.spi.ServiceDiscovery；订阅对账；DiscoverySettings。
+ * 契约本身在 rover-common，本包只放实现，方便 Nacos 适配模块依赖同一接口。
  */
 package com.rover.gateway.core.discovery;

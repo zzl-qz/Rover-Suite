@@ -1,4 +1,4 @@
-package com.rover.nameserver.client.codec;
+package com.rover.common.codec;
 
 import com.rover.common.constants.ProtocolConstants;
 import com.rover.common.protocol.AckMode;
@@ -14,7 +14,7 @@ import com.rover.common.protocol.RoverMessage;
  * 这个类是什么：RoverMessage 组装与 body 反序列化的静态工具类。
  * 核心职责：统一处理 flags、ackMode、超时与 Protostuff 序列化，提供
  * request/onewayRequest/response/push/decodeBody 快捷方法。
- * 被谁用：NameserverClient 发请求、NameserverClientHandler 解析推送/响应。
+ * 被谁用：NameserverClient、服务端 Listener/Push、Dispatcher 等两端共用。
  */
 public final class RoverMessageCodecSupport {
 

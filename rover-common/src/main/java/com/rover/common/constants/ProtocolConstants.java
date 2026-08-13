@@ -3,12 +3,15 @@ package com.rover.common.constants;
 /**
  * Author: Daylight
  * Created: 2026-08-08 10:34:00
- * Description: 协议常量和消息类型
+ * Description: 协议常量和消息类型（线上契约）
  *
  * 这个类是什么：Rover TCP 二进制协议的全部常量集中地。
- * 核心职责：统一定义魔数、版本、帧头长度、消息类型等编解码双方都必须一致的数值，
- * 防止两端(客户端/服务端)对协议的理解出现偏差。
- * 被谁用：协议编解码器(Decoder/Encoder)、RoverMessage 及各请求/响应体。
+ * 核心职责：统一定义魔数、版本、帧头长度、消息类型等编解码双方都必须一致的数值。
+ * 设计约定：
+ *   - 下列 byte 数值一旦发布尽量不改（兼容老客户端）
+ *   - 进程内业务用有名字的 Event/Listener，不要在业务里散落魔法数字
+ *   - 日志展示名称见 {@link ProtocolTypeNames}
+ * 被谁用：编解码器、RoverMessage、Nameserver Dispatcher 映射层。
  */
 public final class ProtocolConstants {
 

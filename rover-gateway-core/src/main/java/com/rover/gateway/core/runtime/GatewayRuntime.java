@@ -4,7 +4,7 @@ import com.rover.common.spi.Filter;
 import com.rover.gateway.core.config.GatewayRuntimeConfigManager;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
-import com.rover.gateway.core.discovery.ServiceDiscovery;
+import com.rover.common.spi.ServiceDiscovery;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.GatewayFilterAssembler;
 import com.rover.gateway.core.loadbalance.LoadBalancer;

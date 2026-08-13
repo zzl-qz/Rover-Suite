@@ -117,7 +117,6 @@ graph TD
     Common --> Core[rover-nameserver-core]
     Common --> GatewayCore[rover-gateway-core]
 
-    Client --> Core
     Client --> Starter[rover-nameserver-starter]
     Client --> GatewayCore
 
@@ -137,10 +136,10 @@ graph TD
 
 | 模块 | 职责 |
 |---|---|
-| `rover-common` | 公共基础模块：工具类、常量、事件总线接口、SPI 接口、统一模型、异常体系、注解 |
+| `rover-common` | 公共基础：协议模型、TCP 编解码、工具类、事件总线、SPI、异常、注解 |
 | `rover-nameserver-core` | 注册中心核心逻辑：注册表、心跳检测、主动推送、健康检查、数据模型 |
 | `rover-nameserver-server` | 注册中心独立启动入口（可执行 Jar，shade 打包） |
-| `rover-nameserver-client` | 通用 TCP 客户端：连接管理、处理器、本地缓存 |
+| `rover-nameserver-client` | 通用 TCP 客户端：连接管理、处理器、本地缓存（编解码在 common） |
 | `rover-nameserver-starter` | Spring Boot Starter：自动装配，业务服务接入 SDK（唯一依赖 Spring Boot 的模块） |
 | `rover-gateway-core` | 网关核心能力：过滤器链、路由匹配、负载均衡、反向代理、SPI |
 | `rover-gateway-bootstrap` | 网关独立启动入口（可执行 Jar，shade 打包） |

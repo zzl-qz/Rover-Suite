@@ -1,4 +1,4 @@
-package com.rover.nameserver.client.codec;
+package com.rover.common.codec;
 
 import com.rover.common.constants.ProtocolConstants;
 import com.rover.common.exception.ProtocolException;
@@ -16,7 +16,7 @@ import io.netty.handler.codec.MessageToByteEncoder;
  * 这个类是什么：Netty 出站编码器，将 RoverMessage 按协议帧格式写入 ByteBuf。
  * 核心职责：按 magic/version/type/flags/requestId/timeout/body 顺序写帧，
  * 写出前校验 body 长度与 flags 合法性。
- * 被谁用：NameserverClient 连接 pipeline，位于 Decoder 之后、Handler 之前。
+ * 被谁用：NameserverClient / NameserverTcpServer 的 pipeline，两端同一实现。
  */
 public class RoverMessageEncoder extends MessageToByteEncoder<RoverMessage> {
 

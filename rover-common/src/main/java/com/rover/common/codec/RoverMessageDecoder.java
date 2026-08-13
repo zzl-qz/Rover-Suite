@@ -1,4 +1,4 @@
-package com.rover.nameserver.client.codec;
+package com.rover.common.codec;
 
 import com.rover.common.constants.ProtocolConstants;
 import com.rover.common.exception.ProtocolException;
@@ -17,7 +17,7 @@ import java.util.List;
  * 这个类是什么：Netty 入站解码器，将字节流按协议帧头解析为 RoverMessage。
  * 核心职责：基于 ByteToMessageDecoder 累积缓冲处理粘包/半包；帧头不足或 body
  * 未收齐时保留 readerIndex 等待；魔数/版本/flags/长度非法时抛 ProtocolException。
- * 被谁用：NameserverClient 连接 pipeline 最外层，位于 Encoder 之前。
+ * 被谁用：NameserverClient / NameserverTcpServer 的 pipeline，两端同一实现。
  */
 public class RoverMessageDecoder extends ByteToMessageDecoder {
 

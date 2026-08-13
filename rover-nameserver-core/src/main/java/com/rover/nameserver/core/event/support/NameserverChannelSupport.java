@@ -4,7 +4,7 @@ import com.rover.common.constants.StatusConstants;
 import com.rover.common.protocol.AckMode;
 import com.rover.common.protocol.CommonResponseBody;
 import com.rover.common.protocol.RoverMessage;
-import com.rover.nameserver.client.codec.RoverMessageCodecSupport;
+import com.rover.common.codec.RoverMessageCodecSupport;
 import com.rover.nameserver.core.server.NameserverServerOptions;
 import io.netty.channel.Channel;
 import io.netty.util.AttributeKey;

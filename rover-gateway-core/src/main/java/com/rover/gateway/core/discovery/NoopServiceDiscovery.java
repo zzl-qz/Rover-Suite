@@ -1,6 +1,7 @@
 package com.rover.gateway.core.discovery;
 
 import com.rover.common.model.ServiceInstance;
+import com.rover.common.spi.ServiceDiscovery;
 import java.util.List;
 
 /**

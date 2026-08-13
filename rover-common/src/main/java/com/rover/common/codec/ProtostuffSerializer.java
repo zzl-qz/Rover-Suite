@@ -1,4 +1,4 @@
-package com.rover.nameserver.client.codec;
+package com.rover.common.codec;
 
 import com.rover.common.exception.ProtocolException;
 import io.protostuff.LinkedBuffer;
@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * 这个类是什么：基于 Protostuff 的对象序列化/反序列化工具类。
  * 核心职责：RuntimeSchema 按类缓存；LinkedBuffer 用 ThreadLocal 线程内复用。
- * 被谁用：RoverMessageCodecSupport、NameserverClient.query 解码响应体。
+ * 被谁用：RoverMessageCodecSupport、NameserverClient.query、QueryListener 等。
  */
 public final class ProtostuffSerializer {
 
@@ -29,7 +29,6 @@ public final class ProtostuffSerializer {
     /** 工具类，禁止实例化 */
     private ProtostuffSerializer() {
     }
-
 
     /**
      * 将对象序列化为字节数组。

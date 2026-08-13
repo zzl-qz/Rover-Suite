@@ -6,9 +6,12 @@ import com.rover.common.protocol.SubscribeRequest;
 import com.rover.nameserver.core.event.model.SubscribeEvent;
 import com.rover.nameserver.core.event.support.NameserverChannelSupport;
 import com.rover.nameserver.core.event.support.NameserverServices;
+import com.rover.nameserver.core.event.support.NameserverTrace;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
+import lombok.extern.slf4j.Slf4j;
 
 /** 处理订阅：登记订阅 → 立刻推当前全量 → 回包 */
+@Slf4j
 public class SubscribeListener implements EventListener<SubscribeEvent> {
 
     private final NameserverServices services;
@@ -21,6 +24,7 @@ public class SubscribeListener implements EventListener<SubscribeEvent> {
     public void onEvent(SubscribeEvent event) {
         SubscribeRequest request = event.getRequest();
         if (request.getServiceName() == null || request.getServiceName().isBlank()) {
+            log.warn("{}", NameserverTrace.of(event, "subscribe-bad-request"));
             NameserverChannelSupport.reply(
                     event.getChannel(),
                     event.getRequestId(),
@@ -43,5 +47,8 @@ public class SubscribeListener implements EventListener<SubscribeEvent> {
         NameserverChannelSupport.fillNode(services.getOptions(), body);
         NameserverChannelSupport.reply(
                 event.getChannel(), event.getRequestId(), event.isOneway(), body);
+        log.info("{}, revision={}",
+                NameserverTrace.withService(event, "subscribe-ok", request.getServiceName()),
+                snapshot.getRevision());
     }
 }

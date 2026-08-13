@@ -1,7 +1,7 @@
 package com.rover.nameserver.core.push;
 
 import com.rover.common.protocol.ServicePushBody;
-import com.rover.nameserver.client.codec.RoverMessageCodecSupport;
+import com.rover.common.codec.RoverMessageCodecSupport;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
 import io.netty.channel.Channel;
 import java.util.Set;

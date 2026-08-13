@@ -1,7 +1,7 @@
 package com.rover.nameserver.core.server;
 
-import com.rover.nameserver.client.codec.RoverMessageDecoder;
-import com.rover.nameserver.client.codec.RoverMessageEncoder;
+import com.rover.common.codec.RoverMessageDecoder;
+import com.rover.common.codec.RoverMessageEncoder;
 import com.rover.nameserver.core.config.NameserverRuntimeConfigManager;
 import com.rover.nameserver.core.consistency.DefaultWriteAckPolicy;
 import com.rover.nameserver.core.consistency.WriteAckPolicy;

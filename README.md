@@ -115,7 +115,6 @@ graph TD
     Common --> Core[rover-nameserver-core]
     Common --> GatewayCore[rover-gateway-core]
 
-    Client --> Core
     Client --> Starter[rover-nameserver-starter]
     Client --> GatewayCore
 
@@ -135,10 +134,10 @@ graph TD
 
 | Module | Responsibility |
 |---|---|
-| `rover-common` | Common base module: utilities, constants, event bus interfaces, SPI interfaces, unified models, exception hierarchy, annotations |
+| `rover-common` | Shared base: protocol models, TCP codec, utilities, event bus, SPI, exceptions, annotations |
 | `rover-nameserver-core` | Registry core logic: registry table, heartbeat detection, active push, health checks, data models |
 | `rover-nameserver-server` | Standalone bootstrap for the registry (executable Jar, shaded) |
-| `rover-nameserver-client` | Generic TCP client: connection management, handlers, local cache |
+| `rover-nameserver-client` | Generic TCP client: connection management, handlers, local cache (codec lives in common) |
 | `rover-nameserver-starter` | Spring Boot Starter: autoconfiguration; the business-facing SDK (the only module depending on Spring Boot) |
 | `rover-gateway-core` | Gateway core capabilities: filter chain, route matching, load balancing, reverse proxy, SPI |
 | `rover-gateway-bootstrap` | Standalone bootstrap for the gateway (executable Jar, shaded) |

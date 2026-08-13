@@ -1,6 +1,7 @@
 package com.rover.nameserver.client.connection;
 
 import com.rover.common.concurrent.PendingRequestTable;
+import com.rover.common.constants.ProtocolTypeNames;
 import com.rover.common.concurrent.PeriodicTask;
 import com.rover.common.concurrent.RequestIdGenerator;
 import com.rover.common.constants.ProtocolConstants;
@@ -19,10 +20,10 @@ import com.rover.common.protocol.SubscribeRequest;
 import com.rover.common.protocol.UnregisterRequest;
 import com.rover.common.protocol.UnsubscribeRequest;
 import com.rover.nameserver.client.cache.InstanceCache;
-import com.rover.nameserver.client.codec.ProtostuffSerializer;
-import com.rover.nameserver.client.codec.RoverMessageCodecSupport;
-import com.rover.nameserver.client.codec.RoverMessageDecoder;
-import com.rover.nameserver.client.codec.RoverMessageEncoder;
+import com.rover.common.codec.ProtostuffSerializer;
+import com.rover.common.codec.RoverMessageCodecSupport;
+import com.rover.common.codec.RoverMessageDecoder;
+import com.rover.common.codec.RoverMessageEncoder;
 import com.rover.nameserver.client.handler.NameserverClientHandler;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.Channel;
@@ -290,9 +291,13 @@ public class NameserverClient implements AutoCloseable {
         // 先挂 pending 再写出，避免响应太快对不上号
         CompletableFuture<CommonResponseBody> future = pendingRequests.create(requestId, timeoutMs);
         RoverMessage message = RoverMessageCodecSupport.request(type, requestId, ackMode, timeoutMs, body);
+        log.debug("发送请求, type={}, requestId={}, timeoutMs={}",
+                ProtocolTypeNames.nameOf(type), requestId, timeoutMs);
         // 写完成回调里检查写结果，失败立刻 fail，避免调用方干等超时
         current.writeAndFlush(message).addListener(writeFuture -> {
             if (!writeFuture.isSuccess()) {
+                log.warn("请求写出失败, type={}, requestId={}",
+                        ProtocolTypeNames.nameOf(type), requestId, writeFuture.cause());
                 // 没写出成功就别让调用方干等到超时
                 pendingRequests.fail(requestId, writeFuture.cause() == null
                         ? new IllegalStateException("写入失败")

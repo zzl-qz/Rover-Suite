@@ -8,9 +8,12 @@ import com.rover.common.protocol.UnregisterRequest;
 import com.rover.nameserver.core.event.model.UnregisterEvent;
 import com.rover.nameserver.core.event.support.NameserverChannelSupport;
 import com.rover.nameserver.core.event.support.NameserverServices;
+import com.rover.nameserver.core.event.support.NameserverTrace;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
+import lombok.extern.slf4j.Slf4j;
 
 /** 处理注销：摘注册表 → 解绑 → Push → 回包 */
+@Slf4j
 public class UnregisterListener implements EventListener<UnregisterEvent> {
 
     private final NameserverServices services;
@@ -24,6 +27,7 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
         UnregisterRequest request = event.getRequest();
         if (request.getServiceName() == null || request.getServiceName().isBlank()
                 || request.getInstanceId() == null || request.getInstanceId().isBlank()) {
+            log.warn("{}", NameserverTrace.of(event, "unregister-bad-request"));
             NameserverChannelSupport.reply(
                     event.getChannel(),
                     event.getRequestId(),
@@ -37,6 +41,8 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
         NameserverChannelSupport.unbindInstance(
                 event.getChannel(), request.getServiceName(), request.getInstanceId());
         if (snapshot == null) {
+            log.warn("{}", NameserverTrace.withServiceInstance(
+                    event, "unregister-not-found", request.getServiceName(), request.getInstanceId()));
             NameserverChannelSupport.replyFail(
                     event.getChannel(),
                     event.getRequestId(),
@@ -57,5 +63,9 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
         NameserverChannelSupport.fillNode(services.getOptions(), body);
         NameserverChannelSupport.reply(
                 event.getChannel(), event.getRequestId(), event.isOneway(), body);
+        log.info("{}, revision={}",
+                NameserverTrace.withServiceInstance(
+                        event, "unregister-ok", request.getServiceName(), request.getInstanceId()),
+                snapshot.getRevision());
     }
 }

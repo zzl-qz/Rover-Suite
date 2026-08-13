@@ -1,12 +1,13 @@
 package com.rover.nameserver.client.handler;
 
 import com.rover.common.constants.ProtocolConstants;
+import com.rover.common.constants.ProtocolTypeNames;
 import com.rover.common.exception.ProtocolException;
 import com.rover.common.protocol.CommonResponseBody;
 import com.rover.common.protocol.RoverMessage;
 import com.rover.common.protocol.ServicePushBody;
 import com.rover.nameserver.client.cache.InstanceCache;
-import com.rover.nameserver.client.codec.RoverMessageCodecSupport;
+import com.rover.common.codec.RoverMessageCodecSupport;
 import com.rover.nameserver.client.connection.NameserverClient;
 import com.rover.common.concurrent.PendingRequestTable;
 import io.netty.channel.ChannelHandlerContext;
@@ -62,6 +63,11 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
         if (msg.getType() == ProtocolConstants.PUSH_RESPONSE) {
             ServicePushBody pushBody = RoverMessageCodecSupport.decodeBody(msg, ServicePushBody.class);
             instanceCache.onPush(pushBody);
+            log.debug("收到推送, type={}, serviceName={}, revision={}, requestId={}",
+                    ProtocolTypeNames.nameOf(msg.getType()),
+                    pushBody.getServiceName(),
+                    pushBody.getRevision(),
+                    msg.getRequestId());
             return;
         }
 
@@ -71,12 +77,17 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
             // 配对失败说明是超时后迟到的响应或未知请求号的响应，丢弃即可
             boolean matched = pendingRequests.complete(msg.getRequestId(), body);
             if (!matched) {
-                log.debug("收到过期或未知响应, requestId={}", msg.getRequestId());
+                log.debug("收到过期或未知响应, type={}, requestId={}",
+                        ProtocolTypeNames.nameOf(msg.getType()), msg.getRequestId());
+            } else {
+                log.debug("响应已配对, type={}, requestId={}, code={}",
+                        ProtocolTypeNames.nameOf(msg.getType()), msg.getRequestId(), body.getCode());
             }
             return;
         }
 
-        log.warn("客户端收到未处理消息类型: {}", msg.getType());
+        log.warn("客户端收到未处理消息类型: type={}, requestId={}",
+                ProtocolTypeNames.nameOf(msg.getType()), msg.getRequestId());
     }
 
     /**
