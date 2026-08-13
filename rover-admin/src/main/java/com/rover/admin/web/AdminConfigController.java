@@ -39,11 +39,14 @@ public class AdminConfigController {
         // 不用 formatted：CSS 里有很多 %，会炸
         return INDEX_HTML
                 .replace("{{DISCOVERY}}", escape(discoveryType))
-                .replace("{{MODE_HINT}}", nameserverMode ? "请填 serviceName" : "请填 targetUrl")
+                .replace("{{MODE_HINT}}", nameserverMode
+                        ? "请填 serviceName"
+                        : "请填 targetUrl 或 targetUrls（多机逗号分隔，可带|权重）")
                 .replace("{{SERVICE_STAR}}", nameserverMode ? "*" : "")
                 .replace("{{SERVICE_REQ}}", nameserverMode ? "required" : "")
-                .replace("{{TARGET_STAR}}", nameserverMode ? "" : "*")
-                .replace("{{TARGET_REQ}}", nameserverMode ? "" : "required");
+                // 静态模式 targetUrl / targetUrls 二选一即可，不再强制 targetUrl required
+                .replace("{{TARGET_STAR}}", nameserverMode ? "" : "")
+                .replace("{{TARGET_REQ}}", "");
     }
 
     private static final String INDEX_HTML = """
@@ -219,6 +222,11 @@ public class AdminConfigController {
                                 <input name="targetUrl" placeholder="http://127.0.0.1:8081" {{TARGET_REQ}}>
                             </div>
                             <div>
+                                <label>targetUrls（多机）</label>
+                                <input name="targetUrls"
+                                       placeholder="http://127.0.0.1:8081,http://127.0.0.1:8082|200">
+                            </div>
+                            <div>
                                 <label>group</label>
                                 <input name="group" placeholder="可选">
                             </div>
@@ -303,6 +311,7 @@ public class AdminConfigController {
             @RequestParam(value = "id", required = false) String id,
             @RequestParam("businessPrefix") String businessPrefix,
             @RequestParam(value = "targetUrl", required = false) String targetUrl,
+            @RequestParam(value = "targetUrls", required = false) String targetUrls,
             @RequestParam(value = "serviceName", required = false) String serviceName,
             @RequestParam(value = "group", required = false) String group,
             @RequestParam(value = "stripPrefix", required = false) String stripPrefix) {
@@ -311,6 +320,7 @@ public class AdminConfigController {
             route.put("id", id == null ? "" : id);
             route.put("businessPrefix", businessPrefix);
             route.put("targetUrl", targetUrl == null ? "" : targetUrl);
+            route.put("targetUrls", targetUrls == null ? "" : targetUrls);
             route.put("serviceName", serviceName == null ? "" : serviceName);
             route.put("group", group == null ? "" : group);
             route.put("stripPrefix", stripPrefix == null ? "" : stripPrefix);
@@ -382,7 +392,7 @@ public class AdminConfigController {
             html.append("""
                     <table>
                       <thead><tr>
-                        <th>ID</th><th>前缀</th><th>serviceName</th><th>targetUrl</th><th>stripPrefix</th><th></th>
+                        <th>ID</th><th>前缀</th><th>serviceName</th><th>targetUrl</th><th>targetUrls</th><th>stripPrefix</th><th></th>
                       </tr></thead><tbody>
                     """);
             for (Map<String, Object> row : rows) {
@@ -392,6 +402,7 @@ public class AdminConfigController {
                         .append("<td><code>").append(escape(prefix)).append("</code></td>")
                         .append("<td>").append(escape(str(row.get("serviceName")))).append("</td>")
                         .append("<td>").append(escape(str(row.get("targetUrl")))).append("</td>")
+                        .append("<td>").append(escape(str(row.get("targetUrls")))).append("</td>")
                         .append("<td>").append(escape(str(row.get("stripPrefix")))).append("</td>")
                         .append("<td>")
                         .append("<form hx-post=\"/routes/delete\" hx-target=\"#routes\" hx-swap=\"innerHTML\" ")

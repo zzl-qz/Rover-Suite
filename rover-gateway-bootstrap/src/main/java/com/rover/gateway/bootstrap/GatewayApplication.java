@@ -50,7 +50,8 @@ public class GatewayApplication {
                 config.getConnectTimeoutMillisOrDefault(),
                 config.getRequestTimeoutMillisOrDefault(),
                 config.toFilterSettings(),
-                discoverySettings);
+                discoverySettings,
+                config.getLoadBalanceStrategyOrDefault());
 
         Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown, "gateway-shutdown"));
         server.start();

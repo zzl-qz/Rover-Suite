@@ -4,18 +4,17 @@ import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.LoadBalanceContext;
 import com.rover.common.spi.LoadBalancer;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 14:22:00
- * Description: 随机负载均衡
+ * Created: 2026-08-13
+ * Description: 按客户端 IP 哈希，同 IP 尽量打到同一台
  */
-public class RandomLoadBalancer implements LoadBalancer {
+public class IpHashLoadBalancer implements LoadBalancer {
 
     @Override
     public String name() {
-        return "random";
+        return "ip_hash";
     }
 
     @Override
@@ -24,6 +23,12 @@ public class RandomLoadBalancer implements LoadBalancer {
             return null;
         }
         List<ServiceInstance> instances = context.getInstances();
-        return instances.get(ThreadLocalRandom.current().nextInt(instances.size()));
+        String ip = context.getClientIp();
+        if (ip == null || ip.isBlank()) {
+            // 拿不到 IP 时退化为稳定下标 0，避免 NPE
+            return instances.get(0);
+        }
+        int index = Math.floorMod(ip.hashCode(), instances.size());
+        return instances.get(index);
     }
 }

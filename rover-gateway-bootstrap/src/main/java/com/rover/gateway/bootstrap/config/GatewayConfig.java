@@ -50,6 +50,14 @@ public class GatewayConfig {
         return DiscoveryType.from(gatewayProperties().getDiscovery().getType());
     }
 
+    public String getLoadBalanceStrategyOrDefault() {
+        LoadBalanceProperties lb = gatewayProperties().getLoadbalance();
+        if (lb == null || lb.getStrategy() == null || lb.getStrategy().isBlank()) {
+            return "round_robin";
+        }
+        return lb.getStrategy().trim();
+    }
+
     public FilterSettings toFilterSettings() {
         FilterProperties filterProperties = gatewayProperties().getFilters();
         FilterSettings settings = new FilterSettings();
@@ -103,8 +111,7 @@ public class GatewayConfig {
             if (route.getBusinessPrefix() == null || route.getBusinessPrefix().isBlank()) {
                 continue;
             }
-            if (discoveryType == DiscoveryType.STATIC
-                    && (route.getTargetUrl() == null || route.getTargetUrl().isBlank())) {
+            if (discoveryType == DiscoveryType.STATIC && !hasStaticUpstream(route)) {
                 continue;
             }
             if (discoveryType == DiscoveryType.NAMESERVER
@@ -116,6 +123,7 @@ public class GatewayConfig {
             routeConfig.setId(route.getId());
             routeConfig.setBusinessPrefix(route.getBusinessPrefix());
             routeConfig.setTargetUrl(route.getTargetUrl());
+            routeConfig.setTargetUrls(copyTargetUrls(route.getTargetUrls()));
             routeConfig.setServiceName(route.getServiceName());
             routeConfig.setGroup(route.getGroup());
             routeConfig.setStripPrefix(resolveStripPrefix(route));
@@ -241,11 +249,21 @@ public class GatewayConfig {
         }
 
         if (discoveryType == DiscoveryType.STATIC) {
-            if (route.getTargetUrl() == null || route.getTargetUrl().isBlank()) {
-                throw new IllegalStateException("static 模式下 targetUrl 不能为空，businessPrefix="
-                        + route.getBusinessPrefix());
+            if (!hasStaticUpstream(route)) {
+                throw new IllegalStateException(
+                        "static 模式下需要 targetUrl 或 targetUrls，businessPrefix="
+                                + route.getBusinessPrefix());
             }
-            validateTargetUrl(route.getTargetUrl());
+            if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
+                validateTargetUrl(stripWeightSuffix(route.getTargetUrl()));
+            }
+            if (route.getTargetUrls() != null) {
+                for (String raw : route.getTargetUrls()) {
+                    if (raw != null && !raw.isBlank()) {
+                        validateTargetUrl(stripWeightSuffix(raw.trim()));
+                    }
+                }
+            }
         } else {
             if (route.getServiceName() == null || route.getServiceName().isBlank()) {
                 throw new IllegalStateException("nameserver 模式下 serviceName 不能为空，businessPrefix="
@@ -317,9 +335,16 @@ public class GatewayConfig {
         private ServerProperties server = new ServerProperties();
         private ProxyProperties proxy = new ProxyProperties();
         private FilterProperties filters = new FilterProperties();
+        private LoadBalanceProperties loadbalance = new LoadBalanceProperties();
         private RewriteProperties rewrite = new RewriteProperties();
         private DiscoveryProperties discovery = new DiscoveryProperties();
         private List<RouteProperties> routes = new ArrayList<>();
+    }
+
+    @Data
+    public static class LoadBalanceProperties {
+        /** round_robin / random / weighted_round_robin / ip_hash / least_connections / 自定义 */
+        private String strategy = "round_robin";
     }
 
     @Data
@@ -363,8 +388,48 @@ public class GatewayConfig {
         private String id;
         private String businessPrefix;
         private String targetUrl;
+        /** 静态多上游，元素可写 http://host:port|weight */
+        private List<String> targetUrls = new ArrayList<>();
         private String serviceName;
         private String group;
         private String stripPrefix;
+    }
+
+    private static boolean hasStaticUpstream(RouteProperties route) {
+        if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
+            return true;
+        }
+        if (route.getTargetUrls() != null) {
+            for (String raw : route.getTargetUrls()) {
+                if (raw != null && !raw.isBlank()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static List<String> copyTargetUrls(List<String> source) {
+        if (source == null || source.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<String> copy = new ArrayList<>();
+        for (String raw : source) {
+            if (raw != null && !raw.isBlank()) {
+                copy.add(raw.trim());
+            }
+        }
+        return copy;
+    }
+
+    private static String stripWeightSuffix(String raw) {
+        int bar = raw.lastIndexOf('|');
+        if (bar > 0 && bar < raw.length() - 1) {
+            String maybeWeight = raw.substring(bar + 1).trim();
+            if (maybeWeight.chars().allMatch(Character::isDigit)) {
+                return raw.substring(0, bar).trim();
+            }
+        }
+        return raw;
     }
 }

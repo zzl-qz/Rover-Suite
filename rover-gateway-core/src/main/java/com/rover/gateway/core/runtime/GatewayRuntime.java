@@ -1,5 +1,6 @@
 package com.rover.gateway.core.runtime;
 
+import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.Filter;
 import com.rover.gateway.core.config.GatewayRuntimeConfigManager;
 import com.rover.gateway.core.discovery.DiscoverySettings;
@@ -7,9 +8,9 @@ import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.common.spi.ServiceDiscovery;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.GatewayFilterAssembler;
-import com.rover.gateway.core.loadbalance.LoadBalancer;
-import com.rover.gateway.core.loadbalance.RandomLoadBalancer;
-import com.rover.gateway.core.loadbalance.RoundRobinLoadBalancer;
+import com.rover.common.spi.LoadBalancer;
+import com.rover.gateway.core.loadbalance.LoadBalancerFactory;
+import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
@@ -109,7 +110,9 @@ public class GatewayRuntime {
         this.serviceDiscovery = serviceDiscovery;
         this.configManager = configManager;
         this.routeOverlayStore = new RouteOverlayStore();
-        this.loadBalancer.set(new RoundRobinLoadBalancer());
+        String pluginDir = this.filterSettings.getPluginDir();
+        this.loadBalancer.set(LoadBalancerFactory.create("round_robin", pluginDir));
+        this.loadBalanceStrategy.set("round_robin");
         this.routeMatcherRef.set(new RouteMatcher(routes == null ? List.of() : routes));
         rebuildFilters();
     }
@@ -146,19 +149,16 @@ public class GatewayRuntime {
     /**
      * 热更新负载均衡策略，会重建 LoadBalancer 和过滤器链。
      *
-     * @param strategy round_robin 或 random
+     * @param strategy 内置名 / SPI name / 自定义类全名
      * @throws IllegalArgumentException 不支持的策略名
      */
     public void applyLoadBalanceStrategy(String strategy) {
-        String normalized = strategy == null ? "round_robin" : strategy.trim().toLowerCase();
-        LoadBalancer next = switch (normalized) {
-            case "random" -> new RandomLoadBalancer();
-            case "round_robin" -> new RoundRobinLoadBalancer();
-            default -> throw new IllegalArgumentException("不支持的负载均衡策略: " + strategy);
-        };
-        loadBalanceStrategy.set(normalized);
+        String normalized = strategy == null || strategy.isBlank() ? "round_robin" : strategy.trim();
+        LoadBalancer next = LoadBalancerFactory.create(normalized, filterSettings.getPluginDir());
+        loadBalanceStrategy.set(next.name() == null ? normalized : next.name());
         loadBalancer.set(next);
         rebuildFilters();
+        log.info("负载均衡策略已切换: {}", loadBalanceStrategy.get());
     }
 
     /**
@@ -256,10 +256,26 @@ public class GatewayRuntime {
             throw new IllegalArgumentException("businessPrefix 重复: " + route.getBusinessPrefix());
         }
         if (discoveryType == DiscoveryType.STATIC) {
-            if (route.getTargetUrl() == null || route.getTargetUrl().isBlank()) {
-                throw new IllegalArgumentException("static 模式 targetUrl 不能为空: " + route.getBusinessPrefix());
+            if (!StaticUpstreamCluster.hasUpstreams(route)) {
+                throw new IllegalArgumentException(
+                        "static 模式需要 targetUrl 或 targetUrls: " + route.getBusinessPrefix());
             }
-            validateTargetUrl(route.getTargetUrl());
+            // resolve 会解析并校验地址；再对原始配置校验，错误信息更直观
+            List<ServiceInstance> staticInstances = StaticUpstreamCluster.resolve(route);
+            if (staticInstances.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "static 模式没有合法上游: " + route.getBusinessPrefix());
+            }
+            if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
+                validateTargetUrl(stripWeight(route.getTargetUrl()));
+            }
+            if (route.getTargetUrls() != null) {
+                for (String raw : route.getTargetUrls()) {
+                    if (raw != null && !raw.isBlank()) {
+                        validateTargetUrl(stripWeight(raw.trim()));
+                    }
+                }
+            }
         } else if (route.getServiceName() == null || route.getServiceName().isBlank()) {
             throw new IllegalArgumentException("nameserver 模式 serviceName 不能为空: " + route.getBusinessPrefix());
         }
@@ -297,7 +313,28 @@ public class GatewayRuntime {
         copy.setServiceName(trimToNull(route.getServiceName()));
         copy.setGroup(trimToNull(route.getGroup()));
         copy.setStripPrefix(trimToNull(route.getStripPrefix()));
+        List<String> urls = new ArrayList<>();
+        if (route.getTargetUrls() != null) {
+            for (String raw : route.getTargetUrls()) {
+                String trimmed = trimToNull(raw);
+                if (trimmed != null) {
+                    urls.add(trimmed);
+                }
+            }
+        }
+        copy.setTargetUrls(urls);
         return copy;
+    }
+
+    private static String stripWeight(String raw) {
+        int bar = raw.lastIndexOf('|');
+        if (bar > 0 && bar < raw.length() - 1) {
+            String maybeWeight = raw.substring(bar + 1).trim();
+            if (maybeWeight.chars().allMatch(Character::isDigit)) {
+                return raw.substring(0, bar).trim();
+            }
+        }
+        return raw;
     }
 
     private static String trimToNull(String value) {

@@ -208,6 +208,11 @@ public class GatewayManageApi {
             row.put("id", nullToEmpty(route.getId()));
             row.put("businessPrefix", nullToEmpty(route.getBusinessPrefix()));
             row.put("targetUrl", nullToEmpty(route.getTargetUrl()));
+            row.put(
+                    "targetUrls",
+                    route.getTargetUrls() == null || route.getTargetUrls().isEmpty()
+                            ? ""
+                            : String.join(",", route.getTargetUrls()));
             row.put("serviceName", nullToEmpty(route.getServiceName()));
             row.put("group", nullToEmpty(route.getGroup()));
             row.put("stripPrefix", nullToEmpty(route.getStripPrefix()));

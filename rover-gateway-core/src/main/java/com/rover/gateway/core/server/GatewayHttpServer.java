@@ -119,16 +119,35 @@ public class GatewayHttpServer {
             int requestTimeoutMillis,
             FilterSettings filterSettings,
             DiscoverySettings discoverySettings) {
+        this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
+                filterSettings, discoverySettings, "round_robin");
+    }
+
+    /**
+     * 全参数构造（含负载均衡策略名）。
+     */
+    public GatewayHttpServer(
+            int port,
+            List<RouteConfig> routes,
+            int maxContentLengthBytes,
+            int connectTimeoutMillis,
+            int requestTimeoutMillis,
+            FilterSettings filterSettings,
+            DiscoverySettings discoverySettings,
+            String loadBalanceStrategy) {
         this.port = port;
         this.maxContentLengthBytes = maxContentLengthBytes;
         DiscoverySettings settings = discoverySettings == null ? defaultStaticDiscovery() : discoverySettings;
         this.serviceDiscovery = createServiceDiscovery(settings);
 
+        String lbStrategy = loadBalanceStrategy == null || loadBalanceStrategy.isBlank()
+                ? "round_robin"
+                : loadBalanceStrategy.trim();
         GatewayRuntimeConfigManager configManager = new GatewayRuntimeConfigManager();
         configManager.seed("gateway.filter.enabled", String.valueOf(
                 filterSettings == null || filterSettings.isEnabled()));
         configManager.seed("gateway.request.timeoutMillis", String.valueOf(requestTimeoutMillis));
-        configManager.seed("gateway.loadbalance.strategy", "round_robin");
+        configManager.seed("gateway.loadbalance.strategy", lbStrategy);
         // YAML 之后叠 Admin 落盘的配置
         configManager.loadOverlayIfPresent();
 

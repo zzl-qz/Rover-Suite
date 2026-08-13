@@ -6,12 +6,12 @@ package com.rover.gateway.core.discovery;
  * Description: 上游发现模式
  *
  * 这个枚举是什么：Gateway 选择后端地址的两种策略标识。
- * 核心职责：STATIC 用路由 targetUrl；NAMESERVER 通过注册中心查实例并负载均衡。
- * 被谁用：DiscoverySettings、GatewayRuntime、RouteAndProxyFilter 判断转发逻辑。
+ * 核心职责：STATIC 用 targetUrl/targetUrls（多 IP 同样走 LB）；
+ * NAMESERVER 通过注册中心查实例并负载均衡。
  */
 public enum DiscoveryType {
 
-    /** 使用路由里的 targetUrl，不连 Nameserver */
+    /** 静态上游列表，不连 Nameserver；多 IP 走 LoadBalancer */
     STATIC,
 
     /** 通过 Nameserver 订阅 serviceName 对应实例 */

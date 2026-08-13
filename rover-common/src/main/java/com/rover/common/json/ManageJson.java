@@ -211,6 +211,7 @@ public final class ManageJson {
                     "id",
                     "businessPrefix",
                     "targetUrl",
+                    "targetUrls",
                     "serviceName",
                     "group",
                     "stripPrefix")) {

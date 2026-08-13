@@ -1,10 +1,9 @@
 /**
  * Author: Daylight
- * Created: 2026-08-08 10:34:00
- * Description: 定义 Gateway 负载均衡策略接口与实现包
+ * Created: 2026-08-13
+ * Description: 上游负载均衡（静态多 IP / 动态发现共用）
  *
- * 这个包是什么：动态发现模式下从多个实例里选一个的负载均衡层。
- * 核心职责：LoadBalancer 契约、轮询和随机两种内置实现。
- * 被谁用：RouteAndProxyFilter 选实例；GatewayRuntime 按配置热切换策略。
+ * 契约在 com.rover.common.spi.LoadBalancer；本包是内置算法与 Factory。
+ * 自定义：plugins 里 SPI，或配置策略为类全名。
  */
 package com.rover.gateway.core.loadbalance;

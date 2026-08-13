@@ -60,7 +60,11 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         this.applier = applier;
         this.overlayStore = overlayStore;
         addConfig("gateway.filter.enabled", "true", "true", "网关过滤器总开关");
-        addConfig("gateway.loadbalance.strategy", "round_robin", "round_robin", "网关负载均衡策略");
+        addConfig(
+                "gateway.loadbalance.strategy",
+                "round_robin",
+                "round_robin",
+                "负载均衡：round_robin/random/weighted_round_robin/ip_hash/least_connections，或自定义类名/SPI名");
         addConfig("gateway.request.timeoutMillis", "30000", "30000", "网关请求超时时间");
     }
 
@@ -163,9 +167,7 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
         String oldValue = item.getValue();
         String normalized = value == null ? "" : value.trim();
         validate(key, normalized);
-        if ("gateway.loadbalance.strategy".equals(key)) {
-            normalized = normalized.toLowerCase();
-        }
+        // loadbalance.strategy 可能是自定义类全名，不能强行 toLowerCase
         if ("gateway.filter.enabled".equals(key)) {
             normalized = Boolean.parseBoolean(normalized) ? "true" : "false";
         }
@@ -194,10 +196,10 @@ public class GatewayRuntimeConfigManager implements RuntimeConfigManager {
     /** 按 key 校验配置值合法性。 */
     private void validate(String key, String value) {
         if ("gateway.loadbalance.strategy".equals(key)) {
-            String strategy = value.toLowerCase();
-            if (!"round_robin".equals(strategy) && !"random".equals(strategy)) {
-                throw new IllegalArgumentException("loadbalance.strategy 仅支持 round_robin / random");
+            if (value == null || value.isBlank()) {
+                throw new IllegalArgumentException("loadbalance.strategy 不能为空");
             }
+            // 具体合法性在 GatewayRuntime.applyLoadBalanceStrategy → Factory 里校验
         }
         if ("gateway.request.timeoutMillis".equals(key)) {
             long timeout = Long.parseLong(value);

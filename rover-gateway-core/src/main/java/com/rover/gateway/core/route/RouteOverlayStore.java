@@ -87,6 +87,7 @@ public class RouteOverlayStore {
                 row.put("id", nullToEmpty(route.getId()));
                 row.put("businessPrefix", nullToEmpty(route.getBusinessPrefix()));
                 row.put("targetUrl", nullToEmpty(route.getTargetUrl()));
+                row.put("targetUrls", joinTargetUrls(route.getTargetUrls()));
                 row.put("serviceName", nullToEmpty(route.getServiceName()));
                 row.put("group", nullToEmpty(route.getGroup()));
                 row.put("stripPrefix", nullToEmpty(route.getStripPrefix()));
@@ -112,6 +113,7 @@ public class RouteOverlayStore {
             route.setId(blankToNull(row.get("id")));
             route.setBusinessPrefix(blankToNull(row.get("businessPrefix")));
             route.setTargetUrl(blankToNull(row.get("targetUrl")));
+            route.setTargetUrls(splitTargetUrls(row.get("targetUrls")));
             route.setServiceName(blankToNull(row.get("serviceName")));
             route.setGroup(blankToNull(row.get("group")));
             route.setStripPrefix(blankToNull(row.get("stripPrefix")));
@@ -129,5 +131,27 @@ public class RouteOverlayStore {
             return null;
         }
         return value;
+    }
+
+    /** overlay 里用逗号拼接多上游（URL 里本身不含逗号）。 */
+    private static String joinTargetUrls(List<String> urls) {
+        if (urls == null || urls.isEmpty()) {
+            return "";
+        }
+        return String.join(",", urls);
+    }
+
+    private static List<String> splitTargetUrls(String raw) {
+        List<String> urls = new ArrayList<>();
+        if (raw == null || raw.isBlank()) {
+            return urls;
+        }
+        for (String part : raw.split(",")) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) {
+                urls.add(trimmed);
+            }
+        }
+        return urls;
     }
 }

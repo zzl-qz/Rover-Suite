@@ -10,7 +10,12 @@ rover:
       enabled: true
       pluginDir: plugins
       classes: []
-    # static: 只用 targetUrl，不连 Nameserver
+    # 负载均衡（静态多 IP / Nameserver 动态实例共用）
+    # round_robin | random | weighted_round_robin | ip_hash | least_connections
+    # 也可填自定义类全名，或 plugins 里 SPI 的 name()
+    loadbalance:
+      strategy: round_robin
+    # static: targetUrl / targetUrls，不连 Nameserver，多 IP 同样走上面的 LB
     # nameserver: 读下面 nameserver 配置并订阅 serviceName
     discovery:
       type: nameserver
@@ -25,8 +30,10 @@ rover:
         businessPrefix: /api/demo
         serviceName: demo-service
         stripPrefix: /api/demo
-      # 如需切回 static，把 discovery.type 改成 static，并给路由补 targetUrl，例如：
+      # 静态多上游示例（discovery.type=static 时启用）：
       # - id: demo-api
       #   businessPrefix: /api/demo
-      #   targetUrl: http://127.0.0.1:8081
+      #   targetUrls:
+      #     - http://127.0.0.1:8081
+      #     - http://127.0.0.1:8082|200
       #   stripPrefix: /api/demo
