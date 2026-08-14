@@ -1,36 +1,24 @@
-<p align="center">
-  <img src="img/rover-mark.png" alt="Rover-Suite" width="88"/>
-</p>
+<div align="center">
 
-<h1 align="center">Rover-Suite</h1>
+![Rover-Suite](./img/rover-mark.png)
 
-<p align="center">
-  轻量级微服务中间件套件<br/>
-  Java 17 + Netty · 注册中心 · HTTP 网关 · Spring Boot Starter
-</p>
+# Rover-Suite
 
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="docs-public/architecture.md">Architecture</a>
-</p>
+轻量级微服务中间件套件
 
-<p align="center">
-  <img alt="Java" src="https://img.shields.io/badge/Java-17-orange?style=flat-square"/>
-  <img alt="Netty" src="https://img.shields.io/badge/Netty-4.1-blue?style=flat-square"/>
-  <img alt="Spring Boot" src="https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square"/>
-  <img alt="Maven" src="https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square"/>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square"/>
-</p>
+Java 17 + Netty · 注册中心 · HTTP 网关 · Spring Boot Starter
 
-<p align="center">
-  <a href="#-项目简介">简介</a> ·
-  <a href="#-核心特性">特性</a> ·
-  <a href="#-架构概览">架构</a> ·
-  <a href="#-快速开始">快速开始</a> ·
-  <a href="#-业务接入">接入</a> ·
-  <a href="#-路线图">路线图</a>
-</p>
+[English](README.md) · [简体中文](README.zh-CN.md) · [Architecture](docs-public/architecture.md)
+
+![Java](https://img.shields.io/badge/Java-17-orange?style=flat-square)
+![Netty](https://img.shields.io/badge/Netty-4.1-blue?style=flat-square)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square)
+![Maven](https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
+
+[简介](#-项目简介) · [特性](#-核心特性) · [架构](#-架构概览) · [快速开始](#-快速开始) · [接入](#-业务接入) · [路线图](#-路线图)
+
+</div>
 
 ---
 

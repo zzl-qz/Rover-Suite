@@ -1,36 +1,24 @@
-<p align="center">
-  <img src="img/rover-mark.png" alt="Rover-Suite" width="88"/>
-</p>
+<div align="center">
 
-<h1 align="center">Rover-Suite</h1>
+![Rover-Suite](./img/rover-mark.png)
 
-<p align="center">
-  Lightweight Microservice Middleware Suite<br/>
-  Java 17 + Netty · Registry · HTTP Gateway · Spring Boot Starter
-</p>
+# Rover-Suite
 
-<p align="center">
-  <a href="README.md">English</a> ·
-  <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="docs-public/architecture.md">Architecture</a>
-</p>
+Lightweight Microservice Middleware Suite
 
-<p align="center">
-  <img alt="Java" src="https://img.shields.io/badge/Java-17-orange?style=flat-square"/>
-  <img alt="Netty" src="https://img.shields.io/badge/Netty-4.1-blue?style=flat-square"/>
-  <img alt="Spring Boot" src="https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square"/>
-  <img alt="Maven" src="https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square"/>
-  <img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square"/>
-</p>
+Java 17 + Netty · Registry · HTTP Gateway · Spring Boot Starter
 
-<p align="center">
-  <a href="#-introduction">Intro</a> ·
-  <a href="#-features">Features</a> ·
-  <a href="#-architecture">Architecture</a> ·
-  <a href="#-quick-start">Quick Start</a> ·
-  <a href="#-integration">Integration</a> ·
-  <a href="#-roadmap">Roadmap</a>
-</p>
+[English](README.md) · [简体中文](README.zh-CN.md) · [Architecture](docs-public/architecture.md)
+
+![Java](https://img.shields.io/badge/Java-17-orange?style=flat-square)
+![Netty](https://img.shields.io/badge/Netty-4.1-blue?style=flat-square)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square)
+![Maven](https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
+
+[Intro](#-introduction) · [Features](#-features) · [Architecture](#-architecture) · [Quick Start](#-quick-start) · [Integration](#-integration) · [Roadmap](#-roadmap)
+
+</div>
 
 ---
 
