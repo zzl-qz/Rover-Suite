@@ -1,13 +1,42 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Rover">
-  <rect width="128" height="128" rx="28" fill="#0f172a"/>
-  <rect x="22" y="52" width="84" height="40" rx="12" fill="#1e293b"/>
-  <rect x="34" y="36" width="40" height="22" rx="7" fill="#334155"/>
-  <rect x="82" y="24" width="8" height="28" rx="2" fill="#c27a3a"/>
-  <circle cx="86" cy="24" r="5" fill="#c27a3a"/>
-  <circle cx="34" cy="98" r="8" fill="#64748b"/>
-  <circle cx="54" cy="102" r="8" fill="#64748b"/>
-  <circle cx="74" cy="102" r="8" fill="#64748b"/>
-  <circle cx="94" cy="98" r="8" fill="#64748b"/>
-  <rect x="40" y="62" width="20" height="10" rx="2" fill="#e2e8f0"/>
-  <rect x="66" y="62" width="26" height="10" rx="2" fill="#c27a3a"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Rover-Suite">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0052D9"/>
+      <stop offset="100%" stop-color="#003BA8"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded square background -->
+  <rect width="128" height="128" rx="26" fill="url(#bg)"/>
+
+  <!-- R letterform (white, geometric) -->
+  <g fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- vertical stem -->
+    <line x1="34" y1="28" x2="34" y2="100"/>
+    <!-- top horizontal -->
+    <line x1="34" y1="28" x2="60" y2="28"/>
+    <!-- curved bowl (upper-right) -->
+    <path d="M60 28 Q88 28 88 52 Q88 72 60 72"/>
+    <!-- mid horizontal bar -->
+    <line x1="34" y1="72" x2="60" y2="72"/>
+    <!-- diagonal leg -->
+    <line x1="60" y1="72" x2="88" y2="100"/>
+  </g>
+
+  <!-- network nodes (white dots at key points) -->
+  <g fill="#ffffff">
+    <!-- entry node (top-left) -->
+    <circle cx="34" cy="28" r="5"/>
+    <!-- gateway node (curve apex) -->
+    <circle cx="88" cy="52" r="4.5"/>
+    <!-- routing junction -->
+    <circle cx="60" cy="72" r="4"/>
+    <!-- exit node (bottom-right) -->
+    <circle cx="88" cy="100" r="5"/>
+  </g>
+
+  <!-- subtle data-flow dots along the leg -->
+  <g fill="#ffffff" opacity="0.35">
+    <circle cx="68" cy="80" r="2"/>
+    <circle cx="76" cy="88" r="2"/>
+  </g>
 </svg>
