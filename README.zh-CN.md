@@ -12,7 +12,7 @@
 <p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="ARCHITECTURE.md">Architecture</a>
+  <a href="docs-public/architecture.md">Architecture</a>
 </p>
 
 <p align="center">
@@ -98,7 +98,7 @@ flowchart LR
     R -.->|实例变更| D
 ```
 
-模块依赖与主链路说明见 **[ARCHITECTURE.md](./ARCHITECTURE.md)**。
+模块依赖与主链路说明见 **[docs-public/architecture.md](./docs-public/architecture.md)**。
 
 ---
 
@@ -244,7 +244,8 @@ rover:
 
 ## 📚 文档
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md)
+- [公开文档索引](./docs-public/README.md)
+- [架构说明](./docs-public/architecture.md)
 
 ---
 
