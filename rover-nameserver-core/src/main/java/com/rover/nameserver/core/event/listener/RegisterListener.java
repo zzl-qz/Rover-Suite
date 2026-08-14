@@ -51,12 +51,14 @@ public class RegisterListener implements EventListener<RegisterEvent> {
                         services.getOptions().isClusterEnabled()));
         body.setRevision(snapshot.getRevision());
         NameserverChannelSupport.fillNode(services.getOptions(), body);
+        NameserverChannelSupport.fillGeneration(services, body);
         NameserverChannelSupport.reply(
                 event.getChannel(), event.getRequestId(), event.isOneway(), body);
-        log.info("{}, revision={}",
+        log.info("{}, revision={}, epoch={}",
                 NameserverTrace.withServiceInstance(
                         event, "register-ok", request.getServiceName(), request.getInstanceId()),
-                snapshot.getRevision());
+                snapshot.getRevision(),
+                services.getEpoch());
     }
 
     private static boolean validRegister(RegisterRequest request) {

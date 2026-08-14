@@ -19,6 +19,8 @@ public class QueryResponseBody {
 
     /** 实例列表 */
     private List<ServiceInstance> instances = new ArrayList<>();
-    /** 服务版本号 */
+    /** 服务变更版本号（同进程内单调递增） */
     private long revision;
+    /** Nameserver 进程启动世代（UUID），与推送字段同义 */
+    private String epoch;
 }

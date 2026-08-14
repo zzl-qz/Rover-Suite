@@ -51,6 +51,18 @@ public final class NameserverChannelSupport {
         }
     }
 
+    /** 回包时带上世代信息（epoch / 预留 leaderHint），集群实现可丰富 Generation。 */
+    public static void fillGeneration(NameserverServices services, CommonResponseBody body) {
+        if (services == null || body == null || services.getGeneration() == null) {
+            return;
+        }
+        body.setEpoch(services.getEpoch());
+        String leaderHint = services.getGeneration().leaderHint();
+        if (leaderHint != null && !leaderHint.isBlank()) {
+            body.setLeaderHint(leaderHint);
+        }
+    }
+
     public static void bindInstance(Channel channel, String serviceName, String instanceId) {
         Set<String> bound = channel.attr(BOUND_INSTANCES).get();
         if (bound == null) {

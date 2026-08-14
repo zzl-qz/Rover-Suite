@@ -27,6 +27,8 @@ public class CommonResponseBody {
     private int replicaAcked = 1;
     /** 服务版本号 */
     private long revision;
+    /** Nameserver 进程启动世代（UUID），集群/客户端对齐用 */
+    private String epoch;
     /** leader 提示，集群预留 */
     private String leaderHint;
     /** 处理节点 ID */

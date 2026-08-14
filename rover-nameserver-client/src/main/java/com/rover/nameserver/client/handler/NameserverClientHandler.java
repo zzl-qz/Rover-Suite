@@ -62,12 +62,21 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
         // 服务端主动推：更新缓存，不走 pending
         if (msg.getType() == ProtocolConstants.PUSH_RESPONSE) {
             ServicePushBody pushBody = RoverMessageCodecSupport.decodeBody(msg, ServicePushBody.class);
-            instanceCache.onPush(pushBody);
-            log.debug("收到推送, type={}, serviceName={}, revision={}, requestId={}",
-                    ProtocolTypeNames.nameOf(msg.getType()),
-                    pushBody.getServiceName(),
-                    pushBody.getRevision(),
-                    msg.getRequestId());
+            InstanceCache.ApplyOutcome outcome = instanceCache.onPush(pushBody);
+            if (outcome == InstanceCache.ApplyOutcome.APPLIED) {
+                log.debug("收到推送已应用, serviceName={}, revision={}, epoch={}, requestId={}",
+                        pushBody.getServiceName(),
+                        pushBody.getRevision(),
+                        pushBody.getEpoch(),
+                        msg.getRequestId());
+            } else {
+                log.warn("推送未应用: outcome={}, serviceName={}, revision={}, epoch={}, requestId={}",
+                        outcome,
+                        pushBody.getServiceName(),
+                        pushBody.getRevision(),
+                        pushBody.getEpoch(),
+                        msg.getRequestId());
+            }
             return;
         }
 

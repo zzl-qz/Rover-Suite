@@ -7,70 +7,115 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
- * Author: Daylight
- * Created: 2026-08-08 17:55:00
- * Description: 客户端本地实例缓存
+ * 客户端本地实例缓存。
  *
- * 这个类是什么：客户端本地以服务维度缓存 Nameserver 返回的实例快照，
- * 供查询 API 与订阅推送共用一份数据。
- * 核心职责：①query 成功后写入快照；②推送到达时更新缓存并触发监听器；
- * ③提供 revision 供增量订阅；④实例列表防御性拷贝，保证线程安全。
- * 被谁用：NameserverClient 持有；query/getCachedInstances/addPushListener 共用。
+ * 推送：比较 epoch+revision 拒旧；远端空且本地非空则推空保护；连续拒绝达阈值标记强制对账。
+ * 查询对账：以 Nameserver 当前快照为准全量覆盖（含空列表）。
+ *
+ * epoch 是不透明世代串：单机=进程 UUID；集群上线后应变成集群权威世代，
+ * 客户端规则不变（同 epoch 拒旧 rev，epoch 变则换代接受）。
  */
 public class InstanceCache {
 
-    /** serviceName#group -> 缓存项 */
-    private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
-    /** 推送回调 */
-    private final List<Consumer<ServicePushBody>> listeners = new CopyOnWriteArrayList<>();
+    /** 连续拒绝多少次推送后，要求 Gateway 强制 query 全量 */
+    public static final int FORCE_QUERY_AFTER_REJECTS = 3;
 
-    /**
-     * 写入一份实例快照。
-     *
-     * @param serviceName 服务名
-     * @param group       分组名，可为 null（表示不分组）
-     * @param revision    服务端版本号，用于增量判断
-     * @param instances   实例列表快照
-     */
-    public void putSnapshot(String serviceName, String group, long revision, List<ServiceInstance> instances) {
-        String key = cacheKey(serviceName, group);
-        // 整项覆盖替换，实例列表拷贝一份防止外部改动污染缓存
-        cache.put(key, new CacheEntry(revision, copy(instances)));
+    private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
+    private final List<Consumer<ServicePushBody>> listeners = new CopyOnWriteArrayList<>();
+    /** 连续拒绝达阈值时回调（serviceName, group），供 Gateway 立刻强制 query */
+    private final List<BiConsumer<String, String>> forceQueryListeners = new CopyOnWriteArrayList<>();
+
+    /** 推送应用结果 */
+    public enum ApplyOutcome {
+        /** 已写入缓存 */
+        APPLIED,
+        /** 同世代更小 revision，丢弃 */
+        REJECTED_STALE,
+        /** 推空保护：远端空、本地非空 */
+        REJECTED_EMPTY_PROTECT
     }
 
     /**
-     * 处理服务端主动推送：先按推送内容刷新缓存，再逐个通知监听器。
-     *
-     * @param pushBody 服务端推送的服务变更体（可能携带最新实例快照）
+     * 处理服务端主动推送。
      */
-    public void onPush(ServicePushBody pushBody) {
+    public ApplyOutcome onPush(ServicePushBody pushBody) {
         if (pushBody == null || pushBody.getServiceName() == null) {
-            return;
+            return ApplyOutcome.REJECTED_STALE;
         }
-        putSnapshot(
+        ApplyOutcome outcome = applyPush(
                 pushBody.getServiceName(),
                 pushBody.getGroup(),
+                pushBody.getEpoch(),
                 pushBody.getRevision(),
                 pushBody.getInstances());
-        for (Consumer<ServicePushBody> listener : listeners) {
-            listener.accept(pushBody);
+        if (outcome == ApplyOutcome.APPLIED) {
+            for (Consumer<ServicePushBody> listener : listeners) {
+                listener.accept(pushBody);
+            }
         }
+        return outcome;
     }
 
     /**
-     * 读取某服务的实例列表，返回的是防御性拷贝，外部可安全持有。
-     *
-     * @param serviceName 服务名
-     * @param group       分组名；指定分组查不到时自动退回查全量（group=null）缓存
-     * @return 实例列表；无缓存时返回空列表，不返回 null
+     * 推送路径写入规则。
      */
+    public ApplyOutcome applyPush(
+            String serviceName,
+            String group,
+            String epoch,
+            long revision,
+            List<ServiceInstance> instances) {
+        String key = cacheKey(serviceName, group);
+        CacheEntry current = cache.get(key);
+        List<ServiceInstance> incoming = instances == null ? List.of() : instances;
+
+        // 推空保护：疑似误推空，先保住本地，并累计拒绝次数触发强制对账
+        if (incoming.isEmpty() && current != null && !current.instances.isEmpty()) {
+            bumpReject(current);
+            return ApplyOutcome.REJECTED_EMPTY_PROTECT;
+        }
+
+        // 同世代且更旧 → 拒（乱序旧包）；epoch 为空视为老协议，不做拒旧
+        if (current != null
+                && epoch != null
+                && !epoch.isBlank()
+                && epoch.equals(current.epoch)
+                && revision < current.revision) {
+            bumpReject(current);
+            return ApplyOutcome.REJECTED_STALE;
+        }
+
+        cache.put(key, new CacheEntry(serviceName, group, epoch, revision, copy(incoming), new AtomicInteger()));
+        return ApplyOutcome.APPLIED;
+    }
+
+    /**
+     * 查询/对账路径：以服务端为准全量覆盖（含空列表），并清掉强制对账标记。
+     */
+    public void putSnapshotFromQuery(
+            String serviceName,
+            String group,
+            String epoch,
+            long revision,
+            List<ServiceInstance> instances) {
+        String key = cacheKey(serviceName, group);
+        cache.put(key, new CacheEntry(serviceName, group, epoch, revision, copy(instances), new AtomicInteger()));
+    }
+
+    /** @deprecated 兼容旧调用，等价于对账覆盖 */
+    @Deprecated
+    public void putSnapshot(String serviceName, String group, long revision, List<ServiceInstance> instances) {
+        putSnapshotFromQuery(serviceName, group, null, revision, instances);
+    }
+
     public List<ServiceInstance> get(String serviceName, String group) {
         CacheEntry entry = cache.get(cacheKey(serviceName, group));
         if (entry == null && group != null && !group.isBlank()) {
-            // 没按 group 缓存时，退回看全量
             entry = cache.get(cacheKey(serviceName, null));
         }
         if (entry == null) {
@@ -79,58 +124,88 @@ public class InstanceCache {
         return copy(entry.instances);
     }
 
-    /**
-     * 读取某服务当前缓存的版本号，供订阅时携带 knownRevision 做增量判断。
-     *
-     * @param serviceName 服务名
-     * @param group       分组名，可为 null
-     * @return 缓存版本号；无缓存时返回 0
-     */
     public long revision(String serviceName, String group) {
         CacheEntry entry = cache.get(cacheKey(serviceName, group));
         return entry == null ? 0L : entry.revision;
     }
 
+    public String epoch(String serviceName, String group) {
+        CacheEntry entry = cache.get(cacheKey(serviceName, group));
+        return entry == null ? null : entry.epoch;
+    }
+
     /**
-     * 注册推送监听器，服务端推送到达时会回调。
-     *
-     * @param listener 监听回调；为 null 时忽略
+     * 是否因连续拒绝推送而需要强制全量 query。
+     * 返回 true 时会清零计数，避免重复打爆。
      */
+    public boolean consumeForceQuery(String serviceName, String group) {
+        CacheEntry entry = cache.get(cacheKey(serviceName, group));
+        if (entry == null) {
+            return false;
+        }
+        if (entry.rejectCount.get() < FORCE_QUERY_AFTER_REJECTS) {
+            return false;
+        }
+        entry.rejectCount.set(0);
+        return true;
+    }
+
     public void addListener(Consumer<ServicePushBody> listener) {
         if (listener != null) {
             listeners.add(listener);
         }
     }
 
-    /** 清空全部缓存，客户端关闭时调用。 */
+    /** 注册「该强制全量对账了」回调；可能在 Netty 线程触发，监听方自行异步。 */
+    public void addForceQueryListener(BiConsumer<String, String> listener) {
+        if (listener != null) {
+            forceQueryListeners.add(listener);
+        }
+    }
+
     public void clear() {
         cache.clear();
     }
 
-    /**
-     * 拼接缓存键：serviceName + "#" + group，group 为空串与 null 视为同一键（全量）。
-     */
+    private void bumpReject(CacheEntry current) {
+        int n = current.rejectCount.incrementAndGet();
+        // 刚达到阈值时通知一次，避免每次拒绝都刷
+        if (n == FORCE_QUERY_AFTER_REJECTS) {
+            for (BiConsumer<String, String> listener : forceQueryListeners) {
+                listener.accept(current.serviceName, current.group);
+            }
+        }
+    }
+
     private String cacheKey(String serviceName, String group) {
         return serviceName + "#" + (group == null ? "" : group);
     }
 
-    /**
-     * 防御性拷贝：返回一个新 ArrayList，避免缓存内的列表被外部引用直接修改。
-     */
     private List<ServiceInstance> copy(List<ServiceInstance> source) {
         return source == null ? new ArrayList<>() : new ArrayList<>(source);
     }
 
-    /** 单个服务的缓存项：不可变，写入时整体替换。 */
     private static final class CacheEntry {
-        /** 版本号 */
+        private final String serviceName;
+        private final String group;
+        private final String epoch;
         private final long revision;
-        /** 实例列表 */
         private final List<ServiceInstance> instances;
+        private final AtomicInteger rejectCount;
 
-        private CacheEntry(long revision, List<ServiceInstance> instances) {
+        private CacheEntry(
+                String serviceName,
+                String group,
+                String epoch,
+                long revision,
+                List<ServiceInstance> instances,
+                AtomicInteger rejectCount) {
+            this.serviceName = serviceName;
+            this.group = group;
+            this.epoch = epoch;
             this.revision = revision;
             this.instances = instances;
+            this.rejectCount = rejectCount;
         }
     }
 }

@@ -2,6 +2,7 @@ package com.rover.nameserver.core.server;
 
 import com.rover.common.codec.RoverMessageDecoder;
 import com.rover.common.codec.RoverMessageEncoder;
+import com.rover.nameserver.core.cluster.NameserverGeneration;
 import com.rover.nameserver.core.config.NameserverRuntimeConfigManager;
 import com.rover.nameserver.core.consistency.DefaultWriteAckPolicy;
 import com.rover.nameserver.core.consistency.WriteAckPolicy;
@@ -80,7 +81,9 @@ public class NameserverTcpServer {
         this.options = options;
         this.registry = registry;
         this.subscriptionManager = new SubscriptionManager();
-        this.pushService = new PushService(subscriptionManager, options.isPushEnabled());
+        // 世代可替换：单机 ProcessLocal；集群以后注入集群权威 Generation
+        NameserverGeneration generation = NameserverGeneration.processLocal();
+        this.pushService = new PushService(subscriptionManager, options.isPushEnabled(), generation);
         this.healthChecker = new HealthChecker(
                 registry,
                 pushService,
@@ -90,7 +93,7 @@ public class NameserverTcpServer {
 
         // 事件总线：显式注册协议 Listener（Handler 只做 TCP→Event）
         NameserverServices services = new NameserverServices(
-                registry, subscriptionManager, pushService, writeAckPolicy, options);
+                registry, subscriptionManager, pushService, writeAckPolicy, options, generation);
         this.eventBus = new EventBusBootstrap("rover-nameserver");
         this.eventBus.start(services);
         this.dispatcher = new NameserverRequestDispatcher(eventBus.getEventBus(), services);
@@ -144,11 +147,12 @@ public class NameserverTcpServer {
             serverChannel = bootstrap.bind(options.getPort()).sync().channel();
             healthChecker.start();
             manageServer.start();
-            log.info("Rover Nameserver 已启动, port={}, managePort={}, writeAckMode={}, cluster={}",
+            log.info("Rover Nameserver 已启动, port={}, managePort={}, writeAckMode={}, cluster={}, epoch={}",
                     options.getPort(),
                     options.getManagePort(),
                     options.getWriteAckMode(),
-                    options.isClusterEnabled());
+                    options.isClusterEnabled(),
+                    pushService.getEpoch());
         } catch (Exception ex) {
             shutdown();
             throw new IllegalStateException("Nameserver 启动失败, port=" + options.getPort(), ex);

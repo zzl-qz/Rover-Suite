@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" role="img" aria-label="Rover-Suite">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+  </defs>
+  <!-- mark -->
+  <g transform="translate(24,28)">
+    <rect x="0" y="36" width="118" height="56" rx="14" fill="url(#g)"/>
+    <rect x="18" y="18" width="52" height="28" rx="8" fill="#1e293b"/>
+    <rect x="78" y="8" width="10" height="36" rx="3" fill="#c27a3a"/>
+    <circle cx="83" cy="8" r="6" fill="#c27a3a"/>
+    <circle cx="22" cy="98" r="10" fill="#334155"/>
+    <circle cx="48" cy="104" r="10" fill="#334155"/>
+    <circle cx="74" cy="104" r="10" fill="#334155"/>
+    <circle cx="100" cy="98" r="10" fill="#334155"/>
+    <rect x="28" y="48" width="28" height="12" rx="3" fill="#e2e8f0" opacity="0.9"/>
+    <rect x="64" y="48" width="36" height="12" rx="3" fill="#c27a3a" opacity="0.85"/>
+  </g>
+  <!-- wordmark -->
+  <text x="170" y="118" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial" font-size="64" font-weight="700" fill="#0f172a" letter-spacing="-1.5">Rover</text>
+  <text x="360" y="118" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial" font-size="64" font-weight="500" fill="#64748b" letter-spacing="-1">Suite</text>
+  <text x="172" y="152" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial" font-size="18" fill="#94a3b8" letter-spacing="2">LIGHTWEIGHT MICROSERVICE MIDDLEWARE</text>
+</svg>

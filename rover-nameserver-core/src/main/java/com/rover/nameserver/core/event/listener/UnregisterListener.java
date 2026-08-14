@@ -61,6 +61,7 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
                         services.getOptions().isClusterEnabled()));
         body.setRevision(snapshot.getRevision());
         NameserverChannelSupport.fillNode(services.getOptions(), body);
+        NameserverChannelSupport.fillGeneration(services, body);
         NameserverChannelSupport.reply(
                 event.getChannel(), event.getRequestId(), event.isOneway(), body);
         log.info("{}, revision={}",

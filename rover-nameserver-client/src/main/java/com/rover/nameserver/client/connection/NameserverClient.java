@@ -195,9 +195,13 @@ public class NameserverClient implements AutoCloseable {
 
         CommonResponseBody response = requestSync(ProtocolConstants.QUERY_REQUEST, request);
         ensureSuccess(response, "查询失败");
-        // 查询结果解码后落缓存，供 getCachedInstances 与订阅增量判断使用
+        // 查询结果解码后落缓存：对账路径以服务端为准全量覆盖
         QueryResponseBody body = ProtostuffSerializer.deserialize(response.getData(), QueryResponseBody.class);
-        instanceCache.putSnapshot(serviceName, group, body.getRevision(), body.getInstances());
+        String epoch = body.getEpoch() != null && !body.getEpoch().isBlank()
+                ? body.getEpoch()
+                : response.getEpoch();
+        instanceCache.putSnapshotFromQuery(
+                serviceName, group, epoch, body.getRevision(), body.getInstances());
         return body;
     }
 

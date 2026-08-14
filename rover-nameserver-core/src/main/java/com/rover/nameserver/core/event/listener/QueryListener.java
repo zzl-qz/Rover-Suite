@@ -40,15 +40,18 @@ public class QueryListener implements EventListener<QueryEvent> {
         QueryResponseBody queryBody = new QueryResponseBody();
         queryBody.setInstances(instances);
         queryBody.setRevision(services.getRegistry().revisionOf(request.getServiceName()));
+        queryBody.setEpoch(services.getEpoch());
 
         CommonResponseBody body = CommonResponseBody.success(ProtostuffSerializer.serialize(queryBody));
         body.setRevision(queryBody.getRevision());
         NameserverChannelSupport.fillNode(services.getOptions(), body);
+        NameserverChannelSupport.fillGeneration(services, body);
         NameserverChannelSupport.reply(
                 event.getChannel(), event.getRequestId(), event.isOneway(), body);
-        log.debug("{}, instanceCount={}, revision={}",
+        log.debug("{}, instanceCount={}, revision={}, epoch={}",
                 NameserverTrace.withService(event, "query-ok", request.getServiceName()),
                 instances.size(),
-                queryBody.getRevision());
+                queryBody.getRevision(),
+                services.getEpoch());
     }
 }

@@ -48,6 +48,7 @@ public class HeartbeatListener implements EventListener<HeartbeatEvent> {
         CommonResponseBody body = CommonResponseBody.success();
         body.setRevision(services.getRegistry().revisionOf(request.getServiceName()));
         NameserverChannelSupport.fillNode(services.getOptions(), body);
+        NameserverChannelSupport.fillGeneration(services, body);
         NameserverChannelSupport.reply(
                 event.getChannel(), event.getRequestId(), event.isOneway(), body);
         log.debug("{}", NameserverTrace.withServiceInstance(

@@ -55,6 +55,8 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
     @Override
     public void start() {
         client.start();
+        // 推送连续拒绝达阈值 → 异步立刻 query（不对账线程干等一个周期）
+        client.getInstanceCache().addForceQueryListener(this::forceQueryAsync);
         for (DiscoverySettings.ServiceSubscribeSpec spec : subscribeServices) {
             subscribeOne(spec.getServiceName(), spec.getGroup());
         }
@@ -63,6 +65,29 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
                 client.getOptions().getHost(),
                 client.getOptions().getPort(),
                 reconcileIntervalMs);
+    }
+
+    /** 连续拒推后的立即全量拉取；丢到旁路线程，避免堵 Netty IO。 */
+    private void forceQueryAsync(String serviceName, String group) {
+        Thread t = new Thread(() -> {
+            try {
+                if (!client.isActive()) {
+                    return;
+                }
+                client.getInstanceCache().consumeForceQuery(serviceName, group);
+                QueryResponseBody remote = client.query(serviceName, group, false);
+                log.info(
+                        "连续拒绝推送后强制全量: serviceName={}, revision={}, epoch={}, size={}",
+                        serviceName,
+                        remote.getRevision(),
+                        remote.getEpoch(),
+                        remote.getInstances() == null ? 0 : remote.getInstances().size());
+            } catch (Exception ex) {
+                log.warn("强制全量对账失败: serviceName={}, msg={}", serviceName, ex.getMessage());
+            }
+        }, "gateway-force-query-" + serviceName);
+        t.setDaemon(true);
+        t.start();
     }
 
     /**
@@ -134,7 +159,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         }
     }
 
-    /** 定时对账：比对本地 revision 和远端，有差异时打 info 日志。 */
+    /** 定时对账：强制全量优先，再常规 query；以服务端快照为准覆盖本地。 */
     private void reconcile() {
         if (!client.isActive()) {
             return;
@@ -144,13 +169,33 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
                 continue;
             }
             try {
-                long localRevision = client.getInstanceCache().revision(spec.getServiceName(), spec.getGroup());
+                boolean force = client.getInstanceCache()
+                        .consumeForceQuery(spec.getServiceName(), spec.getGroup());
+                long localRevision = client.getInstanceCache()
+                        .revision(spec.getServiceName(), spec.getGroup());
+                String localEpoch = client.getInstanceCache()
+                        .epoch(spec.getServiceName(), spec.getGroup());
                 client.subscribe(spec.getServiceName(), spec.getGroup());
                 QueryResponseBody remote = client.query(spec.getServiceName(), spec.getGroup(), false);
-                if (remote.getRevision() != localRevision) {
-                    log.info("对账更新实例: serviceName={}, localRevision={}, remoteRevision={}, size={}",
+                if (force) {
+                    log.info(
+                            "强制全量对账完成: serviceName={}, localEpoch={}, localRevision={}, "
+                                    + "remoteEpoch={}, remoteRevision={}, size={}",
                             spec.getServiceName(),
+                            localEpoch,
                             localRevision,
+                            remote.getEpoch(),
+                            remote.getRevision(),
+                            remote.getInstances() == null ? 0 : remote.getInstances().size());
+                } else if (remote.getRevision() != localRevision
+                        || !java.util.Objects.equals(localEpoch, remote.getEpoch())) {
+                    log.info(
+                            "对账更新实例: serviceName={}, localEpoch={}, localRevision={}, "
+                                    + "remoteEpoch={}, remoteRevision={}, size={}",
+                            spec.getServiceName(),
+                            localEpoch,
+                            localRevision,
+                            remote.getEpoch(),
                             remote.getRevision(),
                             remote.getInstances() == null ? 0 : remote.getInstances().size());
                 }

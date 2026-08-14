@@ -23,8 +23,13 @@ public class ServicePushBody {
     private String group;
     /** 当前全量实例 */
     private List<ServiceInstance> instances = new ArrayList<>();
-    /** 版本号 */
+    /** 服务变更版本号（同进程内单调递增） */
     private long revision;
+    /**
+     * Nameserver 权威世代（协议字段 epoch，不透明字符串）。
+     * 单机多为进程 UUID；集群应为共享世代（如 term/配置版本），由 Generation 实现决定。
+     */
+    private String epoch;
     /** 推送类型，目前固定 SNAPSHOT */
     private String pushType = "SNAPSHOT";
 }

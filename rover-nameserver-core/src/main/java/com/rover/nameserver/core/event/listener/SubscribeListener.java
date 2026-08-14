@@ -45,10 +45,12 @@ public class SubscribeListener implements EventListener<SubscribeEvent> {
         CommonResponseBody body = CommonResponseBody.success();
         body.setRevision(snapshot.getRevision());
         NameserverChannelSupport.fillNode(services.getOptions(), body);
+        NameserverChannelSupport.fillGeneration(services, body);
         NameserverChannelSupport.reply(
                 event.getChannel(), event.getRequestId(), event.isOneway(), body);
-        log.info("{}, revision={}",
+        log.info("{}, revision={}, epoch={}",
                 NameserverTrace.withService(event, "subscribe-ok", request.getServiceName()),
-                snapshot.getRevision());
+                snapshot.getRevision(),
+                services.getEpoch());
     }
 }
