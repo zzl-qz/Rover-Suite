@@ -51,8 +51,7 @@ public class ManageHttpClient {
         HttpResponse<String> response = raw(
                 baseUrl, "/_manage/configs", "POST", body, "application/x-www-form-urlencoded");
         ensureOk(response);
-        return objectMapper.readValue(response.body(), new TypeReference<>() {
-        });
+        return objectMapper.readValue(response.body(), new TypeReference<>() {});
     }
 
     public Map<String, Object> putJson(String baseUrl, String path, Object payload)

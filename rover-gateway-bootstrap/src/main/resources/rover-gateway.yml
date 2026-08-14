@@ -1,6 +1,6 @@
 rover:
   gateway:
-    port: 8080
+    port: 80
     server:
       maxContentLengthBytes: 1048576
     proxy:

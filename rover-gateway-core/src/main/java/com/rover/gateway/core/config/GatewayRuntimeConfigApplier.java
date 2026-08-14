@@ -9,11 +9,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 14:59:00
  * Description: 把配置变更应用到 Gateway 运行时
- *
- * 这个类是什么：ConfigChangeEvent 到 GatewayRuntime 方法的桥接器。
- * 核心职责：bind 运行时引用；按 key 分发到 applyFilterEnabled、
- * applyRequestTimeoutMillis、applyLoadBalanceStrategy。
- * 被谁用：GatewayRuntimeConfigManager 在 updateConfig 和 reapplyAll 时调用。
  */
 @Slf4j
 public class GatewayRuntimeConfigApplier implements ConfigApplier {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -20,11 +21,15 @@ public final class JsonCodec {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    /** 落盘用：开缩进，人眼可读；读的时候不挑格式。 */
+    private static final ObjectMapper PRETTY_MAPPER = new ObjectMapper()
+            .enable(SerializationFeature.INDENT_OUTPUT);
+
     private JsonCodec() {
     }
 
     /**
-     * 序列化任意对象为 JSON 字符串。
+     * 序列化任意对象为 JSON 字符串（紧凑，适合 HTTP 响应）。
      *
      * @param value 待序列化对象（Map/List/POJO/标量）
      * @return JSON 字符串
@@ -33,6 +38,18 @@ public final class JsonCodec {
     public static String toJson(Object value) {
         try {
             return MAPPER.writeValueAsString(value);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("JSON 序列化失败", ex);
+        }
+    }
+
+    /**
+     * 带缩进的 JSON，给 overlay 配置文件用。
+     * 等价于 ObjectMapper 打开 SerializationFeature.INDENT_OUTPUT。
+     */
+    public static String toPrettyJson(Object value) {
+        try {
+            return PRETTY_MAPPER.writeValueAsString(value);
         } catch (JsonProcessingException ex) {
             throw new IllegalStateException("JSON 序列化失败", ex);
         }

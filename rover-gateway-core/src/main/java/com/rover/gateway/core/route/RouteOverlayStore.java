@@ -93,7 +93,8 @@ public class RouteOverlayStore {
                 row.put("stripPrefix", nullToEmpty(route.getStripPrefix()));
                 rows.add(row);
             }
-            Files.writeString(path, JsonCodec.toJson(rows), StandardCharsets.UTF_8);
+            // 落盘用缩进 JSON，方便人眼看；解析不挑格式
+            Files.writeString(path, JsonCodec.toPrettyJson(rows), StandardCharsets.UTF_8);
             log.info("路由已写入覆盖文件: {}", path.toAbsolutePath());
         } catch (IOException ex) {
             throw new IllegalStateException("写入路由覆盖文件失败: " + path.toAbsolutePath(), ex);

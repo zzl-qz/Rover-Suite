@@ -3,21 +3,25 @@ package com.rover.gateway.core.config;
 import com.rover.common.config.AbstractRuntimeConfigManager;
 import com.rover.common.config.ConfigChangeEvent;
 import com.rover.common.config.RuntimeConfigOverlayStore;
+import lombok.Getter;
+
 import java.nio.file.Path;
 
 /**
  * Gateway 侧 RuntimeConfigManager 实现。
- *
- * 这个类是什么：管理网关三项可热更新配置（过滤器开关、负载均衡策略、请求超时）。
- * 核心职责：注册内置配置项；校验/归一化规则；把变更事件桥接给 GatewayRuntimeConfigApplier。
- * 被谁用：GatewayHttpServer 装配；GatewayManageApi 查询/更新配置。
+ * 把变更事件桥接给 GatewayRuntimeConfigApplier
  */
+@Getter
 public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
 
     /** 默认 overlay 文件路径。 */
     public static final Path DEFAULT_OVERLAY = Path.of("config", "gateway-runtime.overlay.json");
 
-    /** 配置变更应用到 GatewayRuntime 的桥接器。 */
+    /** 配置变更应用到 GatewayRuntime 的桥接器。
+     * -- GETTER --
+     *
+     * @return 配置应用器，用于 bind GatewayRuntime
+     */
     private final GatewayRuntimeConfigApplier applier;
 
     /** 使用默认 applier 和 overlay 路径构造。 */
@@ -42,11 +46,6 @@ public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
                 "round_robin",
                 "负载均衡：round_robin/random/weighted_round_robin/ip_hash/least_connections，或自定义类名/SPI名");
         addConfig("gateway.request.timeoutMillis", "30000", "30000", "网关请求超时时间");
-    }
-
-    /** @return 配置应用器，用于 bind GatewayRuntime */
-    public GatewayRuntimeConfigApplier getApplier() {
-        return applier;
     }
 
     @Override

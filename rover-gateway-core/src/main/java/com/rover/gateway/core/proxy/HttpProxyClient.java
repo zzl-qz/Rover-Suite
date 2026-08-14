@@ -29,11 +29,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 14:22:00
  * Description: 使用 HTTP/1.1 将请求真实转发到目标 URL，并回写后端响应
- *
- * 这个类是什么：Gateway 的 HTTP 反向代理客户端，基于 java.net.http.HttpClient。
- * 核心职责：复制请求头/体转发到后端；补充 X-Forwarded-* 等标准头；
- * 把后端响应写回 Netty 通道；超时/连接失败时返回统一 JSON 错误。
- * 被谁用：RouteAndProxyFilter 终端转发；GatewayRuntime 持有单例并支持热更新超时。
  */
 @Slf4j
 public class HttpProxyClient {

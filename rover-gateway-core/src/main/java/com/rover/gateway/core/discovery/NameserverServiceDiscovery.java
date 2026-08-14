@@ -16,11 +16,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-10 16:20:00
  * Description: 通过 Nameserver 订阅 + 定时对账维护本地实例
- *
- * 这个类是什么：ServiceDiscovery 的 Nameserver 实现，维护本地实例缓存。
- * 核心职责：①启动时连接 Nameserver 并订阅配置里的服务；②getInstances 读本地缓存并过滤健康实例；
- * ③路由热更新时 ensureWatch 补订；④定时对账防止推送丢失。
- * 被谁用：GatewayHttpServer 在 discovery.type=NAMESERVER 时创建；RouteAndProxyFilter 查实例。
  */
 @Slf4j
 public class NameserverServiceDiscovery implements ServiceDiscovery {

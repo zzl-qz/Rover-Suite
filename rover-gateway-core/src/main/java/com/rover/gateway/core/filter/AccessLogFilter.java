@@ -10,11 +10,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
  * Description: 内置访问日志过滤器，记录完整请求链路耗时
- *
- * 这个类是什么：过滤器链最前面的内置 Filter，负责请求入口/出口日志。
- * 核心职责：请求进入时打一条 received 日志，finally 里无论成功失败都打 completed 日志，
- * 带上 routeId、targetUrl、statusCode、耗时等关键字段。
- * 被谁用：GatewayFilterAssembler 始终第一个加入过滤器链。
  */
 @Slf4j
 public class AccessLogFilter implements Filter {

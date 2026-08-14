@@ -1,5 +1,6 @@
 package com.rover.gateway.bootstrap.config;
 
+import com.rover.common.util.HostPort;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
@@ -139,7 +140,9 @@ public class GatewayConfig {
 
         NameserverProperties nameserver = gatewayProperties().getDiscovery().getNameserver();
         if (nameserver != null) {
-            Address address = Address.parse(nameserver.getAddress(), type == DiscoveryType.NAMESERVER);
+            HostPort address = type == DiscoveryType.NAMESERVER
+                    ? HostPort.require(nameserver.getAddress(), "discovery.nameserver.address")
+                    : HostPort.parseOrNull(nameserver.getAddress(), "discovery.nameserver.address");
             if (address != null) {
                 settings.setNameserverHost(address.host());
                 settings.setNameserverPort(address.port());
@@ -232,7 +235,7 @@ public class GatewayConfig {
         if (nameserver == null || nameserver.getAddress() == null || nameserver.getAddress().isBlank()) {
             throw new IllegalStateException("discovery.type=nameserver 时必须配置 discovery.nameserver.address");
         }
-        Address.parse(nameserver.getAddress(), true);
+        HostPort.require(nameserver.getAddress(), "discovery.nameserver.address");
     }
 
     private void validateRoute(RouteProperties route, Set<String> businessPrefixes, DiscoveryType discoveryType) {
@@ -299,28 +302,6 @@ public class GatewayConfig {
         if (!businessPrefix.equals(stripPrefix) && !businessPrefix.startsWith(stripPrefix + "/")) {
             throw new IllegalStateException("Gateway 路由 stripPrefix 必须是 businessPrefix 的前缀："
                     + stripPrefix + " -> " + businessPrefix);
-        }
-    }
-
-    private record Address(String host, int port) {
-        static Address parse(String raw, boolean required) {
-            if (raw == null || raw.isBlank()) {
-                if (required) {
-                    throw new IllegalStateException("discovery.nameserver.address 不能为空");
-                }
-                return null;
-            }
-            String value = raw.trim();
-            int idx = value.lastIndexOf(':');
-            if (idx <= 0 || idx == value.length() - 1) {
-                throw new IllegalStateException("discovery.nameserver.address 格式应为 host:port，当前=" + raw);
-            }
-            String host = value.substring(0, idx).trim();
-            int port = Integer.parseInt(value.substring(idx + 1).trim());
-            if (host.isBlank() || port <= 0 || port > 65535) {
-                throw new IllegalStateException("discovery.nameserver.address 非法: " + raw);
-            }
-            return new Address(host, port);
         }
     }
 

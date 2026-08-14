@@ -6,11 +6,7 @@ import java.util.List;
 /**
  * Author: Daylight
  * Created: 2026-08-08 10:34:00
- * Description: 上游服务实例发现（跨模块契约）
- *
- * 这个接口是什么：调用方查后端实例的统一 SPI，屏蔽 Nameserver / Nacos / 静态等实现。
- * 核心职责：启动订阅；按 serviceName+group 取实例；路由热更新后补订；关闭释放资源。
- * 被谁用：Gateway 动态转发；以后 Nacos 适配模块也实现这一份，不要再在 gateway 里另起一套。
+ * Description: 获取有哪些实例的接口（屏蔽底层方式差异，比如底层可能是static nameserver  redis nacos 之类的）
  */
 public interface ServiceDiscovery extends AutoCloseable {
 

@@ -9,11 +9,6 @@ import java.util.List;
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
  * Description: 按顺序推进过滤器链，直到路由转发或某个过滤器短路
- *
- * 这个类是什么：FilterChain 的默认实现，用下标逐个驱动 Filter 执行。
- * 核心职责：维护当前执行位置，每次 doFilter 调用下一个 Filter；
- * 若 context 已 markCompleted 则立即停止，避免重复写响应。
- * 被谁用：GatewayHttpServerHandler 收到业务请求后创建并启动链路。
  */
 public class DefaultFilterChain implements FilterChain {
 

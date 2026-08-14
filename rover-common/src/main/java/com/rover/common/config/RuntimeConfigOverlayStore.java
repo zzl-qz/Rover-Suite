@@ -15,11 +15,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-10 17:00:00
  * Description: 运行时配置 overlay，Admin 改完落盘，重启再灌回去
- *
- * 这个类是什么：运行时配置覆盖层(overlay)的本地文件持久化存储。
- * 核心职责：以 JSON 数组文件形式保存 Admin 在运行期修改过的配置(key/value 行)，
- * 进程重启后 load 回来覆盖默认配置，实现「改完即持久、重启不丢失」。
- * 被谁用：rover-admin/各组件配置启动链条；需要持久化运行期配置修改的地方。
  */
 @Slf4j
 public class RuntimeConfigOverlayStore {
@@ -93,7 +88,8 @@ public class RuntimeConfigOverlayStore {
                 row.put("value", entry.getValue() == null ? "" : entry.getValue());
                 rows.add(row);
             }
-            Files.writeString(path, JsonCodec.toJson(rows), StandardCharsets.UTF_8);
+            // 落盘用缩进 JSON，方便人眼看；解析不挑格式
+            Files.writeString(path, JsonCodec.toPrettyJson(rows), StandardCharsets.UTF_8);
             log.info("运行时配置已写入覆盖文件: {}", path.toAbsolutePath());
         } catch (IOException ex) {
             throw new IllegalStateException("写入配置覆盖文件失败: " + path.toAbsolutePath(), ex);

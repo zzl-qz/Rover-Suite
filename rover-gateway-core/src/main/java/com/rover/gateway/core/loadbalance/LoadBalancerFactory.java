@@ -1,16 +1,12 @@
 package com.rover.gateway.core.loadbalance;
 
+import com.rover.common.plugin.PluginSpiLoader;
 import com.rover.common.spi.loadbalance.LoadBalancer;
-import com.rover.gateway.core.plugin.PluginJarScanner;
-import java.net.URL;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.ServiceLoader;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -18,10 +14,7 @@ import lombok.extern.slf4j.Slf4j;
  * Created: 2026-08-13
  * Description: 按策略名创建 LB：内置 + plugins SPI + 全限定类名
  *
- * 配置 gateway.loadbalance.strategy：
- * - round_robin（默认）/ random / weighted_round_robin / ip_hash / least_connections
- * - 自定义 SPI 的 name()
- * - 或直接写实现类全名（无参构造）
+ * 插件装载骨架在 common.PluginSpiLoader；这里只做内置策略与名字匹配。
  */
 @Slf4j
 public final class LoadBalancerFactory {
@@ -30,7 +23,7 @@ public final class LoadBalancerFactory {
     }
 
     public static LoadBalancer create(String strategy) {
-        return create(strategy, "plugins");
+        return create(strategy, PluginSpiLoader.DEFAULT_DIR);
     }
 
     public static LoadBalancer create(String strategy, String pluginDir) {
@@ -45,7 +38,7 @@ public final class LoadBalancerFactory {
         }
 
         // plugins SPI：META-INF/services/com.rover.common.spi.loadbalance.LoadBalancer
-        for (LoadBalancer plugin : loadPlugins(pluginDir)) {
+        for (LoadBalancer plugin : PluginSpiLoader.load(LoadBalancer.class, pluginDir).instances()) {
             if (plugin.name() != null && plugin.name().equalsIgnoreCase(normalized)) {
                 log.info("使用插件负载均衡: name={}, class={}", plugin.name(), plugin.getClass().getName());
                 return plugin;
@@ -54,7 +47,7 @@ public final class LoadBalancerFactory {
 
         // 全限定类名
         if (normalized.contains(".")) {
-            LoadBalancer custom = instantiate(normalized, pluginDir);
+            LoadBalancer custom = PluginSpiLoader.newInstance(LoadBalancer.class, normalized, pluginDir);
             log.info("使用自定义负载均衡类: {}", custom.getClass().getName());
             return custom;
         }
@@ -67,7 +60,7 @@ public final class LoadBalancerFactory {
 
     public static List<String> supportedNames(String pluginDir) {
         List<String> names = new ArrayList<>(builtins().keySet());
-        for (LoadBalancer plugin : loadPlugins(pluginDir)) {
+        for (LoadBalancer plugin : PluginSpiLoader.load(LoadBalancer.class, pluginDir).instances()) {
             if (plugin.name() != null && !plugin.name().isBlank()) {
                 names.add(plugin.name());
             }
@@ -88,44 +81,4 @@ public final class LoadBalancerFactory {
     private static void put(Map<String, LoadBalancer> map, LoadBalancer balancer) {
         map.put(balancer.name().toLowerCase(Locale.ROOT), balancer);
     }
-
-    private static List<LoadBalancer> loadPlugins(String pluginDir) {
-        Path directory = Path.of(pluginDir == null || pluginDir.isBlank() ? "plugins" : pluginDir);
-        if (!Files.isDirectory(directory)) {
-            return List.of();
-        }
-        List<URL> jars = PluginJarScanner.listJars(directory);
-        if (jars.isEmpty()) {
-            return List.of();
-        }
-        ClassLoader classLoader = PluginJarScanner.newClassLoader(jars);
-        List<LoadBalancer> loaded = new ArrayList<>();
-        for (LoadBalancer balancer : ServiceLoader.load(LoadBalancer.class, classLoader)) {
-            loaded.add(balancer);
-            log.info("发现负载均衡插件: name={}, class={}",
-                    balancer.name(), balancer.getClass().getName());
-        }
-        return loaded;
-    }
-
-    private static LoadBalancer instantiate(String className, String pluginDir) {
-        try {
-            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-            Path directory = Path.of(pluginDir == null || pluginDir.isBlank() ? "plugins" : pluginDir);
-            if (Files.isDirectory(directory)) {
-                List<URL> jars = PluginJarScanner.listJars(directory);
-                if (!jars.isEmpty()) {
-                    classLoader = PluginJarScanner.newClassLoader(jars);
-                }
-            }
-            Class<?> clazz = Class.forName(className, true, classLoader);
-            if (!LoadBalancer.class.isAssignableFrom(clazz)) {
-                throw new IllegalArgumentException("类未实现 LoadBalancer: " + className);
-            }
-            return (LoadBalancer) clazz.getDeclaredConstructor().newInstance();
-        } catch (ReflectiveOperationException ex) {
-            throw new IllegalArgumentException("创建负载均衡失败: " + className, ex);
-        }
-    }
-
 }

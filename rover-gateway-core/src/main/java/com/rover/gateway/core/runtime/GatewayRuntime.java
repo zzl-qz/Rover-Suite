@@ -24,11 +24,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-10 16:40:00
  * Description: Gateway 运行时可变状态，供热更新和管理口使用
- *
- * 这个类是什么：Gateway 进程的「可变内核」，集中持有路由、过滤器链、代理客户端等。
- * 核心职责：①路由 CRUD 并热替换 RouteMatcher、落盘 overlay；②配置变更时重建过滤器或改超时/LB；
- * ③对外暴露 currentFilters 供 Handler 执行。
- * 被谁用：GatewayHttpServer 创建并持有；GatewayManageApi、GatewayRuntimeConfigApplier 读写。
  */
 @Slf4j
 @Getter

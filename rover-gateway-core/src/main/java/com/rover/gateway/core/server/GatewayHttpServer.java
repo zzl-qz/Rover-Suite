@@ -28,12 +28,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 14:22:00
  * Description: 启动 Gateway HTTP 服务，按发现模式组装过滤器链
- *
- * 这个类是什么：Gateway 进程的 Netty HTTP 服务端入口。
- * 核心职责：①按发现模式创建 ServiceDiscovery 和 GatewayRuntime；
- * ②启动 Netty 监听端口，IO 线程收包、业务线程池跑过滤器链；
- * ③shutdown 时优雅关闭线程池和发现客户端。
- * 被谁用：rover-gateway 启动模块创建并 start/shutdown。
  */
 @Slf4j
 public class GatewayHttpServer {
@@ -167,8 +161,6 @@ public class GatewayHttpServer {
 
     /**
      * 启动服务发现、Netty 服务端并开始监听。
-     *
-     * @throws IllegalStateException 启动被中断或 Netty bind 失败
      */
     public void start() {
         serviceDiscovery.start();

@@ -7,11 +7,7 @@ import java.util.List;
 /**
  * Author: Daylight
  * Created: 2026-08-10 16:20:00
- * Description: 静态模式占位，不连注册中心
- *
- * 这个类是什么：ServiceDiscovery 的空实现，STATIC 模式下使用。
- * 核心职责：所有方法都是 no-op 或返回空列表，表示上游地址完全来自路由 targetUrl。
- * 被谁用：GatewayHttpServer 在 discovery.type=STATIC 时创建。
+ * Description: 静态模式，不连注册中心
  */
 public class NoopServiceDiscovery implements ServiceDiscovery {
 

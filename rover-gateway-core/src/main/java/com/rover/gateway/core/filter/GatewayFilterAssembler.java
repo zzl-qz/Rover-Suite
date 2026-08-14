@@ -17,11 +17,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
  * Description: 组装内置过滤器、配置过滤器和 plugins 外挂过滤器
- *
- * 这个类是什么：Gateway 过滤器链的工厂，把各类 Filter 按 order 排好序。
- * 核心职责：①始终加入 AccessLogFilter；②按配置加载 plugins jar 和显式类名；
- * ③最后追加 RouteAndProxyFilter 作为终端节点。
- * 被谁用：GatewayRuntime 在启动和热更新时调用 assemble 重建过滤器链。
  */
 @Slf4j
 public class GatewayFilterAssembler {

@@ -57,6 +57,9 @@ public class GatewayApplication {
         server.start();
     }
 
+    /**
+     * 将要监听NameServer的这些路由信息封装成集合
+     */
     private static List<DiscoverySettings.ServiceSubscribeSpec> subscribeSpecsFrom(List<RouteConfig> routes) {
         Map<String, DiscoverySettings.ServiceSubscribeSpec> unique = new LinkedHashMap<>();
         for (RouteConfig route : routes) {

@@ -100,8 +100,10 @@ public class RouteAndProxyFilter implements Filter {
                 targetUrl,
                 loadBalancer == null ? "none" : loadBalancer.name());
 
+
         ServiceInstance instance = chosen.instance();
         if (loadBalancer != null && instance != null) {
+            // 告知LB这台实例开始占用，其实目前除了最少连接算法需要用到，其他的都是直接空实现
             loadBalancer.onStart(instance);
         }
         try {
@@ -118,6 +120,9 @@ public class RouteAndProxyFilter implements Filter {
         }
     }
 
+    /**
+     * 节点选取
+     */
     private ChosenUpstream resolveUpstream(RouteConfig route, GatewayRequestContext gatewayContext) {
         if (loadBalancer == null) {
             // 极端兜底：无 LB 时静态只取第一个
@@ -131,8 +136,9 @@ public class RouteAndProxyFilter implements Filter {
             return null;
         }
 
-        String clusterKey;
-        List<ServiceInstance> instances;
+        // 拉到一批健康的节点信息
+        String clusterKey = null;
+        List<ServiceInstance> instances = null;
         if (discoveryType == DiscoveryType.NAMESERVER) {
             if (serviceDiscovery == null) {
                 return null;
@@ -143,15 +149,18 @@ public class RouteAndProxyFilter implements Filter {
             }
             clusterKey = serviceName;
             instances = serviceDiscovery.getInstances(serviceName, route.getGroup());
-        } else {
+        } else if (discoveryType == DiscoveryType.STATIC) {
             clusterKey = StaticUpstreamCluster.clusterKey(route);
             instances = StaticUpstreamCluster.resolve(route);
+        } else {
+            log.warn("暂时没有该 discoveryType 类型， discoveryType is {}", discoveryType);
         }
         if (instances == null || instances.isEmpty()) {
             log.warn("无可用上游: discovery={}, clusterKey={}", discoveryType, clusterKey);
             return null;
         }
 
+        // 根据负载均衡算法进行选取节点
         LoadBalanceContext lbContext = LoadBalanceContext.of(
                 clusterKey,
                 instances,

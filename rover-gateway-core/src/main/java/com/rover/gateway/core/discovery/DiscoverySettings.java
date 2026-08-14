@@ -8,10 +8,6 @@ import lombok.Data;
  * Author: Daylight
  * Created: 2026-08-10 16:20:00
  * Description: Gateway 发现运行时配置
- *
- * 这个类是什么：服务发现相关的 YAML/启动参数载体。
- * 核心职责：指定发现模式、Nameserver 地址、对账间隔、预订阅服务列表。
- * 被谁用：GatewayHttpServer 启动时创建 ServiceDiscovery；GatewayRuntime 持有副本。
  */
 @Data
 public class DiscoverySettings {
