@@ -1,20 +1,20 @@
 <div align="center">
 
-![Rover-Suite](img/rover-mark.png)
+![Rover-Suite](img/rover-logo.svg)
 
-# Rover-Suite
-
-轻量级微服务中间件套件
-
-Java 17 + Netty · 注册中心 · HTTP 网关 · Spring Boot Starter
+<br/>
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [Architecture](docs-public/architecture.md)
+
+<br/>
 
 ![Java](https://img.shields.io/badge/Java-17-orange?style=flat-square)
 ![Netty](https://img.shields.io/badge/Netty-4.1-blue?style=flat-square)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square)
 ![Maven](https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square)
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
+
+<br/>
 
 [简介](#-项目简介) · [特性](#-核心特性) · [架构](#-架构概览) · [快速开始](#-快速开始) · [接入](#-业务接入) · [路线图](#-路线图)
 
