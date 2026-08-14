@@ -12,7 +12,7 @@
 <p align="center">
   <a href="README.md">English</a> ·
   <a href="README.zh-CN.md">简体中文</a> ·
-  <a href="ARCHITECTURE.md">Architecture</a>
+  <a href="docs-public/architecture.md">Architecture</a>
 </p>
 
 <p align="center">
@@ -98,7 +98,7 @@ flowchart LR
     R -.->|instance updates| D
 ```
 
-See **[ARCHITECTURE.md](./ARCHITECTURE.md)** for module dependencies and request flow.
+See **[docs-public/architecture.md](./docs-public/architecture.md)** for module dependencies and request flow.
 
 ---
 
@@ -244,7 +244,8 @@ rover:
 
 ## 📚 Documentation
 
-- [ARCHITECTURE.md](./ARCHITECTURE.md)
+- [Public docs index](./docs-public/README.md)
+- [Architecture](./docs-public/architecture.md)
 
 ---
 

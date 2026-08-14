@@ -1,6 +1,7 @@
 # Rover-Suite Architecture
 
-> Companion to [README.zh-CN.md](./README.zh-CN.md) / [README.md](./README.md).
+> Companion to [README.zh-CN.md](../README.zh-CN.md) / [README.md](../README.md).  
+> Public docs live in [`docs-public/`](./README.md).
 
 ---
 
