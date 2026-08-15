@@ -23,8 +23,13 @@ import org.springframework.stereotype.Component;
 @Component
 public class ManageHttpClient {
 
+    /** 连接超时（秒） */
+    private static final int CONNECT_TIMEOUT_SECONDS = 2;
+    /** 单次请求超时（秒） */
+    private static final int REQUEST_TIMEOUT_SECONDS = 5;
+
     private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(2))
+            .connectTimeout(Duration.ofSeconds(CONNECT_TIMEOUT_SECONDS))
             .build();
     private final ObjectMapper objectMapper;
 
@@ -92,7 +97,7 @@ public class ManageHttpClient {
             throws IOException, InterruptedException {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
                 .uri(URI.create(trimSlash(baseUrl) + path))
-                .timeout(Duration.ofSeconds(5));
+                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS));
         if (contentType != null) {
             builder.header("Content-Type", contentType);
         }

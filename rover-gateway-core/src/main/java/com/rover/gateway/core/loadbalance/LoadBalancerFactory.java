@@ -26,7 +26,7 @@ public final class LoadBalancerFactory {
 
     public static LoadBalancer create(String strategy, String pluginDir) {
         String normalized = strategy == null || strategy.isBlank()
-                ? "round_robin"
+                ? LoadBalancer.ROUND_ROBIN
                 : strategy.trim();
         String key = normalized.toLowerCase(Locale.ROOT);
 

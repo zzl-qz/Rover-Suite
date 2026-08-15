@@ -24,5 +24,5 @@ public class ServicePushBody {
     /** Nameserver 权威世代（不透明字符串；单机多为进程 UUID，集群应为共享世代） */
     private String epoch;
     /** 推送类型，目前固定 SNAPSHOT */
-    private String pushType = "SNAPSHOT";
+    private String pushType = PushType.SNAPSHOT.name();
 }

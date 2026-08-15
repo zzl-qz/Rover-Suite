@@ -34,10 +34,10 @@ import lombok.extern.slf4j.Slf4j;
 public class HttpProxyClient {
 
     /** 默认连接超时（毫秒）。 */
-    private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
+    public static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
 
     /** 默认单次请求超时（毫秒）。 */
-    private static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 30000;
+    public static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 30000;
 
     /** 复用同一个 HttpClient，避免每次请求都新建连接池。 */
     private final HttpClient httpClient;

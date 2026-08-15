@@ -3,6 +3,7 @@ package com.rover.admin.web;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.rover.admin.service.AdminConfigService;
 import com.rover.admin.service.ConfigUpdateResult;
+import com.rover.common.config.ConfigApplyMode;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -466,7 +467,7 @@ public class AdminConfigController {
     private static String renderConfigRow(Map<String, Object> item, String message) {
         boolean error = Boolean.TRUE.equals(item.get("error"));
         boolean hot = Boolean.TRUE.equals(item.get("hotReloadable"))
-                || "HOT_RELOAD".equals(str(item.get("applyMode")));
+                || ConfigApplyMode.HOT_RELOAD.name().equals(str(item.get("applyMode")));
         String messageBlock = message == null || message.isEmpty()
                 ? ""
                 : "<div class=\"message\">" + escape(message) + "</div>";

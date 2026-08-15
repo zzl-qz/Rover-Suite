@@ -72,7 +72,7 @@ public class GatewayRuntime {
     private final AtomicReference<LoadBalancer> loadBalancer = new AtomicReference<>();
 
     /** 当前负载均衡策略名，供 status 展示。 */
-    private final AtomicReference<String> loadBalanceStrategy = new AtomicReference<>("round_robin");
+    private final AtomicReference<String> loadBalanceStrategy = new AtomicReference<>(LoadBalancer.ROUND_ROBIN);
 
     /**
      * 全参数构造：初始化路由表、代理客户端、默认 LB，并组装首版过滤器链。
@@ -106,8 +106,8 @@ public class GatewayRuntime {
         this.routeOverlayStore = new RouteOverlayStore();
         this.routeValidator = new RouteValidator(this.discoveryType);
         String pluginDir = this.filterSettings.getPluginDir();
-        this.loadBalancer.set(LoadBalancerFactory.create("round_robin", pluginDir));
-        this.loadBalanceStrategy.set("round_robin");
+        this.loadBalancer.set(LoadBalancerFactory.create(LoadBalancer.ROUND_ROBIN, pluginDir));
+        this.loadBalanceStrategy.set(LoadBalancer.ROUND_ROBIN);
         this.routeMatcherRef.set(new RouteMatcher(routes == null ? List.of() : routes));
         rebuildFilters();
     }
@@ -144,7 +144,7 @@ public class GatewayRuntime {
      * @throws IllegalArgumentException 不支持的策略名
      */
     public void applyLoadBalanceStrategy(String strategy) {
-        String normalized = strategy == null || strategy.isBlank() ? "round_robin" : strategy.trim();
+        String normalized = strategy == null || strategy.isBlank() ? LoadBalancer.ROUND_ROBIN : strategy.trim();
         LoadBalancer next = LoadBalancerFactory.create(normalized, filterSettings.getPluginDir());
         loadBalanceStrategy.set(next.name() == null ? normalized : next.name());
         loadBalancer.set(next);

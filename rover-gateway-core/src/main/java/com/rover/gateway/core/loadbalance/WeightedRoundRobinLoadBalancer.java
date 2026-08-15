@@ -16,6 +16,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class WeightedRoundRobinLoadBalancer implements LoadBalancer {
 
+    /** 单实例按权重展开的份数上限，防止配置夸张权重把内存打爆 */
+    private static final int MAX_EXPAND_COPIES = 1000;
+
     private final Map<String, AtomicInteger> counters = new ConcurrentHashMap<>();
 
     @Override
@@ -42,8 +45,7 @@ public class WeightedRoundRobinLoadBalancer implements LoadBalancer {
         List<ServiceInstance> expanded = new ArrayList<>();
         for (ServiceInstance instance : instances) {
             int weight = instance.getWeight() <= 0 ? 1 : instance.getWeight();
-            // 防止配置夸张权重把内存打爆，单实例最多扩 1000 份
-            int copies = Math.min(weight, 1000);
+            int copies = Math.min(weight, MAX_EXPAND_COPIES);
             for (int i = 0; i < copies; i++) {
                 expanded.add(instance);
             }

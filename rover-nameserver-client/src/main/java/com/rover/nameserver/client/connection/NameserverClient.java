@@ -311,7 +311,7 @@ public class NameserverClient implements AutoCloseable {
      */
     public CommonResponseBody requestSync(byte type, Object body) {
         try {
-            return requestAsync(type, body).get(options.getRequestTimeoutMs() + 1000L, TimeUnit.MILLISECONDS);
+            return requestAsync(type, body).get(options.getRequestTimeoutMs() + SYNC_GRACE_MILLIS, TimeUnit.MILLISECONDS);
         } catch (TimeoutException ex) {
             throw new RoverException("请求超时", ex);
         } catch (InterruptedException ex) {
