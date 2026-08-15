@@ -16,6 +16,13 @@ import java.util.Set;
  */
 public final class StaticUpstreamCluster {
 
+    /** 默认权重。 */
+    private static final int DEFAULT_WEIGHT = 100;
+
+    private static final int HTTP_PORT = 80;
+
+    private static final int HTTPS_PORT = 443;
+
     private StaticUpstreamCluster() {
     }
 
