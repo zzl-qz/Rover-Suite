@@ -17,12 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-08 17:55:00
- * Description: 客户端收包处理
- *
- * 这个类是什么：客户端 Netty 流水线最内层的业务收包处理器。
- * 核心职责：①推送消息落到 InstanceCache；②RPC 响应按 requestId 配对 complete；
- * ③连接断开时快速失败在途请求并触发重连。
- * 被谁用：NameserverClient.connect 创建并加入 pipeline。
+ * Description: 客户端收包处理：推送落缓存、响应按 requestId 配对、断线快速失败并触发重连
  */
 @Slf4j
 public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMessage> {
@@ -36,10 +31,6 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
 
     /**
      * 构造 handler，与客户端共享在途请求表与缓存。
-     *
-     * @param pendingRequests 在途请求表（请求响应配对用）
-     * @param instanceCache   本地实例缓存（推送落地用）
-     * @param client          所属客户端（断线通知用）
      */
     public NameserverClientHandler(
             PendingRequestTable<CommonResponseBody> pendingRequests,
@@ -53,9 +44,6 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
     /**
      * 处理一条完整解码后的入站消息，按类型分派：
      * 推送 -> 更新缓存；RPC 响应 -> 按 requestId 完成对应 Future。
-     *
-     * @param ctx 通道上下文
-     * @param msg 解码后的一条 RoverMessage
      */
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, RoverMessage msg) {
@@ -102,8 +90,6 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
     /**
      * 连接断开：先让所有在途请求立刻失败（避免业务线程一直卡在 get() 等到超时），
      * 再通知客户端进入待重连状态。
-     *
-     * @param ctx 通道上下文
      */
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
@@ -113,13 +99,7 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
         client.onDisconnected();
     }
 
-    /**
-     * 收包/处理过程异常：协议错误只打警告，其余记完整异常栈，随后关闭连接
-     * （触发 channelInactive 走统一的重连流程）。
-     *
-     * @param ctx   通道上下文
-     * @param cause 异常原因
-     */
+    /** 收包异常：协议错误只打警告，其余记完整栈，随后关闭连接走统一的重连流程。 */
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         if (cause instanceof ProtocolException) {

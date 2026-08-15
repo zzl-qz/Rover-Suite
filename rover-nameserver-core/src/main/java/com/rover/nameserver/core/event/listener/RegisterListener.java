@@ -13,8 +13,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13 00:00:00
- * Description: 处理注册：写注册表 → 绑连接 → Push → 回包
+ * Created: 2026-08-02 09:40:00
+ * Description: 处理注册请求：写入注册表、绑定连接、触发推送并回包
  */
 @Slf4j
 public class RegisterListener implements EventListener<RegisterEvent> {

@@ -18,12 +18,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Gateway 同口管理 API（/_manage/**）。
- *
- * 这个类是什么：Gateway 内置管理 HTTP 接口，与业务流量共用端口。
- * 核心职责：提供 status、routes 端点，路由变更委托 GatewayRuntime 热更新并落盘；
- * /configs 通用端点与 JSON/异常处理由 AbstractManageApi 提供。
- * 被谁用：GatewayHttpServerHandler 在 /_manage 前缀请求时短路调用。
+ * Author: Daylight
+ * Created: 2026-08-10 09:27:00
+ * Description: Gateway 同口管理 API（/_manage/**）：status/routes 端点，路由变更热更新并落盘
  */
 public class GatewayManageApi extends AbstractManageApi {
 

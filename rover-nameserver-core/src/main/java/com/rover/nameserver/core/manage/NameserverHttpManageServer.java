@@ -18,12 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-10 16:45:00
- * Description: Nameserver 旁路 HTTP 管理口
- *
- * 这个类是什么：基于 Netty 的轻量 HTTP 服务端，与 TCP 注册口并行监听。
- * 核心职责：①绑定 managePort 接收 HTTP 请求；②把解码后的请求转给 NameserverManageApi；
- * ③提供 start/shutdown 生命周期管理。
- * 被谁用：NameserverTcpServer 在 TCP 服务启动时一并启停；port<=0 时直接跳过不监听。
+ * Description: 基于 Netty 的轻量 HTTP 管理口，与 TCP 注册口并行监听，将请求转交 NameserverManageApi 并管理启停生命周期
  */
 @Slf4j
 public class NameserverHttpManageServer {
@@ -40,20 +35,12 @@ public class NameserverHttpManageServer {
     /** 服务端 channel，关闭时使用 */
     private Channel serverChannel;
 
-    /**
-     * @param port    HTTP 管理口端口
-     * @param runtime Nameserver 运行时，供 ManageApi 读状态与改配置
-     */
     public NameserverHttpManageServer(int port, NameserverRuntime runtime) {
         this.port = port;
         this.manageApi = new NameserverManageApi(runtime);
     }
 
-    /**
-     * 启动 HTTP 管理口；port<=0 时只打日志并返回。
-     *
-     * @throws IllegalStateException 绑定端口失败
-     */
+    /** 启动 HTTP 管理口；port<=0 时只打日志并返回。 */
     public void start() {
         if (port <= 0) {
             log.info("Nameserver managePort 未启用");

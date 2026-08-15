@@ -9,7 +9,11 @@ import com.rover.nameserver.core.registry.RegistrySnapshot;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 
-/** 连接断开：清订阅，注销该连接绑定的实例并 Push */
+/**
+ * Author: Daylight
+ * Created: 2026-08-08 09:55:00
+ * Description: 处理连接断开：清理订阅并注销该连接绑定的实例、触发推送
+ */
 @Slf4j
 public class ChannelInactiveListener implements EventListener<ChannelInactiveEvent> {
 

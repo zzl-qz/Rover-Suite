@@ -1,9 +1,9 @@
 package com.rover.common.util;
 
 /**
- * host:port 解析工具。
- *
- * Gateway discovery 地址、Starter 连接 Nameserver 等共用，避免各模块各写一份。
+ * Author: Daylight
+ * Created: 2026-08-02 11:30:00
+ * Description: host:port 解析工具，供 Gateway discovery 地址、Starter 连接 Nameserver 等复用
  */
 public record HostPort(String host, int port) {
 

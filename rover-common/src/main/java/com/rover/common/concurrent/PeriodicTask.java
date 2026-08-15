@@ -9,13 +9,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:55:00
- * Description: 固定间隔周期任务，适合心跳这种简单定时
- *
- * 这个类是什么：包装单线程定时线程池的固定延迟周期任务。
- * 核心职责：以 scheduleWithFixedDelay 近似「while + sleep」的间隔语义跑一个 Runnable，
- * 单次执行失败互不影响，并暴露 start/stop 方便启停与随主对象一起关闭。
- * 被谁用：注册中心/网关中需要周期发送心跳、定期清扫的场景。
+ * Created: 2026-08-03 11:05:00
+ * Description: 固定延迟周期任务（近似 while+sleep），单次失败互不影响，支持随主对象一起关闭
  */
 @Slf4j
 public class PeriodicTask implements AutoCloseable {
@@ -29,11 +24,7 @@ public class PeriodicTask implements AutoCloseable {
     /** 当前调度任务的句柄，stop 时用来取消 */
     private volatile ScheduledFuture<?> future;
 
-    /**
-     * 构造周期任务。
-     *
-     * @param name 任务名；为空时使用默认名，同时作为线程名前缀
-     */
+    /** 构造周期任务；name 为空时用默认名，同时作为线程名前缀。 */
     public PeriodicTask(String name) {
         // 名字为空时兜底，保证线程名可读
         this.name = name == null || name.isBlank() ? "periodic-task" : name;
@@ -44,14 +35,7 @@ public class PeriodicTask implements AutoCloseable {
         });
     }
 
-    /**
-     * 固定延迟调度，语义接近 while + sleep，但更好停。
-     * 后面如果有大量超时/延时任务，再考虑时间轮。
-     *
-     * @param task          每次周期执行的任务
-     * @param initialDelayMs 首次执行前的延迟(毫秒)，下限 0
-     * @param periodMs      相邻两次执行的间隔(毫秒)，下限 1
-     */
+    /** 固定延迟调度，语义接近 while+sleep 但更好停；幂等，重复调用忽略。 */
     public void start(Runnable task, long initialDelayMs, long periodMs) {
         // compareAndSet 保证只启动一次，重复调用直接忽略
         if (!started.compareAndSet(false, true)) {
@@ -64,9 +48,7 @@ public class PeriodicTask implements AutoCloseable {
         future = executor.scheduleWithFixedDelay(() -> safeRun(task), delay, period, TimeUnit.MILLISECONDS);
     }
 
-    /**
-     * 停止任务：取消当前调度并关闭内部线程池，幂等可重复调用。
-     */
+    /** 停止任务：取消当前调度并关闭内部线程池，幂等可重复调用。 */
     public void stop() {
         started.set(false);
         ScheduledFuture<?> current = future;
@@ -87,7 +69,7 @@ public class PeriodicTask implements AutoCloseable {
         try {
             task.run();
         } catch (Throwable ex) {
-            // 单次失败别把整个调度打挂
+            // 单次失败不中断整个调度
             log.warn("周期任务执行失败: {}", name, ex);
         }
     }

@@ -3,7 +3,9 @@ package com.rover.gateway.bootstrap.config;
 import com.rover.common.config.YamlConfigLoader;
 
 /**
- * Gateway 配置加载入口。
+ * Author: Daylight
+ * Created: 2026-08-04 09:42:00
+ * Description: Gateway 配置加载入口，委托 YamlConfigLoader 读取 rover-gateway.yml
  */
 public class GatewayConfigLoader {
 

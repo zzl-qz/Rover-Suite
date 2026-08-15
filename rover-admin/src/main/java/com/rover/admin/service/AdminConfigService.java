@@ -13,8 +13,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 11:37:00
- * Description: 通过 HTTP 聚合 Gateway / Nameserver 管理口数据
+ * Created: 2026-08-11 14:08:00
+ * Description: 通过 HTTP 聚合 Gateway / Nameserver 管理口数据的服务层
  */
 @Service
 public class AdminConfigService {

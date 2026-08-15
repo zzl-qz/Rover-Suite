@@ -27,9 +27,7 @@ public class DiscoverySettings {
     /** 启动时需要订阅的服务列表；路由热更新时也会动态追加 */
     private List<ServiceSubscribeSpec> subscribeServices = new ArrayList<>();
 
-    /**
-     * 单个服务的订阅规格。
-     */
+    /** 单个服务的订阅规格。 */
     @Data
     public static class ServiceSubscribeSpec {
 

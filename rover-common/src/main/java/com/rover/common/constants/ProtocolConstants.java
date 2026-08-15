@@ -2,16 +2,8 @@ package com.rover.common.constants;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 10:34:00
- * Description: 协议常量和消息类型（线上契约）
- *
- * 这个类是什么：Rover TCP 二进制协议的全部常量集中地。
- * 核心职责：统一定义魔数、版本、帧头长度、消息类型等编解码双方都必须一致的数值。
- * 设计约定：
- *   - 下列 byte 数值一旦发布尽量不改（兼容老客户端）
- *   - 进程内业务用有名字的 Event/Listener，不要在业务里散落魔法数字
- *   - 日志展示名称见 {@link ProtocolTypeNames}
- * 被谁用：编解码器、RoverMessage、Nameserver Dispatcher 映射层。
+ * Created: 2026-08-01 09:20:00
+ * Description: Rover TCP 协议常量集中地：魔数、版本、帧头长度、消息类型等编解码双方必须一致的线上契约
  */
 public final class ProtocolConstants {
 
@@ -35,7 +27,6 @@ public final class ProtocolConstants {
     /** 防一手异常大包，body 最大长度 1MB，超过直接拒绝，防止恶意大包打爆内存 */
     public static final int MAX_BODY_LENGTH = 1024 * 1024;
 
-    // 0 表示跟服务端默认走
     /** 默认超时 3 秒；报文中为 0 时服务端按此值处理 */
     public static final int DEFAULT_TIMEOUT_MS = 3000;
 
@@ -58,7 +49,7 @@ public final class ProtocolConstants {
     /** 取消订阅请求 */
     public static final byte UNSUBSCRIBE_REQUEST = 8;
 
-    // ---- 集群内部先占坑，暂时不用 ----
+    // ---- 集群内部消息（预留）----
 
     /** 集群复制请求(预留) */
     public static final byte CLUSTER_REPLICATE_REQUEST = 32;

@@ -8,13 +8,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:50:00
- * Description: 订阅关系管理
- *
- * 这个类是什么：serviceName → group → Channel 三级订阅表，并发安全。
- * 核心职责：订阅/退订/连接失效清理/按服务查询订阅者；
- * group 为空表示通配订阅（收该服务所有组变更）。
- * 被谁用：PushService 查订阅者；NameserverRequestDispatcher 在订阅/退订/断线时更新。
+ * Created: 2026-08-06 11:25:00
+ * Description: serviceName → group → Channel 三级订阅表（并发安全），group 为空表示通配订阅
  */
 public class SubscriptionManager {
 
@@ -38,13 +33,7 @@ public class SubscriptionManager {
                 .add(channel);
     }
 
-    /**
-     * 取消单条订阅关系，并级联清理空组、空服务，防止死数据累积。
-     *
-     * @param serviceName 服务名
-     * @param group       组（null/空白对应通配组 "")
-     * @param channel     要退订的连接
-     */
+    /** 取消单条订阅，并级联清理空组、空服务，防止死数据累积。 */
     public void unsubscribe(String serviceName, String group, Channel channel) {
         Map<String, Set<Channel>> byGroup = subscriptions.get(serviceName);
         if (byGroup == null) {
@@ -65,14 +54,8 @@ public class SubscriptionManager {
         }
     }
 
-    /**
-     * 连接失效时的全量清理：从该连接订阅的所有服务/组中移除，
-     * 并级联清理空组与空服务。由断线处理（dispatcher.onChannelInactive）调用。
-     *
-     * @param channel 已失效的连接
-     */
+    /** 连接失效时的全量清理：移除该连接的所有订阅，并级联清理空组与空服务。 */
     public void removeChannel(Channel channel) {
-        // 遍历所有服务的所有组，用迭代器安全移除该 channel
         for (Map.Entry<String, Map<String, Set<Channel>>> serviceEntry : subscriptions.entrySet()) {
             Map<String, Set<Channel>> byGroup = serviceEntry.getValue();
             for (Map.Entry<String, Set<Channel>> groupEntry : byGroup.entrySet()) {
@@ -85,28 +68,20 @@ public class SubscriptionManager {
         }
     }
 
-    /**
-     * 查询某服务下所有应接收变更的连接（含去重）。
-     * 匹配规则：通配组订阅者（group=""）一律返回；若实例组非空，再加入该组的指定订阅者。
-     *
-     * @param serviceName   服务名
-     * @param instanceGroup 发生变更的实例所属组（可为 null）
-     * @return 去重后的订阅者集合（不可修改）；无人订阅时返回空集合
-     */
+    /** 查询某服务下应接收变更的连接（去重）：通配组订阅者一律返回，实例组非空时再加入指定组订阅者。 */
     public Set<Channel> findSubscribers(String serviceName, String instanceGroup) {
         Map<String, Set<Channel>> byGroup = subscriptions.get(serviceName);
         if (byGroup == null || byGroup.isEmpty()) {
             return Set.of();
         }
 
-        // 内部用并发 set 聚合，保证不重复；最终返回不可修改视图防外部篡改
+        // 内部用并发 set 聚合去重，最终返回不可修改视图防外部篡改
         Set<Channel> result = ConcurrentHashMap.newKeySet();
-        // group 为空的订阅：吃这个服务所有变更
+        // group 为空的订阅：收该服务所有变更
         Set<Channel> allGroupSubscribers = byGroup.get("");
         if (allGroupSubscribers != null) {
             result.addAll(allGroupSubscribers);
         }
-        // 指定 group 的订阅
         if (instanceGroup != null && !instanceGroup.isBlank()) {
             Set<Channel> groupSubscribers = byGroup.get(instanceGroup);
             if (groupSubscribers != null) {

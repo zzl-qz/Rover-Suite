@@ -12,9 +12,9 @@ import java.util.Objects;
 import java.util.ServiceLoader;
 
 /**
- * 插件 SPI 加载骨架：扫 jar → ClassLoader → ServiceLoader / 反射实例化。
- *
- * 和 PluginJarScanner 配套；各模块只写自己的策略匹配，不重复装载逻辑。
+ * Author: Daylight
+ * Created: 2026-08-05 10:40:00
+ * Description: 插件 SPI 加载骨架：扫 jar → ClassLoader → ServiceLoader/反射实例化
  */
 public final class PluginSpiLoader {
 

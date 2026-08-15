@@ -16,12 +16,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Nameserver 管理 HTTP API。
- *
- * 这个类是什么：管理口的 REST 风格路由与 JSON 响应层。
- * 核心职责：暴露 /_manage/status、/instances 查询；/configs 通用端点与
- * JSON/异常处理由 AbstractManageApi 提供。
- * 被谁用：NameserverHttpManageServer 把 HTTP 请求转进来。
+ * Author: Daylight
+ * Created: 2026-08-11 11:20:00
+ * Description: Nameserver 管理 HTTP API，暴露 /_manage/status 与 /instances 查询，configs 与 JSON/异常处理由基类提供
  */
 public class NameserverManageApi extends AbstractManageApi {
 

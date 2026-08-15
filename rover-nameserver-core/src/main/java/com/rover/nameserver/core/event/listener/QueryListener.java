@@ -13,7 +13,11 @@ import com.rover.nameserver.core.event.support.NameserverTrace;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 
-/** 处理查询：按服务/组取实例列表回包 */
+/**
+ * Author: Daylight
+ * Created: 2026-08-05 11:30:00
+ * Description: 处理查询请求：按服务/组获取实例列表并回包
+ */
 @Slf4j
 public class QueryListener implements EventListener<QueryEvent> {
 

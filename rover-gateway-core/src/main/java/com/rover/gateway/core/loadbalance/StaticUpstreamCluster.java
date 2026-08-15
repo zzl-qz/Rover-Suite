@@ -11,12 +11,8 @@ import java.util.Set;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13
- * Description: 静态路由上游集群：把 targetUrl / targetUrls 收成实例列表
- *
- * 多地址写法：
- * - targetUrl: 单机（兼容旧配置）
- * - targetUrls: 多机列表，可选 weight：http://host:port|200
+ * Created: 2026-08-06 09:08:00
+ * Description: 静态路由上游集群：把 targetUrl/targetUrls 收成实例列表，多地址可带 |weight
  */
 public final class StaticUpstreamCluster {
 
@@ -84,9 +80,7 @@ public final class StaticUpstreamCluster {
         out.add(instance);
     }
 
-    /**
-     * 解析 http://host:port 或 http://host:port|weight。
-     */
+    /** 解析 http://host:port 或 http://host:port|weight。 */
     static ParsedEndpoint parse(String raw) {
         String urlPart = raw;
         int weight = 100;

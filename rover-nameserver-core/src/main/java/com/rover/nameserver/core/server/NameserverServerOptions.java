@@ -6,13 +6,8 @@ import lombok.Getter;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:50:00
- * Description: 服务端运行参数
- *
- * 这个类是什么：不可变 POJO，集中承载 Nameserver 服务端全部启动参数。
- * 核心职责：由 Builder 供上层（NameserverApplication / YAML）装配，
- * 供 NameserverTcpServer 与 NameserverRequestDispatcher 消费端口、超时、ACK 等配置。
- * 被谁用：NameserverTcpServer、NameserverRequestDispatcher、NameserverRuntime。
+ * Created: 2026-08-04 16:05:00
+ * Description: 服务端运行参数不可变 POJO，由 Builder 装配并集中承载全部启动参数
  */
 @Getter
 @Builder

@@ -54,35 +54,17 @@ public class GatewayHttpServer {
     private EventExecutorGroup bizGroup;
     private Channel serverChannel;
 
-    /**
-     * 最简构造：仅指定端口，其余用默认值。
-     *
-     * @param port 监听端口
-     */
+    /** 最简构造：仅指定端口，其余用默认值。 */
     public GatewayHttpServer(int port) {
         this(port, List.of(), 1024 * 1024, 3000, 30000, new FilterSettings(), defaultStaticDiscovery());
     }
 
-    /**
-     * 指定端口和初始路由表。
-     *
-     * @param port   监听端口
-     * @param routes 初始路由列表
-     */
+    /** 指定端口和初始路由表构造。 */
     public GatewayHttpServer(int port, List<RouteConfig> routes) {
         this(port, routes, 1024 * 1024, 3000, 30000, new FilterSettings(), defaultStaticDiscovery());
     }
 
-    /**
-     * 指定端口、路由、body 上限和代理超时。
-     *
-     * @param port                   监听端口
-     * @param routes                 初始路由列表
-     * @param maxContentLengthBytes  单请求最大 body 字节
-     * @param connectTimeoutMillis   代理连接超时
-     * @param requestTimeoutMillis   代理请求超时
-     * @param filterSettings         过滤器加载配置
-     */
+    /** 指定端口、路由、body 上限和代理超时。 */
     public GatewayHttpServer(
             int port,
             List<RouteConfig> routes,
@@ -94,17 +76,7 @@ public class GatewayHttpServer {
                 filterSettings, defaultStaticDiscovery());
     }
 
-    /**
-     * 全参数构造，组装 GatewayRuntime 并加载配置 overlay。
-     *
-     * @param port                   监听端口
-     * @param routes                 初始路由列表
-     * @param maxContentLengthBytes  单请求最大 body 字节
-     * @param connectTimeoutMillis   代理连接超时
-     * @param requestTimeoutMillis   代理请求超时
-     * @param filterSettings         过滤器加载配置
-     * @param discoverySettings      服务发现配置
-     */
+    /** 全参数构造，组装 GatewayRuntime 并加载配置 overlay。 */
     public GatewayHttpServer(
             int port,
             List<RouteConfig> routes,
@@ -117,9 +89,7 @@ public class GatewayHttpServer {
                 filterSettings, discoverySettings, "round_robin");
     }
 
-    /**
-     * 全参数构造（含负载均衡策略名）。
-     */
+    /** 全参数构造（含负载均衡策略名）。 */
     public GatewayHttpServer(
             int port,
             List<RouteConfig> routes,

@@ -7,8 +7,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 11:37:00
- * Description: 启动 Rover 轻量级网页管理端
+ * Created: 2026-08-12 10:30:00
+ * Description: Rover 管理端启动入口
  */
 @SpringBootApplication
 @EnableConfigurationProperties(AdminProperties.class)

@@ -11,8 +11,8 @@ import lombok.Getter;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13 00:00:00
- * Description: Nameserver 业务依赖门面，注入给各协议 Listener
+ * Created: 2026-08-07 09:20:00
+ * Description: Nameserver 业务依赖门面，向各协议 Listener 注入注册表、推送与配置等依赖
  */
 @Getter
 public class NameserverServices {

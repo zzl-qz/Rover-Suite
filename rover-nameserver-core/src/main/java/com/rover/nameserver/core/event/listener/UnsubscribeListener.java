@@ -9,7 +9,11 @@ import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.event.support.NameserverTrace;
 import lombok.extern.slf4j.Slf4j;
 
-/** 处理退订：移除订阅关系 → 回包 */
+/**
+ * Author: Daylight
+ * Created: 2026-08-07 16:20:00
+ * Description: 处理退订请求：移除订阅关系并回包
+ */
 @Slf4j
 public class UnsubscribeListener implements EventListener<UnsubscribeEvent> {
 

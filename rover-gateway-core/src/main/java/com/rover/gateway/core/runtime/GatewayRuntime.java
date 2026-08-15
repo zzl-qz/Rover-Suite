@@ -22,8 +22,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-10 16:40:00
- * Description: Gateway 运行时可变状态，供热更新和管理口使用
+ * Created: 2026-08-10 10:33:00
+ * Description: Gateway 运行时可变状态：路由、过滤器链、代理客户端、LB 等热更新组件的容器
  */
 @Slf4j
 @Getter
@@ -112,7 +112,7 @@ public class GatewayRuntime {
         rebuildFilters();
     }
 
-    /** @return 当前路由匹配器快照 */
+    /** 当前路由匹配器快照。 */
     public RouteMatcher getRouteMatcher() {
         return routeMatcherRef.get();
     }
@@ -132,11 +132,7 @@ public class GatewayRuntime {
         rebuildFilters();
     }
 
-    /**
-     * 热更新代理请求超时。
-     *
-     * @param timeoutMillis 超时毫秒，必须大于 0
-     */
+    /** 热更新代理请求超时（毫秒），必须大于 0。 */
     public void applyRequestTimeoutMillis(long timeoutMillis) {
         proxyClient.setRequestTimeoutMillis(timeoutMillis);
     }
@@ -174,12 +170,7 @@ public class GatewayRuntime {
         return List.copyOf(normalized);
     }
 
-    /**
-     * 新增或按 businessPrefix/id 替换单条路由。
-     *
-     * @param route 路由对象
-     * @return 更新后的完整路由表
-     */
+    /** 新增或按 businessPrefix/id 替换单条路由，返回更新后的完整路由表。 */
     public List<RouteConfig> addOrReplaceRoute(RouteConfig route) {
         List<RouteConfig> current = new ArrayList<>(getRouteMatcher().listRoutes());
         String prefix = route.getBusinessPrefix();
@@ -191,13 +182,7 @@ public class GatewayRuntime {
         return applyRoutes(current);
     }
 
-    /**
-     * 按 id 或 businessPrefix 删除路由。
-     *
-     * @param idOrPrefix 路由 id 或 businessPrefix
-     * @return 删除后的完整路由表
-     * @throws IllegalArgumentException 参数为空或未找到路由
-     */
+    /** 按 id 或 businessPrefix 删除路由，返回删除后的完整路由表。 */
     public List<RouteConfig> removeRoute(String idOrPrefix) {
         if (idOrPrefix == null || idOrPrefix.isBlank()) {
             throw new IllegalArgumentException("删除路由需要 id 或 businessPrefix");

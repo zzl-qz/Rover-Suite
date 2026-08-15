@@ -27,8 +27,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 14:22:00
- * Description: 使用 HTTP/1.1 将请求真实转发到目标 URL，并回写后端响应
+ * Created: 2026-08-07 09:12:00
+ * Description: HTTP/1.1 反向代理客户端：将请求转发到目标 URL，并回写后端响应
  */
 @Slf4j
 public class HttpProxyClient {
@@ -49,10 +49,7 @@ public class HttpProxyClient {
         this(DEFAULT_CONNECT_TIMEOUT_MILLIS, DEFAULT_REQUEST_TIMEOUT_MILLIS);
     }
 
-    /**
-     * @param connectTimeoutMillis 连接超时（毫秒）
-     * @param requestTimeoutMillis 单次请求超时（毫秒）
-     */
+    /** 指定连接/请求超时构造。 */
     public HttpProxyClient(int connectTimeoutMillis, int requestTimeoutMillis) {
         this.requestTimeoutMillis = new java.util.concurrent.atomic.AtomicLong(requestTimeoutMillis);
         // 强制 HTTP/1.1，避免部分后端对协议升级兼容不好。
@@ -62,17 +59,12 @@ public class HttpProxyClient {
                 .build();
     }
 
-    /** @return 当前请求超时（毫秒） */
+    /** 当前请求超时（毫秒）。 */
     public long getRequestTimeoutMillis() {
         return requestTimeoutMillis.get();
     }
 
-    /**
-     * 热更新请求超时。
-     *
-     * @param timeoutMillis 新的超时毫秒数，必须大于 0
-     * @throws IllegalArgumentException timeoutMillis 非法
-     */
+    /** 热更新请求超时，必须大于 0。 */
     public void setRequestTimeoutMillis(long timeoutMillis) {
         if (timeoutMillis <= 0) {
             throw new IllegalArgumentException("requestTimeoutMillis 必须大于 0");
@@ -83,9 +75,6 @@ public class HttpProxyClient {
     /**
      * 转发请求到目标 URL，并将后端响应写回当前客户端连接。
      *
-     * @param ctx        Netty 通道上下文
-     * @param request    客户端原始 HTTP 请求
-     * @param targetUrl  完整目标 URL
      * @return 最终给客户端的 HTTP 状态码，方便链路日志统计
      */
     public int forward(ChannelHandlerContext ctx, FullHttpRequest request, String targetUrl) {
@@ -228,9 +217,7 @@ public class HttpProxyClient {
         return null;
     }
 
-    /**
-     * 这些是协议层 Header，代理时不该原样转发，否则容易出兼容问题。
-     */
+    /** 协议层 Header，代理时不原样转发，避免兼容问题。 */
     private boolean isHopByHopHeader(String name) {
         String normalizedName = name.toLowerCase(Locale.ROOT);
         return "connection".equals(normalizedName)

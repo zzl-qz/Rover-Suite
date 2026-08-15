@@ -24,14 +24,7 @@ public class GatewayFilterAssembler {
     /** 负责从 plugins 目录和 classpath 加载用户扩展 Filter。 */
     private final PluginFilterLoader pluginFilterLoader = new PluginFilterLoader();
 
-    /**
-     * 静态模式组装过滤器链。
-     *
-     * @param settings     过滤器加载配置
-     * @param routeMatcher 路由匹配器
-     * @param proxyClient  HTTP 代理客户端
-     * @return 按 order 排序后的不可变过滤器列表（含终端 RouteAndProxyFilter）
-     */
+    /** 静态模式组装过滤器链。 */
     public List<Filter> assemble(
             FilterSettings settings,
             RouteMatcher routeMatcher,
@@ -39,17 +32,7 @@ public class GatewayFilterAssembler {
         return assemble(settings, routeMatcher, proxyClient, DiscoveryType.STATIC, null, null);
     }
 
-    /**
-     * 全参数组装过滤器链：访问日志 → 插件/配置 Filter → 路由转发。
-     *
-     * @param settings          过滤器加载配置
-     * @param routeMatcher      路由匹配器
-     * @param proxyClient       HTTP 代理客户端
-     * @param discoveryType     上游发现模式
-     * @param serviceDiscovery  服务发现，动态模式使用
-     * @param loadBalancer      负载均衡器，动态模式使用
-     * @return 按 order 排序后的不可变过滤器列表
-     */
+    /** 全参数组装过滤器链：访问日志 → 插件/配置 Filter → 路由转发终端。 */
     public List<Filter> assemble(
             FilterSettings settings,
             RouteMatcher routeMatcher,

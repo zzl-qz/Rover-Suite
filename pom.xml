@@ -15,14 +15,14 @@
     <modules>
         <module>rover-common</module>
         <module>rover-nameserver-core</module>
-        <module>rover-nameserver-server</module>
+        <module>rover-nameserver-bootstrap</module>
         <module>rover-nameserver-client</module>
         <module>rover-nameserver-starter</module>
         <module>rover-gateway-core</module>
         <module>rover-gateway-bootstrap</module>
         <module>rover-gateway-adapter-nacos</module>
         <module>rover-admin</module>
-        <module>rover-demo</module>
+        <module>rover-gateway-test/demo/backend</module>
     </modules>
 
     <properties>
@@ -139,7 +139,7 @@
             </dependency>
             <dependency>
                 <groupId>com.rover</groupId>
-                <artifactId>rover-nameserver-server</artifactId>
+                <artifactId>rover-nameserver-bootstrap</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

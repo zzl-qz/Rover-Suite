@@ -6,13 +6,8 @@ import java.util.List;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 14:22:00
- * Description: 按业务前缀匹配 Gateway 路由，长前缀优先
- *
- * 这个类是什么：路由表匹配引擎，把请求路径映射到 RouteConfig。
- * 核心职责：构造时按 businessPrefix 长度降序排序；match 时精确或前缀匹配；
- * listRoutes 供管理口只读展示。
- * 被谁用：RouteAndProxyFilter 查路由；GatewayRuntime 热更新时替换实例。
+ * Created: 2026-08-08 13:06:00
+ * Description: 路由表匹配引擎：按业务前缀匹配请求路径，长前缀优先
  */
 public class RouteMatcher {
 
@@ -24,9 +19,7 @@ public class RouteMatcher {
         this(List.of());
     }
 
-    /**
-     * @param routes 路由列表，构造时会按 businessPrefix 长度降序排序
-     */
+    /** 按 businessPrefix 长度降序构造路由匹配器，长前缀优先命中。 */
     public RouteMatcher(List<RouteConfig> routes) {
         this.routes = new ArrayList<>(routes);
         // 更长的路径优先，避免 /api/** 抢在 /api/user/** 前面命中。
@@ -48,11 +41,7 @@ public class RouteMatcher {
         return null;
     }
 
-    /**
-     * 返回当前路由表副本，供管理口只读展示。
-     *
-     * @return 不可变路由列表
-     */
+    /** 返回当前路由表只读副本，供管理口展示。 */
     public List<RouteConfig> listRoutes() {
         return List.copyOf(routes);
     }
