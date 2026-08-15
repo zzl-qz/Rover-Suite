@@ -24,16 +24,18 @@
 
 ## 📖 项目简介
 
-**Rover-Suite** 是一套可独立部署的轻量微服务基础设施，核心能力包括：
+**Rover-Suite** 是一套面向小团队的轻量微服务基础设施，解决的核心问题是：
+
+> 后端有多个单体项目（可能是 Java/Python/PHP/Go 等不同语言），前端多个 App 各自硬编码后端端口，用 Nginx 做反向代理需要手动维护大量静态配置，上 OpenResty/APISIX 又太重、不好定制。
+
+Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务启动后自动注册，网关实时感知实例变化，无需手动维护 IP 端口。
 
 | 组件 | 说明 |
 | :--- | :--- |
-| **Rover-Nameserver** | 基于 TCP 的服务注册与发现 |
+| **Rover-Nameserver** | 基于 TCP 的服务注册与发现（心跳检测、健康检查、实例变更推送） |
 | **Rover-Gateway** | 基于 Netty 的 HTTP 网关（路由、发现、负载均衡、反向代理） |
 | **Rover-Starter** | Spring Boot 接入，业务侧自动注册与优雅下线 |
 | **Rover-Admin** | 可选管理控制台，支持运行时配置查看与更新 |
-
-适合希望部署轻量、链路清晰、便于私有化与二次扩展的场景。
 
 ---
 
@@ -42,11 +44,14 @@
 | 特性 | 说明 |
 | :--- | :--- |
 | **自研核心组件** | Nameserver 与 Gateway 均基于 Netty 实现，核心不依赖 Spring Cloud |
-| **独立进程部署** | 注册中心与网关均可单独打包运行 |
-| **低侵入接入** | 引入 Starter 并完成 YAML 配置即可注册 |
+| **独立进程部署** | 注册中心与网关均可单独打包运行，两个 jar 即可跑通全链路 |
+| **低侵入接入** | 引入 Starter 并完成 YAML 配置即可注册，支持优雅下线 |
+| **健康检查** | 心跳超时自动剔除临时实例 / 标记持久实例不健康，网关实时感知 |
 | **静态 / 动态路由** | 支持固定上游与注册中心动态发现，共用负载均衡能力 |
-| **可扩展** | Filter、负载均衡、服务发现等提供 SPI 扩展点 |
-| **运行时管理** | Admin 可查看并更新网关 / 注册中心运行时配置 |
+| **多种负载均衡** | 轮询、加权轮询、随机、IP Hash、最少连接数 |
+| **可扩展** | Filter、负载均衡、服务发现等提供 SPI 扩展点，支持插件 jar 热加载 |
+| **运行时管理** | Admin 可查看并更新网关 / 注册中心运行时配置，路由热更新 |
+| **Java 原生** | 定制开发用 Java SPI，对 Java 团队零学习成本，可直接改源码二开 |
 
 ---
 
@@ -96,14 +101,15 @@ flowchart LR
 | :--- | :--- |
 | `rover-common` | 协议、编解码与公共能力 |
 | `rover-nameserver-core` | 注册中心核心逻辑 |
-| `rover-nameserver-server` | Nameserver 可执行进程 |
+| `rover-nameserver-bootstrap` | Nameserver 可执行进程 |
 | `rover-nameserver-client` | 注册中心客户端 |
 | `rover-nameserver-starter` | Spring Boot Starter |
 | `rover-gateway-core` | 网关核心逻辑 |
 | `rover-gateway-bootstrap` | Gateway 可执行进程 |
 | `rover-gateway-adapter-nacos` | 外部注册中心适配扩展 |
 | `rover-admin` | 管理控制台 |
-| `rover-demo` | 示例业务服务 |
+| `rover-gateway-test/demo/backend` | 网关验证测试服务 |
+| `rover-gateway-test/demo/frontend` | 测试前端面板（独立于核心套件） |
 
 ---
 
@@ -125,7 +131,7 @@ mvn clean package -DskipTests
 ### 2. 启动 Nameserver
 
 ```bash
-java -jar rover-nameserver-server/target/rover-nameserver-server-1.0.0-SNAPSHOT.jar
+java -jar rover-nameserver-bootstrap/target/rover-nameserver-bootstrap-1.0.0-SNAPSHOT.jar
 ```
 
 默认监听 TCP `8888`。
@@ -138,11 +144,19 @@ java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.
 
 默认端口见 `rover-gateway.yml`（本机可按需改为 `8080`）。
 
-### 4. 启动示例服务
+### 4. （可选）测试网关
+
+如需测试网关路由与负载均衡：
 
 ```bash
-mvn -pl rover-demo spring-boot:run
+# 后端测试服务
+mvn -pl rover-gateway-test/demo/backend spring-boot:run --server.port=8081
+
+# 前端测试面板（独立项目）
+cd rover-gateway-test/demo/frontend && npm install && npm run dev
 ```
+
+完整测试套件见 **[rover-gateway-test/demo/README.md](./rover-gateway-test/demo/README.md)**。
 
 ### 5. 可选：Admin
 
@@ -208,25 +222,51 @@ rover:
 
 ## 📊 定位对比
 
-| 维度 | 传统 Spring Cloud 方案 | Rover-Suite |
-| :--- | :--- | :--- |
-| 部署形态 | 依赖较重的组件生态 | 核心链路以独立 Jar 运行 |
-| 框架耦合 | 通常强依赖 Spring Cloud | 核心基于 Netty；仅 Starter 使用 Spring Boot |
-| 注册中心 | 常见为 Nacos 等 | 自研 TCP Nameserver |
-| 网关 | 常见为 Spring Cloud Gateway | 自研 Netty Gateway |
-| 适用场景 | 大规模微服务治理 | 轻量部署、私有化与可定制扩展 |
+### 与常见方案对比
+
+| 维度 | Nginx | OpenResty / APISIX | Spring Cloud | **Rover-Suite** |
+| :--- | :--- | :--- | :--- | :--- |
+| 服务发现 | 无，静态配置 | 需对接外部注册中心 | 有（Nacos 等） | **自带注册中心** |
+| 后端接入 | 手动维护 upstream | 手动配置路由 | 引入 SDK | **引入 Starter 自动注册** |
+| 定制开发 | C 模块 | Lua 脚本 | Java | **Java SPI，零学习成本** |
+| 部署依赖 | 无 | etcd（APISIX） | 组件生态较重 | **两个 jar，无外部依赖** |
+| 适用场景 | 静态代理 | 大规模流量治理 | 大规模微服务 | **小团队多单体、轻量私有化** |
+
+### Rover-Suite 适合你，如果
+
+- 后端有多个单体项目（Java/Python/PHP/Go 等混合技术栈）
+- 不想为每个前端 App 硬编码后端端口
+- 嫌 Nginx 静态配置维护麻烦，又不想上 APISIX 那么重的方案
+- 团队是 Java 技术栈，希望用 Java 做网关定制开发
+- 并发量不大，不需要百万 QPS，但需要动态注册和基本的负载均衡
+
+### Rover-Suite 不适合你，如果
+
+- 需要完整的流量治理能力（限流、熔断、鉴权等，规划中）
+- 需要大规模集群高可用（当前为单点部署，集群在规划中）
+- 需要极致的网关性能（APISIX 等基于 Nginx 的方案性能上限更高）
 
 ---
 
 ## 🗺️ 路线图
 
-- [x] Nameserver 注册 / 心跳 / 推送
-- [x] Gateway 路由、发现、负载均衡与反向代理
-- [x] Spring Boot Starter 接入
-- [x] Admin 运行时管理
-- [ ] 流量治理能力增强（限流、鉴权、熔断等）
+**已完成：**
+
+- [x] Nameserver 注册 / 心跳 / 推送 / 健康检查
+- [x] Gateway 路由、发现、负载均衡（5 种策略）与反向代理
+- [x] Spring Boot Starter 接入（自动注册 + 优雅下线）
+- [x] Admin 运行时管理（配置热更新、路由热更新）
+- [x] SPI 插件扩展机制（Filter、负载均衡、服务发现）
+- [x] 运行时配置管理（YAML 配置 + 热更新）
+
+**规划中：**
+
+- [ ] 可观测性（内置轻量指标采集 + Admin 可视化面板）
+- [ ] 请求链路时间线（网关内阶段耗时拆解 + traceId 透传）
+- [ ] HTTP 注册接口（支持 Python/PHP/Go 等非 Java 服务接入）
+- [ ] 流量治理能力（限流、鉴权、熔断）
 - [ ] 外部注册中心适配完善
-- [ ] 高可用与集群能力增强
+- [ ] Nameserver 持久化与集群高可用
 
 ---
 
@@ -234,6 +274,7 @@ rover:
 
 - [公开文档索引](./docs-public/README.md)
 - [架构说明](./docs-public/architecture.md)
+- [网关测试套件](./rover-gateway-test/demo/README.md) - **仅用于测试**
 
 ---
 

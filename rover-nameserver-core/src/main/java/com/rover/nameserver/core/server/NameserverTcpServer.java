@@ -30,13 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-08 17:50:00
- * Description: Nameserver TCP 服务 + HTTP 管理口
- *
- * 这个类是什么：Nameserver 服务的总装配器与生命周期管理者。
- * 核心职责：①构造全部业务组件（注册表、订阅、推送、健康检查、分发器、运行时）；
- * ②组装并启动 Netty TCP 服务端（解码器 → 编码器 → 业务 Handler）；
- * ③启动健康检查与管理口，提供优雅关闭。
- * 被谁用：NameserverApplication 作为服务入口；NameserverRuntime 供管理口与配置热更新引用。
+ * Description: Nameserver 服务总装配器与生命周期管理者：组装业务组件、启动 Netty TCP 服务端、健康检查与管理口，提供优雅关闭
  */
 @Slf4j
 public class NameserverTcpServer {
@@ -69,13 +63,7 @@ public class NameserverTcpServer {
         this(options, new InMemoryServiceRegistry(), new DefaultWriteAckPolicy());
     }
 
-    /**
-     * 完整构造：组装全部业务组件、配置管理，并构建运行时。
-     *
-     * @param options        服务端运行参数
-     * @param registry       注入的注册表实现（便于测试替换）
-     * @param writeAckPolicy 注入的写确认策略（便于测试/集群替换）
-     */
+    /** 完整构造：组装全部业务组件、配置管理并构建运行时。 */
     public NameserverTcpServer(
             NameserverServerOptions options, ServiceRegistry registry, WriteAckPolicy writeAckPolicy) {
         this.options = options;
@@ -159,10 +147,7 @@ public class NameserverTcpServer {
         }
     }
 
-    /**
-     * 优雅关闭：按依赖逆序关闭管理口 → 健康检查 → 服务端 channel → 各线程组，
-     * 可安全重复调用（空引用已判空）。
-     */
+    /** 优雅关闭：按依赖逆序关闭管理口 → 健康检查 → 服务端 channel → 各线程组，可安全重复调用。 */
     public void shutdown() {
         manageServer.shutdown();
         healthChecker.shutdown();

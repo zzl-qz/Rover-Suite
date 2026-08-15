@@ -8,11 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-08 10:34:00
- * Description: 提供本机对外 IP 的探测工具
- *
- * 这个类是什么：本机 IP 探测的静态工具。
- * 核心职责：返回本机对外可用的 IPv4 地址，供实例注册时自动上报 host 使用。
- * 被谁用：rover-nameserver-starter 的实例注册装配；其它需要自动探测本机地址的模块。
+ * Description: 本机对外 IP 探测工具：返回可用 IPv4 地址，供实例注册时自动上报 host
  */
 @Slf4j
 public final class IpUtil {

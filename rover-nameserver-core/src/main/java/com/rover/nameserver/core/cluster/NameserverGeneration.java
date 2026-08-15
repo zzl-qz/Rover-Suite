@@ -1,20 +1,16 @@
 package com.rover.nameserver.core.cluster;
 
 /**
- * Nameserver 对外「世代」视图：推送/查询里的 epoch 从这里来。
+ * Author: Daylight
+ * Created: 2026-08-05 09:30:00
+ * Description: Nameserver 对外世代视图抽象，推送/查询中的 epoch 由此提供，集群可替换实现
  */
 public interface NameserverGeneration {
 
-    /**
-     * 当前权威世代号（协议字段 epoch）。
-     * 客户端：同 epoch 内用 revision 拒旧；epoch 变化视为换代并接受。
-     */
+    /** 当前权威世代号（协议字段 epoch）：客户端同 epoch 内用 revision 拒旧，epoch 变化视为换代并接受。 */
     String epoch();
 
-    /**
-     * 集群任期预留；单机固定 0。
-     * 以后可写入 CommonResponseBody / 推送扩展，先留方法避免调用方写死「只有 UUID」。
-     */
+    /** 集群任期预留；单机固定 0。 */
     default long term() {
         return 0L;
     }

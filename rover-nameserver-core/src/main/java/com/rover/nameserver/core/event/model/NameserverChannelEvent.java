@@ -8,8 +8,8 @@ import lombok.EqualsAndHashCode;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13 00:00:00
- * Description: Nameserver 协议事件基类（带连接与回包上下文）
+ * Created: 2026-08-12 10:00:00
+ * Description: Nameserver 协议事件基类，携带连接、请求 ID 与回包上下文
  */
 @Data
 @EqualsAndHashCode(callSuper = false)

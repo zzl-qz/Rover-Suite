@@ -10,12 +10,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 基于 Jackson 的 JSON 编解码工具。
- *
- * 这个类是什么：管理口与 overlay 文件共用的 JSON 序列化/反序列化统一入口。
- * 核心职责：①把任意对象/集合序列化为 JSON 字符串；②解析 JSON 对象数组为字符串行；
- * ③解析管理口 key/value 请求体（JSON 或表单）。
- * 被谁用：AbstractManageApi、RouteOverlayStore、RuntimeConfigOverlayStore 等。
+ * Author: Daylight
+ * Created: 2026-08-02 16:20:00
+ * Description: 基于 Jackson 的 JSON 编解码工具
  */
 public final class JsonCodec {
 
@@ -43,10 +40,7 @@ public final class JsonCodec {
         }
     }
 
-    /**
-     * 带缩进的 JSON，给 overlay 配置文件用。
-     * 等价于 ObjectMapper 打开 SerializationFeature.INDENT_OUTPUT。
-     */
+    /** 带缩进的 JSON，供 overlay 配置文件落盘使用。 */
     public static String toPrettyJson(Object value) {
         try {
             return PRETTY_MAPPER.writeValueAsString(value);

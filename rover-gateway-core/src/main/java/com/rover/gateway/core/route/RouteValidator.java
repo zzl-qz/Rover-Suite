@@ -10,12 +10,9 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 路由清洗与校验器。
- *
- * 这个类是什么：把「过滤 null、拷贝裁剪、前缀/上游/转发字段校验」这些纯路由规则
- * 从 GatewayRuntime 里独立出来，让 Runtime 只保留可变状态与热更新编排。
- * 核心职责：normalizeAndValidate 一次完成清洗 + 校验，返回可直接生效的路由副本。
- * 被谁用：GatewayRuntime 在 applyRoutes 时调用。
+ * Author: Daylight
+ * Created: 2026-08-09 16:02:00
+ * Description: 路由清洗与校验器：normalizeAndValidate 一次完成过滤 null、拷贝裁剪与字段校验，返回可生效的路由副本
  */
 public class RouteValidator {
 
@@ -26,13 +23,7 @@ public class RouteValidator {
         this.discoveryType = discoveryType;
     }
 
-    /**
-     * 清洗并校验路由列表，过滤 null 条目。
-     *
-     * @param routes 原始路由列表
-     * @return 清洗校验后的路由副本
-     * @throws IllegalArgumentException 校验失败
-     */
+    /** 清洗并校验路由列表，过滤 null，返回可直接生效的路由副本。 */
     public List<RouteConfig> normalizeAndValidate(List<RouteConfig> routes) {
         if (routes == null) {
             return List.of();

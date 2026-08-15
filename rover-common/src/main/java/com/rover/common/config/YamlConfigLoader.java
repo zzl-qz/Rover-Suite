@@ -10,12 +10,9 @@ import java.util.function.Consumer;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 通用 YAML 启动配置加载器。
- *
- * 这个类是什么：把「外部文件优先 → classpath 兜底 → 默认对象」这套启动配置加载
- * 流程收敛到一处，供各进程的 bootstrap 配置复用。
- * 核心职责：按优先级加载 YAML 并反序列化为目标类型；可选校验；解析失败直接终止启动。
- * 被谁用：NameserverConfigLoader / GatewayConfigLoader 等启动配置门面。
+ * Author: Daylight
+ * Created: 2026-08-05 15:40:00
+ * Description: 通用 YAML 启动配置加载器：外部文件优先、classpath 兜底、默认对象收尾，解析失败终止启动
  */
 @Slf4j
 public class YamlConfigLoader<T> {

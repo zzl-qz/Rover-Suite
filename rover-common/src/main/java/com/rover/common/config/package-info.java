@@ -1,12 +1,6 @@
 /**
  * Author: Daylight
- * Created: 2026-08-08 11:37:00
- * Description: 定义 Rover 通用配置模型和变更事件包
- *
- * 包职责：提供配置管理所需的统一模型与契约。
- * 包含：配置项模型 ConfigItem、生效方式枚举 ConfigApplyMode、
- * 配置变更事件 ConfigChangeEvent、组件运行时配置契约 RuntimeConfigManager、
- * 以及运行期配置落盘存储 RuntimeConfigOverlayStore。
- * 使用者：rover-admin 管理端与各组件(网关/注册中心)的配置实现。
+ * Created: 2026-08-02 14:10:00
+ * Description: 配置管理统一模型与契约：配置项、生效方式、变更事件、运行时配置管理器与 overlay 存储
  */
 package com.rover.common.config;

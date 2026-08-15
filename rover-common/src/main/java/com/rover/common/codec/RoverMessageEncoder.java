@@ -10,24 +10,12 @@ import io.netty.handler.codec.MessageToByteEncoder;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:30:00
- * Description: 消息编码
- *
- * 这个类是什么：Netty 出站编码器，将 RoverMessage 按协议帧格式写入 ByteBuf。
- * 核心职责：按 magic/version/type/flags/requestId/timeout/body 顺序写帧，
- * 写出前校验 body 长度与 flags 合法性。
- * 被谁用：NameserverClient / NameserverTcpServer 的 pipeline，两端同一实现。
+ * Created: 2026-08-06 16:05:00
+ * Description: Netty 出站编码器：将 RoverMessage 按协议帧格式写入 ByteBuf，写出前校验 body 长度与 flags
  */
 public class RoverMessageEncoder extends MessageToByteEncoder<RoverMessage> {
 
-    /**
-     * 将单条消息编码为帧字节写入 out。
-     *
-     * @param ctx 通道上下文
-     * @param msg 待发送消息；为 null 时抛协议异常
-     * @param out 存放帧字节的输出缓冲
-     * @throws ProtocolException 消息为 null、消息体超限或 flags 非法时抛出
-     */
+    /** 编码单条消息为帧字节；消息为 null、body 超限或 flags 非法时抛 ProtocolException。 */
     @Override
     protected void encode(ChannelHandlerContext ctx, RoverMessage msg, ByteBuf out) {
         if (msg == null) {

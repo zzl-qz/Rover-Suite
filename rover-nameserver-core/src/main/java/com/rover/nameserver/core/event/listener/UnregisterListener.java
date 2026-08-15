@@ -12,7 +12,11 @@ import com.rover.nameserver.core.event.support.NameserverTrace;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
 import lombok.extern.slf4j.Slf4j;
 
-/** 处理注销：摘注册表 → 解绑 → Push → 回包 */
+/**
+ * Author: Daylight
+ * Created: 2026-08-06 14:05:00
+ * Description: 处理注销请求：移除注册表、解绑连接、触发推送并回包
+ */
 @Slf4j
 public class UnregisterListener implements EventListener<UnregisterEvent> {
 

@@ -23,9 +23,9 @@ public class GatewayApplication {
 
     public static void main(String[] args) {
         log.info("Rover Gateway starting...");
-        GatewayConfig config = new GatewayConfigLoader().load(); // 加载配置
+        GatewayConfig config = new GatewayConfigLoader().load();
 
-        List<RouteConfig> routes = config.toRouteConfigs(); // 把配置的路由代理封装成集合
+        List<RouteConfig> routes = config.toRouteConfigs();
         RouteOverlayStore overlayStore = new RouteOverlayStore();
         if (overlayStore.exists()) {
             routes = overlayStore.loadOrEmpty();
@@ -57,9 +57,7 @@ public class GatewayApplication {
         server.start();
     }
 
-    /**
-     * 将要监听NameServer的这些路由信息封装成集合
-     */
+    /** 从路由中提取待订阅的 Nameserver 服务（去重）。 */
     private static List<DiscoverySettings.ServiceSubscribeSpec> subscribeSpecsFrom(List<RouteConfig> routes) {
         Map<String, DiscoverySettings.ServiceSubscribeSpec> unique = new LinkedHashMap<>();
         for (RouteConfig route : routes) {

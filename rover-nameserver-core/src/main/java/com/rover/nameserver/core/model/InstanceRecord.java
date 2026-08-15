@@ -8,12 +8,7 @@ import lombok.Data;
 /**
  * Author: Daylight
  * Created: 2026-08-08 17:50:00
- * Description: 注册表里的实例记录
- *
- * 这个类是什么：注册表内部对一条实例的完整描述。
- * 核心职责：绑定对外 ServiceInstance 与内部 lastHeartbeatMillis；
- * from 构造新记录，touchHeartbeat 刷新心跳并恢复健康。
- * 被谁用：InMemoryServiceRegistry 存取；HealthChecker 读心跳时间做超时判定。
+ * Description: 注册表内部实例记录：绑定对外 ServiceInstance 与心跳时间，提供记录构造与心跳刷新能力
  */
 @Data
 public class InstanceRecord {
@@ -55,11 +50,7 @@ public class InstanceRecord {
         return record;
     }
 
-    /**
-     * 刷新心跳：更新最近心跳时间，并将实例恢复为健康状态。
-     * 由注册表在收到心跳时调用；被健康检查标不健康的实例，
-     * 下次心跳即可自动恢复健康。
-     */
+    /** 刷新心跳时间并恢复健康；被健康检查标不健康的实例，下次心跳即可自动恢复。 */
     public void touchHeartbeat() {
         this.lastHeartbeatMillis = System.currentTimeMillis();
         if (this.instance != null) {

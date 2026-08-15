@@ -20,13 +20,9 @@ import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 管理 HTTP API 的通用骨架。
- *
- * 这个类是什么：把 Gateway / Nameserver 管理口共有的「supports、handle 分发与异常映射、
- * 写 JSON 响应、/configs 查询与热更新」收敛到一处。
- * 核心职责：子类只需实现 {@link #dispatch} 提供各自端点，并回填 {@link #configManager} 与
- * {@link #componentName}。
- * 被谁用：GatewayManageApi / NameserverManageApi。
+ * Author: Daylight
+ * Created: 2026-08-04 17:10:00
+ * Description: 管理 HTTP API 的通用骨架
  */
 @Slf4j
 public abstract class AbstractManageApi {

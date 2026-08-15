@@ -14,8 +14,9 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 服务变更推送：全量快照 + generation.epoch（拒旧/换代用）。
- * epoch 不在这里写死 UUID，统一问 {@link NameserverGeneration}。
+ * Author: Daylight
+ * Created: 2026-08-06 09:00:00
+ * Description: 服务变更推送：向订阅连接推送携带 revision 与 generation.epoch 的全量快照，供客户端拒旧/换代判断
  */
 @Slf4j
 public class PushService {
@@ -48,10 +49,7 @@ public class PushService {
     }
 
 
-    /**
-     * 推送服务实例快照
-     * @param snapshot
-     */
+    /** 推送服务实例快照给全部订阅者，含失效连接清理与单连接失败告警。 */
     public void pushSnapshot(RegistrySnapshot snapshot) {
         if (!pushEnabled.get() || snapshot == null) {
             return;

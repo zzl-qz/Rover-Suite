@@ -8,7 +8,7 @@ import lombok.NoArgsConstructor;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 11:37:00
+ * Created: 2026-08-02 14:35:00
  * Description: 配置更新事件
  */
 @Data

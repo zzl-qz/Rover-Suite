@@ -12,24 +12,16 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * {@link RuntimeConfigManager} 的通用实现骨架。
- *
- * 这个类是什么：把「配置项注册、seed/loadOverlay/reapplyAll 启动流程、
- * updateConfig 校验/应用/落盘」等公共逻辑收敛到一处。
- * 核心职责：子类只需注册自身配置项并实现 {@link #validate} / {@link #applyChange}，
- * 无需重复维护 configs 表、overlay 持久化与排序/副本等细节。
- * 被谁用：GatewayRuntimeConfigManager / NameserverRuntimeConfigManager。
+ * Author: Daylight
+ * Created: 2026-08-04 10:20:00
+ * Description: {@link RuntimeConfigManager} 通用实现骨架：子类注册配置项并实现 validate/applyChange 即接入热更新
  */
 @Slf4j
 public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManager {
 
     /** 配置项注册表：key -> ConfigItem */
     private final Map<String, ConfigItem> configs = new ConcurrentHashMap<>();
-    /** overlay 持久化存储
-     * -- GETTER --
-     *
-     * @return overlay 存储，供 status 接口展示路径
-     */
+    /** overlay 持久化存储，供 status 接口展示路径 */
     @Getter
     private final RuntimeConfigOverlayStore overlayStore;
     /** 组件名，用于日志与异常文案 */

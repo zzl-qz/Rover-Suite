@@ -14,8 +14,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-10 16:20:00
- * Description: 通过 Nameserver 订阅 + 定时对账维护本地实例
+ * Created: 2026-08-11 10:12:00
+ * Description: Nameserver 服务发现：订阅 + 定时对账维护本地实例缓存
  */
 @Slf4j
 public class NameserverServiceDiscovery implements ServiceDiscovery {
@@ -32,9 +32,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
     /** 后台对账任务，周期性 query 并比对 revision。 */
     private final PeriodicTask reconcileTask;
 
-    /**
-     * @param settings 发现配置，含 Nameserver 地址、订阅列表、对账间隔
-     */
+    /** 指定发现配置构造。 */
     public NameserverServiceDiscovery(DiscoverySettings settings) {
         Objects.requireNonNull(settings, "settings");
         this.subscribeServices = new CopyOnWriteArrayList<>(
@@ -90,13 +88,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         t.start();
     }
 
-    /**
-     * 从本地缓存取实例，优先返回健康实例；全不健康时退回全部缓存。
-     *
-     * @param serviceName 服务名
-     * @param group       分组
-     * @return 可用实例列表，缓存为空时返回空列表
-     */
+    /** 从本地缓存取实例，优先返回健康实例；全不健康时退回全部缓存。 */
     @Override
     public List<ServiceInstance> getInstances(String serviceName, String group) {
         List<ServiceInstance> cached = client.getCachedInstances(serviceName, group);
@@ -112,12 +104,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         return healthy.isEmpty() ? cached : healthy;
     }
 
-    /**
-     * 路由热更新后补订新服务：已在列表里则重新 subscribe，否则追加并订阅。
-     *
-     * @param serviceName 服务名
-     * @param group       分组
-     */
+    /** 路由热更新后补订新服务：已在列表则重订，否则追加并订阅。 */
     @Override
     public void ensureWatch(String serviceName, String group) {
         if (serviceName == null || serviceName.isBlank()) {

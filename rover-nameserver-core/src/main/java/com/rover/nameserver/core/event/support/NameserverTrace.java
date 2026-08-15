@@ -6,10 +6,8 @@ import io.netty.channel.Channel;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13 00:00:00
- * Description: 排障关联字段拼装（requestId / remote / 协议名）
- *
- * 哲学：异步网络靠关联 ID 串起来，不靠“猜是哪次请求”。
+ * Created: 2026-08-05 16:30:00
+ * Description: 排障日志关联字段拼装（requestId / remote / 协议名），异步网络下靠关联 ID 串联请求
  */
 public final class NameserverTrace {
 

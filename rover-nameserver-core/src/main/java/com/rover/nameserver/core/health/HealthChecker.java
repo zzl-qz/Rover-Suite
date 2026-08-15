@@ -17,11 +17,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:50:00
- * Description: 定时扫超时实例，参数可热更新
- *
- * 临时实例超 expire 剔除并 Push；非临时超心跳超时标不健康。
- * 不绕 EventBus，保持直接好读。
+ * Created: 2026-08-07 14:10:00
+ * Description: 定时扫描注册表：临时实例超时剔除并推送、非临时实例超时标记不健康，参数可热更新
  */
 @Slf4j
 public class HealthChecker {

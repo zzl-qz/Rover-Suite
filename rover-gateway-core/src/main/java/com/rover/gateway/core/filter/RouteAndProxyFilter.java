@@ -21,9 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
- * Description: 终端过滤器：路由匹配 + 选上游 + 真实转发
- *
- * 静态多 IP / Nameserver 动态实例都走同一套 LoadBalancer。
+ * Description: 终端过滤器：路由匹配 + 选上游 + 真实转发，静态多 IP / Nameserver 动态实例统一走 LoadBalancer
  */
 @Slf4j
 public class RouteAndProxyFilter implements Filter {
@@ -103,7 +101,7 @@ public class RouteAndProxyFilter implements Filter {
 
         ServiceInstance instance = chosen.instance();
         if (loadBalancer != null && instance != null) {
-            // 告知LB这台实例开始占用，其实目前除了最少连接算法需要用到，其他的都是直接空实现
+            // 告知 LB 实例开始占用（目前仅最少连接算法使用，其余为空实现）。
             loadBalancer.onStart(instance);
         }
         try {
@@ -120,9 +118,6 @@ public class RouteAndProxyFilter implements Filter {
         }
     }
 
-    /**
-     * 节点选取
-     */
     private ChosenUpstream resolveUpstream(RouteConfig route, GatewayRequestContext gatewayContext) {
         if (loadBalancer == null) {
             // 极端兜底：无 LB 时静态只取第一个
@@ -160,7 +155,6 @@ public class RouteAndProxyFilter implements Filter {
             return null;
         }
 
-        // 根据负载均衡算法进行选取节点
         LoadBalanceContext lbContext = LoadBalanceContext.of(
                 clusterKey,
                 instances,

@@ -10,7 +10,11 @@ import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.event.support.NameserverTrace;
 import lombok.extern.slf4j.Slf4j;
 
-/** 处理心跳：刷新 lastHeartbeat → 回 revision */
+/**
+ * Author: Daylight
+ * Created: 2026-08-03 10:15:00
+ * Description: 处理心跳请求：刷新实例最后心跳时间并回包最新 revision
+ */
 @Slf4j
 public class HeartbeatListener implements EventListener<HeartbeatEvent> {
 

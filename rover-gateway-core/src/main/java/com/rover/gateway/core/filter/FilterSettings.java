@@ -6,8 +6,8 @@ import lombok.Data;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 16:53:00
- * Description: 描述 Gateway 过滤器加载配置
+ * Created: 2026-08-08 11:44:00
+ * Description: Gateway 过滤器加载配置：总开关、插件目录与按类名加载的过滤器
  */
 @Data
 public class FilterSettings {

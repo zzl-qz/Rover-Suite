@@ -4,7 +4,11 @@ import com.rover.common.protocol.HeartbeatRequest;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
-/** 心跳协议事件 */
+/**
+ * Author: Daylight
+ * Created: 2026-08-10 11:05:00
+ * Description: 心跳协议事件
+ */
 @Data
 @EqualsAndHashCode(callSuper = true)
 public class HeartbeatEvent extends NameserverChannelEvent {

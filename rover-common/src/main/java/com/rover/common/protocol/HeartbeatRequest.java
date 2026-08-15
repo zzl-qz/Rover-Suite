@@ -6,13 +6,8 @@ import lombok.Data;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:30:00
- * Description: 心跳请求
- *
- * 这个类是什么：客户端按周期发给注册中心的保活消息体。
- * 核心职责：携带服务名与实例 ID 上报「我还活着」，服务端据此续期实例租约
- * (临时实例心跳超时会被剔除)。
- * 被谁用：客户端心跳定时任务发送；注册中心服务端心跳处理逻辑解析。
+ * Created: 2026-08-07 10:00:00
+ * Description: 心跳请求：客户端周期上报保活，服务端据此续期实例租约
  */
 @Data
 public class HeartbeatRequest {

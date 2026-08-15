@@ -51,12 +51,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 17:55:00
  * Description: Nameserver TCP 客户端，带请求响应匹配和简单心跳
- *
- * 这个类是什么：面向业务层的 Nameserver 长连接客户端，封装注册/注销、心跳、
- * 查询、订阅等同步 API，底层走 Netty + Protostuff 协议。
- * 核心职责：①requestId 配对请求与响应；②维护本地实例缓存；③断线自动重连并
- * 恢复注册/订阅；④定时对已注册实例续约心跳。
- * 被谁用：注册中心 SDK、服务注册/发现调用方；通常单例持有。
  */
 @Slf4j
 public class NameserverClient implements AutoCloseable {
@@ -110,7 +104,7 @@ public class NameserverClient implements AutoCloseable {
         workerGroup = new NioEventLoopGroup();
         connect();
         if (options.isAutoHeartbeat()) {
-            // 固定间隔心跳就够了，没必要上时间轮
+            // 心跳任务
             heartbeatTask = new PeriodicTask("nameserver-client-heartbeat");
             heartbeatTask.start(this::heartbeatRegistered, options.getHeartbeatIntervalMs(), options.getHeartbeatIntervalMs());
         }
@@ -122,11 +116,7 @@ public class NameserverClient implements AutoCloseable {
         }
     }
 
-    /**
-     * 当前 TCP 连接是否可用（已建立且 active）。
-     *
-     * @return true 表示连接存活
-     */
+    /** 当前 TCP 连接是否可用（已建立且 active）。 */
     public boolean isActive() {
         Channel current = channel;
         return current != null && current.isActive();
@@ -266,14 +256,14 @@ public class NameserverClient implements AutoCloseable {
 
     /**
      * 异步发送请求，返回的 Future 会在响应到达（或超时/失败）时完成。
-     * 使用默认 ack 模式（IMMEDIATE）与默认请求超时。
+     * 使用默认 ack 模式（SINGLE）与默认请求超时。
      *
      * @param type 请求消息类型（ProtocolConstants 常量）
      * @param body 请求体对象
      * @return 关联响应的 Future；响应通过 requestId 配对后由 handler complete
      */
     public CompletableFuture<CommonResponseBody> requestAsync(byte type, Object body) {
-        return requestAsync(type, body, AckMode.IMMEDIATE, options.getRequestTimeoutMs());
+        return requestAsync(type, body, AckMode.SINGLE, options.getRequestTimeoutMs());
     }
 
     /**

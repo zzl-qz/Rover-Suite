@@ -9,12 +9,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-08 14:59:00
  * Description: 把配置变更应用到 Nameserver 运行时
- *
- * 这个类是什么：配置热更新的落点执行器。
- * 核心职责：把 ConfigChangeEvent 翻译成对 HealthChecker、PushService 等组件的 setter 调用；
- * runtime 未绑定或 event 为 null 时直接跳过。
- * 被谁用：NameserverRuntimeConfigManager 在 updateConfig / reapplyAll 时调用；
- * NameserverTcpServer 启动时 bind(runtime)。
  */
 @Slf4j
 public class NameserverRuntimeConfigApplier implements ConfigApplier {
@@ -60,14 +54,7 @@ public class NameserverRuntimeConfigApplier implements ConfigApplier {
         log.info("Nameserver 配置已热更新: {}={} (old={})", key, value, event.getOldValue());
     }
 
-    /**
-     * 把字符串安全解析为正数。
-     *
-     * @param value 待解析的字符串数值
-     * @param key   配置项 key，用于异常提示
-     * @return 大于 0 的 long
-     * @throws IllegalArgumentException 解析失败或数值 <= 0 时抛出
-     */
+    /** 把字符串安全解析为正数，解析失败或 <=0 时抛异常。 */
     private static long parsePositiveLong(String value, String key) {
         long parsed = Long.parseLong(value.trim());
         if (parsed <= 0) {

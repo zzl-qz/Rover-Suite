@@ -12,13 +12,9 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
 /**
- * 客户端本地实例缓存。
- *
- * 推送：比较 epoch+revision 拒旧；远端空且本地非空则推空保护；连续拒绝达阈值标记强制对账。
- * 查询对账：以 Nameserver 当前快照为准全量覆盖（含空列表）。
- *
- * epoch 是不透明世代串：单机=进程 UUID；集群上线后应变成集群权威世代，
- * 客户端规则不变（同 epoch 拒旧 rev，epoch 变则换代接受）。
+ * Author: Daylight
+ * Created: 2026-08-05 10:12:00
+ * Description: 客户端本地实例缓存：推送按 epoch+revision 拒旧并带推空保护，查询对账以服务端快照为准全量覆盖
  */
 public class InstanceCache {
 

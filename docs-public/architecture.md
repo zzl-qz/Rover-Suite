@@ -61,7 +61,7 @@ flowchart TB
 
     NC --> ST[rover-nameserver-starter]
     NC --> GC
-    NK --> NS[rover-nameserver-server]
+    NK --> NS[rover-nameserver-bootstrap]
     NK --> AD[rover-admin]
     GC --> GB[rover-gateway-bootstrap]
     GC --> NA[rover-gateway-adapter-nacos]

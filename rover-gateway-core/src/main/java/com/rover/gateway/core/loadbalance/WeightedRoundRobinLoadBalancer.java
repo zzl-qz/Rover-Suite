@@ -11,8 +11,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13
- * Description: 加权轮询（按 ServiceInstance.weight）
+ * Created: 2026-08-05 11:20:00
+ * Description: 加权轮询负载均衡，按 ServiceInstance.weight 展开实例后轮询
  */
 public class WeightedRoundRobinLoadBalancer implements LoadBalancer {
 

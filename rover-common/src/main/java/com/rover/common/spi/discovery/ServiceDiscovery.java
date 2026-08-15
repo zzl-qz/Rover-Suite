@@ -6,7 +6,7 @@ import java.util.List;
 /**
  * Author: Daylight
  * Created: 2026-08-08 10:34:00
- * Description: 获取有哪些实例的接口（屏蔽底层方式差异，比如底层可能是static nameserver  redis nacos 之类的）
+ * Description: 服务发现接口：屏蔽底层差异（static/nameserver/redis/nacos 等），统一返回实例列表
  */
 public interface ServiceDiscovery extends AutoCloseable {
 

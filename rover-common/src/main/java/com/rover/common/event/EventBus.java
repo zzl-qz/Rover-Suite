@@ -22,9 +22,6 @@ import lombok.extern.slf4j.Slf4j;
  * Author: Daylight
  * Created: 2026-08-12 00:00:00
  * Description: 轻量事件总线（对齐 aero-mq：SPI/register + 异步精确分发）
- *
- * 只做一件事：按事件具体类型找到监听器，丢进线程池执行。
- * 不做父类匹配、不做同步 fail-fast，业务全在 Listener 里。
  */
 @Slf4j
 public class EventBus {

@@ -14,12 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-10 16:55:00
- * Description: Admin 改路由后落盘，重启优先读这份
- *
- * 这个类是什么：路由热更新的本地持久化存储，JSON 格式。
- * 核心职责：loadOrEmpty 启动/恢复时读 overlay；save 管理口改路由后写入；
- * toRoutes 把 JSON 行转成 RouteConfig 列表。
- * 被谁用：GatewayRuntime 路由热更新后落盘；GatewayManageApi 间接通过 runtime 调用。
+ * Description: 路由热更新本地持久化：Admin 改路由后落盘，重启优先读 overlay
  */
 @Slf4j
 public class RouteOverlayStore {
@@ -52,12 +47,7 @@ public class RouteOverlayStore {
         return Files.exists(path);
     }
 
-    /**
-     * 读取 overlay 文件，不存在或为空时返回空列表。
-     *
-     * @return 路由列表
-     * @throws IllegalStateException 文件存在但解析失败
-     */
+    /** 读取 overlay 文件，不存在或为空时返回空列表。 */
     public List<RouteConfig> loadOrEmpty() {
         if (!exists()) {
             return List.of();
@@ -101,12 +91,7 @@ public class RouteOverlayStore {
         }
     }
 
-    /**
-     * 把 JSON 行列表转成 RouteConfig 列表。
-     *
-     * @param rows JsonCodec 解析出的键值对列表
-     * @return RouteConfig 列表
-     */
+    /** 把 JSON 行列表转成 RouteConfig 列表。 */
     public static List<RouteConfig> toRoutes(List<Map<String, String>> rows) {
         List<RouteConfig> routes = new ArrayList<>();
         for (Map<String, String> row : rows) {

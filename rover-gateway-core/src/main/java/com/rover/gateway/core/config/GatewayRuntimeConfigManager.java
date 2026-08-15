@@ -8,8 +8,9 @@ import lombok.Getter;
 import java.nio.file.Path;
 
 /**
- * Gateway 侧 RuntimeConfigManager 实现。
- * 把变更事件桥接给 GatewayRuntimeConfigApplier
+ * Author: Daylight
+ * Created: 2026-08-09 09:55:00
+ * Description: Gateway 侧 RuntimeConfigManager 实现，把变更事件桥接给 Applier
  */
 @Getter
 public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
@@ -17,11 +18,7 @@ public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
     /** 默认 overlay 文件路径。 */
     public static final Path DEFAULT_OVERLAY = Path.of("config", "gateway-runtime.overlay.json");
 
-    /** 配置变更应用到 GatewayRuntime 的桥接器。
-     * -- GETTER --
-     *
-     * @return 配置应用器，用于 bind GatewayRuntime
-     */
+    /** 配置变更应用到 GatewayRuntime 的桥接器。 */
     private final GatewayRuntimeConfigApplier applier;
 
     /** 使用默认 applier 和 overlay 路径构造。 */

@@ -3,21 +3,22 @@ package com.rover.nameserver.core.config;
 import com.rover.common.config.AbstractRuntimeConfigManager;
 import com.rover.common.config.ConfigChangeEvent;
 import com.rover.common.config.RuntimeConfigOverlayStore;
+import lombok.Getter;
+
 import java.nio.file.Path;
 
 /**
- * Nameserver 侧 RuntimeConfigManager 实现。
- *
- * 这个类是什么：管理 Nameserver 可热更新配置（健康检查间隔、心跳超时、过期时间、推送开关）。
- * 核心职责：注册内置配置项；校验/归一化规则；把变更事件桥接给 NameserverRuntimeConfigApplier。
- * 被谁用：NameserverTcpServer 装配；NameserverManageApi 查询/更新配置。
+ * Author: Daylight
+ * Created: 2026-08-08 14:30:00
+ * Description: Nameserver 侧运行时配置管理器：注册配置项、overlay 持久化恢复并将变更实时应用到运行时
  */
+@Getter
 public class NameserverRuntimeConfigManager extends AbstractRuntimeConfigManager {
 
     /** overlay 落盘路径：工作目录下 config/nameserver-runtime.overlay.json */
     public static final Path DEFAULT_OVERLAY = Path.of("config", "nameserver-runtime.overlay.json");
 
-    /** 配置变更应用到 Nameserver 运行时的桥接器。 */
+    /** 配置变更应用到 Nameserver 运行时的桥接器 */
     private final NameserverRuntimeConfigApplier applier;
 
     /** 使用默认 applier 和 overlay 路径构造。 */
@@ -39,11 +40,6 @@ public class NameserverRuntimeConfigManager extends AbstractRuntimeConfigManager
         addConfig("nameserver.heartbeat.timeoutMillis", "15000", "15000", "注册中心心跳超时时间");
         addConfig("nameserver.instance.expireMillis", "30000", "30000", "注册中心实例过期时间");
         addConfig("nameserver.push.enabled", "true", "true", "注册中心服务变更推送开关");
-    }
-
-    /** @return 配置应用器，用于 bind NameserverRuntime */
-    public NameserverRuntimeConfigApplier getApplier() {
-        return applier;
     }
 
     @Override

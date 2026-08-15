@@ -8,11 +8,8 @@ import java.util.Objects;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13
- * Description: 负载均衡一次选择的入参
- *
- * 自定义 LB（比如读 Redis 拿分片键）可从 requestContext 取 header/属性，
- * 再结合 instances 算出打哪台。
+ * Created: 2026-08-13 15:10:00
+ * Description: 负载均衡一次选择的入参：集群键、候选实例、请求上下文与客户端 IP
  */
 public final class LoadBalanceContext {
 

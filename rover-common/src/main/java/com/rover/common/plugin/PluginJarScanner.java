@@ -10,10 +10,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 插件 jar 扫描与 ClassLoader 构建。
- *
- * 套件级公共能力：Gateway / Nameserver 等模块都可复用，
- * 业务模块只关心自己的 SPI 装配，不各自再写一遍扫 jar。
+ * Author: Daylight
+ * Created: 2026-08-05 10:35:00
+ * Description: 插件 jar 扫描与 ClassLoader 构建，供 Gateway / Nameserver 等模块复用
  */
 public final class PluginJarScanner {
 

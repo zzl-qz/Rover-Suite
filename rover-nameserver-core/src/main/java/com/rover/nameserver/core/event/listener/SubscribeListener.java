@@ -10,7 +10,11 @@ import com.rover.nameserver.core.event.support.NameserverTrace;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
 import lombok.extern.slf4j.Slf4j;
 
-/** 处理订阅：登记订阅 → 立刻推当前全量 → 回包 */
+/**
+ * Author: Daylight
+ * Created: 2026-08-04 15:45:00
+ * Description: 处理订阅请求：登记订阅、立即推送当前全量快照并回包
+ */
 @Slf4j
 public class SubscribeListener implements EventListener<SubscribeEvent> {
 

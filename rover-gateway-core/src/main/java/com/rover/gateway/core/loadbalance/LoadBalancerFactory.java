@@ -11,10 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13
- * Description: 按策略名创建 LB：内置 + plugins SPI + 全限定类名
- *
- * 插件装载骨架在 common.PluginSpiLoader；这里只做内置策略与名字匹配。
+ * Created: 2026-08-06 10:50:00
+ * Description: 按策略名创建负载均衡器：内置 + plugins SPI + 全限定类名
  */
 @Slf4j
 public final class LoadBalancerFactory {

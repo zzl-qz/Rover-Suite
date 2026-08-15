@@ -4,8 +4,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Author: Daylight
- * Created: 2026-08-10 16:50:00
- * Description: Admin 连接 Gateway / Nameserver 管理口的地址
+ * Created: 2026-08-09 13:45:00
+ * Description: Admin 连接 Gateway / Nameserver 管理口的地址配置
  */
 @ConfigurationProperties(prefix = "rover.admin")
 public class AdminProperties {

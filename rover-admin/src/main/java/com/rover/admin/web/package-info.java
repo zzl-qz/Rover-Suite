@@ -1,6 +1,6 @@
 /**
  * Author: Daylight
- * Created: 2026-08-08 11:37:00
- * Description: 定义管理端页面和接口包
+ * Created: 2026-08-07 09:25:00
+ * Description: 管理端页面与 HTTP 接口层
  */
 package com.rover.admin.web;
