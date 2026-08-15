@@ -55,6 +55,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class NameserverClient implements AutoCloseable {
 
+    /** 异步转同步时额外增加的等待时间，覆盖调度误差（毫秒）。 */
+    private static final long SYNC_GRACE_MILLIS = 1000;
+
     /** 客户端配置 */
     @Getter
     private final NameserverClientOptions options;
