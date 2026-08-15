@@ -5,13 +5,8 @@ import lombok.Getter;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:55:00
- * Description: Nameserver 客户端参数
- *
- * 这个类是什么：NameserverClient 的配置对象，集中承载连接地址、超时、
- * 心跳/重连开关与周期、在途请求上限等可配置项。
- * 核心职责：通过 Lombok @Builder 供外部链式构造；所有字段有默认值，仅 host/port 必填。
- * 被谁用：NameserverClient 构造时传入；调用方按需覆盖默认值。
+ * Created: 2026-08-06 14:35:00
+ * Description: Nameserver 客户端连接参数（地址、超时、心跳/重连开关等）
  */
 @Getter
 @Builder

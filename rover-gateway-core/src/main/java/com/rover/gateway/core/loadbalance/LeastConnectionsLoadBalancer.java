@@ -10,10 +10,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13
- * Description: 最少连接（按网关视角的在途请求数）
- *
- * 依赖 RouteAndProxyFilter 在转发前后调用 onStart / onComplete。
+ * Created: 2026-08-07 11:05:00
+ * Description: 最少连接负载均衡，按网关视角在途请求数（依赖 onStart/onComplete 计数）选实例
  */
 public class LeastConnectionsLoadBalancer implements LoadBalancer {
 

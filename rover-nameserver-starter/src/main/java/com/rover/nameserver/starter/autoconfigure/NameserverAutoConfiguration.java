@@ -23,7 +23,7 @@ import org.springframework.core.env.Environment;
 public class NameserverAutoConfiguration {
 
     @Bean(destroyMethod = "")
-    @ConditionalOnMissingBean
+    @ConditionalOnMissingBean // 容器中无同类型 Bean 时才创建
     public NameserverClient nameserverClient(RoverNameserverProperties properties) {
         HostPort address = HostPort.require(properties.getAddress(), "rover.nameserver.address");
         NameserverClientOptions options = NameserverClientOptions.builder()

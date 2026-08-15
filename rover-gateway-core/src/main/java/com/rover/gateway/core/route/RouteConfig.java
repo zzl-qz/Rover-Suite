@@ -7,10 +7,7 @@ import lombok.Data;
 /**
  * Author: Daylight
  * Created: 2026-08-08 14:22:00
- * Description: Gateway 路由规则
- *
- * 静态上游：targetUrl（单机兼容）和/或 targetUrls（多机，可带 |weight）。
- * 动态上游：serviceName + group，走 Nameserver。
+ * Description: Gateway 路由规则：静态上游 targetUrl/targetUrls，动态上游 serviceName + group
  */
 @Data
 public class RouteConfig {
@@ -24,11 +21,7 @@ public class RouteConfig {
     /** 静态单上游（兼容旧配置），可与 targetUrls 一起用 */
     private String targetUrl;
 
-    /**
-     * 静态多上游。元素支持：
-     * http://127.0.0.1:8081
-     * http://127.0.0.1:8082|200  （竖线后是权重）
-     */
+    /** 静态多上游，元素支持 http://host:port 或 http://host:port|weight。 */
     private List<String> targetUrls = new ArrayList<>();
 
     /** 动态模式下的服务名，配合 Nameserver 发现实例 */

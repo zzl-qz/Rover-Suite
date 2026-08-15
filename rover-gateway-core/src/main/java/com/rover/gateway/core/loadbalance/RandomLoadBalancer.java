@@ -8,8 +8,8 @@ import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 14:22:00
- * Description: 随机负载均衡
+ * Created: 2026-08-06 15:26:00
+ * Description: 随机负载均衡，从实例列表中均匀随机选取
  */
 public class RandomLoadBalancer implements LoadBalancer {
 

@@ -11,31 +11,18 @@ import java.util.List;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:30:00
- * Description: 消息解码，顺手处理粘包半包
- *
- * 这个类是什么：Netty 入站解码器，将字节流按协议帧头解析为 RoverMessage。
- * 核心职责：基于 ByteToMessageDecoder 累积缓冲处理粘包/半包；帧头不足或 body
- * 未收齐时保留 readerIndex 等待；魔数/版本/flags/长度非法时抛 ProtocolException。
- * 被谁用：NameserverClient / NameserverTcpServer 的 pipeline，两端同一实现。
+ * Created: 2026-08-06 16:10:00
+ * Description: Netty 入站解码器：按协议帧头解析 RoverMessage，基于累积缓冲处理粘包/半包
  */
 public class RoverMessageDecoder extends ByteToMessageDecoder {
 
     /**
-     * 尝试从可读字节中解析出一条消息。
-     *
-     * 解析之前先 markReaderIndex，中途发现数据不足或字段非法时 resetReaderIndex
-     * 回到本次解析的起点；数据不足属于正常半包（return 等待下次回调），字段非法
-     * 属于协议错误（抛异常关闭连接）。
-     *
-     * @param ctx 通道上下文
-     * @param in  累积了已收字节的输入缓冲
-     * @param out 解析出的 RoverMessage 会添加到这里，交给后续 handler
-     * @throws ProtocolException 协议头非法时抛出
+     * 解析一条消息；解析前 markReaderIndex，数据不足（半包）时回退并等待下次回调，
+     * 魔数/版本/flags/长度非法时回退并抛 ProtocolException 关闭连接。
      */
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
-        // 半包：头都不够，等更多字节
+        // 半包：连帧头都不够，等待更多字节
         if (in.readableBytes() < ProtocolConstants.HEADER_LENGTH) {
             return;
         }
@@ -61,7 +48,6 @@ public class RoverMessageDecoder extends ByteToMessageDecoder {
         // flags：2 字节，含 ack 模式与 oneway 等标志位
         short flags = in.readShort();
         try {
-            // 校验 flags 中是否有未注册/不允许的组合
             ProtocolFlags.validateSupported(flags);
         } catch (IllegalArgumentException ex) {
             in.resetReaderIndex();
@@ -84,20 +70,18 @@ public class RoverMessageDecoder extends ByteToMessageDecoder {
             throw new ProtocolException("非法消息体长度: " + bodyLength);
         }
 
-        // body 没收齐就回退，等下次
+        // body 没收齐则回退，等待下次回调补齐
         if (in.readableBytes() < bodyLength) {
             in.resetReaderIndex();
             return;
         }
 
-        // 读走消息体（可为 0 字节，即无 body）
         byte[] body = null;
         if (bodyLength > 0) {
             body = new byte[bodyLength];
             in.readBytes(body);
         }
 
-        // 组装消息对象，交给上层 handler
         RoverMessage message = new RoverMessage();
         message.setVersion(version);
         message.setType(type);

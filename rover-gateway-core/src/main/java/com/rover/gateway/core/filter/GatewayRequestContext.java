@@ -19,12 +19,7 @@ import lombok.Setter;
 /**
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
- * Description: Gateway 请求上下文，承载 Netty 请求和过滤器共享状态
- *
- * 这个类是什么：RequestContext 的 Gateway 实现，贯穿整条过滤器链。
- * 核心职责：封装 Netty 通道和 HTTP 请求；提供 attributes 供插件共享数据；
- * 记录路由匹配结果、目标 URL、状态码；支持 writeText 短路回写。
- * 被谁用：GatewayHttpServerHandler 创建；各 Filter 读写共享状态。
+ * Description: RequestContext 的 Gateway 实现：封装 Netty 通道与 HTTP 请求，记录路由/目标 URL/状态码，支持 writeText 短路回写
  */
 @Getter
 public class GatewayRequestContext implements RequestContext {
@@ -59,11 +54,7 @@ public class GatewayRequestContext implements RequestContext {
     /** 请求是否已经结束（响应已写回或不再继续转发）。 */
     private boolean completed;
 
-    /**
-     * @param channelContext Netty 通道上下文，用于写回响应
-     * @param request        完整 HTTP 请求
-     * @param requestPath    不含 query 的请求路径
-     */
+    /** 构造：记录通道、请求与请求路径，并启动耗时计时。 */
     public GatewayRequestContext(
             ChannelHandlerContext channelContext,
             FullHttpRequest request,
@@ -80,7 +71,7 @@ public class GatewayRequestContext implements RequestContext {
         return attributes.get(key);
     }
 
-    /** @param key 属性名 @param value 属性值 */
+    /** 写入过滤器共享属性。 */
     @Override
     public void setAttribute(String key, Object value) {
         attributes.put(key, value);
@@ -115,7 +106,6 @@ public class GatewayRequestContext implements RequestContext {
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
         channelContext.writeAndFlush(response);
         this.statusCode = status.code();
-        // 标记完成后，后面的过滤器不会再执行。
         markCompleted();
     }
 }

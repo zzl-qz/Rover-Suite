@@ -19,8 +19,8 @@ import org.springframework.web.util.HtmlUtils;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 11:37:00
- * Description: Admin 控制台：状态 / 实例 / 路由管理 / 配置热更新
+ * Created: 2026-08-12 17:10:00
+ * Description: Admin 控制台：状态、实例、路由管理与配置热更新页面
  */
 @Controller
 public class AdminConfigController {

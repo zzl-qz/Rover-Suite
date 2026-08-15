@@ -9,10 +9,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 16:53:00
+ * Created: 2026-08-08 09:18:00
  * Description: 从 plugins 目录加载用户扩展 jar，并通过 SPI 发现 Filter
- *
- * 扫 jar / SPI / 反射骨架在 common.PluginSpiLoader；这里只做 Filter 侧日志与缓存 ClassLoader。
  */
 @Slf4j
 public class PluginFilterLoader {
@@ -49,10 +47,7 @@ public class PluginFilterLoader {
         return result.instances();
     }
 
-    /**
-     * 按全限定类名实例化 Filter。
-     * 优先用已加载的插件 ClassLoader。
-     */
+    /** 按全限定类名实例化 Filter，优先用已加载的插件 ClassLoader。 */
     public Filter createFilter(String className) {
         try {
             return PluginSpiLoader.newInstance(Filter.class, className, pluginClassLoader);

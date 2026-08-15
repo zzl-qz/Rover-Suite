@@ -13,8 +13,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13 00:00:00
- * Description: 连接绑定 / 回包 / ACK 协商等 Listener 共用小工具
+ * Created: 2026-08-06 10:50:00
+ * Description: 连接绑定、回包与 ACK 协商等 Listener 共用工具类
  */
 public final class NameserverChannelSupport {
 

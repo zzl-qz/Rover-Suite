@@ -30,10 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-08 17:50:00
- * Description: 协议入口映射器（薄入口）
- *
- * 只做：解码 → 组装 XxxEvent → eventBus.publish。
- * 线上 type 是契约数字；进程内用有名字的 Event。业务在 Listener。
+ * Description: 协议消息入口映射器（薄入口）：解码并组装为 XxxEvent 发布到 EventBus，业务在 Listener 处理
  */
 @Slf4j
 public class NameserverRequestDispatcher {
@@ -46,9 +43,7 @@ public class NameserverRequestDispatcher {
         this.services = services;
     }
 
-    /**
-     * 按消息类型映射成事件并异步发布。
-     */
+    /** 按消息类型映射成事件并异步发布，未知类型或映射异常统一回错误包。 */
     public void dispatch(Channel channel, RoverMessage message) {
         if (message == null) {
             return;

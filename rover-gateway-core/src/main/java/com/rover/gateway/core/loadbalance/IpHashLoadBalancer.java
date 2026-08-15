@@ -7,8 +7,8 @@ import java.util.List;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13
- * Description: 按客户端 IP 哈希，同 IP 尽量打到同一台
+ * Created: 2026-08-05 14:35:00
+ * Description: 按客户端 IP 哈希负载均衡，同 IP 尽量打到同一台实例
  */
 public class IpHashLoadBalancer implements LoadBalancer {
 

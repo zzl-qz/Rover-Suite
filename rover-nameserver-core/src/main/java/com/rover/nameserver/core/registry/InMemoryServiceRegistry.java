@@ -14,13 +14,8 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 17:50:00
- * Description: 内存注册表，单机先用这个
- *
- * 这个类是什么：ServiceRegistry 的单机内存实现。
- * 核心职责：注册/注销/心跳/查询，并为每个服务维护单调递增 revision；
- * 双层 ConcurrentHashMap 保证多线程无锁安全读写。
- * 被谁用：NameserverTcpServer 默认装配；请求分发器与健康检查器使用。
+ * Created: 2026-08-02 15:50:00
+ * Description: 服务注册表单机内存实现：双层 ConcurrentHashMap 无锁安全读写，每个服务维护单调递增 revision
  */
 @Slf4j
 public class InMemoryServiceRegistry implements ServiceRegistry {
@@ -30,12 +25,7 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
     /** 每个服务自己的版本号，变更时 +1 */
     private final Map<String, AtomicLong> revisions = new ConcurrentHashMap<>();
 
-    /**
-     * 注册实例：放入注册表（同 instanceId 覆盖旧记录），版本号 +1，返回新快照。
-     *
-     * @param request 注册请求
-     * @return 注册后该服务的完整快照（含新 revision），调用方应推送给订阅者
-     */
+    /** 注册实例（同 instanceId 覆盖旧记录），版本号 +1 并返回新快照。 */
     @Override
     public RegistrySnapshot register(RegisterRequest request) {
         InstanceRecord record = InstanceRecord.from(request);
@@ -50,13 +40,7 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
         return snapshotOf(serviceName, record.getInstance().getGroup(), revision);
     }
 
-    /**
-     * 注销实例：移除指定实例，版本号 +1 并返回新快照。
-     *
-     * @param serviceName 服务名
-     * @param instanceId  实例 ID
-     * @return 注销后该服务的完整快照；实例不存在时返回 null（调用方无需推送）
-     */
+    /** 注销实例，版本号 +1 并返回新快照；实例不存在时返回 null（调用方无需推送）。 */
     @Override
     public RegistrySnapshot unregister(String serviceName, String instanceId) {
         Map<String, InstanceRecord> instances = services.get(serviceName);
@@ -91,14 +75,7 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
         return true;
     }
 
-    /**
-     * 查询服务实例列表。
-     *
-     * @param serviceName 服务名
-     * @param group       组过滤；null 或空白表示不过滤
-     * @param healthyOnly 仅返回健康实例
-     * @return 匹配实例的防御性副本列表（避免调用方改动内部状态）；无则空列表
-     */
+    /** 按服务、组过滤查询实例（healthyOnly 时仅健康），返回防御性副本避免调用方改动内部状态。 */
     @Override
     public List<ServiceInstance> query(String serviceName, String group, boolean healthyOnly) {
         Map<String, InstanceRecord> instances = services.get(serviceName);
@@ -132,10 +109,7 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
         return revision == null ? 0L : revision.get();
     }
 
-    /**
-     * 返回注册表内全部实例记录（从内层 map 汇总的一层浅拷贝）。
-     * 供健康检查器扫描超时实例使用。
-     */
+    /** 枚举注册表内全部实例记录（浅拷贝汇总），供健康检查器扫描超时实例。 */
     @Override
     public List<InstanceRecord> listAllRecords() {
         List<InstanceRecord> all = new ArrayList<>();
@@ -164,10 +138,7 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
         return instances.get(instanceId);
     }
 
-    /**
-     * 服务版本号 +1：首次变更时懒创建计数器。
-     * revision 单调递增，客户端/推送方可据此判断快照新旧。
-     */
+    /** 服务版本号 +1（首次变更时懒创建计数器）；revision 单调递增，客户端/推送方可据此判断快照新旧。 */
     private long bumpRevision(String serviceName) {
         return revisions.computeIfAbsent(serviceName, key -> new AtomicLong()).incrementAndGet();
     }
@@ -180,7 +151,7 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
         return RegistrySnapshot.of(serviceName, group, revision, query(serviceName, null, false));
     }
 
-    /** 实例深拷贝（浅拷贝字段 + 元数据防御性拷贝），防止外部修改污染注册表 */
+    /** 实例深拷贝（含元数据防御性拷贝），防止外部修改污染注册表 */
     private ServiceInstance copyOf(ServiceInstance source) {
         ServiceInstance copy = new ServiceInstance();
         copy.setServiceName(source.getServiceName());

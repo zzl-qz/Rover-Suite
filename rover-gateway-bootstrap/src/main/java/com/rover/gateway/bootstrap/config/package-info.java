@@ -1,6 +1,6 @@
 /**
  * Author: Daylight
- * Created: 2026-08-08 15:13:00
- * Description: 定义 Gateway 启动配置加载包
+ * Created: 2026-08-04 10:15:00
+ * Description: Gateway 启动配置（rover-gateway.yml）的模型与加载
  */
 package com.rover.gateway.bootstrap.config;

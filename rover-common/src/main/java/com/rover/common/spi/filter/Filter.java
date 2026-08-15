@@ -3,12 +3,7 @@ package com.rover.common.spi.filter;
 /**
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
- * Description: 定义网关过滤器执行契约，支持 plugins 目录外挂二开
- *
- * 这个接口是什么：网关过滤器 SPI，沿 Servlet Filter 思路的请求处理扩展点。
- * 核心职责：让过滤器参与请求处理链——放行则把控制权交给 FilterChain 继续推进，
- * 自行收尾则调用 RequestContext.markCompleted 终止链路。
- * 被谁用：rover-gateway 内置过滤器(日志/鉴权/路由)与 plugins 目录的外部过滤器实现。
+ * Description: 网关过滤器 SPI：放行则交给 FilterChain 继续推进，自行收尾则 markCompleted 终止链路
  */
 public interface Filter {
 

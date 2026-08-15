@@ -4,7 +4,11 @@ import com.rover.common.protocol.QueryRequest;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
-/** 实例查询协议事件 */
+/**
+ * Author: Daylight
+ * Created: 2026-08-13 09:45:00
+ * Description: 实例查询协议事件
+ */
 @Data
 @EqualsAndHashCode(callSuper = true)
 public class QueryEvent extends NameserverChannelEvent {

@@ -1,10 +1,6 @@
 /**
  * Author: Daylight
- * Created: 2026-08-08 14:22:00
- * Description: 定义 Gateway 对外 HTTP 服务启动与请求处理包
- *
- * 这个包是什么：Gateway 的 Netty HTTP 服务端入口层。
- * 核心职责：GatewayHttpServer 启动监听；GatewayHttpServerHandler 分发管理口和业务链。
- * 被谁用：rover-gateway 启动模块创建 GatewayHttpServer 并 start/shutdown。
+ * Created: 2026-08-08 12:20:00
+ * Description: Gateway 对外 HTTP 服务入口层：Netty 启动监听与管理口/业务链分发
  */
 package com.rover.gateway.core.server;

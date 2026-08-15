@@ -2,10 +2,8 @@ package com.rover.common.constants;
 
 /**
  * Author: Daylight
- * Created: 2026-08-13 00:00:00
- * Description: 协议 type → 可读名称（线上仍用数字 code，日志/排障用名字）
- *
- * 哲学：协议码是稳定契约；名字是给人看的领域语言。
+ * Created: 2026-08-01 09:30:00
+ * Description: 协议 type → 可读名称；线上仍用数字 code，名字仅供日志/排障
  */
 public final class ProtocolTypeNames {
 

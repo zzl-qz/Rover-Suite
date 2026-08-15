@@ -17,8 +17,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * Author: Daylight
- * Created: 2026-08-10 16:50:00
- * Description: 调组件 /_manage 接口
+ * Created: 2026-08-11 09:55:00
+ * Description: 调用组件 /_manage 管理接口的 HTTP 客户端
  */
 @Component
 public class ManageHttpClient {

@@ -6,8 +6,8 @@ import lombok.Data;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 11:37:00
- * Description: 配置更新结果
+ * Created: 2026-08-11 15:20:00
+ * Description: 配置更新结果模型
  */
 @Data
 @AllArgsConstructor

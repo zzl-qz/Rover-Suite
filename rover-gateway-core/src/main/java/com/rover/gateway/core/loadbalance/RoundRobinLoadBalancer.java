@@ -10,8 +10,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Author: Daylight
- * Created: 2026-08-08 14:22:00
- * Description: 轮询（默认策略）
+ * Created: 2026-08-07 16:40:00
+ * Description: 轮询负载均衡，默认策略，按集群键独立计数
  */
 public class RoundRobinLoadBalancer implements LoadBalancer {
 

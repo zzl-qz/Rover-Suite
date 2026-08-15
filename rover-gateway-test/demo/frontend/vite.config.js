@@ -1,0 +1,17 @@
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+
+// https://vitejs.dev/config/
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    port: 3000,
+    // 开发环境代理配置（可选，直接请求网关更简单）
+    // proxy: {
+    //   '/api': {
+    //     target: 'http://localhost:9999',
+    //     changeOrigin: true
+    //   }
+    // }
+  }
+})
