@@ -104,11 +104,10 @@ public class NameserverClient implements AutoCloseable {
         workerGroup = new NioEventLoopGroup();
         connect();
         if (options.isAutoHeartbeat()) {
-            // 心跳任务
             heartbeatTask = new PeriodicTask("nameserver-client-heartbeat");
             heartbeatTask.start(this::heartbeatRegistered, options.getHeartbeatIntervalMs(), options.getHeartbeatIntervalMs());
         }
-        // 如果需要短线自动重连的话就是开启一个定时任务
+        // 开启重连定时任务
         if (options.isAutoReconnect()) {
             reconnectTask = new PeriodicTask("nameserver-client-reconnect");
             // 周期拉活：连接还活着就跳过；断了则执行 connect 重连
