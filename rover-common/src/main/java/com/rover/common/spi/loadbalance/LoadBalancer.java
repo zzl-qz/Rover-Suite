@@ -9,6 +9,9 @@ import com.rover.common.model.ServiceInstance;
  */
 public interface LoadBalancer {
 
+    /** 内置负载均衡策略名：轮询（也是默认策略） */
+    String ROUND_ROBIN = "round_robin";
+
     /**
      * 策略名，配置 gateway.loadbalance.strategy 用这个匹配。
      * 内置：round_robin / random / weighted_round_robin / ip_hash / least_connections

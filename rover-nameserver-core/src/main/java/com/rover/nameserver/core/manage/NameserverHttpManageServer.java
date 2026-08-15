@@ -57,7 +57,7 @@ public class NameserverHttpManageServer {
                         protected void initChannel(SocketChannel ch) {
                             ch.pipeline()
                                     .addLast(new HttpServerCodec())
-                                    .addLast(new HttpObjectAggregator(256 * 1024))
+                                    .addLast(new HttpObjectAggregator(MAX_BODY_BYTES))
                                     .addLast(new SimpleChannelInboundHandler<FullHttpRequest>() {
                                         @Override
                                         protected void channelRead0(

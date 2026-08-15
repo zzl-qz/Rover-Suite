@@ -163,6 +163,6 @@ public class RoverNameserverLifecycle implements ApplicationListener<Application
                 return port;
             }
         }
-        return Integer.parseInt(environment.getProperty("server.port", "8080"));
+        return Integer.parseInt(environment.getProperty("server.port", DEFAULT_SERVER_PORT));
     }
 }

@@ -1,5 +1,6 @@
 package com.rover.gateway.bootstrap.config;
 
+import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.common.util.HostPort;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
@@ -54,7 +55,7 @@ public class GatewayConfig {
     public String getLoadBalanceStrategyOrDefault() {
         LoadBalanceProperties lb = gatewayProperties().getLoadbalance();
         if (lb == null || lb.getStrategy() == null || lb.getStrategy().isBlank()) {
-            return "round_robin";
+            return LoadBalancer.ROUND_ROBIN;
         }
         return lb.getStrategy().trim();
     }
@@ -323,7 +324,7 @@ public class GatewayConfig {
     @Data
     public static class LoadBalanceProperties {
         /** round_robin / random / weighted_round_robin / ip_hash / least_connections / 自定义 */
-        private String strategy = "round_robin";
+        private String strategy = LoadBalancer.ROUND_ROBIN;
     }
 
     @Data

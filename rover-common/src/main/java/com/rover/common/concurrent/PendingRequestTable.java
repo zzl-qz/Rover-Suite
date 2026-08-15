@@ -17,6 +17,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class PendingRequestTable<T> implements AutoCloseable {
 
+    /** 默认在途请求上限 */
+    public static final int DEFAULT_MAX_PENDING = 10000;
+
     private final Map<Long, Entry<T>> pending = new ConcurrentHashMap<>();
     private final ScheduledExecutorService timeoutScheduler;
     private final int maxPending;
@@ -25,7 +28,7 @@ public class PendingRequestTable<T> implements AutoCloseable {
 
     /** 默认：最多 10000 个在途请求，内部自建超时调度线程池 */
     public PendingRequestTable() {
-        this(10000, null);
+        this(DEFAULT_MAX_PENDING, null);
     }
 
     /** 指定最大在途请求数，超时调度线程池内部自建 */

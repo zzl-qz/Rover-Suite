@@ -3,6 +3,7 @@ package com.rover.gateway.core.config;
 import com.rover.common.config.AbstractRuntimeConfigManager;
 import com.rover.common.config.ConfigChangeEvent;
 import com.rover.common.config.RuntimeConfigOverlayStore;
+import com.rover.common.spi.loadbalance.LoadBalancer;
 import lombok.Getter;
 
 import java.nio.file.Path;
@@ -39,8 +40,8 @@ public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
         addConfig("gateway.filter.enabled", "true", "true", "网关过滤器总开关");
         addConfig(
                 "gateway.loadbalance.strategy",
-                "round_robin",
-                "round_robin",
+                LoadBalancer.ROUND_ROBIN,
+                LoadBalancer.ROUND_ROBIN,
                 "负载均衡：round_robin/random/weighted_round_robin/ip_hash/least_connections，或自定义类名/SPI名");
         addConfig("gateway.request.timeoutMillis", "30000", "30000", "网关请求超时时间");
     }

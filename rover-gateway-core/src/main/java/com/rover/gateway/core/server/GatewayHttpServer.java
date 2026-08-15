@@ -5,8 +5,11 @@ import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
 import com.rover.gateway.core.discovery.NoopServiceDiscovery;
+import com.rover.common.constants.ProtocolConstants;
 import com.rover.common.spi.discovery.ServiceDiscovery;
+import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.filter.FilterSettings;
+import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.runtime.GatewayRuntime;
 import io.netty.bootstrap.ServerBootstrap;
@@ -32,8 +35,11 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class GatewayHttpServer {
 
-    /** 业务线程池大小，至少 4，随 CPU 核数放大。 */
-    private static final int BIZ_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
+    /** 业务线程池最小线程数，再按 CPU 核数放大。 */
+    private static final int MIN_BIZ_THREADS = 4;
+
+    /** 业务线程池大小，随 CPU 核数放大。 */
+    private static final int BIZ_THREADS = Math.max(MIN_BIZ_THREADS, Runtime.getRuntime().availableProcessors());
 
     /** 监听端口。 */
     @Getter
@@ -56,12 +62,18 @@ public class GatewayHttpServer {
 
     /** 最简构造：仅指定端口，其余用默认值。 */
     public GatewayHttpServer(int port) {
-        this(port, List.of(), 1024 * 1024, 3000, 30000, new FilterSettings(), defaultStaticDiscovery());
+        this(port, List.of(), ProtocolConstants.MAX_BODY_LENGTH,
+                HttpProxyClient.DEFAULT_CONNECT_TIMEOUT_MILLIS,
+                HttpProxyClient.DEFAULT_REQUEST_TIMEOUT_MILLIS,
+                new FilterSettings(), defaultStaticDiscovery());
     }
 
     /** 指定端口和初始路由表构造。 */
     public GatewayHttpServer(int port, List<RouteConfig> routes) {
-        this(port, routes, 1024 * 1024, 3000, 30000, new FilterSettings(), defaultStaticDiscovery());
+        this(port, routes, ProtocolConstants.MAX_BODY_LENGTH,
+                HttpProxyClient.DEFAULT_CONNECT_TIMEOUT_MILLIS,
+                HttpProxyClient.DEFAULT_REQUEST_TIMEOUT_MILLIS,
+                new FilterSettings(), defaultStaticDiscovery());
     }
 
     /** 指定端口、路由、body 上限和代理超时。 */
@@ -86,7 +98,7 @@ public class GatewayHttpServer {
             FilterSettings filterSettings,
             DiscoverySettings discoverySettings) {
         this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
-                filterSettings, discoverySettings, "round_robin");
+                filterSettings, discoverySettings, LoadBalancer.ROUND_ROBIN);
     }
 
     /** 全参数构造（含负载均衡策略名）。 */
@@ -105,7 +117,7 @@ public class GatewayHttpServer {
         this.serviceDiscovery = createServiceDiscovery(settings);
 
         String lbStrategy = loadBalanceStrategy == null || loadBalanceStrategy.isBlank()
-                ? "round_robin"
+                ? LoadBalancer.ROUND_ROBIN
                 : loadBalanceStrategy.trim();
         GatewayRuntimeConfigManager configManager = new GatewayRuntimeConfigManager();
         configManager.seed("gateway.filter.enabled", String.valueOf(
