@@ -83,7 +83,7 @@ public final class StaticUpstreamCluster {
     /** 解析 http://host:port 或 http://host:port|weight。 */
     static ParsedEndpoint parse(String raw) {
         String urlPart = raw;
-        int weight = 100;
+        int weight = DEFAULT_WEIGHT;
         int bar = raw.lastIndexOf('|');
         if (bar > 0 && bar < raw.length() - 1) {
             String maybeWeight = raw.substring(bar + 1).trim();
@@ -103,7 +103,7 @@ public final class StaticUpstreamCluster {
             }
             int port = uri.getPort();
             if (port < 0) {
-                port = "https".equalsIgnoreCase(scheme) ? 443 : 80;
+                port = "https".equalsIgnoreCase(scheme) ? HTTPS_PORT : HTTP_PORT;
             }
             String baseUrl = scheme.toLowerCase(Locale.ROOT) + "://" + uri.getHost() + ":" + port;
             return new ParsedEndpoint(scheme.toLowerCase(Locale.ROOT), uri.getHost(), port, weight, baseUrl);

@@ -35,8 +35,11 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class NameserverTcpServer {
 
-    /** 业务线程数：至少 4，默认用 CPU 核数——业务 Handler 在此线程组执行，不占用 IO 线程 */
-    private static final int BIZ_THREADS = Math.max(4, Runtime.getRuntime().availableProcessors());
+    /** 业务线程池最小线程数，再按 CPU 核数放大——业务 Handler 在此线程组执行，不占用 IO 线程 */
+    private static final int MIN_BIZ_THREADS = 4;
+
+    /** 业务线程数：随 CPU 核数放大 */
+    private static final int BIZ_THREADS = Math.max(MIN_BIZ_THREADS, Runtime.getRuntime().availableProcessors());
 
     @Getter
     private final NameserverServerOptions options;

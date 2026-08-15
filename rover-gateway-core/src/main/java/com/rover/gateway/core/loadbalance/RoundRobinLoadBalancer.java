@@ -19,7 +19,7 @@ public class RoundRobinLoadBalancer implements LoadBalancer {
 
     @Override
     public String name() {
-        return "round_robin";
+        return LoadBalancer.ROUND_ROBIN;
     }
 
     @Override

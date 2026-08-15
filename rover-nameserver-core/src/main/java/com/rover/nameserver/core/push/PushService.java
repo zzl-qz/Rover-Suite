@@ -1,6 +1,7 @@
 package com.rover.nameserver.core.push;
 
 import com.rover.common.codec.RoverMessageCodecSupport;
+import com.rover.common.protocol.PushType;
 import com.rover.common.protocol.ServicePushBody;
 import com.rover.nameserver.core.cluster.NameserverGeneration;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
@@ -67,7 +68,7 @@ public class PushService {
         body.setInstances(snapshot.getInstances());
         body.setRevision(snapshot.getRevision());
         body.setEpoch(epoch);
-        body.setPushType("SNAPSHOT");
+        body.setPushType(PushType.SNAPSHOT.name());
 
         long pushId = pushIdGenerator.getAndIncrement();
         for (Channel channel : subscribers) {

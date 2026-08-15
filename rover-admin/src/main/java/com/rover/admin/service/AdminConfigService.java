@@ -3,6 +3,7 @@ package com.rover.admin.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.rover.admin.client.ManageHttpClient;
 import com.rover.admin.config.AdminProperties;
+import com.rover.common.config.ConfigApplyMode;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -18,6 +19,11 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class AdminConfigService {
+
+    /** Gateway 状态接口缺失 discoveryType 字段时的默认展示值 */
+    private static final String DISCOVERY_TYPE_STATIC = "STATIC";
+    /** 无法获取状态时展示为未知 */
+    private static final String DISCOVERY_TYPE_UNKNOWN = "UNKNOWN";
 
     private final ManageHttpClient httpClient;
     private final AdminProperties properties;
@@ -37,9 +43,9 @@ public class AdminConfigService {
     public String discoveryType() {
         try {
             JsonNode status = httpClient.getJson(properties.getGatewayUrl(), "/_manage/status");
-            return status.path("discoveryType").asText("STATIC");
+            return status.path("discoveryType").asText(DISCOVERY_TYPE_STATIC);
         } catch (Exception ex) {
-            return "UNKNOWN";
+            return DISCOVERY_TYPE_UNKNOWN;
         }
     }
 
@@ -129,7 +135,7 @@ public class AdminConfigService {
             error.put("description", "读取失败: " + ex.getMessage());
             error.put("value", "");
             error.put("defaultValue", "");
-            error.put("applyMode", "HOT_RELOAD");
+            error.put("applyMode", ConfigApplyMode.HOT_RELOAD.name());
             error.put("hotReloadable", false);
             error.put("error", true);
             return List.of(error);
