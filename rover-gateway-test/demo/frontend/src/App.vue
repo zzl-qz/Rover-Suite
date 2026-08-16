@@ -1,5 +1,12 @@
 <template>
   <div class="container">
+    <!-- 全局 toast 提示：请求结果即时反馈，无需打开控制台 -->
+    <div class="toast-container">
+      <div v-for="t in toasts" :key="t.id" :class="['toast', t.type]">
+        {{ t.message }}
+      </div>
+    </div>
+
     <div class="header">
       <h1>🚀 Rover Gateway Test</h1>
       <p class="subtitle">完整测试网关代理、负载均衡、请求头传递、超时处理等</p>
@@ -8,7 +15,7 @@
     <!-- 网关配置 -->
     <div class="config-panel">
       <label>网关地址：</label>
-      <input v-model="gatewayUrl" placeholder="http://localhost:9999" />
+      <input v-model="gatewayUrl" placeholder="http://localhost:80" />
       <button @click="updateGateway">更新</button>
       <button @click="resetStats" class="btn-reset">重置统计</button>
     </div>
@@ -183,7 +190,7 @@ import { ref, reactive } from 'vue'
 import axios from 'axios'
 
 // 网关地址配置
-const gatewayUrl = ref('http://localhost:9999')
+const gatewayUrl = ref('http://localhost:80')
 
 // 创建可配置的 axios 实例
 let request = axios.create({
@@ -214,6 +221,22 @@ const concurrentCount = ref(10)
 const loading = ref(false)
 const lastResponse = ref(null)
 const history = ref([])
+
+// ===== toast 提示 =====
+const toasts = ref([])
+let toastSeq = 0
+
+const showToast = (type, message) => {
+  const id = ++toastSeq
+  toasts.value.push({ id, type, message })
+  // 最多同时显示 5 条
+  if (toasts.value.length > 5) {
+    toasts.value.shift()
+  }
+  setTimeout(() => {
+    toasts.value = toasts.value.filter(t => t.id !== id)
+  }, 3000)
+}
 
 const stats = reactive({
   total: 0,
@@ -288,6 +311,7 @@ const makeRequest = async (method, endpoint, config = {}) => {
     lastResponse.value = response.data
     updateStats(true, response.data.port, latency)
     addHistory(method.toUpperCase(), endpoint, true, response.data.port, latency)
+    showToast('success', `${method.toUpperCase()} ${endpoint} → ${response.status} 成功（${latency}ms）`)
   } catch (error) {
     const latency = Date.now() - startTime
     lastResponse.value = {
@@ -297,6 +321,8 @@ const makeRequest = async (method, endpoint, config = {}) => {
     }
     updateStats(false, null, latency)
     addHistory(method.toUpperCase(), endpoint, false, null, latency)
+    const status = error.response?.status
+    showToast('error', `${method.toUpperCase()} ${endpoint} → ${status ? `HTTP ${status}` : error.message}（${latency}ms）`)
   } finally {
     loading.value = false
   }
@@ -368,6 +394,7 @@ const testTimeout1s = async () => {
     lastResponse.value = response.data
     updateStats(true, response.data.port, latency)
     addHistory('GET', '/api/delay?ms=2000 (timeout:1s)', true, response.data.port, latency)
+    showToast('success', `GET /api/delay?ms=2000 → 200 成功（${latency}ms，未触发超时）`)
   } catch (error) {
     const latency = Date.now() - startTime
     lastResponse.value = {
@@ -377,6 +404,7 @@ const testTimeout1s = async () => {
     }
     updateStats(false, null, latency)
     addHistory('GET', '/api/delay?ms=2000 (timeout:1s)', false, null, latency)
+    showToast('error', `GET /api/delay?ms=2000 → 超时失败（${latency}ms，符合预期）`)
   } finally {
     loading.value = false
   }
@@ -392,15 +420,19 @@ const testConcurrent = async () => {
 
   const promises = []
   const startTime = Date.now()
+  let okCount = 0
+  let failCount = 0
 
   for (let i = 0; i < concurrentCount.value; i++) {
     promises.push(
       request.get('/api/hello')
         .then(response => {
+          okCount++
           updateStats(true, response.data.port, 0)
           addHistory('GET', `/api/hello (并发 ${i + 1})`, true, response.data.port, 0)
         })
         .catch(error => {
+          failCount++
           updateStats(false, null, 0)
           addHistory('GET', `/api/hello (并发 ${i + 1})`, false, null, 0)
         })
@@ -416,6 +448,11 @@ const testConcurrent = async () => {
     totalTime: `${totalTime}ms`,
     timestamp: new Date().toLocaleTimeString()
   }
+  if (failCount === 0) {
+    showToast('success', `并发测试完成：${concurrentCount.value} 个请求全部成功，总耗时 ${totalTime}ms`)
+  } else {
+    showToast('error', `并发测试完成：成功 ${okCount} / 失败 ${failCount}，总耗时 ${totalTime}ms`)
+  }
 
   loading.value = false
 }
@@ -429,6 +466,51 @@ const formatJSON = (obj) => JSON.stringify(obj, null, 2)
 </script>
 
 <style scoped>
+/* ===== toast 提示 ===== */
+.toast-container {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: bold;
+  color: white;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+  animation: toast-in 0.25s ease-out;
+  max-width: 80vw;
+  word-break: break-all;
+}
+
+.toast.success {
+  background: #38a169;
+}
+
+.toast.error {
+  background: #e53e3e;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .container {
   background: white;
   border-radius: 16px;

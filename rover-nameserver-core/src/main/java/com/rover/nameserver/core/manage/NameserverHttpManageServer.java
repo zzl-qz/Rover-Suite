@@ -23,6 +23,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class NameserverHttpManageServer {
 
+    /** HTTP 请求体大小上限（字节），注册/心跳请求都很小，1MB 足够。 */
+    private static final int MAX_BODY_BYTES = 1024 * 1024;
+
     /** HTTP 管理口监听端口，0 或未配置表示不启用 */
     private final int port;
     /** 管理 API 处理器，负责路由与 JSON 响应 */

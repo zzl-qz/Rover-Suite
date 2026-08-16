@@ -48,6 +48,9 @@ public class GatewayHttpServer {
     /** 单请求最大 body 字节数，超过 TooLongFrameException。 */
     private final int maxContentLengthBytes;
 
+    /** CORS 跨域配置，未启用时为默认关闭对象。 */
+    private final CorsSettings corsSettings;
+
     /** 服务发现客户端，STATIC 时为 NoopServiceDiscovery。 */
     private final ServiceDiscovery serviceDiscovery;
 
@@ -111,8 +114,24 @@ public class GatewayHttpServer {
             FilterSettings filterSettings,
             DiscoverySettings discoverySettings,
             String loadBalanceStrategy) {
+        this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
+                filterSettings, discoverySettings, loadBalanceStrategy, new CorsSettings());
+    }
+
+    /** 全参数构造（含负载均衡策略名和 CORS 配置）。 */
+    public GatewayHttpServer(
+            int port,
+            List<RouteConfig> routes,
+            int maxContentLengthBytes,
+            int connectTimeoutMillis,
+            int requestTimeoutMillis,
+            FilterSettings filterSettings,
+            DiscoverySettings discoverySettings,
+            String loadBalanceStrategy,
+            CorsSettings corsSettings) {
         this.port = port;
         this.maxContentLengthBytes = maxContentLengthBytes;
+        this.corsSettings = corsSettings == null ? new CorsSettings() : corsSettings;
         DiscoverySettings settings = discoverySettings == null ? defaultStaticDiscovery() : discoverySettings;
         this.serviceDiscovery = createServiceDiscovery(settings);
 
@@ -161,6 +180,7 @@ public class GatewayHttpServer {
                             ch.pipeline()
                                     .addLast(new HttpServerCodec())
                                     .addLast(new HttpObjectAggregator(maxContentLengthBytes))
+                                    .addLast(new CorsHandler(corsSettings))
                                     .addLast(bizGroup, new GatewayHttpServerHandler(runtime));
                         }
                     });

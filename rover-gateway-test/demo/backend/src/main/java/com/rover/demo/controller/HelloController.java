@@ -35,6 +35,7 @@ public class HelloController {
         result.put("service", serviceName);
         result.put("port", port);
         result.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
+        System.out.println("请求进来");
         return result;
     }
 
@@ -42,7 +43,7 @@ public class HelloController {
      * Echo 接口 - 用于测试请求参数传递
      */
     @GetMapping("/api/echo")
-    public Map<String, Object> echo(@RequestParam(required = false, defaultValue = "empty") String msg) {
+    public Map<String, Object> echo(@RequestParam(name = "msg", required = false, defaultValue = "empty") String msg) {
         Map<String, Object> result = new HashMap<>();
         result.put("echo", msg);
         result.put("service", serviceName);
@@ -114,7 +115,7 @@ public class HelloController {
      * Delay 接口 - 模拟延迟响应（用于测试超时）
      */
     @GetMapping("/api/delay")
-    public Map<String, Object> delay(@RequestParam(defaultValue = "1000") int ms) {
+    public Map<String, Object> delay(@RequestParam(name = "ms", defaultValue = "1000") int ms) {
         try {
             Thread.sleep(ms);
         } catch (InterruptedException e) {
@@ -143,10 +144,11 @@ public class HelloController {
     }
 
     /**
-     * Error 接口 - 模拟错误（用于测试错误处理）
+     * Error 接口 - 模拟错误（用于测试错误处理），返回真实 HTTP 状态码
      */
     @GetMapping("/api/error")
-    public Map<String, Object> error(@RequestParam(defaultValue = "500") int code) {
+    public org.springframework.http.ResponseEntity<Map<String, Object>> error(
+            @RequestParam(name = "code", defaultValue = "500") int code) {
         Map<String, Object> result = new HashMap<>();
         result.put("service", serviceName);
         result.put("port", port);
@@ -154,6 +156,6 @@ public class HelloController {
         result.put("errorCode", code);
         result.put("message", "Simulated error for testing");
         result.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
-        return result;
+        return org.springframework.http.ResponseEntity.status(code).body(result);
     }
 }

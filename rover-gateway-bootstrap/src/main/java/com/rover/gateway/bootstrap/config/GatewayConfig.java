@@ -6,6 +6,7 @@ import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.server.CorsSettings;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -58,6 +59,29 @@ public class GatewayConfig {
             return LoadBalancer.ROUND_ROBIN;
         }
         return lb.getStrategy().trim();
+    }
+
+    /** 把 yml 的 cors 配置转成 core 的 CorsSettings。 */
+    public CorsSettings toCorsSettings() {
+        CorsProperties cors = gatewayProperties().getCors();
+        CorsSettings settings = new CorsSettings();
+        if (cors == null) {
+            return settings;
+        }
+        settings.setEnabled(cors.isEnabled());
+        settings.setCredentials(cors.isCredentials());
+        settings.setAllowedOrigins(cors.getAllowedOrigins() == null
+                ? new ArrayList<>() : new ArrayList<>(cors.getAllowedOrigins()));
+        if (cors.getAllowedMethods() != null && !cors.getAllowedMethods().isEmpty()) {
+            settings.setAllowedMethods(new ArrayList<>(cors.getAllowedMethods()));
+        }
+        if (cors.getAllowedHeaders() != null && !cors.getAllowedHeaders().isEmpty()) {
+            settings.setAllowedHeaders(new ArrayList<>(cors.getAllowedHeaders()));
+        }
+        if (cors.getMaxAgeSeconds() > 0) {
+            settings.setMaxAgeSeconds(cors.getMaxAgeSeconds());
+        }
+        return settings;
     }
 
     public FilterSettings toFilterSettings() {
@@ -317,6 +341,7 @@ public class GatewayConfig {
         private FilterProperties filters = new FilterProperties();
         private LoadBalanceProperties loadbalance = new LoadBalanceProperties();
         private RewriteProperties rewrite = new RewriteProperties();
+        private CorsProperties cors = new CorsProperties();
         private DiscoveryProperties discovery = new DiscoveryProperties();
         private List<RouteProperties> routes = new ArrayList<>();
     }
@@ -361,6 +386,16 @@ public class GatewayConfig {
     @Data
     public static class RewriteProperties {
         private String stripPrefix;
+    }
+
+    @Data
+    public static class CorsProperties {
+        private boolean enabled = false;
+        private List<String> allowedOrigins = new ArrayList<>();
+        private List<String> allowedMethods = new ArrayList<>();
+        private List<String> allowedHeaders = new ArrayList<>();
+        private long maxAgeSeconds = 1800;
+        private boolean credentials = false;
     }
 
     @Data

@@ -15,25 +15,50 @@ rover:
     # 也可填自定义类全名，或 plugins 里 SPI 的 name()
     loadbalance:
       strategy: round_robin
-    # static: targetUrl / targetUrls，不连 Nameserver，多 IP 同样走上面的 LB
-    # nameserver: 读下面 nameserver 配置并订阅 serviceName
+    # static: 静态多 IP，不连 Nameserver；nameserver: 读下面配置订阅动态实例
+    # 两种模式共用同一套 LB 策略，测试时二选一（注释/取消注释即可切换）
     discovery:
       type: nameserver
       nameserver:
         address: 127.0.0.1:8888
         reconcileIntervalMs: 30000
+    # 跨域（CORS）：前端 dev server 等异源页面访问网关时需要开启
+    cors:
+      enabled: true
+      # 允许的来源；* 表示任意（开发联调用），生产建议列明具体地址
+      allowedOrigins:
+        - "*"
+      allowedMethods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - PATCH
+        - OPTIONS
+      # * 表示任意请求头
+      allowedHeaders:
+        - "*"
+      # 是否允许携带凭证（Cookie/Authorization）；开启后响应回显具体 Origin 而非 *
+      credentials: false
+      # 预检结果缓存秒数
+      maxAgeSeconds: 1800
     rewrite:
       stripPrefix: /api
     routes:
-      # 动态发现：转发到 demo-service（Starter 自动注册）
+      # ===== 场景一：nameserver 动态发现（discovery.type=nameserver 生效）=====
+      # 后端 demo-service 接口自带 /api 前缀（/api/hello 等），网关匹配后透传、不剥前缀
+      # 测试：GET http://localhost/api/hello
       - id: demo-api
-        businessPrefix: /api/demo
+        businessPrefix: /api
         serviceName: demo-service
-        stripPrefix: /api/demo
-      # 静态多上游示例（discovery.type=static 时启用）：
-      # - id: demo-api
-      #   businessPrefix: /api/demo
+        stripPrefix: ""
+
+      # ===== 场景二：静态多上游（discovery.type=static 生效，演示负载均衡）=====
+      # 访问 /api/static/api/hello，网关剥掉 /api/static 后转发 /api/hello 给后端
+      # 两个后端（8081、8082|200）按 LB 策略轮询
+      # - id: static-demo-api
+      #   businessPrefix: /api/static
       #   targetUrls:
       #     - http://127.0.0.1:8081
       #     - http://127.0.0.1:8082|200
-      #   stripPrefix: /api/demo
+      #   stripPrefix: /api/static

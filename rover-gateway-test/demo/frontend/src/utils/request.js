@@ -6,7 +6,7 @@ import axios from 'axios'
  */
 
 // 网关地址（根据实际部署情况修改）
-const GATEWAY_BASE_URL = 'http://localhost:9999'
+const GATEWAY_BASE_URL = 'http://localhost:80'
 
 const request = axios.create({
   baseURL: GATEWAY_BASE_URL,

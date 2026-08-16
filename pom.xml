@@ -208,6 +208,8 @@
                         <source>17</source>
                         <target>17</target>
                         <encoding>UTF-8</encoding>
+                        <!-- Spring 6.1+ 要求编译带 -parameters，否则 @RequestParam 等无法解析参数名 -->
+                        <parameters>true</parameters>
                     </configuration>
                 </plugin>
                 <plugin>
