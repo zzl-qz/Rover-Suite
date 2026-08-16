@@ -25,6 +25,9 @@ import org.springframework.util.StringUtils;
 @Slf4j
 public class RoverNameserverLifecycle implements ApplicationListener<ApplicationReadyEvent> {
 
+    /** server.port 未配置时的默认端口。 */
+    private static final String DEFAULT_SERVER_PORT = "8080";
+
     private final NameserverClient client;
     private final RoverNameserverProperties properties;
     private final Environment environment;
