@@ -9,7 +9,6 @@ import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
-import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -23,6 +22,8 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
 
@@ -83,44 +84,78 @@ public class HttpProxyClient {
 
     /**
      * 转发请求到目标 URL，并将后端响应写回当前客户端连接。
+     * 异步实现：用 sendAsync 发起，不占用调用线程等待上游，避免线程被阻塞导致的并发天花板。
      *
-     * @return 代理结果：最终状态码、上游往返耗时、是否连接失败/超时，方便指标统计
+     * @return 代理结果 Future：最终状态码、上游往返耗时、是否连接失败/超时，方便指标统计
      */
-    public ProxyResult forward(ChannelHandlerContext ctx, FullHttpRequest request, String targetUrl) {
+    public CompletableFuture<ProxyResult> forwardAsync(
+            ChannelHandlerContext ctx,
+            FullHttpRequest request,
+            String targetUrl) {
         long startNanos = System.nanoTime();
         inFlight.incrementAndGet();
+
+        HttpRequest proxyRequest;
         try {
-            HttpRequest proxyRequest = buildProxyRequest(ctx, request, targetUrl);
-            // 同步发送；当前跑在业务线程池，不会直接堵死 Netty IO 线程。
-            HttpResponse<byte[]> proxyResponse = httpClient.send(
-                    proxyRequest,
-                    HttpResponse.BodyHandlers.ofByteArray());
-            writeProxyResponse(ctx, proxyResponse);
-            return new ProxyResult(proxyResponse.statusCode(), elapsedMillis(startNanos), false, false);
-        } catch (HttpTimeoutException err) {
-            log.warn("Proxy request timeout, targetUrl={}", targetUrl, err);
+            proxyRequest = buildProxyRequest(ctx, request, targetUrl);
+        } catch (Exception err) {
+            inFlight.decrementAndGet();
+            return CompletableFuture.completedFuture(handleError(ctx, err, targetUrl, startNanos));
+        }
+
+        return httpClient
+                .sendAsync(proxyRequest, HttpResponse.BodyHandlers.ofByteArray())
+                .handle((proxyResponse, err) -> {
+                    inFlight.decrementAndGet();
+                    if (err != null) {
+                        return handleError(ctx, err, targetUrl, startNanos);
+                    }
+                    writeProxyResponse(ctx, proxyResponse);
+                    return new ProxyResult(proxyResponse.statusCode(), elapsedMillis(startNanos), false, false);
+                });
+    }
+
+    /** 统一错误分类：把异常解包后按类型回写对应错误响应，并返回可统计的 ProxyResult。 */
+    private ProxyResult handleError(
+            ChannelHandlerContext ctx,
+            Throwable err,
+            String targetUrl,
+            long startNanos) {
+        Throwable cause = unwrap(err);
+        if (cause instanceof HttpTimeoutException) {
+            log.warn("Proxy request timeout, targetUrl={}", targetUrl, cause);
             writeProxyError(ctx, HttpResponseStatus.GATEWAY_TIMEOUT, "后端请求超时", targetUrl);
             return new ProxyResult(HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true);
-        } catch (ConnectException err) {
-            log.warn("Proxy target connection error, targetUrl={}", targetUrl, err);
+        }
+        if (cause instanceof ConnectException) {
+            log.warn("Proxy target connection error, targetUrl={}", targetUrl, cause);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端连接失败", targetUrl);
             return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
-        } catch (IOException err) {
-            log.warn("Proxy request IO error, targetUrl={}", targetUrl, err);
-            writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应异常", targetUrl);
-            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
-        } catch (InterruptedException err) {
+        }
+        if (cause instanceof InterruptedException) {
             Thread.currentThread().interrupt();
-            log.warn("Proxy request interrupted, targetUrl={}", targetUrl, err);
+            log.warn("Proxy request interrupted, targetUrl={}", targetUrl, cause);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "代理请求被中断", targetUrl);
             return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
-        } catch (IllegalArgumentException err) {
-            log.warn("Invalid proxy target URL, targetUrl={}", targetUrl, err);
+        }
+        if (cause instanceof IllegalArgumentException) {
+            log.warn("Invalid proxy target URL, targetUrl={}", targetUrl, cause);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "目标 URL 非法", targetUrl);
             return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
-        } finally {
-            inFlight.decrementAndGet();
         }
+        log.warn("Proxy request IO error, targetUrl={}", targetUrl, cause);
+        writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应异常", targetUrl);
+        return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+    }
+
+    /** 解包 CompletionException/ExecutionException，拿到真正的业务异常。 */
+    private static Throwable unwrap(Throwable err) {
+        Throwable cause = err;
+        while ((cause instanceof CompletionException || cause instanceof java.util.concurrent.ExecutionException)
+                && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     /** 单调时钟计时，纳秒转毫秒，负值夹到 0。 */

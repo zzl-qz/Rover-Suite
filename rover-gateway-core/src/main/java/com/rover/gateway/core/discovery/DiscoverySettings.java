@@ -1,5 +1,6 @@
 package com.rover.gateway.core.discovery;
 
+import com.rover.common.constants.NameserverConstants;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.Data;
@@ -16,10 +17,10 @@ public class DiscoverySettings {
     private DiscoveryType type = DiscoveryType.STATIC;
 
     /** Nameserver host，仅 NAMESERVER 模式使用 */
-    private String nameserverHost = "127.0.0.1";
+    private String nameserverHost = NameserverConstants.DEFAULT_HOST;
 
     /** Nameserver 端口，仅 NAMESERVER 模式使用 */
-    private int nameserverPort = 8888;
+    private int nameserverPort = NameserverConstants.DEFAULT_PORT;
 
     /** 定时对账间隔（毫秒），防止订阅推送丢失 */
     private long reconcileIntervalMs = 30000L;

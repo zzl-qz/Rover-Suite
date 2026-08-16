@@ -4,6 +4,7 @@ import com.rover.common.spi.filter.Filter;
 import com.rover.common.spi.filter.FilterChain;
 import com.rover.common.spi.filter.RequestContext;
 import com.rover.gateway.core.route.RouteConfig;
+import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -31,22 +32,20 @@ public class AccessLogFilter implements Filter {
 
     /**
      * 先记录请求开始，再放行后续过滤器；
-     * finally 中打印完整链路日志，无论下游成功或异常。
+     * 无论下游成功或异常，都在完成回调里打印完整链路日志。
      *
      * @param context 网关请求上下文
      * @param chain     过滤器链，用于继续执行
-     * @throws Exception 下游过滤器抛出的异常会向上传播
+     * @return 后续过滤器链的异步结果
      */
     @Override
-    public void doFilter(RequestContext context, FilterChain chain) throws Exception {
+    public CompletableFuture<Void> doFilter(RequestContext context, FilterChain chain) {
         GatewayRequestContext gatewayContext = (GatewayRequestContext) context;
         log.info(
                 "Gateway received request: {} {}",
                 gatewayContext.getRequest().method(),
                 gatewayContext.getRequestPath());
-        try {
-            chain.doFilter(context);
-        } finally {
+        return chain.doFilter(context).whenComplete((ignored, err) -> {
             // 无论下游抛异常还是正常结束，都补一条完成日志。
             long costMillis = (System.nanoTime() - gatewayContext.getStartNanos()) / 1_000_000;
             RouteConfig route = gatewayContext.getRoute();
@@ -61,6 +60,6 @@ public class AccessLogFilter implements Filter {
                     gatewayContext.getTargetUrl() == null ? "-" : gatewayContext.getTargetUrl(),
                     statusCode == null ? "-" : statusCode,
                     costMillis);
-        }
+        });
     }
 }

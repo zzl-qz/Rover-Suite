@@ -4,11 +4,13 @@ import com.rover.common.spi.filter.Filter;
 import com.rover.common.spi.filter.FilterChain;
 import com.rover.common.spi.filter.RequestContext;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
- * Description: 按顺序推进过滤器链，直到路由转发或某个过滤器短路
+ * Description: 按顺序推进过滤器链（异步），直到路由转发或某个过滤器短路。
+ * 同步阶段抛出的异常统一转成 failedFuture，避免污染调用方。
  */
 public class DefaultFilterChain implements FilterChain {
 
@@ -25,16 +27,20 @@ public class DefaultFilterChain implements FilterChain {
 
     /** 执行下一个过滤器；Filter 内部调 chain.doFilter 续链，或 markCompleted 结束请求。 */
     @Override
-    public void doFilter(RequestContext context) throws Exception {
+    public CompletableFuture<Void> doFilter(RequestContext context) {
         if (context.isCompleted()) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
         if (index >= filters.size()) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         // 取出当前过滤器并把下标后移，避免同一过滤器重复执行。
         Filter filter = filters.get(index++);
-        filter.doFilter(context, this);
+        try {
+            return filter.doFilter(context, this);
+        } catch (Exception err) {
+            return CompletableFuture.failedFuture(err);
+        }
     }
 }

@@ -20,6 +20,7 @@ import com.rover.gateway.core.route.RouteOverlayStore;
 import com.rover.gateway.core.route.RouteValidator;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -88,6 +89,21 @@ public class GatewayRuntime {
     private final AtomicReference<String> loadBalanceStrategy = new AtomicReference<>(LoadBalancer.ROUND_ROBIN);
 
     /**
+     * 在途请求准入闸门（有界并发）：超过上限时快速返回 503，避免内存/上游连接被无限堆积。
+     * 异步模型下在途请求不占业务线程，闸门与线程数解耦，仅用于背压保护；
+     * 默认 CPU×8（下限 64），可用 -Drover.gateway.maxInflight 覆盖。
+     */
+    private volatile Semaphore processingGate = new Semaphore(defaultProcessingPermits());
+
+    /** 默认准入上限：CPU 核数 × 8，下限 64，可用 -Drover.gateway.maxInflight 覆盖。 */
+    private static int defaultProcessingPermits() {
+        int fromProp = Integer.getInteger("rover.gateway.maxInflight", 0);
+        return fromProp > 0
+                ? fromProp
+                : Math.max(64, Runtime.getRuntime().availableProcessors() * 8);
+    }
+
+    /**
      * 全参数构造：初始化路由表、代理客户端、默认 LB，并组装首版过滤器链。
      *
      * @param port                   监听端口
@@ -129,6 +145,16 @@ public class GatewayRuntime {
     /** 当前路由匹配器快照。 */
     public RouteMatcher getRouteMatcher() {
         return routeMatcherRef.get();
+    }
+
+    /** 尝试获取一个在途处理名额，失败说明已过载（由调用方快速 503）。 */
+    public boolean tryAcquireProcessingPermit() {
+        return processingGate.tryAcquire();
+    }
+
+    /** 释放一个在途处理名额。 */
+    public void releaseProcessingPermit() {
+        processingGate.release();
     }
 
     /** @return 当前过滤器链快照，供 Handler 执行 */

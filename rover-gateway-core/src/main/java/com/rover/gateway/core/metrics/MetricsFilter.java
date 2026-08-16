@@ -5,6 +5,7 @@ import com.rover.common.spi.filter.FilterChain;
 import com.rover.common.spi.filter.RequestContext;
 import com.rover.gateway.core.filter.GatewayRequestContext;
 import com.rover.gateway.core.route.RouteConfig;
+import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -35,19 +36,16 @@ public class MetricsFilter implements Filter {
     }
 
     /**
-     * 放行后续过滤器，finally 中聚合本次请求指标；
+     * 放行后续过滤器，完成回调里聚合本次请求指标；
      * 无论下游成功、短路还是抛异常，都恰好记录一次。
      */
     @Override
-    public void doFilter(RequestContext context, FilterChain chain) throws Exception {
+    public CompletableFuture<Void> doFilter(RequestContext context, FilterChain chain) {
         GatewayRequestContext gatewayContext = (GatewayRequestContext) context;
         if (!registry.getSettings().isEnabled()) {
-            chain.doFilter(context);
-            return;
+            return chain.doFilter(context);
         }
-        try {
-            chain.doFilter(context);
-        } finally {
+        return chain.doFilter(context).whenComplete((ignored, err) -> {
             try {
                 long costMillis = (System.nanoTime() - gatewayContext.getStartNanos()) / 1_000_000;
                 RouteConfig route = gatewayContext.getRoute();
@@ -62,9 +60,9 @@ public class MetricsFilter implements Filter {
                         gatewayContext.getUpstreamCostMillis(),
                         gatewayContext.isUpstreamConnectFail(),
                         gatewayContext.isUpstreamTimeout());
-            } catch (Exception err) {
-                log.warn("Metrics record failed, ignore to protect request path", err);
+            } catch (Exception recordErr) {
+                log.warn("Metrics record failed, ignore to protect request path", recordErr);
             }
-        }
+        });
     }
 }

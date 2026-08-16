@@ -1,5 +1,6 @@
 package com.rover.nameserver.bootstrap.config;
 
+import com.rover.common.constants.NameserverConstants;
 import com.rover.common.protocol.AckMode;
 import java.util.ArrayList;
 import java.util.List;
@@ -16,7 +17,7 @@ import lombok.Data;
 public class NameserverConfig {
 
     /** 服务未配置端口时的默认 TCP 端口 */
-    private static final int DEFAULT_PORT = 8888;
+    private static final int DEFAULT_PORT = NameserverConstants.DEFAULT_PORT;
 
     /** 根配置块：rover.nameserver.* */
     private RoverProperties rover = new RoverProperties();
@@ -58,7 +59,7 @@ public class NameserverConfig {
         /** TCP 注册发现端口 */
         private int port = DEFAULT_PORT;
         /** HTTP 管理口，Admin 调这里 */
-        private int managePort = 8889;
+        private int managePort = NameserverConstants.DEFAULT_MANAGE_PORT;
         /** 心跳超时时间(ms)：超过则标记实例不健康 */
         private long heartbeatTimeoutMillis = 15000L;
         /** 健康检查扫描间隔(ms) */
