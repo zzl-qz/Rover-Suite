@@ -37,6 +37,11 @@ public abstract class AbstractManageApi {
 
     /** 分发管理请求，统一 JSON 响应与异常映射。 */
     public void handle(ChannelHandlerContext ctx, FullHttpRequest request, String path) {
+        if (!authorized(request)) {
+            writeJson(ctx, HttpResponseStatus.UNAUTHORIZED,
+                    JsonCodec.toJson(Map.of("message", "管理口鉴权失败：token 不匹配")));
+            return;
+        }
         try {
             if (!dispatch(ctx, request, path)) {
                 writeJson(ctx, HttpResponseStatus.NOT_FOUND,
@@ -52,6 +57,16 @@ public abstract class AbstractManageApi {
         }
     }
 
+    /** 校验管理口 token；未配置时放行，配置后必须匹配 X-Rover-Admin-Token 请求头。 */
+    private boolean authorized(FullHttpRequest request) {
+        String expected = adminToken();
+        if (expected == null || expected.isBlank()) {
+            return true;
+        }
+        String provided = request.headers().get("X-Rover-Admin-Token");
+        return expected.equals(provided);
+    }
+
     /**
      * 分发到具体端点；已处理返回 true，未命中返回 false（由骨架回 NOT_FOUND）。
      */
@@ -62,6 +77,9 @@ public abstract class AbstractManageApi {
 
     /** 组件名，用于日志。 */
     protected abstract String componentName();
+
+    /** 管理口鉴权 token；返回 null 或空串表示关闭鉴权。 */
+    protected abstract String adminToken();
 
     /** 处理 GET/POST /_manage/configs。 */
     protected boolean handleConfigs(ChannelHandlerContext ctx, FullHttpRequest request, String path) {

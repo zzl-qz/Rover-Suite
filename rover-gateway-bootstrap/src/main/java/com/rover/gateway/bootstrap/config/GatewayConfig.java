@@ -38,6 +38,15 @@ public class GatewayConfig {
         return gatewayProperties().getPort();
     }
 
+    public String getBindHostOrDefault() {
+        String bindHost = gatewayProperties().getServer().getBindHost();
+        return bindHost == null || bindHost.isBlank() ? "0.0.0.0" : bindHost.trim();
+    }
+
+    public String getAdminTokenOrDefault() {
+        return gatewayProperties().getAdminToken();
+    }
+
     public int getMaxContentLengthBytesOrDefault() {
         return gatewayProperties().getServer().getMaxContentLengthBytes();
     }
@@ -171,6 +180,7 @@ public class GatewayConfig {
                 settings.setNameserverHost(address.host());
                 settings.setNameserverPort(address.port());
             }
+            settings.setNameserverToken(nameserver.getToken());
             long reconcile = nameserver.getReconcileIntervalMs() <= 0
                     ? DEFAULT_RECONCILE_INTERVAL_MS
                     : nameserver.getReconcileIntervalMs();
@@ -337,6 +347,8 @@ public class GatewayConfig {
     @Data
     public static class GatewayProperties {
         private int port = DEFAULT_PORT;
+        /** 管理口鉴权 token（/_manage/** 校验）；空表示不鉴权 */
+        private String adminToken;
         private ServerProperties server = new ServerProperties();
         private ProxyProperties proxy = new ProxyProperties();
         private FilterProperties filters = new FilterProperties();
@@ -364,6 +376,8 @@ public class GatewayConfig {
     public static class NameserverProperties {
         private String address = NameserverConstants.DEFAULT_ADDRESS;
         private long reconcileIntervalMs = DEFAULT_RECONCILE_INTERVAL_MS;
+        /** 连接 Nameserver 订阅/查询时携带的协议 token；空表示不鉴权 */
+        private String token;
     }
 
     @Data
@@ -376,6 +390,8 @@ public class GatewayConfig {
     @Data
     public static class ServerProperties {
         private int maxContentLengthBytes = DEFAULT_MAX_CONTENT_LENGTH_BYTES;
+        /** 监听地址，默认 0.0.0.0；可收紧到本机/内网 */
+        private String bindHost = "0.0.0.0";
     }
 
     @Data

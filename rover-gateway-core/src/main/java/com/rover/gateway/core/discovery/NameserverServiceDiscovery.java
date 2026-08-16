@@ -43,6 +43,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         this.client = new NameserverClient(NameserverClientOptions.builder()
                 .host(settings.getNameserverHost())
                 .port(settings.getNameserverPort())
+                .token(settings.getNameserverToken())
                 .autoHeartbeat(false)
                 .autoReconnect(true)
                 .build());

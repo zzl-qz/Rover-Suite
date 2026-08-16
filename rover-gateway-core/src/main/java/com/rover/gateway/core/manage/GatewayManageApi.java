@@ -42,6 +42,11 @@ public class GatewayManageApi extends AbstractManageApi {
     }
 
     @Override
+    protected String adminToken() {
+        return runtime.getAdminToken();
+    }
+
+    @Override
     protected boolean dispatch(ChannelHandlerContext ctx, FullHttpRequest request, String path) {
         if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/status").equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, statusJson());

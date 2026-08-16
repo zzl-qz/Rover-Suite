@@ -48,6 +48,9 @@ public class RoverNameserverProperties {
     /** 扩展元数据 */
     private Map<String, String> metadata = new HashMap<>();
 
+    /** 集群鉴权 token，注册/注销时携带；空表示不鉴权 */
+    private String token;
+
     /** 连接超时 */
     private int connectTimeoutMs = 3000;
 

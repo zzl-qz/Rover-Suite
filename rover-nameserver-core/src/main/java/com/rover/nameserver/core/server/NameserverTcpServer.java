@@ -110,7 +110,8 @@ public class NameserverTcpServer {
         this.runtime = new NameserverRuntime(options, registry, pushService, healthChecker, configManager, metrics);
         configManager.getApplier().bind(runtime);
         configManager.reapplyAll();
-        this.manageServer = new NameserverHttpManageServer(options.getManagePort(), runtime);
+        this.manageServer = new NameserverHttpManageServer(
+                options.getManagePort(), options.getManageBindHost(), runtime);
     }
 
     /**
@@ -142,11 +143,13 @@ public class NameserverTcpServer {
                     });
 
             // 同步等待绑定完成，拿到服务端 channel 句柄供关闭使用
-            serverChannel = bootstrap.bind(options.getPort()).sync().channel();
+            serverChannel = bootstrap.bind(options.getBindHost(), options.getPort()).sync().channel();
             healthChecker.start();
             manageServer.start();
-            log.info("Rover Nameserver 已启动, port={}, managePort={}, writeAckMode={}, cluster={}, epoch={}",
+            log.info("Rover Nameserver 已启动, bind={}:{}, manageBind={}:{}, writeAckMode={}, cluster={}, epoch={}",
+                    options.getBindHost(),
                     options.getPort(),
+                    options.getManageBindHost(),
                     options.getManagePort(),
                     options.getWriteAckMode(),
                     options.isClusterEnabled(),

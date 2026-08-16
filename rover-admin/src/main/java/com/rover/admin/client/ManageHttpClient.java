@@ -3,6 +3,7 @@ package com.rover.admin.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rover.admin.config.AdminProperties;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -28,13 +29,18 @@ public class ManageHttpClient {
     /** 单次请求超时（秒） */
     private static final int REQUEST_TIMEOUT_SECONDS = 5;
 
+    /** 管理口鉴权 token（X-Rover-Admin-Token）；空表示不鉴权 */
+    private static final String ADMIN_TOKEN_HEADER = "X-Rover-Admin-Token";
+
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(CONNECT_TIMEOUT_SECONDS))
             .build();
     private final ObjectMapper objectMapper;
+    private final AdminProperties properties;
 
-    public ManageHttpClient(ObjectMapper objectMapper) {
+    public ManageHttpClient(ObjectMapper objectMapper, AdminProperties properties) {
         this.objectMapper = objectMapper;
+        this.properties = properties;
     }
 
     public JsonNode getJson(String baseUrl, String path) throws IOException, InterruptedException {
@@ -100,6 +106,10 @@ public class ManageHttpClient {
                 .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS));
         if (contentType != null) {
             builder.header("Content-Type", contentType);
+        }
+        String adminToken = properties.getAdminToken();
+        if (adminToken != null && !adminToken.isBlank()) {
+            builder.header(ADMIN_TOKEN_HEADER, adminToken);
         }
         if ("GET".equals(method)) {
             builder.GET();

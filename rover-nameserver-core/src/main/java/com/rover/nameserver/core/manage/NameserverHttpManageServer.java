@@ -28,6 +28,8 @@ public class NameserverHttpManageServer {
 
     /** HTTP 管理口监听端口，0 或未配置表示不启用 */
     private final int port;
+    /** HTTP 管理口监听地址 */
+    private final String bindHost;
     /** 管理 API 处理器，负责路由与 JSON 响应 */
     private final NameserverManageApi manageApi;
 
@@ -38,8 +40,9 @@ public class NameserverHttpManageServer {
     /** 服务端 channel，关闭时使用 */
     private Channel serverChannel;
 
-    public NameserverHttpManageServer(int port, NameserverRuntime runtime) {
+    public NameserverHttpManageServer(int port, String bindHost, NameserverRuntime runtime) {
         this.port = port;
+        this.bindHost = bindHost == null || bindHost.isBlank() ? "0.0.0.0" : bindHost.trim();
         this.manageApi = new NameserverManageApi(runtime);
     }
 
@@ -72,8 +75,8 @@ public class NameserverHttpManageServer {
                                     });
                         }
                     });
-            serverChannel = bootstrap.bind(port).sync().channel();
-            log.info("Nameserver HTTP manage server listening on port {}, prefix=/_manage", port);
+            serverChannel = bootstrap.bind(bindHost, port).sync().channel();
+            log.info("Nameserver HTTP manage server listening on {}:{}, prefix=/_manage", bindHost, port);
         } catch (Exception ex) {
             shutdown();
             throw new IllegalStateException("启动 Nameserver 管理口失败, port=" + port, ex);

@@ -52,7 +52,9 @@ public class GatewayApplication {
                 config.toFilterSettings(),
                 discoverySettings,
                 config.getLoadBalanceStrategyOrDefault(),
-                config.toCorsSettings());
+                config.toCorsSettings(),
+                config.getBindHostOrDefault(),
+                config.getAdminTokenOrDefault());
 
         Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown, "gateway-shutdown"));
         server.start();

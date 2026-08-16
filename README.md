@@ -51,6 +51,7 @@ Rover-Suite provides an **all-in-one lightweight solution with a built-in regist
 | **Multiple load balancing** | Round-robin, weighted round-robin, random, IP hash, least connections |
 | **Extensible SPI** | Filters, load balancers, and service discovery adapters; supports plugin jar hot-loading |
 | **Runtime management** | Admin console for viewing and updating runtime config, hot route updates |
+| **Management security** | Configurable bind address + token auth for the management API and registration/subscription protocol |
 | **Java native** | Customize with Java SPI, zero learning cost for Java teams, source code fully modifiable |
 
 ---
@@ -217,6 +218,15 @@ rover:
         serviceName: demo-service
         stripPrefix: /api/demo
 ```
+
+### Security (optional)
+
+Listeners bind `0.0.0.0` by default and management/protocol auth is disabled for backward compatibility. To harden a deployment:
+
+- `rover.nameserver.bindHost` / `manageBindHost`, `rover.gateway.server.bindHost` — restrict listen addresses
+- `rover.nameserver.token` / `adminToken`, `rover.gateway.adminToken`, `rover.admin.admin-token` — enable token auth
+
+When a token is set, clients must present the same value: the Starter and Gateway discovery read `rover.nameserver.token`, and Admin sends `X-Rover-Admin-Token` to management endpoints. All options are documented with comments in `rover-nameserver.yml`, `rover-gateway.yml`, and `rover-admin`'s `application.yml`.
 
 ---
 
