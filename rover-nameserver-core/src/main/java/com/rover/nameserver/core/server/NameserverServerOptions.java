@@ -16,9 +16,19 @@ public class NameserverServerOptions {
 
     /** TCP 注册发现端口 */
     private final int port;
+    /** TCP 监听地址，默认 0.0.0.0（不限制部署形态，用户可收紧到本机/内网） */
+    @Builder.Default
+    private final String bindHost = "0.0.0.0";
     /** HTTP 管理口端口，0 表示关闭 */
     @Builder.Default
     private final int managePort = NameserverConstants.DEFAULT_MANAGE_PORT;
+    /** HTTP 管理口监听地址，默认 0.0.0.0 */
+    @Builder.Default
+    private final String manageBindHost = "0.0.0.0";
+    /** 集群协议鉴权 token（注册/注销/订阅校验）；空表示不鉴权 */
+    private final String token;
+    /** HTTP 管理口鉴权 token（X-Rover-Admin-Token 校验）；空表示不鉴权 */
+    private final String adminToken;
     /** 写确认模式，集群预留 */
     private final AckMode writeAckMode;
     /** 是否允许客户端覆盖 ack */

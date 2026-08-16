@@ -22,6 +22,9 @@ public class DiscoverySettings {
     /** Nameserver 端口，仅 NAMESERVER 模式使用 */
     private int nameserverPort = NameserverConstants.DEFAULT_PORT;
 
+    /** 连接 Nameserver 订阅/查询时携带的协议 token；空表示不鉴权 */
+    private String nameserverToken;
+
     /** 定时对账间隔（毫秒），防止订阅推送丢失 */
     private long reconcileIntervalMs = 30000L;
 

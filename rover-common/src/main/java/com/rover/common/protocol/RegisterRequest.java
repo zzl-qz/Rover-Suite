@@ -32,4 +32,6 @@ public class RegisterRequest {
     private boolean ephemeral = true;
     /** 扩展 KV */
     private Map<String, String> metadata = new HashMap<>();
+    /** 集群鉴权 token，服务端开启鉴权时校验；空表示不鉴权 */
+    private String token;
 }

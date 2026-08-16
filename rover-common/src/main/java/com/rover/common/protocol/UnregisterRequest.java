@@ -16,4 +16,6 @@ public class UnregisterRequest {
     private String instanceId;
     /** 注销原因，可选 */
     private String reason;
+    /** 集群鉴权 token，服务端开启鉴权时校验；空表示不鉴权 */
+    private String token;
 }
