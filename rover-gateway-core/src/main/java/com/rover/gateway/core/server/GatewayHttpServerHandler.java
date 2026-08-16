@@ -3,7 +3,10 @@ package com.rover.gateway.core.server;
 import com.rover.gateway.core.filter.DefaultFilterChain;
 import com.rover.gateway.core.filter.GatewayRequestContext;
 import com.rover.gateway.core.manage.GatewayManageApi;
+import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.runtime.GatewayRuntime;
+import com.rover.gateway.core.trace.RequestTrace;
+import com.rover.gateway.core.trace.TraceSettings;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
@@ -16,6 +19,9 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.QueryStringDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -48,7 +54,11 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
             return;
         }
 
+        runtime.getMetricsRegistry().requestStarted();
         GatewayRequestContext context = new GatewayRequestContext(ctx, request, requestPath);
+        // 生成/透传 traceId，供后端日志关联（转发时随请求头原样透传）
+        ensureTraceId(request, context);
+        context.markPhase("receive", System.nanoTime() - context.getStartNanos());
         try {
             new DefaultFilterChain(runtime.currentFilters()).doFilter(context);
         } catch (Exception err) {
@@ -58,7 +68,72 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
                         HttpResponseStatus.INTERNAL_SERVER_ERROR,
                         "Gateway filter chain error: " + err.getMessage());
             }
+        } finally {
+            runtime.getMetricsRegistry().requestFinished();
+            recordTraceIfNeeded(context);
         }
+    }
+
+    /** 请求头已有 traceId 则沿用，否则生成；同时写入上下文属性。 */
+    private void ensureTraceId(FullHttpRequest request, GatewayRequestContext context) {
+        String traceId = request.headers().get("X-Rover-Trace-Id");
+        if (traceId == null || traceId.isBlank()) {
+            traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+            request.headers().set("X-Rover-Trace-Id", traceId);
+        }
+        context.setAttribute("traceId", traceId);
+    }
+
+    /** 慢请求或采样命中时记录链路时间线（写回耗时按剩余时间兜底，保证各阶段之和等于总耗时）。 */
+    private void recordTraceIfNeeded(GatewayRequestContext context) {
+        TraceSettings settings = runtime.getTraceSettings();
+        if (!settings.isEnabled()) {
+            return;
+        }
+        long totalNanos = System.nanoTime() - context.getStartNanos();
+        long totalCostMs = totalNanos / 1_000_000;
+        long writeNanos = Math.max(0, totalNanos - context.phaseCostSumNanos());
+        context.markPhase("write", writeNanos);
+
+        boolean slow = totalCostMs >= settings.getSlowThresholdMillis();
+        boolean sampled = settings.getSampleRate() > 0
+                && ThreadLocalRandom.current().nextDouble() < settings.getSampleRate();
+        if (!slow && !sampled) {
+            return;
+        }
+
+        try {
+            String traceId = String.valueOf(context.getAttribute("traceId"));
+            RouteConfig route = context.getRoute();
+            RequestTrace trace = new RequestTrace(
+                    traceId,
+                    context.getRequest().method().name(),
+                    context.getRequestPath(),
+                    route == null ? null : route.getId(),
+                    context.getTargetUrl(),
+                    context.getStatusCode() == null ? 500 : context.getStatusCode(),
+                    System.currentTimeMillis() - totalCostMs,
+                    totalCostMs,
+                    slow,
+                    context.phaseCostsMillis());
+            runtime.getTraceBuffer().append(trace);
+        } catch (Exception err) {
+            log.warn("Trace record failed, ignore to protect request path", err);
+        }
+    }
+
+    /** 连接建立：计入活跃连接数。 */
+    @Override
+    public void channelActive(ChannelHandlerContext ctx) throws Exception {
+        runtime.getMetricsRegistry().connectionOpened();
+        super.channelActive(ctx);
+    }
+
+    /** 连接关闭：扣减活跃连接数。 */
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        runtime.getMetricsRegistry().connectionClosed();
+        super.channelInactive(ctx);
     }
 
     /** 管道异常：body 过大返回 413，其它异常打日志并关连接。 */

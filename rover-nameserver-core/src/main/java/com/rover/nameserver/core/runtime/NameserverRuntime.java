@@ -2,6 +2,7 @@ package com.rover.nameserver.core.runtime;
 
 import com.rover.nameserver.core.config.NameserverRuntimeConfigManager;
 import com.rover.nameserver.core.health.HealthChecker;
+import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.push.PushService;
 import com.rover.nameserver.core.registry.ServiceRegistry;
 import com.rover.nameserver.core.server.NameserverServerOptions;
@@ -25,17 +26,21 @@ public class NameserverRuntime {
     private final HealthChecker healthChecker;
     /** 运行时配置管理器（含 overlay 持久化） */
     private final NameserverRuntimeConfigManager configManager;
+    /** 指标注册表（生命周期计数 + 最近事件 + TCP 连接数） */
+    private final NameserverMetricsRegistry metrics;
 
     public NameserverRuntime(
             NameserverServerOptions options,
             ServiceRegistry registry,
             PushService pushService,
             HealthChecker healthChecker,
-            NameserverRuntimeConfigManager configManager) {
+            NameserverRuntimeConfigManager configManager,
+            NameserverMetricsRegistry metrics) {
         this.options = options;
         this.registry = registry;
         this.pushService = pushService;
         this.healthChecker = healthChecker;
         this.configManager = configManager;
+        this.metrics = metrics == null ? new NameserverMetricsRegistry() : metrics;
     }
 }

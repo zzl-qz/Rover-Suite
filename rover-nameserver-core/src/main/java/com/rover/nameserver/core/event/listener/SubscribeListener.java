@@ -38,6 +38,7 @@ public class SubscribeListener implements EventListener<SubscribeEvent> {
         }
         services.getSubscriptionManager()
                 .subscribe(request.getServiceName(), request.getGroup(), event.getChannel());
+        services.getMetrics().subscribe(request.getServiceName());
 
         RegistrySnapshot snapshot = RegistrySnapshot.of(
                 request.getServiceName(),

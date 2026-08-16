@@ -23,6 +23,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -44,6 +45,9 @@ public class HttpProxyClient {
     /** 单次请求超时，可热更新。 */
     private final java.util.concurrent.atomic.AtomicLong requestTimeoutMillis;
 
+    /** 在途上游请求数（正在等待后端响应的请求），近似代理客户端连接池使用情况。 */
+    private final AtomicInteger inFlight = new AtomicInteger();
+
     /** 使用默认连接/请求超时构造。 */
     public HttpProxyClient() {
         this(DEFAULT_CONNECT_TIMEOUT_MILLIS, DEFAULT_REQUEST_TIMEOUT_MILLIS);
@@ -64,6 +68,11 @@ public class HttpProxyClient {
         return requestTimeoutMillis.get();
     }
 
+    /** 在途上游请求数，近似连接池使用情况（java.net.http 不暴露内部连接池状态）。 */
+    public int getInFlightCount() {
+        return inFlight.get();
+    }
+
     /** 热更新请求超时，必须大于 0。 */
     public void setRequestTimeoutMillis(long timeoutMillis) {
         if (timeoutMillis <= 0) {
@@ -75,9 +84,11 @@ public class HttpProxyClient {
     /**
      * 转发请求到目标 URL，并将后端响应写回当前客户端连接。
      *
-     * @return 最终给客户端的 HTTP 状态码，方便链路日志统计
+     * @return 代理结果：最终状态码、上游往返耗时、是否连接失败/超时，方便指标统计
      */
-    public int forward(ChannelHandlerContext ctx, FullHttpRequest request, String targetUrl) {
+    public ProxyResult forward(ChannelHandlerContext ctx, FullHttpRequest request, String targetUrl) {
+        long startNanos = System.nanoTime();
+        inFlight.incrementAndGet();
         try {
             HttpRequest proxyRequest = buildProxyRequest(ctx, request, targetUrl);
             // 同步发送；当前跑在业务线程池，不会直接堵死 Netty IO 线程。
@@ -85,29 +96,40 @@ public class HttpProxyClient {
                     proxyRequest,
                     HttpResponse.BodyHandlers.ofByteArray());
             writeProxyResponse(ctx, proxyResponse);
-            return proxyResponse.statusCode();
+            return new ProxyResult(proxyResponse.statusCode(), elapsedMillis(startNanos), false, false);
         } catch (HttpTimeoutException err) {
             log.warn("Proxy request timeout, targetUrl={}", targetUrl, err);
             writeProxyError(ctx, HttpResponseStatus.GATEWAY_TIMEOUT, "后端请求超时", targetUrl);
-            return HttpResponseStatus.GATEWAY_TIMEOUT.code();
+            return new ProxyResult(HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true);
         } catch (ConnectException err) {
             log.warn("Proxy target connection error, targetUrl={}", targetUrl, err);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端连接失败", targetUrl);
-            return HttpResponseStatus.BAD_GATEWAY.code();
+            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
         } catch (IOException err) {
             log.warn("Proxy request IO error, targetUrl={}", targetUrl, err);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应异常", targetUrl);
-            return HttpResponseStatus.BAD_GATEWAY.code();
+            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
         } catch (InterruptedException err) {
             Thread.currentThread().interrupt();
             log.warn("Proxy request interrupted, targetUrl={}", targetUrl, err);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "代理请求被中断", targetUrl);
-            return HttpResponseStatus.BAD_GATEWAY.code();
+            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
         } catch (IllegalArgumentException err) {
             log.warn("Invalid proxy target URL, targetUrl={}", targetUrl, err);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "目标 URL 非法", targetUrl);
-            return HttpResponseStatus.BAD_GATEWAY.code();
+            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+        } finally {
+            inFlight.decrementAndGet();
         }
+    }
+
+    /** 单调时钟计时，纳秒转毫秒，负值夹到 0。 */
+    private static long elapsedMillis(long startNanos) {
+        return Math.max(0, (System.nanoTime() - startNanos) / 1_000_000);
+    }
+
+    /** 一次代理转发的统计结果。 */
+    public record ProxyResult(int statusCode, long upstreamCostMillis, boolean connectFail, boolean timeout) {
     }
 
     /** 把客户端原始请求改造成发给后端的代理请求。 */
