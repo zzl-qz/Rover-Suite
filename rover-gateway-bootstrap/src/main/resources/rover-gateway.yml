@@ -1,8 +1,13 @@
 rover:
   gateway:
     port: 80
+    # 管理口鉴权 token：非空时，访问 /_manage/** 必须带 X-Rover-Admin-Token 请求头
+    # 留空 = 关闭管理口鉴权（向后兼容）
+    adminToken: ""
     server:
       maxContentLengthBytes: 1048576
+      # 监听地址：默认 0.0.0.0；可收紧到 127.0.0.1 或内网 IP
+      bindHost: 0.0.0.0
     proxy:
       connectTimeoutMillis: 3000
       requestTimeoutMillis: 30000
@@ -22,6 +27,8 @@ rover:
       nameserver:
         address: 127.0.0.1:8888
         reconcileIntervalMs: 30000
+        # 连接 Nameserver 订阅/查询时携带的协议 token；与服务端 token 保持一致，留空=不鉴权
+        token: ""
     # 跨域（CORS）：前端 dev server 等异源页面访问网关时需要开启
     cors:
       enabled: true

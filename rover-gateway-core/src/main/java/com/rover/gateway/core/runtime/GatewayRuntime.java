@@ -37,6 +37,9 @@ public class GatewayRuntime {
     /** 监听端口，status 接口展示用。 */
     private final int port;
 
+    /** 管理口鉴权 token（/_manage/**）；空表示不鉴权。 */
+    private final String adminToken;
+
     /** 服务发现配置副本。 */
     private final DiscoverySettings discoverySettings;
 
@@ -114,6 +117,7 @@ public class GatewayRuntime {
      * @param discoverySettings      发现配置
      * @param serviceDiscovery       发现客户端
      * @param configManager          配置管理器
+     * @param adminToken             管理口鉴权 token，空表示不鉴权
      */
     public GatewayRuntime(
             int port,
@@ -123,8 +127,10 @@ public class GatewayRuntime {
             FilterSettings filterSettings,
             DiscoverySettings discoverySettings,
             ServiceDiscovery serviceDiscovery,
-            GatewayRuntimeConfigManager configManager) {
+            GatewayRuntimeConfigManager configManager,
+            String adminToken) {
         this.port = port;
+        this.adminToken = adminToken;
         this.connectTimeoutMillis = connectTimeoutMillis;
         this.discoverySettings = discoverySettings == null ? new DiscoverySettings() : discoverySettings;
         this.discoveryType = this.discoverySettings.getType();

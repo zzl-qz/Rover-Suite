@@ -86,17 +86,25 @@ public class NameserverRequestDispatcher {
     }
 
     private void publishRegister(Channel channel, RoverMessage message) {
+        RegisterRequest request = RoverMessageCodecSupport.decodeBody(message, RegisterRequest.class);
+        if (!authorized(channel, message, request.getToken())) {
+            return;
+        }
         RegisterEvent event = new RegisterEvent();
         fillBase(event, channel, message);
-        event.setRequest(RoverMessageCodecSupport.decodeBody(message, RegisterRequest.class));
+        event.setRequest(request);
         log.debug("{}", NameserverTrace.of(event, "publish-RegisterEvent"));
         eventBus.publish(event);
     }
 
     private void publishUnregister(Channel channel, RoverMessage message) {
+        UnregisterRequest request = RoverMessageCodecSupport.decodeBody(message, UnregisterRequest.class);
+        if (!authorized(channel, message, request.getToken())) {
+            return;
+        }
         UnregisterEvent event = new UnregisterEvent();
         fillBase(event, channel, message);
-        event.setRequest(RoverMessageCodecSupport.decodeBody(message, UnregisterRequest.class));
+        event.setRequest(request);
         log.debug("{}", NameserverTrace.of(event, "publish-UnregisterEvent"));
         eventBus.publish(event);
     }
@@ -118,9 +126,13 @@ public class NameserverRequestDispatcher {
     }
 
     private void publishSubscribe(Channel channel, RoverMessage message) {
+        SubscribeRequest request = RoverMessageCodecSupport.decodeBody(message, SubscribeRequest.class);
+        if (!authorized(channel, message, request.getToken())) {
+            return;
+        }
         SubscribeEvent event = new SubscribeEvent();
         fillBase(event, channel, message);
-        event.setRequest(RoverMessageCodecSupport.decodeBody(message, SubscribeRequest.class));
+        event.setRequest(request);
         log.debug("{}", NameserverTrace.of(event, "publish-SubscribeEvent"));
         eventBus.publish(event);
     }
@@ -138,5 +150,25 @@ public class NameserverRequestDispatcher {
         event.setRequestId(message.getRequestId());
         event.setOneway(message.oneway());
         event.setAckMode(NameserverChannelSupport.resolveAck(services, message));
+    }
+
+    /**
+     * 校验协议层 token。服务端未配置 token 时放行；配置后必须与请求携带的 token 完全一致，
+     * 否则回 401 并阻止事件进入业务 Listener，实现注册/注销/订阅的纵深防御。
+     */
+    private boolean authorized(Channel channel, RoverMessage message, String providedToken) {
+        String expected = services.getOptions().getToken();
+        if (expected == null || expected.isBlank()) {
+            return true;
+        }
+        if (expected.equals(providedToken)) {
+            return true;
+        }
+        log.warn("{}", NameserverTrace.of(
+                channel, message.getRequestId(), message.getType(), "unauthorized-token"));
+        NameserverChannelSupport.replyFail(
+                channel, message.getRequestId(), message.oneway(),
+                StatusConstants.UNAUTHORIZED, "鉴权失败：token 不匹配");
+        return false;
     }
 }

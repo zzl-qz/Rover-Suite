@@ -26,7 +26,11 @@ public class NameserverApplication {
         // 配置 → 运行参数映射，含端口默认值、ACK 模式解析等派生逻辑
         NameserverServerOptions options = NameserverServerOptions.builder()
                 .port(config.getPortOrDefault())
+                .bindHost(props.getBindHost())
                 .managePort(props.getManagePort())
+                .manageBindHost(props.getManageBindHost())
+                .token(props.getToken())
+                .adminToken(props.getAdminToken())
                 .writeAckMode(config.resolveWriteAckMode())
                 .allowClientAckOverride(props.isAllowClientAckOverride())
                 .clusterEnabled(props.getCluster().isEnabled())

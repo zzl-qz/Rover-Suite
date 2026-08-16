@@ -54,6 +54,12 @@ public class GatewayHttpServer {
     @Getter
     private final int port;
 
+    /** 监听地址，默认 0.0.0.0。 */
+    private final String bindHost;
+
+    /** 管理口鉴权 token（/_manage/**）；空表示不鉴权。 */
+    private final String adminToken;
+
     /** 单请求最大 body 字节数，超过 TooLongFrameException。 */
     private final int maxContentLengthBytes;
 
@@ -138,7 +144,26 @@ public class GatewayHttpServer {
             DiscoverySettings discoverySettings,
             String loadBalanceStrategy,
             CorsSettings corsSettings) {
+        this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
+                filterSettings, discoverySettings, loadBalanceStrategy, corsSettings, "0.0.0.0", null);
+    }
+
+    /** 全参数构造（含绑定地址与管理口 token）。 */
+    public GatewayHttpServer(
+            int port,
+            List<RouteConfig> routes,
+            int maxContentLengthBytes,
+            int connectTimeoutMillis,
+            int requestTimeoutMillis,
+            FilterSettings filterSettings,
+            DiscoverySettings discoverySettings,
+            String loadBalanceStrategy,
+            CorsSettings corsSettings,
+            String bindHost,
+            String adminToken) {
         this.port = port;
+        this.bindHost = bindHost == null || bindHost.isBlank() ? "0.0.0.0" : bindHost.trim();
+        this.adminToken = adminToken;
         this.maxContentLengthBytes = maxContentLengthBytes;
         this.corsSettings = corsSettings == null ? new CorsSettings() : corsSettings;
         DiscoverySettings settings = discoverySettings == null ? defaultStaticDiscovery() : discoverySettings;
@@ -163,7 +188,8 @@ public class GatewayHttpServer {
                 filterSettings,
                 settings,
                 serviceDiscovery,
-                configManager);
+                configManager,
+                adminToken);
         configManager.getApplier().bind(runtime);
         // 把 overlay/当前值真正打进运行时（超时、过滤器、LB）
         configManager.reapplyAll();
@@ -194,9 +220,9 @@ public class GatewayHttpServer {
                         }
                     });
 
-            serverChannel = bootstrap.bind(port).sync().channel();
-            log.info("Rover Gateway HTTP server listening on port {}, discovery={}, managePrefix=/_manage",
-                    port, runtime.getDiscoveryType());
+            serverChannel = bootstrap.bind(bindHost, port).sync().channel();
+            log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, managePrefix=/_manage",
+                    bindHost, port, runtime.getDiscoveryType());
         } catch (InterruptedException err) {
             Thread.currentThread().interrupt();
             shutdown();

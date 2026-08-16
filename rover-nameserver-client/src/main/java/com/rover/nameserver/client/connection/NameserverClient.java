@@ -131,6 +131,7 @@ public class NameserverClient implements AutoCloseable {
      * @return 注册响应；服务端返回非成功码时抛 RoverException
      */
     public CommonResponseBody register(RegisterRequest request) {
+        request.setToken(options.getToken());
         CommonResponseBody response = requestSync(ProtocolConstants.REGISTER_REQUEST, request);
         ensureSuccess(response, "注册失败");
         // 本地也记一份，断线重连后才能自动补注册
@@ -149,6 +150,7 @@ public class NameserverClient implements AutoCloseable {
         UnregisterRequest request = new UnregisterRequest();
         request.setServiceName(serviceName);
         request.setInstanceId(instanceId);
+        request.setToken(options.getToken());
         CommonResponseBody response = requestSync(ProtocolConstants.UNREGISTER_REQUEST, request);
         // 双向删除：服务端注销成功后，本地备份也一并清掉，避免重连后误补注册
         registeredInstances.remove(instanceKey(serviceName, instanceId));
@@ -222,6 +224,7 @@ public class NameserverClient implements AutoCloseable {
         request.setGroup(group);
         // 带上本地已知版本号，支持增量订阅
         request.setKnownRevision(instanceCache.revision(serviceName, group));
+        request.setToken(options.getToken());
 
         CommonResponseBody response = requestSync(ProtocolConstants.SUBSCRIBE_REQUEST, request);
         ensureSuccess(response, "订阅失败");
@@ -509,6 +512,7 @@ public class NameserverClient implements AutoCloseable {
         copy.setGroup(source.getGroup());
         copy.setZone(source.getZone());
         copy.setEphemeral(source.isEphemeral());
+        copy.setToken(source.getToken());
         copy.setMetadata(source.getMetadata() == null
                 ? new java.util.HashMap<>()
                 : new java.util.HashMap<>(source.getMetadata()));

@@ -51,6 +51,7 @@ Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务�
 | **多种负载均衡** | 轮询、加权轮询、随机、IP Hash、最少连接数 |
 | **可扩展** | Filter、负载均衡、服务发现等提供 SPI 扩展点，支持插件 jar 热加载 |
 | **运行时管理** | Admin 可查看并更新网关 / 注册中心运行时配置，路由热更新 |
+| **管理面安全** | 监听地址可配置 + 管理口与注册/订阅协议 token 鉴权 |
 | **Java 原生** | 定制开发用 Java SPI，对 Java 团队零学习成本，可直接改源码二开 |
 
 ---
@@ -217,6 +218,15 @@ rover:
         serviceName: demo-service
         stripPrefix: /api/demo
 ```
+
+### 安全加固（可选）
+
+监听地址默认绑定 `0.0.0.0`，管理口与注册/订阅协议默认不鉴权（向后兼容）。如需加固：
+
+- `rover.nameserver.bindHost` / `manageBindHost`、`rover.gateway.server.bindHost` —— 收紧监听地址
+- `rover.nameserver.token` / `adminToken`、`rover.gateway.adminToken`、`rover.admin.admin-token` —— 开启 token 鉴权
+
+开启 token 后，客户端需携带一致的值：Starter 与 Gateway 发现读取 `rover.nameserver.token`，Admin 调用管理口时携带 `X-Rover-Admin-Token` 请求头。所有配置项均在 `rover-nameserver.yml`、`rover-gateway.yml` 与 `rover-admin` 的 `application.yml` 中带注释说明。
 
 ---
 

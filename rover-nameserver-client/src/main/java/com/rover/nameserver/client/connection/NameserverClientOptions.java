@@ -47,4 +47,6 @@ public class NameserverClientOptions {
     /** 最大在途请求数 */
     @Builder.Default
     private final int maxPendingRequests = PendingRequestTable.DEFAULT_MAX_PENDING;
+    /** 集群鉴权 token，注册/注销/订阅时携带；空表示不鉴权 */
+    private final String token;
 }

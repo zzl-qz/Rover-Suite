@@ -29,6 +29,7 @@ public class NameserverAutoConfiguration {
         NameserverClientOptions options = NameserverClientOptions.builder()
                 .host(address.host())
                 .port(address.port())
+                .token(properties.getToken())
                 .connectTimeoutMs(properties.getConnectTimeoutMs())
                 .requestTimeoutMs(properties.getRequestTimeoutMs())
                 .heartbeatIntervalMs(properties.getHeartbeatIntervalMs())
