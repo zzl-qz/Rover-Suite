@@ -49,6 +49,7 @@ public class HeartbeatListener implements EventListener<HeartbeatEvent> {
                     "实例不存在，请先注册");
             return;
         }
+        services.getMetrics().heartbeat(request.getServiceName(), request.getInstanceId());
         CommonResponseBody body = CommonResponseBody.success();
         body.setRevision(services.getRegistry().revisionOf(request.getServiceName()));
         NameserverChannelSupport.fillNode(services.getOptions(), body);

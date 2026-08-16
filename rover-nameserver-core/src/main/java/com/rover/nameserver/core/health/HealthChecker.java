@@ -1,6 +1,7 @@
 package com.rover.nameserver.core.health;
 
 import com.rover.common.model.ServiceInstance;
+import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.model.InstanceRecord;
 import com.rover.nameserver.core.push.PushService;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
@@ -25,6 +26,8 @@ public class HealthChecker {
 
     private final ServiceRegistry registry;
     private final PushService pushService;
+    /** 指标注册表：剔除/标不健康动作埋点。 */
+    private final NameserverMetricsRegistry metrics;
     private final AtomicLong heartbeatTimeoutMillis;
     private final AtomicLong checkIntervalMillis;
     private final AtomicLong instanceExpireMillis;
@@ -43,8 +46,19 @@ public class HealthChecker {
             long heartbeatTimeoutMillis,
             long checkIntervalMillis,
             long instanceExpireMillis) {
+        this(registry, pushService, heartbeatTimeoutMillis, checkIntervalMillis, instanceExpireMillis, null);
+    }
+
+    public HealthChecker(
+            ServiceRegistry registry,
+            PushService pushService,
+            long heartbeatTimeoutMillis,
+            long checkIntervalMillis,
+            long instanceExpireMillis,
+            NameserverMetricsRegistry metrics) {
         this.registry = registry;
         this.pushService = pushService;
+        this.metrics = metrics == null ? new NameserverMetricsRegistry() : metrics;
         this.heartbeatTimeoutMillis = new AtomicLong(heartbeatTimeoutMillis);
         this.checkIntervalMillis = new AtomicLong(checkIntervalMillis);
         this.instanceExpireMillis = new AtomicLong(instanceExpireMillis);
@@ -132,6 +146,7 @@ public class HealthChecker {
                         registry.removeExpired(instance.getServiceName(), instance.getInstanceId());
                 if (snapshot != null) {
                     changed.add(snapshot);
+                    metrics.expireEvict(instance.getServiceName(), instance.getInstanceId(), idle, expire);
                     log.warn("心跳超时，剔除临时实例: {}#{} idle={}ms expire={}ms",
                             instance.getServiceName(), instance.getInstanceId(), idle, expire);
                 }
@@ -143,6 +158,7 @@ public class HealthChecker {
             }
             if (instance.isHealthy()) {
                 instance.setHealthy(false);
+                metrics.markUnhealthy(instance.getServiceName(), instance.getInstanceId(), idle);
                 log.warn("心跳超时，标记实例不健康: {}#{} idle={}ms",
                         instance.getServiceName(), instance.getInstanceId(), idle);
             }

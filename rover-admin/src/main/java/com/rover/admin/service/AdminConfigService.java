@@ -91,6 +91,61 @@ public class AdminConfigService {
         return items;
     }
 
+    /** 读取 Gateway 指标快照（/api/metrics）。 */
+    public JsonNode loadMetrics() {
+        try {
+            return httpClient.getJson(properties.getGatewayUrl(), "/_manage/metrics");
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取 Gateway 指标失败: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** 读取 Gateway 指标自洽校验结果（/api/selfcheck）。 */
+    public JsonNode loadSelfcheck() {
+        try {
+            return httpClient.getJson(properties.getGatewayUrl(), "/_manage/metrics/selfcheck");
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取指标自洽校验失败: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** 读取 Nameserver 指标快照（注册概况 + 生命周期计数 + TCP 连接 + JVM）。 */
+    public JsonNode loadNameserverMetrics() {
+        try {
+            return httpClient.getJson(properties.getNameserverManageUrl(), "/_manage/metrics");
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取 Nameserver 指标失败: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** 读取 Nameserver 最近事件列表（注册/注销/剔除/标不健康/推送）。 */
+    public List<Map<String, Object>> loadEvents() {
+        try {
+            return httpClient.getList(properties.getNameserverManageUrl(), "/_manage/events");
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取 Nameserver 事件失败: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** 读取 Gateway 请求链路时间线（支持 traceId/path/slow 过滤）。 */
+    public JsonNode loadTraces(Map<String, String> params) {
+        try {
+            StringBuilder path = new StringBuilder("/_manage/traces");
+            List<String> query = new ArrayList<>();
+            params.forEach((key, value) -> {
+                if (value != null && !value.isBlank()) {
+                    query.add(key + "=" + URLEncoder.encode(value, StandardCharsets.UTF_8));
+                }
+            });
+            if (!query.isEmpty()) {
+                path.append('?').append(String.join("&", query));
+            }
+            return httpClient.getJson(properties.getGatewayUrl(), path.toString());
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取请求链路失败: " + ex.getMessage(), ex);
+        }
+    }
+
     public ConfigUpdateResult updateConfig(String component, String key, String value) {
         String baseUrl = resolveBaseUrl(component);
         try {

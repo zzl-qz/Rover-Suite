@@ -68,8 +68,15 @@ public class RouteAndProxyFilter implements Filter {
             return;
         }
 
+        // Filter 链（前置）：从请求开始到本终端过滤器执行，扣除已标记阶段（receive）
+        long filterStartNanos = System.nanoTime();
+        long filterCostNanos = filterStartNanos - gatewayContext.getStartNanos() - gatewayContext.phaseCostSumNanos();
+        gatewayContext.markPhase("filter", Math.max(0, filterCostNanos));
+
         String requestPath = gatewayContext.getRequestPath();
+        long routeStartNanos = System.nanoTime();
         RouteConfig route = routeMatcher.match(requestPath);
+        gatewayContext.markPhase("route", System.nanoTime() - routeStartNanos);
         if (route == null) {
             gatewayContext.writeText(HttpResponseStatus.NOT_FOUND, "No route matched: " + requestPath);
             return;
@@ -105,11 +112,18 @@ public class RouteAndProxyFilter implements Filter {
             loadBalancer.onStart(instance);
         }
         try {
-            int statusCode = proxyClient.forward(
+            long proxyStartNanos = System.nanoTime();
+            HttpProxyClient.ProxyResult result = proxyClient.forward(
                     gatewayContext.getChannelContext(),
                     gatewayContext.getRequest(),
                     targetUrl);
-            gatewayContext.setStatusCode(statusCode);
+            gatewayContext.markPhase("proxy", System.nanoTime() - proxyStartNanos);
+            gatewayContext.setStatusCode(result.statusCode());
+            // 回填上游信息，供 MetricsFilter 做上游维度统计
+            gatewayContext.setUpstreamHostPort(hostPortOf(instance));
+            gatewayContext.setUpstreamCostMillis(result.upstreamCostMillis());
+            gatewayContext.setUpstreamConnectFail(result.connectFail());
+            gatewayContext.setUpstreamTimeout(result.timeout());
             gatewayContext.markCompleted();
         } finally {
             if (loadBalancer != null && instance != null) {
@@ -122,7 +136,9 @@ public class RouteAndProxyFilter implements Filter {
         if (loadBalancer == null) {
             // 极端兜底：无 LB 时静态只取第一个
             if (discoveryType == DiscoveryType.STATIC) {
+                long discoveryStart = System.nanoTime();
                 List<ServiceInstance> instances = StaticUpstreamCluster.resolve(route);
+                gatewayContext.markPhase("discovery", System.nanoTime() - discoveryStart);
                 if (instances.isEmpty()) {
                     return null;
                 }
@@ -131,9 +147,10 @@ public class RouteAndProxyFilter implements Filter {
             return null;
         }
 
-        // 拉到一批健康的节点信息
+        // 服务发现查询：从注册中心缓存/静态配置拉取候选实例列表
         String clusterKey = null;
         List<ServiceInstance> instances = null;
+        long discoveryStart = System.nanoTime();
         if (discoveryType == DiscoveryType.NAMESERVER) {
             if (serviceDiscovery == null) {
                 return null;
@@ -150,21 +167,32 @@ public class RouteAndProxyFilter implements Filter {
         } else {
             log.warn("暂时没有该 discoveryType 类型， discoveryType is {}", discoveryType);
         }
+        gatewayContext.markPhase("discovery", System.nanoTime() - discoveryStart);
         if (instances == null || instances.isEmpty()) {
             log.warn("无可用上游: discovery={}, clusterKey={}", discoveryType, clusterKey);
             return null;
         }
 
+        // 负载均衡选实例
+        long lbStart = System.nanoTime();
         LoadBalanceContext lbContext = LoadBalanceContext.of(
                 clusterKey,
                 instances,
                 gatewayContext,
                 resolveClientIp(gatewayContext));
         ServiceInstance chosen = loadBalancer.choose(lbContext);
+        gatewayContext.markPhase("loadbalance", System.nanoTime() - lbStart);
         if (chosen == null) {
             return null;
         }
         return new ChosenUpstream(StaticUpstreamCluster.baseUrlOf(chosen), chosen);
+    }
+
+    private static String hostPortOf(ServiceInstance instance) {
+        if (instance == null) {
+            return null;
+        }
+        return instance.getHost() + ":" + instance.getPort();
     }
 
     private static String resolveClientIp(GatewayRequestContext context) {

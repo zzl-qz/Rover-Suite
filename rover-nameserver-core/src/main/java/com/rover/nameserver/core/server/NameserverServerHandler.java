@@ -2,6 +2,7 @@ package com.rover.nameserver.core.server;
 
 import com.rover.common.exception.ProtocolException;
 import com.rover.common.protocol.RoverMessage;
+import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
 import lombok.extern.slf4j.Slf4j;
@@ -16,14 +17,22 @@ public class NameserverServerHandler extends SimpleChannelInboundHandler<RoverMe
 
     /** 业务分发器：处理各类协议消息与断线清理 */
     private final NameserverRequestDispatcher dispatcher;
+    /** 指标注册表：TCP 连接数实时增减 */
+    private final NameserverMetricsRegistry metrics;
 
     public NameserverServerHandler(NameserverRequestDispatcher dispatcher) {
-        this.dispatcher = dispatcher;
+        this(dispatcher, null);
     }
 
-    /** 新连接建立：记录日志 */
+    public NameserverServerHandler(NameserverRequestDispatcher dispatcher, NameserverMetricsRegistry metrics) {
+        this.dispatcher = dispatcher;
+        this.metrics = metrics == null ? new NameserverMetricsRegistry() : metrics;
+    }
+
+    /** 新连接建立：记录日志并累加连接数 */
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
+        metrics.connectionOpened();
         log.info("客户端已连接: {}", ctx.channel().remoteAddress());
     }
 
@@ -33,9 +42,10 @@ public class NameserverServerHandler extends SimpleChannelInboundHandler<RoverMe
         dispatcher.dispatch(ctx.channel(), msg);
     }
 
-    /** 连接断开：转分发器做订阅清理与实例摘除 */
+    /** 连接断开：扣减连接数并转分发器做订阅清理与实例摘除 */
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
+        metrics.connectionClosed();
         log.info("客户端断开: {}", ctx.channel().remoteAddress());
         dispatcher.onChannelInactive(ctx.channel());
     }

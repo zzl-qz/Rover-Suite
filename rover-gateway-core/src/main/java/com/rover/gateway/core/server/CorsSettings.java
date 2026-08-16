@@ -6,8 +6,7 @@ import lombok.Data;
 
 /**
  * Author: Daylight
- * Created: 2026-08-16 00:20:00
- * Description: 网关 CORS 跨域配置：开关、允许的 Origin/方法/头、预检缓存时长
+ * Description: CORS 配置：开关、允许的 Origin/方法/头、预检缓存时长
  */
 @Data
 public class CorsSettings {

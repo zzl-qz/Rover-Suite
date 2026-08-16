@@ -41,6 +41,7 @@ public class QueryListener implements EventListener<QueryEvent> {
         }
         List<ServiceInstance> instances = services.getRegistry()
                 .query(request.getServiceName(), request.getGroup(), request.isHealthyOnly());
+        services.getMetrics().query(request.getServiceName());
         QueryResponseBody queryBody = new QueryResponseBody();
         queryBody.setInstances(instances);
         queryBody.setRevision(services.getRegistry().revisionOf(request.getServiceName()));

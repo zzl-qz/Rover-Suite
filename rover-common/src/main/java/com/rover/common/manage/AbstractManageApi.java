@@ -119,6 +119,19 @@ public abstract class AbstractManageApi {
         ctx.writeAndFlush(response);
     }
 
+    /** 写纯文本 HTTP 响应（如 Prometheus 文本格式导出）。 */
+    protected static void writeText(ChannelHandlerContext ctx, HttpResponseStatus status, String text,
+                                    String contentType) {
+        byte[] body = text.getBytes(StandardCharsets.UTF_8);
+        FullHttpResponse response = new DefaultFullHttpResponse(
+                HttpVersion.HTTP_1_1,
+                status,
+                Unpooled.wrappedBuffer(body));
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, contentType);
+        response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
+        ctx.writeAndFlush(response);
+    }
+
     /** null 安全转空串。 */
     protected static String nullToEmpty(String value) {
         return value == null ? "" : value;
