@@ -55,6 +55,7 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
                     "实例不存在");
             return;
         }
+        services.getMetrics().unregister(request.getServiceName(), request.getInstanceId());
         services.getPushService().pushSnapshot(snapshot);
 
         AckMode ackMode = event.getAckMode();

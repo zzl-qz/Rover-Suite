@@ -11,7 +11,9 @@ import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import lombok.Getter;
 import lombok.Setter;
@@ -39,6 +41,52 @@ public class GatewayRequestContext implements RequestContext {
     /** 过滤器之间共享的自定义属性，比如鉴权结果、traceId 等。 */
     private final Map<String, Object> attributes = new HashMap<>();
 
+    /** 链路时间线阶段耗时（纳秒），按标记顺序排列。 */
+    private final List<Phase> phases = new ArrayList<>();
+
+    /**
+     * 记录一个处理阶段耗时。
+     *
+     * @param name     阶段名（receive/route/proxy/write）
+     * @param costNanos 该阶段耗时（纳秒）
+     */
+    public void markPhase(String name, long costNanos) {
+        if (costNanos < 0) {
+            costNanos = 0;
+        }
+        phases.add(new Phase(name, costNanos));
+    }
+
+    /** 所有已标记阶段耗时之和（纳秒），用于计算剩余写回耗时。 */
+    public long phaseCostSumNanos() {
+        long sum = 0;
+        for (Phase phase : phases) {
+            sum += phase.costNanos;
+        }
+        return sum;
+    }
+
+    /** 阶段耗时列表（毫秒，供时间线组装）。 */
+    public List<com.rover.gateway.core.trace.RequestTrace.Phase> phaseCostsMillis() {
+        List<com.rover.gateway.core.trace.RequestTrace.Phase> result = new java.util.ArrayList<>();
+        for (Phase phase : phases) {
+            result.add(new com.rover.gateway.core.trace.RequestTrace.Phase(
+                    phase.name, phase.costNanos / 1_000_000));
+        }
+        return result;
+    }
+
+    /** 单阶段耗时记录。 */
+    private static final class Phase {
+        final String name;
+        final long costNanos;
+
+        Phase(String name, long costNanos) {
+            this.name = name;
+            this.costNanos = costNanos;
+        }
+    }
+
     /** 命中的路由规则，路由匹配后才会有值。 */
     @Setter
     private RouteConfig route;
@@ -50,6 +98,22 @@ public class GatewayRequestContext implements RequestContext {
     /** 最终返回给客户端的状态码。 */
     @Setter
     private Integer statusCode;
+
+    /** 命中的上游实例 host:port，未转发时为 null。 */
+    @Setter
+    private String upstreamHostPort;
+
+    /** 上游往返耗时（毫秒，含连接 + 上游处理，java.net.http 不暴露拆分点）。 */
+    @Setter
+    private long upstreamCostMillis;
+
+    /** 上游是否连接失败（ConnectException/IOException/目标非法）。 */
+    @Setter
+    private boolean upstreamConnectFail;
+
+    /** 上游是否触发请求超时。 */
+    @Setter
+    private boolean upstreamTimeout;
 
     /** 请求是否已经结束（响应已写回或不再继续转发）。 */
     private boolean completed;

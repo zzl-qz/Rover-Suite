@@ -1,5 +1,6 @@
 package com.rover.common.config;
 
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -26,6 +27,8 @@ public class ConfigItem {
     private ConfigApplyMode applyMode;
     /** 是否敏感项(如密码/密钥)，管理端展示时需脱敏 */
     private boolean sensitive;
+    /** 预设可选值（管理端渲染为可选择项）；为空表示自由输入 */
+    private List<String> options;
 
     /** 是否支持热更新（applyMode 为 HOT_RELOAD）。 */
     public boolean isHotReloadable() {

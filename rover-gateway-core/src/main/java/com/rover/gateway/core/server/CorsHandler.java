@@ -18,7 +18,6 @@ import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
- * Created: 2026-08-16 00:20:00
  * Description: Netty 层 CORS 处理器：预检 OPTIONS 直接 204 应答，其余跨域请求放行并在
  *              响应写回时注入跨域头，位于业务过滤器链之前，保证 404/500/管理口等所有响应都带 CORS 头
  */

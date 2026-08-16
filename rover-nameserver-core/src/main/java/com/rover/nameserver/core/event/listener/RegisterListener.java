@@ -39,6 +39,7 @@ public class RegisterListener implements EventListener<RegisterEvent> {
         }
 
         RegistrySnapshot snapshot = services.getRegistry().register(request);
+        services.getMetrics().register(request.getServiceName(), request.getInstanceId());
         NameserverChannelSupport.bindInstance(
                 event.getChannel(), request.getServiceName(), request.getInstanceId());
         services.getPushService().pushSnapshot(snapshot);

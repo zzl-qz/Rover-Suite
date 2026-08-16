@@ -37,6 +37,7 @@ public class UnsubscribeListener implements EventListener<UnsubscribeEvent> {
         }
         services.getSubscriptionManager()
                 .unsubscribe(request.getServiceName(), request.getGroup(), event.getChannel());
+        services.getMetrics().unsubscribe(request.getServiceName());
         CommonResponseBody body = CommonResponseBody.success();
         NameserverChannelSupport.fillNode(services.getOptions(), body);
         NameserverChannelSupport.reply(

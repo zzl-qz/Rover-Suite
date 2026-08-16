@@ -10,6 +10,7 @@ import com.rover.nameserver.core.event.EventBusBootstrap;
 import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.health.HealthChecker;
 import com.rover.nameserver.core.manage.NameserverHttpManageServer;
+import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.push.PushService;
 import com.rover.nameserver.core.push.SubscriptionManager;
 import com.rover.nameserver.core.registry.InMemoryServiceRegistry;
@@ -54,6 +55,8 @@ public class NameserverTcpServer {
     private final EventBusBootstrap eventBus;
     private final NameserverRequestDispatcher dispatcher;
     private final NameserverHttpManageServer manageServer;
+    /** 指标注册表：pipeline 中统计 TCP 连接数 */
+    private final NameserverMetricsRegistry metrics;
 
     /** Netty 事件循环组与业务线程组、服务端 channel（关闭时使用） */
     private EventLoopGroup bossGroup;
@@ -72,19 +75,23 @@ public class NameserverTcpServer {
         this.options = options;
         this.registry = registry;
         this.subscriptionManager = new SubscriptionManager();
+        // 指标注册表：生命周期计数 + 最近事件 + TCP 连接数，注入各业务组件
+        NameserverMetricsRegistry metrics = new NameserverMetricsRegistry();
+        this.metrics = metrics;
         // 世代可替换：单机 ProcessLocal；集群以后注入集群权威 Generation
         NameserverGeneration generation = NameserverGeneration.processLocal();
-        this.pushService = new PushService(subscriptionManager, options.isPushEnabled(), generation);
+        this.pushService = new PushService(subscriptionManager, options.isPushEnabled(), generation, metrics);
         this.healthChecker = new HealthChecker(
                 registry,
                 pushService,
                 options.getHeartbeatTimeoutMillis(),
                 options.getHealthCheckIntervalMillis(),
-                options.getInstanceExpireMillis());
+                options.getInstanceExpireMillis(),
+                metrics);
 
         // 事件总线：显式注册协议 Listener（Handler 只做 TCP→Event）
         NameserverServices services = new NameserverServices(
-                registry, subscriptionManager, pushService, writeAckPolicy, options, generation);
+                registry, subscriptionManager, pushService, writeAckPolicy, options, generation, metrics);
         this.eventBus = new EventBusBootstrap("rover-nameserver");
         this.eventBus.start(services);
         this.dispatcher = new NameserverRequestDispatcher(eventBus.getEventBus(), services);
@@ -100,7 +107,7 @@ public class NameserverTcpServer {
         configManager.seed("nameserver.push.enabled", String.valueOf(options.isPushEnabled()));
         configManager.loadOverlayIfPresent();
 
-        this.runtime = new NameserverRuntime(options, registry, pushService, healthChecker, configManager);
+        this.runtime = new NameserverRuntime(options, registry, pushService, healthChecker, configManager, metrics);
         configManager.getApplier().bind(runtime);
         configManager.reapplyAll();
         this.manageServer = new NameserverHttpManageServer(options.getManagePort(), runtime);
@@ -130,7 +137,7 @@ public class NameserverTcpServer {
                             ch.pipeline()
                                     .addLast(new RoverMessageDecoder())
                                     .addLast(new RoverMessageEncoder())
-                                    .addLast(bizGroup, new NameserverServerHandler(dispatcher));
+                                    .addLast(bizGroup, new NameserverServerHandler(dispatcher, metrics));
                         }
                     });
 

@@ -4,6 +4,8 @@ import com.rover.common.spi.filter.Filter;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.common.spi.loadbalance.LoadBalancer;
+import com.rover.gateway.core.metrics.MetricsFilter;
+import com.rover.gateway.core.metrics.MetricsRegistry;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteMatcher;
 import java.util.ArrayList;
@@ -29,23 +31,30 @@ public class GatewayFilterAssembler {
             FilterSettings settings,
             RouteMatcher routeMatcher,
             HttpProxyClient proxyClient) {
-        return assemble(settings, routeMatcher, proxyClient, DiscoveryType.STATIC, null, null);
+        return assemble(settings, routeMatcher, proxyClient, DiscoveryType.STATIC, null, null, null);
     }
 
-    /** 全参数组装过滤器链：访问日志 → 插件/配置 Filter → 路由转发终端。 */
+    /** 全参数组装过滤器链：访问日志 → 指标采集 → 插件/配置 Filter → 路由转发终端。 */
     public List<Filter> assemble(
             FilterSettings settings,
             RouteMatcher routeMatcher,
             HttpProxyClient proxyClient,
             DiscoveryType discoveryType,
             ServiceDiscovery serviceDiscovery,
-            LoadBalancer loadBalancer) {
+            LoadBalancer loadBalancer,
+            MetricsRegistry metricsRegistry) {
         // key 用类名，避免同名过滤器被重复加入。
         Map<String, Filter> filters = new LinkedHashMap<>();
 
         // 内置访问日志始终开启，保证主链路可观测。
         AccessLogFilter accessLogFilter = new AccessLogFilter();
         filters.put(accessLogFilter.getClass().getName(), accessLogFilter);
+
+        // 指标采集始终装配，内部受 metrics.enabled 总开关控制，可一键降级。
+        if (metricsRegistry != null) {
+            MetricsFilter metricsFilter = new MetricsFilter(metricsRegistry);
+            filters.put(metricsFilter.getClass().getName(), metricsFilter);
+        }
 
         if (settings == null || settings.isEnabled()) {
             // 1) 从 plugins 目录自动发现 SPI 过滤器。

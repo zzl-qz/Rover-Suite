@@ -36,11 +36,19 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
         this.componentName = componentName;
     }
 
-    /** 注册一个可热更新、非敏感的内置配置项。 */
+    /** 注册一个可热更新、非敏感的内置配置项（自由输入）。 */
     protected final void addConfig(String key, String value, String defaultValue, String description) {
+        addConfig(key, value, defaultValue, description, List.of());
+    }
+
+    /** 注册一个可热更新、非敏感的内置配置项，并附带预设可选值（管理端渲染为可选择项，仍允许自定义输入）。 */
+    protected final void addConfig(
+            String key, String value, String defaultValue, String description, List<String> options) {
         configs.put(
                 key,
-                new ConfigItem(key, value, defaultValue, description, ConfigApplyMode.HOT_RELOAD, false));
+                new ConfigItem(
+                        key, value, defaultValue, description, ConfigApplyMode.HOT_RELOAD, false,
+                        options == null ? List.of() : List.copyOf(options)));
     }
 
     /** 把一条配置变更事件应用到具体运行时，由子类桥接到自己的 Applier。 */
@@ -149,6 +157,7 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
                 item.getDefaultValue(),
                 item.getDescription(),
                 item.getApplyMode(),
-                item.isSensitive());
+                item.isSensitive(),
+                item.getOptions() == null ? List.of() : List.copyOf(item.getOptions()));
     }
 }

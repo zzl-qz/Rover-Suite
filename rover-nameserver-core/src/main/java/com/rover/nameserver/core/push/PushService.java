@@ -4,6 +4,7 @@ import com.rover.common.codec.RoverMessageCodecSupport;
 import com.rover.common.protocol.PushType;
 import com.rover.common.protocol.ServicePushBody;
 import com.rover.nameserver.core.cluster.NameserverGeneration;
+import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
 import io.netty.channel.Channel;
 import java.util.Objects;
@@ -25,6 +26,8 @@ public class PushService {
     private final SubscriptionManager subscriptionManager;
     private final AtomicBoolean pushEnabled;
     private final AtomicLong pushIdGenerator = new AtomicLong(1);
+    /** 指标注册表：推送次数埋点（仅统计真实发生的推送）。 */
+    private final NameserverMetricsRegistry metrics;
     @Getter
     private final NameserverGeneration generation;
 
@@ -32,9 +35,18 @@ public class PushService {
             SubscriptionManager subscriptionManager,
             boolean pushEnabled,
             NameserverGeneration generation) {
+        this(subscriptionManager, pushEnabled, generation, null);
+    }
+
+    public PushService(
+            SubscriptionManager subscriptionManager,
+            boolean pushEnabled,
+            NameserverGeneration generation,
+            NameserverMetricsRegistry metrics) {
         this.subscriptionManager = subscriptionManager;
         this.pushEnabled = new AtomicBoolean(pushEnabled);
         this.generation = Objects.requireNonNull(generation, "generation");
+        this.metrics = metrics == null ? new NameserverMetricsRegistry() : metrics;
     }
 
     public boolean isPushEnabled() {
@@ -60,6 +72,7 @@ public class PushService {
         if (subscribers.isEmpty()) {
             return;
         }
+        metrics.push(snapshot.getServiceName(), subscribers.size());
 
         String epoch = generation.epoch();
         ServicePushBody body = new ServicePushBody();

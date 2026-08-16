@@ -47,6 +47,23 @@ public class GatewayManageApi extends AbstractManageApi {
             writeJson(ctx, HttpResponseStatus.OK, statusJson());
             return true;
         }
+        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/metrics").equals(path)) {
+            writeJson(ctx, HttpResponseStatus.OK, runtime.getMetricsRegistry().snapshotJson());
+            return true;
+        }
+        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/metrics/selfcheck").equals(path)) {
+            writeJson(ctx, HttpResponseStatus.OK, runtime.getMetricsRegistry().selfcheckJson());
+            return true;
+        }
+        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/prometheus").equals(path)) {
+            writeText(ctx, HttpResponseStatus.OK, runtime.getMetricsRegistry().prometheusText(),
+                    "text/plain; version=0.0.4; charset=UTF-8");
+            return true;
+        }
+        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/traces").equals(path)) {
+            writeJson(ctx, HttpResponseStatus.OK, tracesJson(request));
+            return true;
+        }
         if ((PREFIX + "/routes").equals(path)) {
             handleRoutes(ctx, request);
             return true;
@@ -91,6 +108,64 @@ public class GatewayManageApi extends AbstractManageApi {
         }
         writeJson(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED,
                 JsonCodec.toJson(Map.of("message", "routes 支持 GET/PUT/POST/DELETE")));
+    }
+
+    /** 组装 GET /_manage/traces 的 JSON：支持按 traceId / path / slow 过滤。 */
+    private String tracesJson(FullHttpRequest request) {
+        QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
+        String traceIdFilter = firstQuery(decoder, "traceId");
+        String pathFilter = firstQuery(decoder, "path");
+        String slowFilter = firstQuery(decoder, "slow");
+
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("enabled", runtime.getTraceSettings().isEnabled());
+        resp.put("slowThresholdMillis", runtime.getTraceSettings().getSlowThresholdMillis());
+        resp.put("sampleRate", runtime.getTraceSettings().getSampleRate());
+        resp.put("capacity", runtime.getTraceBuffer().capacity());
+        resp.put("count", runtime.getTraceBuffer().size());
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (com.rover.gateway.core.trace.RequestTrace trace : runtime.getTraceBuffer().snapshot()) {
+            if (traceIdFilter != null && !traceIdFilter.isBlank()
+                    && !traceIdFilter.equals(trace.getTraceId())) {
+                continue;
+            }
+            if (pathFilter != null && !pathFilter.isBlank()
+                    && trace.getPath() != null
+                    && !trace.getPath().contains(pathFilter)) {
+                continue;
+            }
+            if (slowFilter != null && !"false".equalsIgnoreCase(slowFilter)
+                    && !trace.isSlow()) {
+                continue;
+            }
+            rows.add(traceRow(trace));
+        }
+        resp.put("traces", rows);
+        return JsonCodec.toJson(resp);
+    }
+
+    /** 单条 trace 的 JSON 行。 */
+    private Map<String, Object> traceRow(com.rover.gateway.core.trace.RequestTrace trace) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("traceId", trace.getTraceId());
+        row.put("method", trace.getMethod());
+        row.put("path", trace.getPath());
+        row.put("routeId", nullToEmpty(trace.getRouteId()));
+        row.put("targetUrl", nullToEmpty(trace.getTargetUrl()));
+        row.put("statusCode", trace.getStatusCode());
+        row.put("startMillis", trace.getStartMillis());
+        row.put("totalCostMs", trace.getTotalCostMs());
+        row.put("slow", trace.isSlow());
+        List<Map<String, Object>> phases = new ArrayList<>();
+        for (com.rover.gateway.core.trace.RequestTrace.Phase phase : trace.getPhases()) {
+            Map<String, Object> phaseRow = new LinkedHashMap<>();
+            phaseRow.put("name", phase.getName());
+            phaseRow.put("costMs", phase.getCostMs());
+            phases.add(phaseRow);
+        }
+        row.put("phases", phases);
+        return row;
     }
 
     /** 组装 GET /_manage/status 的 JSON 内容。 */

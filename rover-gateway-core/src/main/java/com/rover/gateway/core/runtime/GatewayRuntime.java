@@ -9,7 +9,11 @@ import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.GatewayFilterAssembler;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.loadbalance.LoadBalancerFactory;
+import com.rover.gateway.core.metrics.MetricsRegistry;
+import com.rover.gateway.core.metrics.MetricsSettings;
 import com.rover.gateway.core.proxy.HttpProxyClient;
+import com.rover.gateway.core.trace.TraceBuffer;
+import com.rover.gateway.core.trace.TraceSettings;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
 import com.rover.gateway.core.route.RouteOverlayStore;
@@ -40,6 +44,15 @@ public class GatewayRuntime {
 
     /** HTTP 反向代理客户端，超时支持热更。 */
     private final HttpProxyClient proxyClient;
+
+    /** 指标统一数据源，MetricsFilter 向其累加，管理端点从其读取。 */
+    private final MetricsRegistry metricsRegistry = new MetricsRegistry(new MetricsSettings());
+
+    /** 请求链路时间线缓冲（环形，只记慢请求/采样命中）。 */
+    private final TraceBuffer traceBuffer = new TraceBuffer();
+
+    /** 链路时间线采集配置，支持热更新。 */
+    private final TraceSettings traceSettings = new TraceSettings();
 
     /** 服务发现客户端，动态模式查实例。 */
     private final ServiceDiscovery serviceDiscovery;
@@ -105,6 +118,7 @@ public class GatewayRuntime {
         this.configManager = configManager;
         this.routeOverlayStore = new RouteOverlayStore();
         this.routeValidator = new RouteValidator(this.discoveryType);
+        this.metricsRegistry.setUpstreamInFlightSupplier(proxyClient::getInFlightCount);
         String pluginDir = this.filterSettings.getPluginDir();
         this.loadBalancer.set(LoadBalancerFactory.create(LoadBalancer.ROUND_ROBIN, pluginDir));
         this.loadBalanceStrategy.set(LoadBalancer.ROUND_ROBIN);
@@ -135,6 +149,45 @@ public class GatewayRuntime {
     /** 热更新代理请求超时（毫秒），必须大于 0。 */
     public void applyRequestTimeoutMillis(long timeoutMillis) {
         proxyClient.setRequestTimeoutMillis(timeoutMillis);
+    }
+
+    /** 热更新指标采集总开关，false 时 MetricsFilter 直通，一键降级。 */
+    public void applyMetricsEnabled(boolean enabled) {
+        metricsRegistry.getSettings().setEnabled(enabled);
+        log.info("指标采集开关已切换: enabled={}", enabled);
+    }
+
+    /** 热更新指标滑动窗口时长（秒），必须大于 0。 */
+    public void applyMetricsWindowSeconds(int windowSeconds) {
+        if (windowSeconds <= 0) {
+            throw new IllegalArgumentException("metrics.windowSeconds 必须大于 0");
+        }
+        metricsRegistry.getSettings().setWindowSeconds(windowSeconds);
+        log.info("指标窗口时长已切换: windowSeconds={}", windowSeconds);
+    }
+
+    /** 热更新链路时间线总开关。 */
+    public void applyTraceEnabled(boolean enabled) {
+        traceSettings.setEnabled(enabled);
+        log.info("链路时间线开关已切换: enabled={}", enabled);
+    }
+
+    /** 热更新慢请求阈值（毫秒），必须大于 0。 */
+    public void applyTraceSlowThresholdMillis(long thresholdMillis) {
+        if (thresholdMillis <= 0) {
+            throw new IllegalArgumentException("trace.slowThresholdMillis 必须大于 0");
+        }
+        traceSettings.setSlowThresholdMillis(thresholdMillis);
+        log.info("链路时间线慢请求阈值已切换: slowThresholdMillis={}", thresholdMillis);
+    }
+
+    /** 热更新采样率 0~1。 */
+    public void applyTraceSampleRate(double sampleRate) {
+        if (sampleRate < 0 || sampleRate > 1) {
+            throw new IllegalArgumentException("trace.sampleRate 必须在 0~1 之间");
+        }
+        traceSettings.setSampleRate(sampleRate);
+        log.info("链路时间线采样率已切换: sampleRate={}", sampleRate);
     }
 
     /**
@@ -214,7 +267,8 @@ public class GatewayRuntime {
                 proxyClient,
                 discoveryType,
                 serviceDiscovery,
-                loadBalancer.get());
+                loadBalancer.get(),
+                metricsRegistry);
         filters.set(assembled);
     }
 }

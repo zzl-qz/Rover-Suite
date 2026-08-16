@@ -49,6 +49,14 @@ public class NameserverManageApi extends AbstractManageApi {
             writeJson(ctx, HttpResponseStatus.OK, instancesJson());
             return true;
         }
+        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/metrics").equals(path)) {
+            writeJson(ctx, HttpResponseStatus.OK, runtime.getMetrics().snapshotJson(runtime.getRegistry()));
+            return true;
+        }
+        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/events").equals(path)) {
+            writeJson(ctx, HttpResponseStatus.OK, runtime.getMetrics().eventsJson());
+            return true;
+        }
         return handleConfigs(ctx, request, path);
     }
 

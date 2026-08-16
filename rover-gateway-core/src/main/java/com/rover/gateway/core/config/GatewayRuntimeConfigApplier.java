@@ -33,6 +33,11 @@ public class GatewayRuntimeConfigApplier implements ConfigApplier {
             case "gateway.filter.enabled" -> current.applyFilterEnabled(Boolean.parseBoolean(value));
             case "gateway.request.timeoutMillis" -> current.applyRequestTimeoutMillis(parsePositiveLong(value, key));
             case "gateway.loadbalance.strategy" -> current.applyLoadBalanceStrategy(value);
+            case "gateway.metrics.enabled" -> current.applyMetricsEnabled(Boolean.parseBoolean(value));
+            case "gateway.metrics.windowSeconds" -> current.applyMetricsWindowSeconds(parsePositiveInt(value, key));
+            case "gateway.trace.enabled" -> current.applyTraceEnabled(Boolean.parseBoolean(value));
+            case "gateway.trace.slowThresholdMillis" -> current.applyTraceSlowThresholdMillis(parsePositiveLong(value, key));
+            case "gateway.trace.sampleRate" -> current.applyTraceSampleRate(Double.parseDouble(value.trim()));
             default -> log.warn("忽略未支持热更新的 Gateway 配置: {}", key);
         }
         log.info("Gateway 配置已热更新: {}={} (old={})", key, value, event.getOldValue());
@@ -41,6 +46,15 @@ public class GatewayRuntimeConfigApplier implements ConfigApplier {
     /** 解析正整数配置值。 */
     private static long parsePositiveLong(String value, String key) {
         long parsed = Long.parseLong(value.trim());
+        if (parsed <= 0) {
+            throw new IllegalArgumentException(key + " 必须大于 0");
+        }
+        return parsed;
+    }
+
+    /** 解析正 int 配置值。 */
+    private static int parsePositiveInt(String value, String key) {
+        int parsed = Integer.parseInt(value.trim());
         if (parsed <= 0) {
             throw new IllegalArgumentException(key + " 必须大于 0");
         }

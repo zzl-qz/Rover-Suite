@@ -6,6 +6,7 @@ import com.rover.common.config.RuntimeConfigOverlayStore;
 import lombok.Getter;
 
 import java.nio.file.Path;
+import java.util.List;
 
 /**
  * Author: Daylight
@@ -36,10 +37,14 @@ public class NameserverRuntimeConfigManager extends AbstractRuntimeConfigManager
             NameserverRuntimeConfigApplier applier, RuntimeConfigOverlayStore overlayStore) {
         super(overlayStore, "Nameserver");
         this.applier = applier;
-        addConfig("nameserver.health.checkIntervalMillis", "5000", "5000", "注册中心健康检查间隔");
-        addConfig("nameserver.heartbeat.timeoutMillis", "15000", "15000", "注册中心心跳超时时间");
-        addConfig("nameserver.instance.expireMillis", "30000", "30000", "注册中心实例过期时间");
-        addConfig("nameserver.push.enabled", "true", "true", "注册中心服务变更推送开关");
+        addConfig("nameserver.health.checkIntervalMillis", "5000", "5000", "注册中心健康检查间隔（毫秒）",
+                List.of("3000", "5000", "10000"));
+        addConfig("nameserver.heartbeat.timeoutMillis", "15000", "15000", "注册中心心跳超时时间（毫秒）",
+                List.of("10000", "15000", "30000"));
+        addConfig("nameserver.instance.expireMillis", "30000", "30000", "注册中心实例过期时间（毫秒）",
+                List.of("30000", "60000", "90000"));
+        addConfig("nameserver.push.enabled", "true", "true", "注册中心服务变更推送开关",
+                List.of("true", "false"));
     }
 
     @Override

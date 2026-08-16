@@ -2,6 +2,7 @@ package com.rover.nameserver.core.event.support;
 
 import com.rover.nameserver.core.cluster.NameserverGeneration;
 import com.rover.nameserver.core.consistency.WriteAckPolicy;
+import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.push.PushService;
 import com.rover.nameserver.core.push.SubscriptionManager;
 import com.rover.nameserver.core.registry.ServiceRegistry;
@@ -24,6 +25,8 @@ public class NameserverServices {
     private final NameserverServerOptions options;
     /** 世代视图：单机=进程 UUID；集群可替换实现 */
     private final NameserverGeneration generation;
+    /** 指标注册表：生命周期事件埋点统一入口 */
+    private final NameserverMetricsRegistry metrics;
 
     public NameserverServices(
             ServiceRegistry registry,
@@ -31,13 +34,15 @@ public class NameserverServices {
             PushService pushService,
             WriteAckPolicy writeAckPolicy,
             NameserverServerOptions options,
-            NameserverGeneration generation) {
+            NameserverGeneration generation,
+            NameserverMetricsRegistry metrics) {
         this.registry = registry;
         this.subscriptionManager = subscriptionManager;
         this.pushService = pushService;
         this.writeAckPolicy = writeAckPolicy;
         this.options = options;
         this.generation = Objects.requireNonNull(generation, "generation");
+        this.metrics = metrics == null ? new NameserverMetricsRegistry() : metrics;
     }
 
     /** 协议 epoch：委托 Generation，调用方不要自己 new UUID。 */
