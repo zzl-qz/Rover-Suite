@@ -1,9 +1,12 @@
 package com.rover.common.spi.filter;
 
+import java.util.concurrent.CompletableFuture;
+
 /**
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
- * Description: 过滤器链推进契约（Servlet 风格 chain.doFilter）：封装后续过滤器，链路结束自然收尾
+ * Description: 过滤器链推进契约（异步）：封装后续过滤器，链路结束自然收尾。
+ * doFilter 返回 CompletableFuture，异常统一放进返回的 Future 而非同步上抛。
  */
 public interface FilterChain {
 
@@ -13,7 +16,7 @@ public interface FilterChain {
      * 如果前面已经 markCompleted，后续也不会再执行。
      *
      * @param context 请求上下文
-     * @throws Exception 链路内任意过滤器抛出的异常原样上抛
+     * @return 后续过滤器链全部执行完毕的异步结果（异常通过 Future 传递）
      */
-    void doFilter(RequestContext context) throws Exception;
+    CompletableFuture<Void> doFilter(RequestContext context);
 }

@@ -1,5 +1,6 @@
 package com.rover.nameserver.starter.autoconfigure;
 
+import com.rover.common.constants.NameserverConstants;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.Data;
@@ -18,7 +19,7 @@ public class RoverNameserverProperties {
     private boolean enabled = true;
 
     /** Nameserver 地址，host:port */
-    private String address = "127.0.0.1:8888";
+    private String address = NameserverConstants.DEFAULT_ADDRESS;
 
     /** 服务名；不填可用 spring.application.name */
     private String serviceName;

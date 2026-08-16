@@ -16,6 +16,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -62,10 +63,10 @@ public class RouteAndProxyFilter implements Filter {
     }
 
     @Override
-    public void doFilter(RequestContext context, FilterChain chain) {
+    public CompletableFuture<Void> doFilter(RequestContext context, FilterChain chain) {
         GatewayRequestContext gatewayContext = (GatewayRequestContext) context;
         if (gatewayContext.isCompleted()) {
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         // Filter 链（前置）：从请求开始到本终端过滤器执行，扣除已标记阶段（receive）
@@ -79,7 +80,7 @@ public class RouteAndProxyFilter implements Filter {
         gatewayContext.markPhase("route", System.nanoTime() - routeStartNanos);
         if (route == null) {
             gatewayContext.writeText(HttpResponseStatus.NOT_FOUND, "No route matched: " + requestPath);
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         ChosenUpstream chosen = resolveUpstream(route, gatewayContext);
@@ -87,7 +88,7 @@ public class RouteAndProxyFilter implements Filter {
             gatewayContext.writeText(
                     HttpResponseStatus.SERVICE_UNAVAILABLE,
                     "No available upstream for route: " + route.getId());
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         String targetUrl = joinUrl(
@@ -105,31 +106,31 @@ public class RouteAndProxyFilter implements Filter {
                 targetUrl,
                 loadBalancer == null ? "none" : loadBalancer.name());
 
-
         ServiceInstance instance = chosen.instance();
         if (loadBalancer != null && instance != null) {
             // 告知 LB 实例开始占用（目前仅最少连接算法使用，其余为空实现）。
             loadBalancer.onStart(instance);
         }
-        try {
-            long proxyStartNanos = System.nanoTime();
-            HttpProxyClient.ProxyResult result = proxyClient.forward(
-                    gatewayContext.getChannelContext(),
-                    gatewayContext.getRequest(),
-                    targetUrl);
-            gatewayContext.markPhase("proxy", System.nanoTime() - proxyStartNanos);
-            gatewayContext.setStatusCode(result.statusCode());
-            // 回填上游信息，供 MetricsFilter 做上游维度统计
-            gatewayContext.setUpstreamHostPort(hostPortOf(instance));
-            gatewayContext.setUpstreamCostMillis(result.upstreamCostMillis());
-            gatewayContext.setUpstreamConnectFail(result.connectFail());
-            gatewayContext.setUpstreamTimeout(result.timeout());
-            gatewayContext.markCompleted();
-        } finally {
-            if (loadBalancer != null && instance != null) {
-                loadBalancer.onComplete(instance);
-            }
-        }
+        long proxyStartNanos = System.nanoTime();
+        return proxyClient
+                .forwardAsync(gatewayContext.getChannelContext(), gatewayContext.getRequest(), targetUrl)
+                .whenComplete((result, err) -> {
+                    // finally 语义：无论上游成功/失败，都释放 LB 对实例的占用。
+                    if (loadBalancer != null && instance != null) {
+                        loadBalancer.onComplete(instance);
+                    }
+                })
+                .thenApply(result -> {
+                    gatewayContext.markPhase("proxy", System.nanoTime() - proxyStartNanos);
+                    gatewayContext.setStatusCode(result.statusCode());
+                    // 回填上游信息，供 MetricsFilter 做上游维度统计
+                    gatewayContext.setUpstreamHostPort(hostPortOf(instance));
+                    gatewayContext.setUpstreamCostMillis(result.upstreamCostMillis());
+                    gatewayContext.setUpstreamConnectFail(result.connectFail());
+                    gatewayContext.setUpstreamTimeout(result.timeout());
+                    gatewayContext.markCompleted();
+                    return null;
+                });
     }
 
     private ChosenUpstream resolveUpstream(RouteConfig route, GatewayRequestContext gatewayContext) {

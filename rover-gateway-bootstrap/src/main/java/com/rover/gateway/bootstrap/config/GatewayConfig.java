@@ -1,5 +1,6 @@
 package com.rover.gateway.bootstrap.config;
 
+import com.rover.common.constants.NameserverConstants;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.common.util.HostPort;
 import com.rover.gateway.core.discovery.DiscoverySettings;
@@ -361,7 +362,7 @@ public class GatewayConfig {
 
     @Data
     public static class NameserverProperties {
-        private String address = "127.0.0.1:8888";
+        private String address = NameserverConstants.DEFAULT_ADDRESS;
         private long reconcileIntervalMs = DEFAULT_RECONCILE_INTERVAL_MS;
     }
 
