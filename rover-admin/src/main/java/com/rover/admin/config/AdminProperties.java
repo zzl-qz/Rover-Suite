@@ -1,5 +1,6 @@
 package com.rover.admin.config;
 
+import com.rover.common.constants.NameserverConstants;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -10,8 +11,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "rover.admin")
 public class AdminProperties {
 
-    private String gatewayUrl = "http://127.0.0.1:8080";
-    private String nameserverManageUrl = "http://127.0.0.1:8889";
+    /** Gateway 管理口地址，默认端口 80（与 GatewayConfig.DEFAULT_PORT 保持一致） */
+    private String gatewayUrl = "http://127.0.0.1:80";
+    private String nameserverManageUrl = NameserverConstants.DEFAULT_MANAGE_URL;
 
     public String getGatewayUrl() {
         return gatewayUrl;

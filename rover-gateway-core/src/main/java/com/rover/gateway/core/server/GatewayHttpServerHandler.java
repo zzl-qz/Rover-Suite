@@ -21,6 +21,7 @@ import io.netty.handler.codec.http.QueryStringDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import lombok.extern.slf4j.Slf4j;
 
@@ -53,25 +54,42 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
             manageApi.handle(ctx, request, requestPath);
             return;
         }
+        // 准入控制：超过在途上限时快速 503，避免内存/上游连接被无限堆积
+        if (!runtime.tryAcquireProcessingPermit()) {
+            log.warn("Gateway overloaded, reject request path={}", requestPath);
+            writeText(ctx, HttpResponseStatus.SERVICE_UNAVAILABLE, "Gateway is overloaded, please retry later");
+            return;
+        }
 
         runtime.getMetricsRegistry().requestStarted();
         GatewayRequestContext context = new GatewayRequestContext(ctx, request, requestPath);
         // 生成/透传 traceId，供后端日志关联（转发时随请求头原样透传）
         ensureTraceId(request, context);
         context.markPhase("receive", System.nanoTime() - context.getStartNanos());
+
+        // 异步推进过滤器链，收尾统一放在完成回调里，不阻塞业务线程等待上游。
+        CompletableFuture<Void> chainFuture;
         try {
-            new DefaultFilterChain(runtime.currentFilters()).doFilter(context);
+            chainFuture = new DefaultFilterChain(runtime.currentFilters()).doFilter(context);
         } catch (Exception err) {
-            log.warn("Gateway filter chain error, requestPath={}", requestPath, err);
-            if (!context.isCompleted()) {
-                context.writeText(
-                        HttpResponseStatus.INTERNAL_SERVER_ERROR,
-                        "Gateway filter chain error: " + err.getMessage());
-            }
-        } finally {
-            runtime.getMetricsRegistry().requestFinished();
-            recordTraceIfNeeded(context);
+            chainFuture = CompletableFuture.failedFuture(err);
         }
+        chainFuture.whenComplete((ignored, err) -> {
+            try {
+                if (err != null) {
+                    log.warn("Gateway filter chain error, requestPath={}", requestPath, err);
+                    if (!context.isCompleted()) {
+                        context.writeText(
+                                HttpResponseStatus.INTERNAL_SERVER_ERROR,
+                                "Gateway filter chain error: " + err.getMessage());
+                    }
+                }
+            } finally {
+                runtime.getMetricsRegistry().requestFinished();
+                recordTraceIfNeeded(context);
+                runtime.releaseProcessingPermit();
+            }
+        });
     }
 
     /** 请求头已有 traceId 则沿用，否则生成；同时写入上下文属性。 */

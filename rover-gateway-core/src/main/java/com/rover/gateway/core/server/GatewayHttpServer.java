@@ -35,11 +35,20 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class GatewayHttpServer {
 
-    /** 业务线程池最小线程数，再按 CPU 核数放大。 */
+    /** 业务线程池最小线程数。 */
     private static final int MIN_BIZ_THREADS = 4;
 
-    /** 业务线程池大小，随 CPU 核数放大。 */
-    private static final int BIZ_THREADS = Math.max(MIN_BIZ_THREADS, Runtime.getRuntime().availableProcessors());
+    /**
+     * 业务线程池默认大小：等于 CPU 核数（下限 4），可用 -Drover.gateway.bizThreads 覆盖。
+     * 异步转发模型下业务线程只做「收包 + 路由/发现/LB + 派发」，不阻塞等待上游，
+     * 所以无需按倍数放大，少量线程即可驱动极高并发，弱机器也不浪费线程栈内存。
+     */
+    private static final int DEFAULT_BIZ_THREADS =
+            Math.max(MIN_BIZ_THREADS, Runtime.getRuntime().availableProcessors());
+
+    /** 业务线程池实际大小（系统属性可覆盖）。 */
+    private static final int BIZ_THREADS =
+            Integer.getInteger("rover.gateway.bizThreads", DEFAULT_BIZ_THREADS);
 
     /** 监听端口。 */
     @Getter

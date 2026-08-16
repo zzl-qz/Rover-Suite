@@ -1,5 +1,6 @@
 package com.rover.nameserver.core.server;
 
+import com.rover.common.constants.NameserverConstants;
 import com.rover.common.protocol.AckMode;
 import lombok.Builder;
 import lombok.Getter;
@@ -17,7 +18,7 @@ public class NameserverServerOptions {
     private final int port;
     /** HTTP 管理口端口，0 表示关闭 */
     @Builder.Default
-    private final int managePort = 8889;
+    private final int managePort = NameserverConstants.DEFAULT_MANAGE_PORT;
     /** 写确认模式，集群预留 */
     private final AckMode writeAckMode;
     /** 是否允许客户端覆盖 ack */
