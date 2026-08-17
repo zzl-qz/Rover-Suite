@@ -9,7 +9,8 @@ import com.rover.nameserver.core.event.model.UnregisterEvent;
 import com.rover.nameserver.core.event.support.NameserverChannelSupport;
 import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.event.support.NameserverTrace;
-import com.rover.nameserver.core.registry.RegistrySnapshot;
+import com.rover.nameserver.core.registration.RegistrationOwner;
+import com.rover.nameserver.core.registration.RegistrationResult;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -40,11 +41,12 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
             return;
         }
 
-        RegistrySnapshot snapshot = services.getRegistry()
-                .unregister(request.getServiceName(), request.getInstanceId());
+        RegistrationOwner owner = NameserverChannelSupport.registrationOwner(event.getChannel());
+        RegistrationResult result = services.getRegistrationService()
+                .unregister(request.getServiceName(), request.getInstanceId(), owner);
         NameserverChannelSupport.unbindInstance(
-                event.getChannel(), request.getServiceName(), request.getInstanceId());
-        if (snapshot == null) {
+                event.getChannel(), request.getServiceName(), request.getInstanceId(), owner);
+        if (result.isNotFound()) {
             log.warn("{}", NameserverTrace.withServiceInstance(
                     event, "unregister-not-found", request.getServiceName(), request.getInstanceId()));
             NameserverChannelSupport.replyFail(
@@ -55,8 +57,17 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
                     "实例不存在");
             return;
         }
-        services.getMetrics().unregister(request.getServiceName(), request.getInstanceId());
-        services.getPushService().pushSnapshot(snapshot);
+        if (result.isOwnerMismatch()) {
+            log.warn("{}", NameserverTrace.withServiceInstance(
+                    event, "unregister-owner-mismatch", request.getServiceName(), request.getInstanceId()));
+            NameserverChannelSupport.replyFail(
+                    event.getChannel(),
+                    event.getRequestId(),
+                    event.isOneway(),
+                    StatusConstants.CONFLICT,
+                    "实例已由新会话接管，不能由旧会话注销");
+            return;
+        }
 
         AckMode ackMode = event.getAckMode();
         CommonResponseBody body = CommonResponseBody.success()
@@ -64,7 +75,7 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
                         ackMode,
                         services.getOptions().getReplicationFactor(),
                         services.getOptions().isClusterEnabled()));
-        body.setRevision(snapshot.getRevision());
+        body.setRevision(result.revision());
         NameserverChannelSupport.fillNode(services.getOptions(), body);
         NameserverChannelSupport.fillGeneration(services, body);
         NameserverChannelSupport.reply(
@@ -72,6 +83,6 @@ public class UnregisterListener implements EventListener<UnregisterEvent> {
         log.info("{}, revision={}",
                 NameserverTrace.withServiceInstance(
                         event, "unregister-ok", request.getServiceName(), request.getInstanceId()),
-                snapshot.getRevision());
+                result.revision());
     }
 }

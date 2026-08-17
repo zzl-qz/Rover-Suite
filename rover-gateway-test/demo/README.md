@@ -1,87 +1,96 @@
 # Gateway 测试套件
 
-> ⚠️ **重要说明**：这是**测试项目**，用于验证 Rover Gateway 和 Nameserver 功能，**不是生产级模块**。
+> 本目录只用于验证 Rover Gateway 与 Nameserver，不是生产业务模板。
 
-## 📦 项目结构
+首次使用建议先按公开[快速上手](../../docs-public/quick-start.zh-CN.md)跑通单实例链路，再使用本页验证多实例与网关行为。
 
-```
-test/demo/
-├── backend/          # 后端测试服务（Spring Boot）
-│   ├── src/
-│   │   └── main/java/com/rover/demo/controller/HelloController.java
-│   └── pom.xml
-├── frontend/         # 前端测试面板（Vue 3）
-│   ├── src/
-│   │   ├── App.vue
-│   │   └── utils/request.js
-│   ├── package.json
-│   └── vite.config.js
-└── README.md         # 本文件
+## 目录
+
+```text
+rover-gateway-test/demo/
+├── backend/    # Spring Boot 测试服务，已接入 Rover Starter
+├── frontend/   # Vue 3 测试面板
+└── README.md
 ```
 
-## 🎯 用途
+## 1. 构建与配置
 
-- 测试网关代理转发
-- 测试负载均衡（多实例）
-- 测试请求头传递
-- 测试超时处理
-- 测试错误场景
+在仓库根目录执行：
 
-## 🚀 快速开始
-
-### 1. 启动 Nameserver
 ```bash
-cd ../../rover-nameserver-bootstrap
-mvn spring-boot:run
+mvn clean install -DskipTests
+mkdir -p config
+cp rover-gateway-bootstrap/src/main/resources/rover-gateway.yml config/rover-gateway.yml
+cp rover-nameserver-bootstrap/src/main/resources/rover-nameserver.yml config/rover-nameserver.yml
 ```
 
-### 2. 启动 Gateway
+将 `config/rover-gateway.yml` 中的 Gateway `port` 改为 `8080`、`server.bindHost` 改为 `127.0.0.1`，并保留内置的 `demo-api` 路由和 Nameserver 发现配置。
+将 `config/rover-nameserver.yml` 的 `bindHost` 和 `manageBindHost` 都改为 `127.0.0.1`。这样本地空 token 管理接口不会暴露给局域网。
+
+## 2. 启动基础组件
+
+终端 1 —— Nameserver：
+
 ```bash
-cd ../../rover-gateway-bootstrap
-mvn spring-boot:run
+java -jar rover-nameserver-bootstrap/target/rover-nameserver-bootstrap-1.0.0-SNAPSHOT.jar
 ```
 
-### 3. 启动后端（多实例测试负载均衡）
-```bash
-cd backend
-mvn clean package
+终端 2 —— Gateway：
 
-# 启动 3 个实例
-java -jar target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8081
-java -jar target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8082
-java -jar target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8083
+```bash
+java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.jar
 ```
 
-### 4. 启动前端
+## 3. 启动一个或多个 backend
+
+单实例：
+
 ```bash
-cd frontend
+java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
+```
+
+多实例负载均衡验证（每条命令使用独立终端）：
+
+```bash
+java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8081
+java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8082
+java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8083
+```
+
+Starter 在每个 Web Server ready 后将实际端口注册到 `127.0.0.1:8888`。这组地址只适合所有进程都在本机的测试环境。
+
+## 4. 验收
+
+```bash
+curl -sS http://127.0.0.1:8889/_manage/instances
+curl -sS http://127.0.0.1:8080/api/hello
+curl -sS 'http://127.0.0.1:8080/api/echo?msg=rover'
+curl -sS http://127.0.0.1:8080/api/health
+```
+
+多次请求 `/api/hello`，观察 JSON 中的 `port` 字段，可以验证当前负载均衡策略。
+
+## 5. 可选前端面板
+
+需要 Node.js 与 npm：
+
+```bash
+cd rover-gateway-test/demo/frontend
 npm install
 npm run dev
 ```
 
-访问 http://localhost:3000 开始测试。
+访问 `http://127.0.0.1:3000`。面板默认使用 `http://localhost:8080`，也可在页面中修改 Gateway 地址。
 
-## 🧪 测试场景
+面板可用于验证：
 
-前端提供 6 大测试场景：
+- GET/POST 代理和请求头传递。
+- 多实例端口分布。
+- 并发请求与响应耗时。
+- 上游延迟、404 与模拟错误。
 
-1. **基础接口** - GET /api/hello, /api/echo, /api/health, /api/info
-2. **请求头测试** - 自定义 Authorization、X-Request-ID、X-Custom-Header
-3. **POST 数据** - 简单 JSON、大数据量（100 元素）
-4. **超时延迟** - 可配置延迟时间、超时测试（1s 超时）
-5. **并发测试** - 可配置并发数（1-50），观察端口分布
-6. **错误场景** - 404、模拟错误
+## 注意事项
 
-## 📊 功能特性
-
-✅ 实时统计（总请求数、成功率、平均延迟）
-✅ 端口分布可视化（负载均衡验证）
-✅ 历史记录查看（最近 30 条）
-✅ 可配置网关地址
-✅ 可配置请求头、延迟时间、并发数
-
-## 📝 注意事项
-
-- 仅用于功能测试，不是生产项目
-- 前端请求到网关地址（默认 http://localhost:9999）
-- 后端已集成 rover-nameserver-starter，自动注册到 Nameserver
+- 本测试使用本地空 token 配置，不是生产安全示例。
+- 如果 YAML 路由修改不生效，检查 `config/routes.overlay.json` 是否在覆盖路由列表。
+- 完整生产配置、鉴权和部署边界见[使用指南](../../docs-public/user-guide.zh-CN.md)。

@@ -93,10 +93,12 @@ public class NameserverClientHandler extends SimpleChannelInboundHandler<RoverMe
      */
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
-        log.warn("与 Nameserver 连接断开: {}", ctx.channel().remoteAddress());
-        // 在途请求立刻失败，避免业务线程一直卡在 get()
-        pendingRequests.failAll(new IllegalStateException("连接已断开"));
-        client.onDisconnected();
+        if (client.onDisconnected(ctx.channel())) {
+            log.warn("与 Nameserver 连接断开: {}", ctx.channel().remoteAddress());
+        } else {
+            // 旧连接的延迟回调或尚未发布就失活的连接，不得影响当前连接及其在途请求。
+            log.debug("忽略非当前 Nameserver 连接的断开回调: {}", ctx.channel().remoteAddress());
+        }
     }
 
     /** 收包异常：协议错误只打警告，其余记完整栈，随后关闭连接走统一的重连流程。 */

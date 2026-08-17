@@ -19,9 +19,9 @@ npm run dev
 ## 配置说明
 
 ### 网关地址
-默认网关地址：`http://localhost:9999`
+默认网关地址：`http://localhost:8080`
 
-可在页面顶部修改，或编辑 `src/utils/request.js` 文件。
+可在页面顶部修改；完整组件启动方式见上级 [Gateway 测试套件](../README.md)。
 
 ### 测试接口
 - `/api/hello` - 基本连通性测试
@@ -39,13 +39,15 @@ npm run dev
 
 ## 测试步骤
 
+基础组件和后端命令均从仓库根目录执行。
+
 1. 启动 Nameserver（端口 8888）
-2. 启动 Gateway（端口 9999）
+2. 启动 Gateway（本地配置端口 8080）
 3. 启动多个后端实例：
    ```bash
-   java -jar rover-demo.jar --server.port=8081
-   java -jar rover-demo.jar --server.port=8082
-   java -jar rover-demo.jar --server.port=8083
+   java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8081
+   java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8082
+   java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8083
    ```
 4. 启动前端：`npm run dev`
 5. 点击测试按钮，观察端口分布变化

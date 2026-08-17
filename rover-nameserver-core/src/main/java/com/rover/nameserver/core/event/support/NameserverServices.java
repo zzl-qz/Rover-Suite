@@ -5,6 +5,7 @@ import com.rover.nameserver.core.consistency.WriteAckPolicy;
 import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.push.PushService;
 import com.rover.nameserver.core.push.SubscriptionManager;
+import com.rover.nameserver.core.registration.RegistrationService;
 import com.rover.nameserver.core.registry.ServiceRegistry;
 import com.rover.nameserver.core.server.NameserverServerOptions;
 import java.util.Objects;
@@ -27,6 +28,8 @@ public class NameserverServices {
     private final NameserverGeneration generation;
     /** 指标注册表：生命周期事件埋点统一入口 */
     private final NameserverMetricsRegistry metrics;
+    /** TCP 与 HTTP 共用的注册生命周期门面。 */
+    private final RegistrationService registrationService;
 
     public NameserverServices(
             ServiceRegistry registry,
@@ -35,7 +38,8 @@ public class NameserverServices {
             WriteAckPolicy writeAckPolicy,
             NameserverServerOptions options,
             NameserverGeneration generation,
-            NameserverMetricsRegistry metrics) {
+            NameserverMetricsRegistry metrics,
+            RegistrationService registrationService) {
         this.registry = registry;
         this.subscriptionManager = subscriptionManager;
         this.pushService = pushService;
@@ -43,6 +47,7 @@ public class NameserverServices {
         this.options = options;
         this.generation = Objects.requireNonNull(generation, "generation");
         this.metrics = metrics == null ? new NameserverMetricsRegistry() : metrics;
+        this.registrationService = Objects.requireNonNull(registrationService, "registrationService");
     }
 
     /** 协议 epoch：委托 Generation，调用方不要自己 new UUID。 */

@@ -38,6 +38,7 @@ import io.netty.channel.socket.nio.NioSocketChannel;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -58,6 +59,8 @@ public class NameserverClient implements AutoCloseable {
 
     /** 异步转同步时额外增加的等待时间，覆盖调度误差（毫秒）。 */
     private static final long SYNC_GRACE_MILLIS = 1000;
+    /** 按实例/订阅键串行生命周期操作，避免恢复请求与显式删除交叉。 */
+    private static final int STATE_LOCK_STRIPES = 64;
 
     /** 客户端配置 */
     @Getter
@@ -73,14 +76,22 @@ public class NameserverClient implements AutoCloseable {
     private final Map<String, RegisterRequest> registeredInstances = new ConcurrentHashMap<>();
     /** 已订阅关系，重连恢复用 */
     private final Map<String, SubscribeRequest> subscriptions = new ConcurrentHashMap<>();
+    /** 等待固定周期重试的注册恢复项 */
+    private final Set<String> pendingRegistrationRecoveries = ConcurrentHashMap.newKeySet();
+    /** 等待固定周期重试的订阅恢复项 */
+    private final Set<String> pendingSubscriptionRecoveries = ConcurrentHashMap.newKeySet();
+    /** 正在恢复的注册项，避免心跳与重连任务并发重放同一实例 */
+    private final Set<String> recoveringRegistrations = ConcurrentHashMap.newKeySet();
+    /** 正在恢复的订阅项，避免重复重放同一订阅 */
+    private final Set<String> recoveringSubscriptions = ConcurrentHashMap.newKeySet();
+    /** 有界条带锁，不随动态 service key 增长。 */
+    private final Object[] stateLocks = createStateLocks();
     /** 是否已 start */
     private final AtomicBoolean started = new AtomicBoolean(false);
-    /** 是否待重连 */
-    private final AtomicBoolean reconnecting = new AtomicBoolean(false);
+    /** 当前连接的原子发布/摘除状态，按 channel 身份隔离新旧连接回调。 */
+    private final ClientChannelState channelState = new ClientChannelState();
     /** Netty 工作线程组 */
     private EventLoopGroup workerGroup;
-    /** 当前 TCP 连接 */
-    private volatile Channel channel;
     /** 心跳定时任务 */
     private PeriodicTask heartbeatTask;
     /** 重连定时任务 */
@@ -105,6 +116,7 @@ public class NameserverClient implements AutoCloseable {
         if (!started.compareAndSet(false, true)) {
             return;
         }
+        channelState.startAcceptingConnections();
         workerGroup = new NioEventLoopGroup();
         connect();
         if (options.isAutoHeartbeat()) {
@@ -121,8 +133,7 @@ public class NameserverClient implements AutoCloseable {
 
     /** 当前 TCP 连接是否可用（已建立且 active）。 */
     public boolean isActive() {
-        Channel current = channel;
-        return current != null && current.isActive();
+        return channelState.isActive();
     }
 
     /**
@@ -132,12 +143,16 @@ public class NameserverClient implements AutoCloseable {
      * @return 注册响应；服务端返回非成功码时抛 RoverException
      */
     public CommonResponseBody register(RegisterRequest request) {
-        request.setToken(options.getToken());
-        CommonResponseBody response = requestSync(ProtocolConstants.REGISTER_REQUEST, request);
-        ensureSuccess(response, "注册失败");
-        // 本地也记一份，断线重连后才能自动补注册
-        registeredInstances.put(instanceKey(request.getServiceName(), request.getInstanceId()), copyRegister(request));
-        return response;
+        String key = instanceKey(request.getServiceName(), request.getInstanceId());
+        synchronized (stateLock("instance:" + key)) {
+            request.setToken(options.getToken());
+            CommonResponseBody response = requestSync(ProtocolConstants.REGISTER_REQUEST, request);
+            ensureSuccess(response, "注册失败");
+            // 本地也记一份，断线重连后才能自动补注册
+            registeredInstances.put(key, copyRegister(request));
+            pendingRegistrationRecoveries.remove(key);
+            return response;
+        }
     }
 
     /**
@@ -148,15 +163,19 @@ public class NameserverClient implements AutoCloseable {
      * @return 注销响应；服务端返回非成功码时抛 RoverException
      */
     public CommonResponseBody unregister(String serviceName, String instanceId) {
-        UnregisterRequest request = new UnregisterRequest();
-        request.setServiceName(serviceName);
-        request.setInstanceId(instanceId);
-        request.setToken(options.getToken());
-        CommonResponseBody response = requestSync(ProtocolConstants.UNREGISTER_REQUEST, request);
-        ensureSuccess(response, "注销失败");
-        // 双向删除：确认服务端注销成功后再清本地备份，失败时重连仍能补注册
-        registeredInstances.remove(instanceKey(serviceName, instanceId));
-        return response;
+        String key = instanceKey(serviceName, instanceId);
+        synchronized (stateLock("instance:" + key)) {
+            UnregisterRequest request = new UnregisterRequest();
+            request.setServiceName(serviceName);
+            request.setInstanceId(instanceId);
+            request.setToken(options.getToken());
+            CommonResponseBody response = requestSync(ProtocolConstants.UNREGISTER_REQUEST, request);
+            ensureSuccess(response, "注销失败");
+            // 确认服务端注销成功后再清本地备份；同 key 的恢复请求不能越过本操作。
+            registeredInstances.remove(key);
+            pendingRegistrationRecoveries.remove(key);
+            return response;
+        }
     }
 
     /**
@@ -222,18 +241,21 @@ public class NameserverClient implements AutoCloseable {
      * @return 订阅响应；服务端返回非成功码时抛 RoverException
      */
     public CommonResponseBody subscribe(String serviceName, String group) {
-        SubscribeRequest request = new SubscribeRequest();
-        request.setServiceName(serviceName);
-        request.setGroup(group);
-        // 带上本地已知版本号，支持增量订阅
-        request.setKnownRevision(instanceCache.revision(serviceName, group));
-        request.setToken(options.getToken());
+        String key = subscribeKey(serviceName, group);
+        synchronized (stateLock("subscription:" + key)) {
+            SubscribeRequest request = new SubscribeRequest();
+            request.setServiceName(serviceName);
+            request.setGroup(group);
+            // 带上本地已知版本号，支持增量订阅
+            request.setKnownRevision(instanceCache.revision(serviceName, group));
+            request.setToken(options.getToken());
 
-        CommonResponseBody response = requestSync(ProtocolConstants.SUBSCRIBE_REQUEST, request);
-        ensureSuccess(response, "订阅失败");
-        // 把请求成功的这些订阅信息存储起来，为的就是后续如果出现和nameserver断开可以快速重新完成订阅
-        subscriptions.put(subscribeKey(serviceName, group), request);
-        return response;
+            CommonResponseBody response = requestSync(ProtocolConstants.SUBSCRIBE_REQUEST, request);
+            ensureSuccess(response, "订阅失败");
+            subscriptions.put(key, request);
+            pendingSubscriptionRecoveries.remove(key);
+            return response;
+        }
     }
 
     /**
@@ -244,14 +266,18 @@ public class NameserverClient implements AutoCloseable {
      * @return 取消订阅响应；服务端返回非成功码时抛 RoverException
      */
     public CommonResponseBody unsubscribe(String serviceName, String group) {
-        UnsubscribeRequest request = new UnsubscribeRequest();
-        request.setServiceName(serviceName);
-        request.setGroup(group);
-        request.setToken(options.getToken());
-        CommonResponseBody response = requestSync(ProtocolConstants.UNSUBSCRIBE_REQUEST, request);
-        ensureSuccess(response, "取消订阅失败");
-        subscriptions.remove(subscribeKey(serviceName, group));
-        return response;
+        String key = subscribeKey(serviceName, group);
+        synchronized (stateLock("subscription:" + key)) {
+            UnsubscribeRequest request = new UnsubscribeRequest();
+            request.setServiceName(serviceName);
+            request.setGroup(group);
+            request.setToken(options.getToken());
+            CommonResponseBody response = requestSync(ProtocolConstants.UNSUBSCRIBE_REQUEST, request);
+            ensureSuccess(response, "取消订阅失败");
+            subscriptions.remove(key);
+            pendingSubscriptionRecoveries.remove(key);
+            return response;
+        }
     }
 
     /**
@@ -340,20 +366,33 @@ public class NameserverClient implements AutoCloseable {
 
     /**
      * 通道断开回调（由 handler 在 channelInactive 中触发）：
-     * 清掉当前连接引用并置 reconnecting 标志，把重连动作交给后台 reconnectTask，
-     * 避免在 Netty IO 线程里同步重连造成阻塞。
+     * 仅在回调 channel 仍是当前连接时摘除并失败在途请求；真正重连交给后台任务，
+     * 避免在 Netty IO 线程里同步连接。
      */
-    public void onDisconnected() {
-        this.channel = null;
-        // 真正重连交给 reconnectTask，避免在 IO 线程里狂连
-        reconnecting.set(true);
+    public boolean onDisconnected(Channel disconnectedChannel) {
+        return channelState.deactivate(
+                disconnectedChannel,
+                () -> pendingRequests.failAll(new IllegalStateException("连接已断开")));
     }
 
     /**
-     * 建立到 Nameserver 的 TCP 连接。成功后清 reconnecting 标志并重放本地状态
-     * （recoverState）；失败则置 reconnecting 标志，等待 reconnectTask 下次尝试。
+     * 兼容旧调用方的无参断开通知。新代码应传入实际断开的 channel，才能完整隔离
+     * 新旧连接回调；这里读取快照后仍通过身份校验摘除，不会误清随后建立的新连接。
+     */
+    @Deprecated(forRemoval = false)
+    public void onDisconnected() {
+        Channel current = channelState.current();
+        if (current != null) {
+            onDisconnected(current);
+        }
+    }
+
+    /**
+     * 建立到 Nameserver 的 TCP 连接。仅发布仍 active 的连接，成功后重放本地状态；
+     * 失败或连接过早断开时等待 reconnectTask 下次固定周期尝试。
      */
     private void connect() {
+        Channel connectedChannel = null;
         try {
             // 每次重连都新建 Bootstrap，workerGroup 全局复用
             Bootstrap bootstrap = new Bootstrap();
@@ -375,34 +414,44 @@ public class NameserverClient implements AutoCloseable {
 
             // 同步等待连接建立完成
             ChannelFuture future = bootstrap.connect(options.getHost(), options.getPort()).sync();
-            this.channel = future.channel();
-            reconnecting.set(false);
+            connectedChannel = future.channel();
+            // accept 后立即 close 时，channelInactive 可能早于 sync 返回。只发布仍 active 的连接，
+            // 避免把已失活 channel 写回并让后续重连永久停住。
+            if (!channelState.activate(connectedChannel)) {
+                connectedChannel.close();
+                if (started.get()) {
+                    log.warn("Nameserver 连接在可用前已断开，将按固定周期重试: {}:{}",
+                            options.getHost(), options.getPort());
+                }
+                return;
+            }
             log.info("已连接 Nameserver: {}:{}", options.getHost(), options.getPort());
             // 新连接上重放注册/订阅状态
             recoverState();
         } catch (Exception ex) {
-            // 连接失败：清引用并进入待重连状态
-            this.channel = null;
-            reconnecting.set(true);
+            // 只清理由本次 connect 发布的 channel；旧连接的失败不能覆盖较新的连接。
+            if (connectedChannel != null) {
+                channelState.deactivate(
+                        connectedChannel,
+                        () -> pendingRequests.failAll(new IllegalStateException("连接已断开")));
+                connectedChannel.close();
+            }
             log.warn("连接 Nameserver 失败: {}:{}", options.getHost(), options.getPort(), ex);
         }
     }
 
     /**
-     * 周期重连任务：客户端已启动且开了自动重连时才动作；当前活连接存在时直接恢复
-     * 状态退出，否则（连接为 null 或 reconnecting 标志位 true）发起 connect。
+     * 周期重连任务：客户端已启动且开了自动重连时才动作；当前活连接存在时继续重试
+     * 尚未恢复成功的状态，否则发起 connect。即使出现未及时摘除的 inactive 引用，
+     * 也不能阻止下一次连接尝试。
      */
     private void tryReconnect() {
         if (!started.get() || !options.isAutoReconnect()) {
             return;
         }
         if (isActive()) {
-            // 连接其实是好的，可能是刚恢复，重置标志位
-            reconnecting.set(false);
-            return;
-        }
-        // 没有断线标志且连接引用还在（比如 connect 进行中）时，不去重复拉活
-        if (!reconnecting.get() && channel != null) {
+            // 首次恢复的业务响应可能失败，沿用现有固定重连周期继续补偿
+            recoverPendingState();
             return;
         }
         log.info("尝试重连 Nameserver: {}:{}", options.getHost(), options.getPort());
@@ -413,19 +462,80 @@ public class NameserverClient implements AutoCloseable {
      * 重连成功后：服务端可能已清实例，按本地记录补注册/订阅
      * （注册与订阅逐个重放，单个失败不影响其余）。
      */
-    private void recoverState() {
-        for (RegisterRequest request : registeredInstances.values()) {
+    void recoverState() {
+        pendingRegistrationRecoveries.addAll(registeredInstances.keySet());
+        pendingSubscriptionRecoveries.addAll(subscriptions.keySet());
+        recoverPendingState();
+    }
+
+    /**
+     * 重试尚未恢复成功的注册与订阅。独立的执行中集合保证心跳线程与重连线程不会
+     * 对同一项并发重放；失败项仍留在待恢复集合中，等待下一个固定周期。
+     */
+    void recoverPendingState() {
+        for (String key : pendingRegistrationRecoveries) {
+            recoverRegistration(key);
+        }
+        for (String key : pendingSubscriptionRecoveries) {
+            recoverSubscription(key);
+        }
+    }
+
+    private void recoverRegistration(String key) {
+        synchronized (stateLock("instance:" + key)) {
+            if (!pendingRegistrationRecoveries.contains(key) || !recoveringRegistrations.add(key)) {
+                return;
+            }
+            RegisterRequest request = registeredInstances.get(key);
             try {
-                requestSync(ProtocolConstants.REGISTER_REQUEST, request);
+                if (request == null) {
+                    pendingRegistrationRecoveries.remove(key);
+                    return;
+                }
+                CommonResponseBody response = requestSync(ProtocolConstants.REGISTER_REQUEST, request);
+                ensureSuccess(response, "恢复注册失败");
+                if (registeredInstances.get(key) == request) {
+                    pendingRegistrationRecoveries.remove(key);
+                }
             } catch (Exception ex) {
-                log.warn("重连后恢复注册失败: {}#{}", request.getServiceName(), request.getInstanceId(), ex);
+                if (registeredInstances.get(key) == request) {
+                    pendingRegistrationRecoveries.add(key);
+                }
+                if (request != null) {
+                    log.warn("恢复注册失败，将按固定周期重试: {}#{}",
+                            request.getServiceName(), request.getInstanceId(), ex);
+                }
+            } finally {
+                recoveringRegistrations.remove(key);
             }
         }
-        for (SubscribeRequest request : subscriptions.values()) {
+    }
+
+    private void recoverSubscription(String key) {
+        synchronized (stateLock("subscription:" + key)) {
+            if (!pendingSubscriptionRecoveries.contains(key) || !recoveringSubscriptions.add(key)) {
+                return;
+            }
+            SubscribeRequest request = subscriptions.get(key);
             try {
-                requestSync(ProtocolConstants.SUBSCRIBE_REQUEST, request);
+                if (request == null) {
+                    pendingSubscriptionRecoveries.remove(key);
+                    return;
+                }
+                CommonResponseBody response = requestSync(ProtocolConstants.SUBSCRIBE_REQUEST, request);
+                ensureSuccess(response, "恢复订阅失败");
+                if (subscriptions.get(key) == request) {
+                    pendingSubscriptionRecoveries.remove(key);
+                }
             } catch (Exception ex) {
-                log.warn("重连后恢复订阅失败: {}", request.getServiceName(), ex);
+                if (subscriptions.get(key) == request) {
+                    pendingSubscriptionRecoveries.add(key);
+                }
+                if (request != null) {
+                    log.warn("恢复订阅失败，将按固定周期重试: {}", request.getServiceName(), ex);
+                }
+            } finally {
+                recoveringSubscriptions.remove(key);
             }
         }
     }
@@ -434,23 +544,48 @@ public class NameserverClient implements AutoCloseable {
      * 定时给本客户端注册过的实例打心跳（心跳续约）
      * 由 heartbeatTask 按 heartbeatIntervalMs 周期执行。
      */
-    private void heartbeatRegistered() {
+    void heartbeatRegistered() {
         if (!isActive() || registeredInstances.isEmpty()) {
             return;
         }
-        // 对所有本地注册备份逐个续约
+        // 对所有本地注册备份逐个续约；同 key 与 register/unregister/recovery 串行。
         for (RegisterRequest request : registeredInstances.values()) {
-            try {
-                CommonResponseBody response = heartbeat(request.getServiceName(), request.getInstanceId());
-                if (response.getCode() != StatusConstants.SUCCESS) {
-                    log.warn("心跳失败: {}#{}, code={}, msg={}",
-                            request.getServiceName(),
-                            request.getInstanceId(),
-                            response.getCode(),
-                            response.getMessage());
+            String key = instanceKey(request.getServiceName(), request.getInstanceId());
+            synchronized (stateLock("instance:" + key)) {
+                if (registeredInstances.get(key) != request) {
+                    continue;
                 }
-            } catch (Exception ex) {
-                log.warn("发送心跳异常: {}#{}", request.getServiceName(), request.getInstanceId(), ex);
+                if (pendingRegistrationRecoveries.contains(key)) {
+                    recoverRegistration(key);
+                    continue;
+                }
+                try {
+                    CommonResponseBody response = heartbeat(request.getServiceName(), request.getInstanceId());
+                    if (response != null && response.getCode() == StatusConstants.SERVICE_NOT_FOUND) {
+                        log.info("心跳发现实例不存在，立即重新注册: {}#{}",
+                                request.getServiceName(), request.getInstanceId());
+                        pendingRegistrationRecoveries.add(key);
+                        recoverRegistration(key);
+                        continue;
+                    }
+                    if (response != null && response.getCode() == StatusConstants.CONFLICT) {
+                        // 相同实例已由其他进程/连接接管。旧 owner 必须停止续约，避免重连后反复争抢。
+                        registeredInstances.remove(key, request);
+                        pendingRegistrationRecoveries.remove(key);
+                        log.error("实例已由其他会话接管，停止本连接续约: {}#{}",
+                                request.getServiceName(), request.getInstanceId());
+                        continue;
+                    }
+                    if (response == null || response.getCode() != StatusConstants.SUCCESS) {
+                        log.warn("心跳失败: {}#{}, code={}, msg={}",
+                                request.getServiceName(),
+                                request.getInstanceId(),
+                                response == null ? -1 : response.getCode(),
+                                response == null ? "空响应" : response.getMessage());
+                    }
+                } catch (Exception ex) {
+                    log.warn("发送心跳异常: {}#{}", request.getServiceName(), request.getInstanceId(), ex);
+                }
             }
         }
     }
@@ -462,7 +597,7 @@ public class NameserverClient implements AutoCloseable {
      * @throws RoverException 未连接或连接已断开时抛出
      */
     private Channel requireActiveChannel() {
-        Channel current = channel;
+        Channel current = channelState.current();
         if (current == null || !current.isActive()) {
             throw new RoverException("尚未连接到 Nameserver");
         }
@@ -502,6 +637,19 @@ public class NameserverClient implements AutoCloseable {
         return ServiceKeys.serviceGroup(serviceName, group);
     }
 
+    private Object stateLock(String key) {
+        int index = Math.floorMod(key == null ? 0 : key.hashCode(), STATE_LOCK_STRIPES);
+        return stateLocks[index];
+    }
+
+    private static Object[] createStateLocks() {
+        Object[] locks = new Object[STATE_LOCK_STRIPES];
+        for (int i = 0; i < locks.length; i++) {
+            locks[i] = new Object();
+        }
+        return locks;
+    }
+
     /**
      * 深拷贝注册请求：本地备份必须持有独立对象，避免调用方后续修改原请求污染备份。
      */
@@ -538,6 +686,8 @@ public class NameserverClient implements AutoCloseable {
         if (!started.compareAndSet(true, false)) {
             return;
         }
+        // 先禁止发布晚到的连接成功结果，并摘除当前连接；实际 close 放在在途请求失败之后。
+        Channel current = channelState.stopAcceptingConnections();
         // 先停定时任务，避免关闭过程中心跳/重连还在拉活
         if (heartbeatTask != null) {
             heartbeatTask.stop();
@@ -549,7 +699,6 @@ public class NameserverClient implements AutoCloseable {
         pendingRequests.failAll(new IllegalStateException("客户端已关闭"));
         pendingRequests.close();
         // 再关连接、释放 worker 线程池
-        Channel current = channel;
         if (current != null) {
             current.close();
         }
@@ -559,6 +708,10 @@ public class NameserverClient implements AutoCloseable {
         // 最后清空本地状态
         registeredInstances.clear();
         subscriptions.clear();
+        pendingRegistrationRecoveries.clear();
+        pendingSubscriptionRecoveries.clear();
+        recoveringRegistrations.clear();
+        recoveringSubscriptions.clear();
         instanceCache.clear();
         log.info("NameserverClient 已关闭");
     }

@@ -9,7 +9,7 @@ export default defineConfig({
     // 开发环境代理配置（可选，直接请求网关更简单）
     // proxy: {
     //   '/api': {
-    //     target: 'http://localhost:9999',
+    //     target: 'http://localhost:8080',
     //     changeOrigin: true
     //   }
     // }

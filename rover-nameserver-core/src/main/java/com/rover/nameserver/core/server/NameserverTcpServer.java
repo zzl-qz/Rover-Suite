@@ -14,6 +14,7 @@ import com.rover.nameserver.core.manage.NameserverHttpManageServer;
 import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.push.PushService;
 import com.rover.nameserver.core.push.SubscriptionManager;
+import com.rover.nameserver.core.registration.RegistrationService;
 import com.rover.nameserver.core.registry.InMemoryServiceRegistry;
 import com.rover.nameserver.core.registry.ServiceRegistry;
 import com.rover.nameserver.core.runtime.NameserverRuntime;
@@ -86,6 +87,7 @@ public class NameserverTcpServer {
         // 世代可替换：单机 ProcessLocal；集群以后注入集群权威 Generation
         NameserverGeneration generation = NameserverGeneration.processLocal();
         this.pushService = new PushService(subscriptionManager, options.isPushEnabled(), generation, metrics);
+        RegistrationService registrationService = new RegistrationService(registry, pushService, metrics);
         this.healthChecker = new HealthChecker(
                 registry,
                 pushService,
@@ -96,7 +98,14 @@ public class NameserverTcpServer {
 
         // 事件总线：显式注册协议 Listener（Handler 只做 TCP→Event）
         NameserverServices services = new NameserverServices(
-                registry, subscriptionManager, pushService, writeAckPolicy, options, generation, metrics);
+                registry,
+                subscriptionManager,
+                pushService,
+                writeAckPolicy,
+                options,
+                generation,
+                metrics,
+                registrationService);
         this.eventBus = new EventBusBootstrap("rover-nameserver");
         this.eventBus.start(services);
         this.dispatcher = new NameserverRequestDispatcher(eventBus.getEventBus(), services);
@@ -112,7 +121,14 @@ public class NameserverTcpServer {
         configManager.seed(NameserverRuntimeConfigKeys.PUSH_ENABLED, String.valueOf(options.isPushEnabled()));
         configManager.loadOverlayIfPresent();
 
-        this.runtime = new NameserverRuntime(options, registry, pushService, healthChecker, configManager, metrics);
+        this.runtime = new NameserverRuntime(
+                options,
+                registry,
+                pushService,
+                healthChecker,
+                configManager,
+                metrics,
+                registrationService);
         configManager.getApplier().bind(runtime);
         configManager.reapplyAll();
         this.manageServer = new NameserverHttpManageServer(

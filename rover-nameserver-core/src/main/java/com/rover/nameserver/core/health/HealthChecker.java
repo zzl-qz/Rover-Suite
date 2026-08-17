@@ -143,7 +143,11 @@ public class HealthChecker {
                     continue;
                 }
                 RegistrySnapshot snapshot =
-                        registry.removeExpired(instance.getServiceName(), instance.getInstanceId());
+                        registry.removeExpired(
+                                instance.getServiceName(),
+                                instance.getInstanceId(),
+                                record.getOwner(),
+                                now - expire);
                 if (snapshot != null) {
                     changed.add(snapshot);
                     metrics.expireEvict(instance.getServiceName(), instance.getInstanceId(), idle, expire);

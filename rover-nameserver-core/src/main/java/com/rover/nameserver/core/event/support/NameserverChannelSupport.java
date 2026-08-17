@@ -5,6 +5,7 @@ import com.rover.common.protocol.AckMode;
 import com.rover.common.protocol.CommonResponseBody;
 import com.rover.common.protocol.RoverMessage;
 import com.rover.common.codec.RoverMessageCodecSupport;
+import com.rover.nameserver.core.registration.RegistrationOwner;
 import com.rover.nameserver.core.server.NameserverServerOptions;
 import io.netty.channel.Channel;
 import io.netty.util.Attribute;
@@ -24,7 +25,8 @@ public final class NameserverChannelSupport {
             AttributeKey.valueOf("nameserverBoundInstances");
 
     /** 结构化绑定键，避免 serviceName / instanceId 中出现分隔符时解析错误。 */
-    public record BoundInstance(String serviceName, String instanceId) {
+    public record BoundInstance(
+            String serviceName, String instanceId, RegistrationOwner owner) {
     }
 
     private NameserverChannelSupport() {
@@ -68,8 +70,20 @@ public final class NameserverChannelSupport {
         }
     }
 
-    public static void bindInstance(Channel channel, String serviceName, String instanceId) {
-        if (channel == null || serviceName == null || instanceId == null) {
+    /** 当前 TCP 连接对应的注册所有者。 */
+    public static RegistrationOwner registrationOwner(Channel channel) {
+        if (channel == null) {
+            throw new IllegalArgumentException("TCP 注册连接不能为空");
+        }
+        return RegistrationOwner.tcp(channel.id().asLongText());
+    }
+
+    public static void bindInstance(
+            Channel channel,
+            String serviceName,
+            String instanceId,
+            RegistrationOwner owner) {
+        if (channel == null || serviceName == null || instanceId == null || owner == null) {
             return;
         }
         // setIfAbsent：避免并发注册时两个线程各 new 一个 Set，后写覆盖先写丢绑定
@@ -82,16 +96,20 @@ public final class NameserverChannelSupport {
                 bound = created;
             }
         }
-        bound.add(new BoundInstance(serviceName, instanceId));
+        bound.add(new BoundInstance(serviceName, instanceId, owner));
     }
 
-    public static void unbindInstance(Channel channel, String serviceName, String instanceId) {
+    public static void unbindInstance(
+            Channel channel,
+            String serviceName,
+            String instanceId,
+            RegistrationOwner owner) {
         if (channel == null) {
             return;
         }
         Set<BoundInstance> bound = channel.attr(BOUND_INSTANCES).get();
         if (bound != null) {
-            bound.remove(new BoundInstance(serviceName, instanceId));
+            bound.remove(new BoundInstance(serviceName, instanceId, owner));
         }
     }
 

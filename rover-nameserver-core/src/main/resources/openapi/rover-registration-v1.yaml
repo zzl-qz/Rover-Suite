@@ -1,0 +1,462 @@
+openapi: 3.0.3
+info:
+  title: Rover Nameserver Registration API
+  version: 1.0.0
+  description: |
+    面向非 Java 服务提供方的轻量 HTTP+JSON 注册接口。
+
+    本接口只负责临时实例的注册、心跳续约和注销，不提供服务查询、订阅、
+    Nameserver 主动探活或在线实例持久化能力。客户端应在业务端口开始监听后注册，
+    默认每 5 秒发送一次心跳；Nameserver 重启或实例过期后，心跳会返回
+    `INSTANCE_NOT_FOUND`，客户端应使用原 `sessionId` 和完整实例信息立即重新注册。
+servers:
+  - url: http://localhost:8889
+    description: Nameserver 默认 HTTP 监听地址；实际地址以部署配置为准
+tags:
+  - name: Registration
+    description: 服务提供方注册生命周期
+security:
+  - bearerAuth: []
+  - {}
+paths:
+  /v1/client/instances/register:
+    post:
+      tags:
+        - Registration
+      summary: 注册或续租一个临时实例
+      description: |
+        使用 `serviceName + instanceId` 定位实例，使用进程启动时生成的
+        `sessionId` 标识本次进程会话。
+
+        相同 session、相同实例数据的重复注册是幂等续租；新的 session 可以接管
+        相同实例键。HTTP 注册始终创建临时实例。
+      operationId: registerInstance
+      requestBody:
+        required: true
+        description: |
+          UTF-8 JSON，请求体最大 65536 字节。未知字段会被忽略。
+        x-max-body-bytes: 65536
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              serviceName: order-service
+              instanceId: 10.0.1.20:8080
+              sessionId: 11f1b8a4-f588-4a68-a74d-34354013ac4d
+              host: 10.0.1.20
+              port: 8080
+              weight: 100
+              group: DEFAULT
+              zone: shanghai-a
+              metadata:
+                version: 1.2.0
+      responses:
+        '200':
+          $ref: '#/components/responses/Success'
+        '400':
+          $ref: '#/components/responses/InvalidArgument'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/client/instances/heartbeat:
+    post:
+      tags:
+        - Registration
+      summary: 为已注册实例续约
+      description: |
+        心跳只刷新 Nameserver 接收请求时记录的最后续约时间。客户端时间不参与
+        TTL 判断。实例不存在时返回 `INSTANCE_NOT_FOUND`，客户端应立即重新注册；
+        session 已被其他进程接管时返回 `STALE_SESSION`。
+      operationId: heartbeatInstance
+      requestBody:
+        required: true
+        description: |
+          UTF-8 JSON，请求体最大 65536 字节。未知字段会被忽略。
+        x-max-body-bytes: 65536
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRequest'
+            example:
+              serviceName: order-service
+              instanceId: 10.0.1.20:8080
+              sessionId: 11f1b8a4-f588-4a68-a74d-34354013ac4d
+      responses:
+        '200':
+          $ref: '#/components/responses/Success'
+        '400':
+          $ref: '#/components/responses/InvalidArgument'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StaleSession'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /v1/client/instances/unregister:
+    post:
+      tags:
+        - Registration
+      summary: 注销一个临时实例
+      description: |
+        仅当前 `sessionId` 所有者可以注销实例。客户端关闭时应尽力调用一次，
+        注销失败不应阻塞业务进程退出，最终由 Nameserver 的 TTL 扫描摘除实例。
+      operationId: unregisterInstance
+      requestBody:
+        required: true
+        description: |
+          UTF-8 JSON，请求体最大 65536 字节。未知字段会被忽略。
+        x-max-body-bytes: 65536
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRequest'
+            example:
+              serviceName: order-service
+              instanceId: 10.0.1.20:8080
+              sessionId: 11f1b8a4-f588-4a68-a74d-34354013ac4d
+      responses:
+        '200':
+          $ref: '#/components/responses/Success'
+        '400':
+          $ref: '#/components/responses/InvalidArgument'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StaleSession'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque-token
+      description: |
+        使用 `Authorization: Bearer <client-token>`。Client API token 由
+        Nameserver 部署配置提供，不放入 JSON 请求体。仅当服务端配置了非空
+        `rover.nameserver.token` 时强制校验；Client API 默认关闭，生产启用时应配置 token。
+
+  schemas:
+    RegisterRequest:
+      type: object
+      description: HTTP 注册始终按临时实例处理。
+      required:
+        - serviceName
+        - instanceId
+        - sessionId
+        - host
+        - port
+      properties:
+        serviceName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: 服务名；首尾空白会被移除。
+        instanceId:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: 同一服务内唯一的实例标识；首尾空白会被移除。
+        sessionId:
+          type: string
+          format: uuid
+          maxLength: 36
+          description: 每次业务进程启动时生成并在该进程生命周期内保持不变。
+        host:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Gateway 可访问的实例主机或 IP；首尾空白会被移除。
+        port:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 65535
+          description: 实例监听端口。
+        weight:
+          type: integer
+          format: int32
+          default: 100
+          description: 权重；未提供或值小于等于 0 时服务端使用 100。
+        group:
+          type: string
+          maxLength: 128
+          description: 可选分组；空白值按未提供处理。
+        zone:
+          type: string
+          maxLength: 128
+          description: 可选可用区；空白值按未提供处理。
+        metadata:
+          type: object
+          maxProperties: 64
+          description: |
+            可选字符串元数据。key 不能为空，首尾空白会被移除，最长 128 个字符；
+            value 不能为空，最长 1024 个字符。
+          additionalProperties:
+            type: string
+            maxLength: 1024
+
+    SessionRequest:
+      type: object
+      required:
+        - serviceName
+        - instanceId
+        - sessionId
+      properties:
+        serviceName:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: 服务名；首尾空白会被移除。
+        instanceId:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: 同一服务内唯一的实例标识；首尾空白会被移除。
+        sessionId:
+          type: string
+          format: uuid
+          maxLength: 36
+          description: 注册时使用的进程会话 ID。
+
+    RegistrationResponse:
+      type: object
+      required:
+        - code
+        - message
+        - epoch
+        - revision
+        - serverTimeMillis
+        - heartbeatIntervalMs
+        - expireMillis
+      properties:
+        code:
+          type: string
+          description: 稳定的机器可读业务码。
+          enum:
+            - OK
+            - INVALID_ARGUMENT
+            - UNAUTHORIZED
+            - NOT_FOUND
+            - INSTANCE_NOT_FOUND
+            - STALE_SESSION
+            - METHOD_NOT_ALLOWED
+            - PAYLOAD_TOO_LARGE
+            - UNSUPPORTED_MEDIA_TYPE
+            - SERVER_ERROR
+        message:
+          type: string
+          description: 面向日志和排障的说明文本，客户端不得据此分支。
+        epoch:
+          type: string
+          description: Nameserver 启动世代，用于诊断与对账；HTTP Registrar 的恢复正确性以 `INSTANCE_NOT_FOUND` 为准。
+        revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: 当前服务实例快照版本；错误发生在写入前时可能为 0。
+        serverTimeMillis:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Nameserver 生成响应时的 Unix 毫秒时间戳。
+        heartbeatIntervalMs:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 5000
+          description: 服务端建议的心跳间隔，当前默认 5000 毫秒。
+        expireMillis:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 30000
+          description: 临时实例无成功续约后的过期阈值，由服务端运行配置决定。
+
+  responses:
+    Success:
+      description: 注册、心跳或注销成功。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          example:
+            code: OK
+            message: OK
+            epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+            revision: 12
+            serverTimeMillis: 1786924800000
+            heartbeatIntervalMs: 5000
+            expireMillis: 30000
+
+    InvalidArgument:
+      description: JSON 格式错误、请求体为空或字段不符合约束。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          example:
+            code: INVALID_ARGUMENT
+            message: port 必须在 1-65535 之间
+            epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+            revision: 0
+            serverTimeMillis: 1786924800000
+            heartbeatIntervalMs: 5000
+            expireMillis: 30000
+
+    Unauthorized:
+      description: Bearer token 缺失或与 Nameserver 配置不匹配。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          example:
+            code: UNAUTHORIZED
+            message: 鉴权失败
+            epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+            revision: 0
+            serverTimeMillis: 1786924800000
+            heartbeatIntervalMs: 5000
+            expireMillis: 30000
+
+    MethodNotAllowed:
+      description: Client API 端点只接受 POST。
+      headers:
+        Allow:
+          description: 允许的 HTTP 方法。
+          schema:
+            type: string
+            example: POST
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          example:
+            code: METHOD_NOT_ALLOWED
+            message: 仅支持 POST
+            epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+            revision: 0
+            serverTimeMillis: 1786924800000
+            heartbeatIntervalMs: 5000
+            expireMillis: 30000
+
+    NotFound:
+      description: |
+        心跳或注销的实例不存在，或者 Nameserver 未启用 HTTP Client API。
+        `INSTANCE_NOT_FOUND` 要求客户端提交完整注册信息；`NOT_FOUND` 表示接口不可用。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          examples:
+            instanceNotFound:
+              summary: 实例不存在
+              value:
+                code: INSTANCE_NOT_FOUND
+                message: 实例不存在，请先注册
+                epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+                revision: 0
+                serverTimeMillis: 1786924800000
+                heartbeatIntervalMs: 5000
+                expireMillis: 30000
+            apiDisabled:
+              summary: Client API 未启用
+              value:
+                code: NOT_FOUND
+                message: HTTP Client API 未启用
+                epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+                revision: 0
+                serverTimeMillis: 1786924800000
+                heartbeatIntervalMs: 5000
+                expireMillis: 30000
+
+    StaleSession:
+      description: 当前实例已经由其他 session 接管，旧 session 不得继续续约或注销。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          example:
+            code: STALE_SESSION
+            message: 实例已由其他 session 接管
+            epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+            revision: 12
+            serverTimeMillis: 1786924800000
+            heartbeatIntervalMs: 5000
+            expireMillis: 30000
+
+    PayloadTooLarge:
+      description: |
+        JSON 请求体超过 65536 字节。64KiB～1MiB 由 Client API 返回下述 JSON；
+        超过 HTTP Listener 1MiB 硬上限时可能由 Netty 在路由前直接返回无 body 的 413。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          example:
+            code: PAYLOAD_TOO_LARGE
+            message: 请求体不能超过 65536 字节
+            epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+            revision: 0
+            serverTimeMillis: 1786924800000
+            heartbeatIntervalMs: 5000
+            expireMillis: 30000
+
+    UnsupportedMediaType:
+      description: Content-Type 缺失或不是 application/json。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          example:
+            code: UNSUPPORTED_MEDIA_TYPE
+            message: Content-Type 必须是 application/json
+            epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+            revision: 0
+            serverTimeMillis: 1786924800000
+            heartbeatIntervalMs: 5000
+            expireMillis: 30000
+
+    ServerError:
+      description: Nameserver 处理请求时发生未预期错误。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/RegistrationResponse'
+          example:
+            code: SERVER_ERROR
+            message: client api error
+            epoch: a7127a61-a9ac-4cb9-a1d5-f3131c17ad50
+            revision: 0
+            serverTimeMillis: 1786924800000
+            heartbeatIntervalMs: 5000
+            expireMillis: 30000

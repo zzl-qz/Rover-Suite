@@ -2,7 +2,10 @@ package com.rover.nameserver.core.model;
 
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.protocol.RegisterRequest;
+import com.rover.nameserver.core.registration.RegistrationOwner;
 import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 import lombok.Data;
 
 /**
@@ -15,6 +18,8 @@ public class InstanceRecord {
 
     /** 对外实例信息 */
     private ServiceInstance instance;
+    /** 当前注册会话所有者；旧连接/旧 session 不能给新会话续租或注销。 */
+    private RegistrationOwner owner;
     /** 最近心跳时间；健康检查线程要读，必须看得见心跳线程的写 */
     private volatile long lastHeartbeatMillis;
 
@@ -25,7 +30,7 @@ public class InstanceRecord {
      * @param request 客户端注册请求
      * @return 可直接放入注册表的记录，含完整的 ServiceInstance 与初始心跳时间
      */
-    public static InstanceRecord from(RegisterRequest request) {
+    public static InstanceRecord from(RegisterRequest request, RegistrationOwner owner) {
         long now = System.currentTimeMillis();
         ServiceInstance instance = new ServiceInstance();
         instance.setServiceName(request.getServiceName());
@@ -46,8 +51,41 @@ public class InstanceRecord {
 
         InstanceRecord record = new InstanceRecord();
         record.setInstance(instance);
+        record.setOwner(Objects.requireNonNull(owner, "owner"));
         record.setLastHeartbeatMillis(now);
         return record;
+    }
+
+    /** 是否仍由给定连接/session 持有。 */
+    public boolean isOwnedBy(RegistrationOwner expectedOwner) {
+        return Objects.equals(this.owner, expectedOwner);
+    }
+
+    /**
+     * 比较会影响服务发现数据面的注册字段。registerTime、token 与健康状态不参与：
+     * 它们分别属于首次登记时间、传输鉴权和运行状态，不能让幂等重试产生伪变更。
+     */
+    public boolean hasSameRegistration(RegisterRequest request) {
+        ServiceInstance current = this.instance;
+        if (current == null || request == null) {
+            return false;
+        }
+        int requestedWeight = request.getWeight() <= 0
+                ? ServiceInstance.DEFAULT_WEIGHT
+                : request.getWeight();
+        Map<String, String> requestedMetadata =
+                request.getMetadata() == null ? Map.of() : request.getMetadata();
+        Map<String, String> currentMetadata =
+                current.getMetadata() == null ? Map.of() : current.getMetadata();
+        return Objects.equals(current.getServiceName(), request.getServiceName())
+                && Objects.equals(current.getHost(), request.getHost())
+                && current.getPort() == request.getPort()
+                && Objects.equals(current.getInstanceId(), request.getInstanceId())
+                && current.getWeight() == requestedWeight
+                && Objects.equals(current.getGroup(), request.getGroup())
+                && Objects.equals(current.getZone(), request.getZone())
+                && current.isEphemeral() == request.isEphemeral()
+                && Objects.equals(currentMetadata, requestedMetadata);
     }
 
     /**
@@ -79,5 +117,10 @@ public class InstanceRecord {
         }
         instance.setHealthy(false);
         return true;
+    }
+
+    /** 健康检查真正删除前再次确认心跳仍已过期，避免扫描快照与删除之间的新心跳被误删。 */
+    public synchronized boolean isHeartbeatExpired(long heartbeatDeadlineMillis) {
+        return lastHeartbeatMillis <= heartbeatDeadlineMillis;
     }
 }

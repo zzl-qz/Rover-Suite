@@ -6,7 +6,7 @@ import com.rover.nameserver.core.event.support.NameserverChannelSupport.BoundIns
 import com.rover.nameserver.core.event.support.NameserverChannelSupport;
 import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.event.support.NameserverTrace;
-import com.rover.nameserver.core.registry.RegistrySnapshot;
+import com.rover.nameserver.core.registration.RegistrationResult;
 import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 
@@ -35,16 +35,15 @@ public class ChannelInactiveListener implements EventListener<ChannelInactiveEve
         }
         int removed = 0;
         for (BoundInstance instance : bound) {
-            RegistrySnapshot snapshot = services.getRegistry()
-                    .unregister(instance.serviceName(), instance.instanceId());
-            if (snapshot != null) {
-                services.getPushService().pushSnapshot(snapshot);
+            RegistrationResult result = services.getRegistrationService()
+                    .unregister(instance.serviceName(), instance.instanceId(), instance.owner());
+            if (result.isChanged()) {
                 removed++;
                 log.info("action=channel-inactive-unregister, remote={}, serviceName={}, instanceId={}, revision={}",
                         NameserverTrace.remote(event.getChannel()),
                         instance.serviceName(),
                         instance.instanceId(),
-                        snapshot.getRevision());
+                        result.revision());
             }
         }
         log.info("action=channel-inactive-done, remote={}, unbound={}",

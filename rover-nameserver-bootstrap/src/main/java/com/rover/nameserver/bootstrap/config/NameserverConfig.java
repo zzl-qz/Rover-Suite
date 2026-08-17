@@ -60,14 +60,16 @@ public class NameserverConfig {
         private int port = DEFAULT_PORT;
         /** TCP 监听地址，默认 0.0.0.0 */
         private String bindHost = NameserverConstants.DEFAULT_BIND_HOST;
-        /** HTTP 管理口，Admin 调这里 */
+        /** HTTP 管理/客户端 API 端口 */
         private int managePort = NameserverConstants.DEFAULT_MANAGE_PORT;
-        /** HTTP 管理口监听地址，默认 0.0.0.0 */
+        /** HTTP 管理/客户端 API 监听地址，默认 0.0.0.0 */
         private String manageBindHost = NameserverConstants.DEFAULT_BIND_HOST;
         /** 集群协议鉴权 token（所有请求）；空表示不鉴权 */
         private String token;
         /** HTTP 管理口鉴权 token；空表示不鉴权 */
         private String adminToken;
+        /** 是否启用 /v1/client/** 轻量 HTTP 注册 API */
+        private boolean clientApiEnabled = false;
         /** 心跳超时时间(ms)：超过则标记实例不健康 */
         private long heartbeatTimeoutMillis = NameserverConstants.DEFAULT_HEARTBEAT_TIMEOUT_MILLIS;
         /** 健康检查扫描间隔(ms) */

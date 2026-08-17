@@ -3,6 +3,8 @@ package com.rover.nameserver.core.registry;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.protocol.RegisterRequest;
 import com.rover.nameserver.core.model.InstanceRecord;
+import com.rover.nameserver.core.registration.RegistrationOwner;
+import com.rover.nameserver.core.registration.RegistrationResult;
 import java.util.List;
 
 /**
@@ -12,19 +14,21 @@ import java.util.List;
  */
 public interface ServiceRegistry {
 
-    /** 注册实例，返回该服务的完整快照（含新 revision），用于变更推送。 */
-    RegistrySnapshot register(RegisterRequest request);
+    /**
+     * 注册或续租实例。owner 相同且实例信息未变化时只刷新心跳；实例信息或 owner 变化时返回新快照。
+     */
+    RegistrationResult register(RegisterRequest request, RegistrationOwner owner);
 
-    /** 注销实例，返回新快照；实例不存在时返回 null（调用方应跳过推送）。 */
-    RegistrySnapshot unregister(String serviceName, String instanceId);
+    /** 仅当前 owner 可以注销；实例不存在或 owner 不匹配时不修改注册表。 */
+    RegistrationResult unregister(
+            String serviceName, String instanceId, RegistrationOwner owner);
 
     /**
      * 刷新实例心跳。
-     * 实例不存在 → {@link HeartbeatResult#notFound()}；
-     * 仅刷新时间 → {@link HeartbeatResult#touched()}；
-     * 从不健康恢复 → {@link HeartbeatResult#recovered(RegistrySnapshot)}（已 bump revision）。
+     * 实例不存在或 owner 不匹配时不续租；健康状态恢复时返回新快照。
      */
-    HeartbeatResult heartbeat(String serviceName, String instanceId);
+    RegistrationResult heartbeat(
+            String serviceName, String instanceId, RegistrationOwner owner);
 
     /**
      * 将实例标记为不健康。
@@ -42,6 +46,13 @@ public interface ServiceRegistry {
     /** 枚举注册表内全部实例记录（供健康检查扫描超时实例）。 */
     List<InstanceRecord> listAllRecords();
 
-    /** 移除过期实例（由健康检查在临时实例超时时调用），返回移除后的服务快照；实例不存在返回 null。 */
-    RegistrySnapshot removeExpired(String serviceName, String instanceId);
+    /**
+     * 移除健康检查扫描到的过期实例。必须同时匹配扫描时的 owner 且心跳仍早于截止时间，
+     * 防止旧扫描误删同 ID 的新会话。
+     */
+    RegistrySnapshot removeExpired(
+            String serviceName,
+            String instanceId,
+            RegistrationOwner expectedOwner,
+            long heartbeatDeadlineMillis);
 }

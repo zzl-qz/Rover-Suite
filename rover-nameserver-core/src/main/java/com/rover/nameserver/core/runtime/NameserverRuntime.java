@@ -4,6 +4,7 @@ import com.rover.nameserver.core.config.NameserverRuntimeConfigManager;
 import com.rover.nameserver.core.health.HealthChecker;
 import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.push.PushService;
+import com.rover.nameserver.core.registration.RegistrationService;
 import com.rover.nameserver.core.registry.ServiceRegistry;
 import com.rover.nameserver.core.server.NameserverServerOptions;
 import lombok.Getter;
@@ -28,6 +29,8 @@ public class NameserverRuntime {
     private final NameserverRuntimeConfigManager configManager;
     /** 指标注册表（生命周期计数 + 最近事件 + TCP 连接数） */
     private final NameserverMetricsRegistry metrics;
+    /** TCP 与 HTTP 共用的注册生命周期门面。 */
+    private final RegistrationService registrationService;
 
     public NameserverRuntime(
             NameserverServerOptions options,
@@ -35,12 +38,15 @@ public class NameserverRuntime {
             PushService pushService,
             HealthChecker healthChecker,
             NameserverRuntimeConfigManager configManager,
-            NameserverMetricsRegistry metrics) {
+            NameserverMetricsRegistry metrics,
+            RegistrationService registrationService) {
         this.options = options;
         this.registry = registry;
         this.pushService = pushService;
         this.healthChecker = healthChecker;
         this.configManager = configManager;
         this.metrics = metrics == null ? new NameserverMetricsRegistry() : metrics;
+        this.registrationService = java.util.Objects.requireNonNull(
+                registrationService, "registrationService");
     }
 }

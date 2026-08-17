@@ -8,7 +8,8 @@ import com.rover.nameserver.core.event.model.RegisterEvent;
 import com.rover.nameserver.core.event.support.NameserverChannelSupport;
 import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.event.support.NameserverTrace;
-import com.rover.nameserver.core.registry.RegistrySnapshot;
+import com.rover.nameserver.core.registration.RegistrationOwner;
+import com.rover.nameserver.core.registration.RegistrationResult;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -38,38 +39,37 @@ public class RegisterListener implements EventListener<RegisterEvent> {
             return;
         }
 
-        RegistrySnapshot snapshot = services.getRegistry().register(request);
-        services.getMetrics().register(request.getServiceName(), request.getInstanceId());
+        RegistrationOwner owner = NameserverChannelSupport.registrationOwner(event.getChannel());
+        RegistrationResult result = services.getRegistrationService().register(request, owner);
         // 临时实例归连接所有，断线自动清理；persistent 独立于连接，只能显式注销或由健康检查标不健康。
         if (request.isEphemeral()) {
             NameserverChannelSupport.bindInstance(
-                    event.getChannel(), request.getServiceName(), request.getInstanceId());
+                    event.getChannel(), request.getServiceName(), request.getInstanceId(), owner);
+        } else {
+            // 同一 owner 把临时实例改为持久实例时，必须同步解除 channel 绑定。
+            NameserverChannelSupport.unbindInstance(
+                    event.getChannel(), request.getServiceName(), request.getInstanceId(), owner);
         }
         // 断线事件可能已经跑过（当时还没 bind）。仅临时实例需要在连接已死时回滚注册。
         if (request.isEphemeral()
                 && event.getChannel() != null
                 && !event.getChannel().isActive()) {
-            RegistrySnapshot removed = services.getRegistry()
-                    .unregister(request.getServiceName(), request.getInstanceId());
+            services.getRegistrationService()
+                    .unregister(request.getServiceName(), request.getInstanceId(), owner);
             NameserverChannelSupport.unbindInstance(
-                    event.getChannel(), request.getServiceName(), request.getInstanceId());
-            if (removed != null) {
-                services.getPushService().pushSnapshot(removed);
-            }
+                    event.getChannel(), request.getServiceName(), request.getInstanceId(), owner);
             log.warn("{}, reason=channel-inactive-after-register",
                     NameserverTrace.withServiceInstance(
                             event, "register-aborted", request.getServiceName(), request.getInstanceId()));
             return;
         }
-        services.getPushService().pushSnapshot(snapshot);
-
         AckMode ackMode = event.getAckMode();
         CommonResponseBody body = CommonResponseBody.success()
                 .withAck(ackMode, services.getWriteAckPolicy().requiredAcks(
                         ackMode,
                         services.getOptions().getReplicationFactor(),
                         services.getOptions().isClusterEnabled()));
-        body.setRevision(snapshot.getRevision());
+        body.setRevision(result.revision());
         NameserverChannelSupport.fillNode(services.getOptions(), body);
         NameserverChannelSupport.fillGeneration(services, body);
         NameserverChannelSupport.reply(
@@ -77,7 +77,7 @@ public class RegisterListener implements EventListener<RegisterEvent> {
         log.info("{}, revision={}, epoch={}",
                 NameserverTrace.withServiceInstance(
                         event, "register-ok", request.getServiceName(), request.getInstanceId()),
-                snapshot.getRevision(),
+                result.revision(),
                 services.getEpoch());
     }
 
