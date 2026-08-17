@@ -19,8 +19,6 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManager {
 
-    private static final String MASKED_VALUE = "******";
-
     /** 配置项注册表：key -> ConfigItem */
     private final Map<String, ConfigItem> configs = new ConcurrentHashMap<>();
     /** overlay 持久化存储，供 status 接口展示路径 */
@@ -124,8 +122,8 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
         for (ConfigItem item : configs.values()) {
             ConfigItem copy = copyOf(item);
             if (copy.isSensitive()) {
-                copy.setValue(MASKED_VALUE);
-                copy.setDefaultValue(MASKED_VALUE);
+                copy.setValue(ConfigValues.MASKED);
+                copy.setDefaultValue(ConfigValues.MASKED);
             }
             items.add(copy);
         }

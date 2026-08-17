@@ -1,5 +1,6 @@
 package com.rover.common.util;
 
+import com.rover.common.constants.NetworkConstants;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.util.Enumeration;
@@ -49,10 +50,10 @@ public final class IpUtil {
             if (!fallback.isLinkLocalAddress() && fallback.getHostAddress().indexOf(':') < 0) {
                 return fallback.getHostAddress();
             }
-            return "127.0.0.1";
+            return NetworkConstants.IPV4_LOOPBACK;
         } catch (Exception ex) {
             log.warn("自动探测本机 IP 失败，回退 127.0.0.1", ex);
-            return "127.0.0.1";
+            return NetworkConstants.IPV4_LOOPBACK;
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.rover.gateway.core.discovery;
 
 import com.rover.common.constants.NameserverConstants;
+import com.rover.gateway.core.config.GatewayDefaults;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.Data;
@@ -26,7 +27,7 @@ public class DiscoverySettings {
     private String nameserverToken;
 
     /** 定时对账间隔（毫秒），防止订阅推送丢失 */
-    private long reconcileIntervalMs = 30000L;
+    private long reconcileIntervalMs = GatewayDefaults.RECONCILE_INTERVAL_MILLIS;
 
     /** 启动时需要订阅的服务列表；路由热更新时也会动态追加 */
     private List<ServiceSubscribeSpec> subscribeServices = new ArrayList<>();

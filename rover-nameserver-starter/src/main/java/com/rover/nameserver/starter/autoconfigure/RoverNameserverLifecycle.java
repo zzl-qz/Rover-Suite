@@ -27,6 +27,8 @@ public class RoverNameserverLifecycle implements ApplicationListener<Application
 
     /** server.port 未配置时的默认端口。 */
     private static final String DEFAULT_SERVER_PORT = "8080";
+    private static final String SPRING_APPLICATION_NAME = "spring.application.name";
+    private static final String SERVER_PORT = "server.port";
 
     private final NameserverClient client;
     private final RoverNameserverProperties properties;
@@ -142,7 +144,7 @@ public class RoverNameserverLifecycle implements ApplicationListener<Application
         if (StringUtils.hasText(properties.getServiceName())) {
             return properties.getServiceName().trim();
         }
-        String appName = environment.getProperty("spring.application.name");
+        String appName = environment.getProperty(SPRING_APPLICATION_NAME);
         if (StringUtils.hasText(appName)) {
             return appName.trim();
         }
@@ -166,6 +168,6 @@ public class RoverNameserverLifecycle implements ApplicationListener<Application
                 return port;
             }
         }
-        return Integer.parseInt(environment.getProperty("server.port", DEFAULT_SERVER_PORT));
+        return Integer.parseInt(environment.getProperty(SERVER_PORT, DEFAULT_SERVER_PORT));
     }
 }

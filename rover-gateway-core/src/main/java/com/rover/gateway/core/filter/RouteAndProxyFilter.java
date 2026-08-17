@@ -12,6 +12,7 @@ import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
+import com.rover.gateway.core.trace.TracePhase;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -72,12 +73,12 @@ public class RouteAndProxyFilter implements Filter {
         // Filter 链（前置）：从请求开始到本终端过滤器执行，扣除已标记阶段（receive）
         long filterStartNanos = System.nanoTime();
         long filterCostNanos = filterStartNanos - gatewayContext.getStartNanos() - gatewayContext.phaseCostSumNanos();
-        gatewayContext.markPhase("filter", Math.max(0, filterCostNanos));
+        gatewayContext.markPhase(TracePhase.FILTER.phaseName(), Math.max(0, filterCostNanos));
 
         String requestPath = gatewayContext.getRequestPath();
         long routeStartNanos = System.nanoTime();
         RouteConfig route = routeMatcher.match(requestPath);
-        gatewayContext.markPhase("route", System.nanoTime() - routeStartNanos);
+        gatewayContext.markPhase(TracePhase.ROUTE.phaseName(), System.nanoTime() - routeStartNanos);
         if (route == null) {
             gatewayContext.writeText(HttpResponseStatus.NOT_FOUND, "No route matched: " + requestPath);
             return CompletableFuture.completedFuture(null);
@@ -121,7 +122,7 @@ public class RouteAndProxyFilter implements Filter {
                     }
                 })
                 .thenApply(result -> {
-                    gatewayContext.markPhase("proxy", System.nanoTime() - proxyStartNanos);
+                    gatewayContext.markPhase(TracePhase.PROXY.phaseName(), System.nanoTime() - proxyStartNanos);
                     gatewayContext.setStatusCode(result.statusCode());
                     // 回填上游信息，供 MetricsFilter 做上游维度统计
                     gatewayContext.setUpstreamHostPort(hostPortOf(instance));
@@ -139,7 +140,7 @@ public class RouteAndProxyFilter implements Filter {
             if (discoveryType == DiscoveryType.STATIC) {
                 long discoveryStart = System.nanoTime();
                 List<ServiceInstance> instances = StaticUpstreamCluster.resolve(route);
-                gatewayContext.markPhase("discovery", System.nanoTime() - discoveryStart);
+                gatewayContext.markPhase(TracePhase.DISCOVERY.phaseName(), System.nanoTime() - discoveryStart);
                 if (instances.isEmpty()) {
                     return null;
                 }
@@ -168,7 +169,7 @@ public class RouteAndProxyFilter implements Filter {
         } else {
             log.warn("暂时没有该 discoveryType 类型， discoveryType is {}", discoveryType);
         }
-        gatewayContext.markPhase("discovery", System.nanoTime() - discoveryStart);
+        gatewayContext.markPhase(TracePhase.DISCOVERY.phaseName(), System.nanoTime() - discoveryStart);
         if (instances == null || instances.isEmpty()) {
             log.warn("无可用上游: discovery={}, clusterKey={}", discoveryType, clusterKey);
             return null;
@@ -182,7 +183,7 @@ public class RouteAndProxyFilter implements Filter {
                 gatewayContext,
                 resolveClientIp(gatewayContext));
         ServiceInstance chosen = loadBalancer.choose(lbContext);
-        gatewayContext.markPhase("loadbalance", System.nanoTime() - lbStart);
+        gatewayContext.markPhase(TracePhase.LOAD_BALANCE.phaseName(), System.nanoTime() - lbStart);
         if (chosen == null) {
             return null;
         }

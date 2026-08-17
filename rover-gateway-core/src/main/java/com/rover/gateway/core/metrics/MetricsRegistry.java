@@ -2,6 +2,8 @@ package com.rover.gateway.core.metrics;
 
 import com.rover.common.json.JsonCodec;
 import com.rover.common.jvm.JvmMetricsCollector;
+import com.rover.common.constants.RoverComponent;
+import com.rover.gateway.core.config.GatewayDefaults;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -25,7 +27,7 @@ import java.util.function.IntSupplier;
 public class MetricsRegistry {
 
     /** 环形数组固定长度（秒），即窗口上限 5 分钟。 */
-    public static final int RING_SECONDS = 300;
+    public static final int RING_SECONDS = GatewayDefaults.METRICS_WINDOW_SECONDS;
 
     /** 每秒耗时样本蓄水池容量，够算 P99 且内存极小。 */
     static final int RESERVOIR_SIZE = 64;
@@ -180,7 +182,7 @@ public class MetricsRegistry {
     /** 组装 /_manage/metrics 的 JSON 内容。 */
     public String snapshotJson() {
         Map<String, Object> root = new LinkedHashMap<>();
-        root.put("component", "gateway");
+        root.put("component", RoverComponent.GATEWAY.id());
         root.put("enabled", settings.isEnabled());
         root.put("windowSeconds", effectiveWindowSeconds());
         root.put("uptimeSeconds", (System.nanoTime() - startNanos) / 1_000_000_000L);

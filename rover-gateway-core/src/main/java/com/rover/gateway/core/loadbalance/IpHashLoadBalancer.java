@@ -3,6 +3,7 @@ package com.rover.gateway.core.loadbalance;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.loadbalance.LoadBalanceContext;
 import com.rover.common.spi.loadbalance.LoadBalancer;
+import com.rover.common.spi.loadbalance.BuiltinLoadBalanceStrategy;
 import java.util.List;
 
 /**
@@ -14,7 +15,7 @@ public class IpHashLoadBalancer implements LoadBalancer {
 
     @Override
     public String name() {
-        return "ip_hash";
+        return BuiltinLoadBalanceStrategy.IP_HASH.configName();
     }
 
     @Override

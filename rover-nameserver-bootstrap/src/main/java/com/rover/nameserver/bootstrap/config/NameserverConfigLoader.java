@@ -1,6 +1,7 @@
 package com.rover.nameserver.bootstrap.config;
 
 import com.rover.common.config.YamlConfigLoader;
+import com.rover.common.config.ConfigFiles;
 
 /**
  * Author: Daylight
@@ -9,7 +10,7 @@ import com.rover.common.config.YamlConfigLoader;
  */
 public class NameserverConfigLoader {
 
-    private static final String CONFIG_FILE = "rover-nameserver.yml";
+    private static final String CONFIG_FILE = ConfigFiles.NAMESERVER_YAML;
 
     private final YamlConfigLoader<NameserverConfig> delegate =
             new YamlConfigLoader<>(CONFIG_FILE, NameserverConfig.class, null);

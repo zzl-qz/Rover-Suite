@@ -1,9 +1,14 @@
 package com.rover.gateway.core.manage;
 
 import com.rover.common.config.RuntimeConfigManager;
+import com.rover.common.constants.HttpConstants;
+import com.rover.common.constants.ManageApiPaths;
+import com.rover.common.constants.RoverComponent;
+import com.rover.common.config.ConfigValues;
 import com.rover.common.json.JsonCodec;
 import com.rover.common.manage.AbstractManageApi;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.route.RouteField;
 import com.rover.gateway.core.route.RouteOverlayStore;
 import com.rover.gateway.core.runtime.GatewayRuntime;
 import io.netty.channel.ChannelHandlerContext;
@@ -33,7 +38,7 @@ public class GatewayManageApi extends AbstractManageApi {
 
     @Override
     protected String componentName() {
-        return "Gateway";
+        return RoverComponent.GATEWAY.displayName();
     }
 
     @Override
@@ -48,28 +53,28 @@ public class GatewayManageApi extends AbstractManageApi {
 
     @Override
     protected boolean dispatch(ChannelHandlerContext ctx, FullHttpRequest request, String path) {
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/status").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.STATUS.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, statusJson());
             return true;
         }
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/metrics").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.METRICS.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, runtime.getMetricsRegistry().snapshotJson());
             return true;
         }
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/metrics/selfcheck").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.METRICS_SELFCHECK.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, runtime.getMetricsRegistry().selfcheckJson());
             return true;
         }
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/prometheus").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.PROMETHEUS.equals(path)) {
             writeText(ctx, HttpResponseStatus.OK, runtime.getMetricsRegistry().prometheusText(),
-                    "text/plain; version=0.0.4; charset=UTF-8");
+                    HttpConstants.MEDIA_TYPE_PROMETHEUS);
             return true;
         }
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/traces").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.TRACES.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, tracesJson(request));
             return true;
         }
-        if ((PREFIX + "/routes").equals(path)) {
+        if (ManageApiPaths.ROUTES.equals(path)) {
             handleRoutes(ctx, request);
             return true;
         }
@@ -103,9 +108,9 @@ public class GatewayManageApi extends AbstractManageApi {
         }
         if (HttpMethod.DELETE.equals(request.method())) {
             QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
-            String key = firstQuery(decoder, "id");
+            String key = firstQuery(decoder, ManageApiPaths.PARAM_ID);
             if (key == null || key.isBlank()) {
-                key = firstQuery(decoder, "businessPrefix");
+                key = firstQuery(decoder, ManageApiPaths.PARAM_BUSINESS_PREFIX);
             }
             List<RouteConfig> applied = runtime.removeRoute(key);
             writeJson(ctx, HttpResponseStatus.OK, routesApplyResponse(applied, "路由已删除并热生效"));
@@ -118,9 +123,9 @@ public class GatewayManageApi extends AbstractManageApi {
     /** 组装 GET /_manage/traces 的 JSON：支持按 traceId / path / slow 过滤。 */
     private String tracesJson(FullHttpRequest request) {
         QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
-        String traceIdFilter = firstQuery(decoder, "traceId");
-        String pathFilter = firstQuery(decoder, "path");
-        String slowFilter = firstQuery(decoder, "slow");
+        String traceIdFilter = firstQuery(decoder, ManageApiPaths.PARAM_TRACE_ID);
+        String pathFilter = firstQuery(decoder, ManageApiPaths.PARAM_PATH);
+        String slowFilter = firstQuery(decoder, ManageApiPaths.PARAM_SLOW);
 
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("enabled", runtime.getTraceSettings().isEnabled());
@@ -140,7 +145,7 @@ public class GatewayManageApi extends AbstractManageApi {
                     && !trace.getPath().contains(pathFilter)) {
                 continue;
             }
-            if (slowFilter != null && !"false".equalsIgnoreCase(slowFilter)
+            if (slowFilter != null && !ConfigValues.FALSE.equalsIgnoreCase(slowFilter)
                     && !trace.isSlow()) {
                 continue;
             }
@@ -176,7 +181,7 @@ public class GatewayManageApi extends AbstractManageApi {
     /** 组装 GET /_manage/status 的 JSON 内容。 */
     private String statusJson() {
         Map<String, Object> status = new LinkedHashMap<>();
-        status.put("component", "gateway");
+        status.put("component", RoverComponent.GATEWAY.id());
         status.put("up", true);
         status.put("port", runtime.getPort());
         status.put("discoveryType", runtime.getDiscoveryType().name());
@@ -207,17 +212,17 @@ public class GatewayManageApi extends AbstractManageApi {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (RouteConfig route : routes) {
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("id", nullToEmpty(route.getId()));
-            row.put("businessPrefix", nullToEmpty(route.getBusinessPrefix()));
-            row.put("targetUrl", nullToEmpty(route.getTargetUrl()));
+            row.put(RouteField.ID.jsonName(), nullToEmpty(route.getId()));
+            row.put(RouteField.BUSINESS_PREFIX.jsonName(), nullToEmpty(route.getBusinessPrefix()));
+            row.put(RouteField.TARGET_URL.jsonName(), nullToEmpty(route.getTargetUrl()));
             row.put(
-                    "targetUrls",
+                    RouteField.TARGET_URLS.jsonName(),
                     route.getTargetUrls() == null || route.getTargetUrls().isEmpty()
                             ? ""
                             : String.join(",", route.getTargetUrls()));
-            row.put("serviceName", nullToEmpty(route.getServiceName()));
-            row.put("group", nullToEmpty(route.getGroup()));
-            row.put("stripPrefix", nullToEmpty(route.getStripPrefix()));
+            row.put(RouteField.SERVICE_NAME.jsonName(), nullToEmpty(route.getServiceName()));
+            row.put(RouteField.GROUP.jsonName(), nullToEmpty(route.getGroup()));
+            row.put(RouteField.STRIP_PREFIX.jsonName(), nullToEmpty(route.getStripPrefix()));
             rows.add(row);
         }
         return rows;

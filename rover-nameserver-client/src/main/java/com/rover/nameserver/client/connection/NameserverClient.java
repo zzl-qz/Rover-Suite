@@ -6,6 +6,7 @@ import com.rover.common.concurrent.PeriodicTask;
 import com.rover.common.concurrent.RequestIdGenerator;
 import com.rover.common.constants.ProtocolConstants;
 import com.rover.common.constants.StatusConstants;
+import com.rover.common.util.ServiceKeys;
 import com.rover.common.exception.RoverException;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.protocol.AckMode;
@@ -493,12 +494,12 @@ public class NameserverClient implements AutoCloseable {
 
     /** 拼接注册备份键：serviceName#instanceId。 */
     private String instanceKey(String serviceName, String instanceId) {
-        return serviceName + "#" + instanceId;
+        return ServiceKeys.serviceInstance(serviceName, instanceId);
     }
 
     /** 拼接订阅备份键：serviceName#group（group 为 null 视为空串）。 */
     private String subscribeKey(String serviceName, String group) {
-        return serviceName + "#" + (group == null ? "" : group);
+        return ServiceKeys.serviceGroup(serviceName, group);
     }
 
     /**

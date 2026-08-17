@@ -2,6 +2,7 @@ package com.rover.nameserver.core.metrics;
 
 import com.rover.common.json.JsonCodec;
 import com.rover.common.jvm.JvmMetricsCollector;
+import com.rover.common.constants.RoverComponent;
 import com.rover.nameserver.core.model.InstanceRecord;
 import com.rover.nameserver.core.registry.ServiceRegistry;
 import java.util.ArrayList;
@@ -123,7 +124,7 @@ public class NameserverMetricsRegistry {
     /** 组装 /_manage/metrics 的 JSON 内容。 */
     public String snapshotJson(ServiceRegistry registry) {
         Map<String, Object> root = new LinkedHashMap<>();
-        root.put("component", "nameserver");
+        root.put("component", RoverComponent.NAMESERVER.id());
         root.put("uptimeSeconds", (System.nanoTime() - startNanos) / 1_000_000_000L);
         root.put("jvm", JvmMetricsCollector.collect());
 

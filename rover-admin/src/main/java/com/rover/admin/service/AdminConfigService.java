@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.rover.admin.client.ManageHttpClient;
 import com.rover.admin.config.AdminProperties;
 import com.rover.common.config.ConfigApplyMode;
+import com.rover.common.constants.ManageApiPaths;
+import com.rover.common.constants.RoverComponent;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -38,18 +40,18 @@ public class AdminConfigService {
 
     public Map<String, Object> loadStatus() {
         CompletableFuture<Map<String, Object>> gateway = CompletableFuture.supplyAsync(
-                () -> fetchStatus(properties.getGatewayUrl(), "Gateway"));
+                () -> fetchStatus(properties.getGatewayUrl(), RoverComponent.GATEWAY));
         CompletableFuture<Map<String, Object>> nameserver = CompletableFuture.supplyAsync(
-                () -> fetchStatus(properties.getNameserverManageUrl(), "Nameserver"));
+                () -> fetchStatus(properties.getNameserverManageUrl(), RoverComponent.NAMESERVER));
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("gateway", gateway.join());
-        result.put("nameserver", nameserver.join());
+        result.put(RoverComponent.GATEWAY.id(), gateway.join());
+        result.put(RoverComponent.NAMESERVER.id(), nameserver.join());
         return result;
     }
 
     public String discoveryType() {
         try {
-            JsonNode status = httpClient.getJson(properties.getGatewayUrl(), "/_manage/status");
+            JsonNode status = httpClient.getJson(properties.getGatewayUrl(), ManageApiPaths.STATUS);
             return status.path("discoveryType").asText(DISCOVERY_TYPE_STATIC);
         } catch (Exception ex) {
             log.warn("读取 Gateway discoveryType 失败", ex);
@@ -59,7 +61,7 @@ public class AdminConfigService {
 
     public List<Map<String, Object>> listRoutes() {
         try {
-            return httpClient.getList(properties.getGatewayUrl(), "/_manage/routes");
+            return httpClient.getList(properties.getGatewayUrl(), ManageApiPaths.ROUTES);
         } catch (Exception ex) {
             throw new IllegalStateException("读取 Gateway 路由失败: " + ex.getMessage(), ex);
         }
@@ -67,7 +69,7 @@ public class AdminConfigService {
 
     public Map<String, Object> saveRoute(Map<String, String> route) {
         try {
-            return httpClient.postJson(properties.getGatewayUrl(), "/_manage/routes", route);
+            return httpClient.postJson(properties.getGatewayUrl(), ManageApiPaths.ROUTES, route);
         } catch (Exception ex) {
             throw new IllegalArgumentException(ex.getMessage() == null ? "保存路由失败" : ex.getMessage(), ex);
         }
@@ -78,7 +80,7 @@ public class AdminConfigService {
             String encoded = URLEncoder.encode(idOrPrefix, StandardCharsets.UTF_8);
             return httpClient.delete(
                     properties.getGatewayUrl(),
-                    "/_manage/routes?businessPrefix=" + encoded);
+                    ManageApiPaths.ROUTES + "?" + ManageApiPaths.PARAM_BUSINESS_PREFIX + "=" + encoded);
         } catch (Exception ex) {
             throw new IllegalArgumentException(ex.getMessage() == null ? "删除路由失败" : ex.getMessage(), ex);
         }
@@ -86,7 +88,7 @@ public class AdminConfigService {
 
     public List<Map<String, Object>> listInstances() {
         try {
-            return httpClient.getList(properties.getNameserverManageUrl(), "/_manage/instances");
+            return httpClient.getList(properties.getNameserverManageUrl(), ManageApiPaths.INSTANCES);
         } catch (Exception ex) {
             throw new IllegalStateException("读取 Nameserver 实例失败: " + ex.getMessage(), ex);
         }
@@ -94,15 +96,15 @@ public class AdminConfigService {
 
     public List<Map<String, Object>> listConfigs() {
         List<Map<String, Object>> items = new ArrayList<>();
-        items.addAll(fetchConfigs("gateway", properties.getGatewayUrl()));
-        items.addAll(fetchConfigs("nameserver", properties.getNameserverManageUrl()));
+        items.addAll(fetchConfigs(RoverComponent.GATEWAY, properties.getGatewayUrl()));
+        items.addAll(fetchConfigs(RoverComponent.NAMESERVER, properties.getNameserverManageUrl()));
         return items;
     }
 
     /** 读取 Gateway 指标快照（/api/metrics）。 */
     public JsonNode loadMetrics() {
         try {
-            return httpClient.getJson(properties.getGatewayUrl(), "/_manage/metrics");
+            return httpClient.getJson(properties.getGatewayUrl(), ManageApiPaths.METRICS);
         } catch (Exception ex) {
             throw new IllegalStateException("读取 Gateway 指标失败: " + ex.getMessage(), ex);
         }
@@ -111,7 +113,7 @@ public class AdminConfigService {
     /** 读取 Gateway 指标自洽校验结果（/api/selfcheck）。 */
     public JsonNode loadSelfcheck() {
         try {
-            return httpClient.getJson(properties.getGatewayUrl(), "/_manage/metrics/selfcheck");
+            return httpClient.getJson(properties.getGatewayUrl(), ManageApiPaths.METRICS_SELFCHECK);
         } catch (Exception ex) {
             throw new IllegalStateException("读取指标自洽校验失败: " + ex.getMessage(), ex);
         }
@@ -120,7 +122,7 @@ public class AdminConfigService {
     /** 读取 Nameserver 指标快照（注册概况 + 生命周期计数 + TCP 连接 + JVM）。 */
     public JsonNode loadNameserverMetrics() {
         try {
-            return httpClient.getJson(properties.getNameserverManageUrl(), "/_manage/metrics");
+            return httpClient.getJson(properties.getNameserverManageUrl(), ManageApiPaths.METRICS);
         } catch (Exception ex) {
             throw new IllegalStateException("读取 Nameserver 指标失败: " + ex.getMessage(), ex);
         }
@@ -129,7 +131,7 @@ public class AdminConfigService {
     /** 读取 Nameserver 最近事件列表（注册/注销/剔除/标不健康/推送）。 */
     public List<Map<String, Object>> loadEvents() {
         try {
-            return httpClient.getList(properties.getNameserverManageUrl(), "/_manage/events");
+            return httpClient.getList(properties.getNameserverManageUrl(), ManageApiPaths.EVENTS);
         } catch (Exception ex) {
             throw new IllegalStateException("读取 Nameserver 事件失败: " + ex.getMessage(), ex);
         }
@@ -138,7 +140,7 @@ public class AdminConfigService {
     /** 读取 Gateway 请求链路时间线（支持 traceId/path/slow 过滤）。 */
     public JsonNode loadTraces(Map<String, String> params) {
         try {
-            StringBuilder path = new StringBuilder("/_manage/traces");
+            StringBuilder path = new StringBuilder(ManageApiPaths.TRACES);
             List<String> query = new ArrayList<>();
             params.forEach((key, value) -> {
                 if (value != null && !value.isBlank()) {
@@ -167,17 +169,17 @@ public class AdminConfigService {
         }
     }
 
-    private Map<String, Object> fetchStatus(String baseUrl, String label) {
+    private Map<String, Object> fetchStatus(String baseUrl, RoverComponent component) {
         Map<String, Object> status = new LinkedHashMap<>();
-        status.put("label", label);
+        status.put("label", component.displayName());
         status.put("baseUrl", baseUrl);
         try {
-            JsonNode node = httpClient.getJson(baseUrl, "/_manage/status");
+            JsonNode node = httpClient.getJson(baseUrl, ManageApiPaths.STATUS);
             status.put("reachable", true);
             status.put("data", node);
             status.put("error", "");
         } catch (Exception ex) {
-            log.warn("读取组件状态失败: label={}, baseUrl={}", label, baseUrl, ex);
+            log.warn("读取组件状态失败: component={}, baseUrl={}", component.id(), baseUrl, ex);
             status.put("reachable", false);
             status.put("data", null);
             status.put("error", "不可达");
@@ -185,18 +187,18 @@ public class AdminConfigService {
         return status;
     }
 
-    private List<Map<String, Object>> fetchConfigs(String component, String baseUrl) {
+    private List<Map<String, Object>> fetchConfigs(RoverComponent component, String baseUrl) {
         try {
-            List<Map<String, Object>> configs = httpClient.getList(baseUrl, "/_manage/configs");
+            List<Map<String, Object>> configs = httpClient.getList(baseUrl, ManageApiPaths.CONFIGS);
             for (Map<String, Object> item : configs) {
-                item.put("component", component);
+                item.put("component", component.id());
             }
             return configs;
         } catch (Exception ex) {
-            log.warn("读取配置列表失败: component={}", component, ex);
+            log.warn("读取配置列表失败: component={}", component.id(), ex);
             Map<String, Object> error = new LinkedHashMap<>();
-            error.put("component", component);
-            error.put("key", component + ".*");
+            error.put("component", component.id());
+            error.put("key", component.id() + ".*");
             error.put("description", "读取失败");
             error.put("value", "");
             error.put("defaultValue", "");
@@ -208,12 +210,9 @@ public class AdminConfigService {
     }
 
     private String resolveBaseUrl(String component) {
-        if ("gateway".equalsIgnoreCase(component)) {
-            return properties.getGatewayUrl();
-        }
-        if ("nameserver".equalsIgnoreCase(component)) {
-            return properties.getNameserverManageUrl();
-        }
-        throw new IllegalArgumentException("未知组件: " + component);
+        return switch (RoverComponent.from(component)) {
+            case GATEWAY -> properties.getGatewayUrl();
+            case NAMESERVER -> properties.getNameserverManageUrl();
+        };
     }
 }

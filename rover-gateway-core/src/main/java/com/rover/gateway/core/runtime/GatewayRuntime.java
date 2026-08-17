@@ -2,6 +2,7 @@ package com.rover.gateway.core.runtime;
 
 import com.rover.common.spi.filter.Filter;
 import com.rover.gateway.core.config.GatewayRuntimeConfigManager;
+import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.common.spi.discovery.ServiceDiscovery;
@@ -100,7 +101,7 @@ public class GatewayRuntime {
 
     /** 默认准入上限：CPU 核数 × 8，下限 64，可用 -Drover.gateway.maxInflight 覆盖。 */
     private static int defaultProcessingPermits() {
-        int fromProp = Integer.getInteger("rover.gateway.maxInflight", 0);
+        int fromProp = Integer.getInteger(GatewaySystemProperties.MAX_INFLIGHT, 0);
         return fromProp > 0
                 ? fromProp
                 : Math.max(64, Runtime.getRuntime().availableProcessors() * 8);

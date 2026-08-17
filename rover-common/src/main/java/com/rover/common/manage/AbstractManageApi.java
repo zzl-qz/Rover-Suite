@@ -3,7 +3,10 @@ package com.rover.common.manage;
 import com.rover.common.config.ConfigApplyMode;
 import com.rover.common.config.ConfigChangeEvent;
 import com.rover.common.config.ConfigItem;
+import com.rover.common.config.ConfigValues;
 import com.rover.common.config.RuntimeConfigManager;
+import com.rover.common.constants.HttpConstants;
+import com.rover.common.constants.ManageApiPaths;
 import com.rover.common.json.JsonCodec;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
@@ -28,11 +31,11 @@ import lombok.extern.slf4j.Slf4j;
 public abstract class AbstractManageApi {
 
     /** 管理 API 路径前缀。 */
-    public static final String PREFIX = "/_manage";
+    public static final String PREFIX = ManageApiPaths.PREFIX;
 
     /** 判断路径是否属于管理 API。 */
     public boolean supports(String path) {
-        return path != null && path.startsWith(PREFIX);
+        return path != null && (PREFIX.equals(path) || path.startsWith(PREFIX + "/"));
     }
 
     /** 分发管理请求，统一 JSON 响应与异常映射。 */
@@ -63,7 +66,7 @@ public abstract class AbstractManageApi {
         if (expected == null || expected.isBlank()) {
             return true;
         }
-        String provided = request.headers().get("X-Rover-Admin-Token");
+        String provided = request.headers().get(HttpConstants.ADMIN_TOKEN_HEADER);
         return expected.equals(provided);
     }
 
@@ -83,11 +86,11 @@ public abstract class AbstractManageApi {
 
     /** 处理 GET/POST /_manage/configs。 */
     protected boolean handleConfigs(ChannelHandlerContext ctx, FullHttpRequest request, String path) {
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/configs").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.CONFIGS.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, JsonCodec.toJson(configManager().listConfigs()));
             return true;
         }
-        if (HttpMethod.POST.equals(request.method()) && (PREFIX + "/configs").equals(path)) {
+        if (HttpMethod.POST.equals(request.method()) && ManageApiPaths.CONFIGS.equals(path)) {
             handleUpdateConfig(ctx, request);
             return true;
         }
@@ -113,8 +116,8 @@ public abstract class AbstractManageApi {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("key", event.getKey());
         boolean sensitive = item != null && item.isSensitive();
-        resp.put("value", sensitive ? "******" : event.getNewValue());
-        resp.put("oldValue", sensitive ? "******" : event.getOldValue());
+        resp.put("value", sensitive ? ConfigValues.MASKED : event.getNewValue());
+        resp.put("oldValue", sensitive ? ConfigValues.MASKED : event.getOldValue());
         resp.put("applyMode", event.getApplyMode() == null ? "" : event.getApplyMode().name());
         resp.put("message", ConfigApplyMode.HOT_RELOAD.equals(event.getApplyMode())
                 ? "已热更新并落盘"
@@ -133,7 +136,7 @@ public abstract class AbstractManageApi {
                 HttpVersion.HTTP_1_1,
                 status,
                 Unpooled.wrappedBuffer(body));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpConstants.MEDIA_TYPE_JSON_UTF8);
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
         ctx.writeAndFlush(response);
     }

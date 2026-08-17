@@ -1,5 +1,6 @@
 package com.rover.gateway.core.filter;
 
+import com.rover.common.constants.HttpConstants;
 import com.rover.common.spi.filter.RequestContext;
 import com.rover.gateway.core.route.RouteConfig;
 import io.netty.buffer.Unpooled;
@@ -166,7 +167,7 @@ public class GatewayRequestContext implements RequestContext {
                 HttpVersion.HTTP_1_1,
                 status,
                 Unpooled.wrappedBuffer(body));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpConstants.MEDIA_TYPE_TEXT_UTF8);
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
         channelContext.writeAndFlush(response);
         this.statusCode = status.code();

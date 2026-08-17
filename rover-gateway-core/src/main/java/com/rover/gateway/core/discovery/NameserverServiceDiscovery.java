@@ -2,6 +2,7 @@ package com.rover.gateway.core.discovery;
 
 import com.rover.common.concurrent.PeriodicTask;
 import com.rover.common.model.ServiceInstance;
+import com.rover.common.util.ServiceKeys;
 import com.rover.common.protocol.QueryResponseBody;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.nameserver.client.connection.NameserverClient;
@@ -133,9 +134,9 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         if (serviceName == null || serviceName.isBlank()) {
             return;
         }
-        String key = serviceName + "#" + nullToEmpty(group);
+        String key = ServiceKeys.serviceGroup(serviceName, group);
         for (DiscoverySettings.ServiceSubscribeSpec spec : subscribeServices) {
-            String existing = spec.getServiceName() + "#" + nullToEmpty(spec.getGroup());
+            String existing = ServiceKeys.serviceGroup(spec.getServiceName(), spec.getGroup());
             if (key.equals(existing)) {
                 subscribeOne(serviceName, group);
                 return;

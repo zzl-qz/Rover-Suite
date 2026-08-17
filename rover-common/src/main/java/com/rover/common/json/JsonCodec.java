@@ -1,5 +1,6 @@
 package com.rover.common.json;
 
+import com.rover.common.constants.HttpConstants;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -61,7 +62,7 @@ public final class JsonCodec {
             return null;
         }
         String trimmed = body.trim();
-        if ((contentType != null && contentType.toLowerCase().contains("application/json"))
+        if ((contentType != null && contentType.toLowerCase().contains(HttpConstants.MEDIA_TYPE_JSON))
                 || trimmed.startsWith("{")) {
             try {
                 JsonNode node = MAPPER.readTree(trimmed);

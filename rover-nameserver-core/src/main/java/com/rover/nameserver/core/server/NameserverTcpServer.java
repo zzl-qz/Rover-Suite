@@ -4,6 +4,7 @@ import com.rover.common.codec.RoverMessageDecoder;
 import com.rover.common.codec.RoverMessageEncoder;
 import com.rover.nameserver.core.cluster.NameserverGeneration;
 import com.rover.nameserver.core.config.NameserverRuntimeConfigManager;
+import com.rover.nameserver.core.config.NameserverRuntimeConfigKeys;
 import com.rover.nameserver.core.consistency.DefaultWriteAckPolicy;
 import com.rover.nameserver.core.consistency.WriteAckPolicy;
 import com.rover.nameserver.core.event.EventBusBootstrap;
@@ -102,13 +103,13 @@ public class NameserverTcpServer {
 
         // 配置管理：先用 Options（YAML 来源）灌注初值，再叠加历史持久化的 overlay
         NameserverRuntimeConfigManager configManager = new NameserverRuntimeConfigManager();
-        configManager.seed("nameserver.health.checkIntervalMillis",
+        configManager.seed(NameserverRuntimeConfigKeys.HEALTH_CHECK_INTERVAL_MILLIS,
                 String.valueOf(options.getHealthCheckIntervalMillis()));
-        configManager.seed("nameserver.heartbeat.timeoutMillis",
+        configManager.seed(NameserverRuntimeConfigKeys.HEARTBEAT_TIMEOUT_MILLIS,
                 String.valueOf(options.getHeartbeatTimeoutMillis()));
-        configManager.seed("nameserver.instance.expireMillis",
+        configManager.seed(NameserverRuntimeConfigKeys.INSTANCE_EXPIRE_MILLIS,
                 String.valueOf(options.getInstanceExpireMillis()));
-        configManager.seed("nameserver.push.enabled", String.valueOf(options.isPushEnabled()));
+        configManager.seed(NameserverRuntimeConfigKeys.PUSH_ENABLED, String.valueOf(options.isPushEnabled()));
         configManager.loadOverlayIfPresent();
 
         this.runtime = new NameserverRuntime(options, registry, pushService, healthChecker, configManager, metrics);

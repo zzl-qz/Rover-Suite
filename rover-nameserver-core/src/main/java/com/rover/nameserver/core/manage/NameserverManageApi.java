@@ -1,6 +1,8 @@
 package com.rover.nameserver.core.manage;
 
 import com.rover.common.config.RuntimeConfigManager;
+import com.rover.common.constants.ManageApiPaths;
+import com.rover.common.constants.RoverComponent;
 import com.rover.common.json.JsonCodec;
 import com.rover.common.manage.AbstractManageApi;
 import com.rover.common.model.ServiceInstance;
@@ -31,7 +33,7 @@ public class NameserverManageApi extends AbstractManageApi {
 
     @Override
     protected String componentName() {
-        return "Nameserver";
+        return RoverComponent.NAMESERVER.displayName();
     }
 
     @Override
@@ -46,19 +48,19 @@ public class NameserverManageApi extends AbstractManageApi {
 
     @Override
     protected boolean dispatch(ChannelHandlerContext ctx, FullHttpRequest request, String path) {
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/status").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.STATUS.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, statusJson());
             return true;
         }
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/instances").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.INSTANCES.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, instancesJson());
             return true;
         }
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/metrics").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.METRICS.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, runtime.getMetrics().snapshotJson(runtime.getRegistry()));
             return true;
         }
-        if (HttpMethod.GET.equals(request.method()) && (PREFIX + "/events").equals(path)) {
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.EVENTS.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, runtime.getMetrics().eventsJson());
             return true;
         }
@@ -68,7 +70,7 @@ public class NameserverManageApi extends AbstractManageApi {
     /** 组装 /status 响应：组件状态、端口、实例数、健康检查参数等。 */
     private String statusJson() {
         Map<String, Object> status = new LinkedHashMap<>();
-        status.put("component", "nameserver");
+        status.put("component", RoverComponent.NAMESERVER.id());
         status.put("up", true);
         status.put("port", runtime.getOptions().getPort());
         status.put("managePort", runtime.getOptions().getManagePort());

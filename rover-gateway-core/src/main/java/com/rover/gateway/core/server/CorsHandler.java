@@ -1,5 +1,7 @@
 package com.rover.gateway.core.server;
 
+import com.rover.common.constants.HttpConstants;
+import com.rover.common.config.ConfigValues;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelDuplexHandler;
 import io.netty.channel.ChannelFutureListener;
@@ -83,7 +85,8 @@ public class CorsHandler extends ChannelDuplexHandler {
                 response.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_ORIGIN, allowedOrigin);
                 response.headers().add(HttpHeaderNames.VARY, HttpHeaderNames.ORIGIN);
                 if (settings.isCredentials()) {
-                    response.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
+                    response.headers().set(
+                            HttpHeaderNames.ACCESS_CONTROL_ALLOW_CREDENTIALS, ConfigValues.TRUE);
                 }
             }
         }
@@ -104,7 +107,9 @@ public class CorsHandler extends ChannelDuplexHandler {
             }
             int originPort = originUri.getPort();
             if (originPort < 0) {
-                originPort = "https".equalsIgnoreCase(originUri.getScheme()) ? 443 : 80;
+                originPort = HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(originUri.getScheme())
+                        ? HttpConstants.DEFAULT_HTTPS_PORT
+                        : HttpConstants.DEFAULT_HTTP_PORT;
             }
             return originPort == portOf(host);
         } catch (Exception ex) {
@@ -144,7 +149,7 @@ public class CorsHandler extends ChannelDuplexHandler {
                 : settings.joinAllowedHeaders();
         response.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_HEADERS, allowHeaders);
         if (settings.isCredentials()) {
-            response.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
+            response.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_CREDENTIALS, ConfigValues.TRUE);
         }
         response.headers().set(HttpHeaderNames.ACCESS_CONTROL_MAX_AGE, settings.getMaxAgeSeconds());
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 0);
@@ -159,7 +164,7 @@ public class CorsHandler extends ChannelDuplexHandler {
                 HttpVersion.HTTP_1_1,
                 HttpResponseStatus.FORBIDDEN,
                 Unpooled.wrappedBuffer(body));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpConstants.MEDIA_TYPE_TEXT_UTF8);
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
         ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
     }

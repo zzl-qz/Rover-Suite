@@ -12,8 +12,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * Description: rover.nameserver 配置项
  */
 @Data
-@ConfigurationProperties(prefix = "rover.nameserver")
+@ConfigurationProperties(prefix = RoverNameserverProperties.PREFIX)
 public class RoverNameserverProperties {
+
+    public static final String PREFIX = "rover.nameserver";
 
     /** 是否启用自动注册 */
     private boolean enabled = true;

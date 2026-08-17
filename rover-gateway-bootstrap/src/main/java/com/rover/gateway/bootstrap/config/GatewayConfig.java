@@ -1,8 +1,12 @@
 package com.rover.gateway.bootstrap.config;
 
 import com.rover.common.constants.NameserverConstants;
+import com.rover.common.constants.HttpConstants;
+import com.rover.common.plugin.PluginSpiLoader;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.common.util.HostPort;
+import com.rover.common.util.ServiceKeys;
+import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
@@ -26,11 +30,7 @@ import lombok.Data;
 @Data
 public class GatewayConfig {
 
-    private static final int DEFAULT_PORT = 80;
-    private static final int DEFAULT_MAX_CONTENT_LENGTH_BYTES = 1024 * 1024;
-    private static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
-    private static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 30000;
-    private static final long DEFAULT_RECONCILE_INTERVAL_MS = 30000L;
+    private static final String NAMESERVER_ADDRESS_CONFIG = "discovery.nameserver.address";
 
     private RoverProperties rover = new RoverProperties();
 
@@ -40,7 +40,7 @@ public class GatewayConfig {
 
     public String getBindHostOrDefault() {
         String bindHost = gatewayProperties().getServer().getBindHost();
-        return bindHost == null || bindHost.isBlank() ? "0.0.0.0" : bindHost.trim();
+        return bindHost == null || bindHost.isBlank() ? GatewayDefaults.BIND_HOST : bindHost.trim();
     }
 
     public String getAdminTokenOrDefault() {
@@ -174,15 +174,15 @@ public class GatewayConfig {
         NameserverProperties nameserver = gatewayProperties().getDiscovery().getNameserver();
         if (nameserver != null) {
             HostPort address = type == DiscoveryType.NAMESERVER
-                    ? HostPort.require(nameserver.getAddress(), "discovery.nameserver.address")
-                    : HostPort.parseOrNull(nameserver.getAddress(), "discovery.nameserver.address");
+                    ? HostPort.require(nameserver.getAddress(), NAMESERVER_ADDRESS_CONFIG)
+                    : HostPort.parseOrNull(nameserver.getAddress(), NAMESERVER_ADDRESS_CONFIG);
             if (address != null) {
                 settings.setNameserverHost(address.host());
                 settings.setNameserverPort(address.port());
             }
             settings.setNameserverToken(nameserver.getToken());
             long reconcile = nameserver.getReconcileIntervalMs() <= 0
-                    ? DEFAULT_RECONCILE_INTERVAL_MS
+                    ? GatewayDefaults.RECONCILE_INTERVAL_MILLIS
                     : nameserver.getReconcileIntervalMs();
             settings.setReconcileIntervalMs(reconcile);
         }
@@ -199,7 +199,7 @@ public class GatewayConfig {
             if (route.getServiceName() == null || route.getServiceName().isBlank()) {
                 continue;
             }
-            String key = route.getServiceName() + "#" + (route.getGroup() == null ? "" : route.getGroup());
+            String key = ServiceKeys.serviceGroup(route.getServiceName(), route.getGroup());
             DiscoverySettings.ServiceSubscribeSpec spec = new DiscoverySettings.ServiceSubscribeSpec();
             spec.setServiceName(route.getServiceName());
             spec.setGroup(route.getGroup());
@@ -269,7 +269,7 @@ public class GatewayConfig {
         if (nameserver == null || nameserver.getAddress() == null || nameserver.getAddress().isBlank()) {
             throw new IllegalStateException("discovery.type=nameserver 时必须配置 discovery.nameserver.address");
         }
-        HostPort.require(nameserver.getAddress(), "discovery.nameserver.address");
+        HostPort.require(nameserver.getAddress(), NAMESERVER_ADDRESS_CONFIG);
     }
 
     private void validateRoute(RouteProperties route, Set<String> businessPrefixes, DiscoveryType discoveryType) {
@@ -315,7 +315,8 @@ public class GatewayConfig {
         try {
             URI uri = new URI(targetUrl);
             String scheme = uri.getScheme();
-            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            if (!HttpConstants.SCHEME_HTTP.equalsIgnoreCase(scheme)
+                    && !HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(scheme)) {
                 throw new IllegalStateException("Gateway 路由 targetUrl 只支持 http/https：" + targetUrl);
             }
             if (uri.getHost() == null || uri.getHost().isBlank()) {
@@ -346,7 +347,7 @@ public class GatewayConfig {
 
     @Data
     public static class GatewayProperties {
-        private int port = DEFAULT_PORT;
+        private int port = GatewayDefaults.HTTP_PORT;
         /** 管理口鉴权 token（/_manage/** 校验）；空表示不鉴权 */
         private String adminToken;
         private ServerProperties server = new ServerProperties();
@@ -368,14 +369,14 @@ public class GatewayConfig {
     @Data
     public static class DiscoveryProperties {
         /** static | nameserver */
-        private String type = "static";
+        private String type = DiscoveryType.STATIC.name();
         private NameserverProperties nameserver = new NameserverProperties();
     }
 
     @Data
     public static class NameserverProperties {
         private String address = NameserverConstants.DEFAULT_ADDRESS;
-        private long reconcileIntervalMs = DEFAULT_RECONCILE_INTERVAL_MS;
+        private long reconcileIntervalMs = GatewayDefaults.RECONCILE_INTERVAL_MILLIS;
         /** 连接 Nameserver 订阅/查询时携带的协议 token；空表示不鉴权 */
         private String token;
     }
@@ -383,21 +384,21 @@ public class GatewayConfig {
     @Data
     public static class FilterProperties {
         private boolean enabled = true;
-        private String pluginDir = "plugins";
+        private String pluginDir = PluginSpiLoader.DEFAULT_DIR;
         private List<String> classes = new ArrayList<>();
     }
 
     @Data
     public static class ServerProperties {
-        private int maxContentLengthBytes = DEFAULT_MAX_CONTENT_LENGTH_BYTES;
+        private int maxContentLengthBytes = GatewayDefaults.MAX_REQUEST_BODY_BYTES;
         /** 监听地址，默认 0.0.0.0；可收紧到本机/内网 */
-        private String bindHost = "0.0.0.0";
+        private String bindHost = GatewayDefaults.BIND_HOST;
     }
 
     @Data
     public static class ProxyProperties {
-        private int connectTimeoutMillis = DEFAULT_CONNECT_TIMEOUT_MILLIS;
-        private int requestTimeoutMillis = DEFAULT_REQUEST_TIMEOUT_MILLIS;
+        private int connectTimeoutMillis = GatewayDefaults.CONNECT_TIMEOUT_MILLIS;
+        private int requestTimeoutMillis = GatewayDefaults.REQUEST_TIMEOUT_MILLIS;
     }
 
     @Data
@@ -411,7 +412,7 @@ public class GatewayConfig {
         private List<String> allowedOrigins = new ArrayList<>();
         private List<String> allowedMethods = new ArrayList<>();
         private List<String> allowedHeaders = new ArrayList<>();
-        private long maxAgeSeconds = 1800;
+        private long maxAgeSeconds = GatewayDefaults.CORS_MAX_AGE_SECONDS;
         private boolean credentials = false;
     }
 
