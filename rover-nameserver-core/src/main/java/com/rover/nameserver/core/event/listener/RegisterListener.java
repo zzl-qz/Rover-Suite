@@ -40,8 +40,27 @@ public class RegisterListener implements EventListener<RegisterEvent> {
 
         RegistrySnapshot snapshot = services.getRegistry().register(request);
         services.getMetrics().register(request.getServiceName(), request.getInstanceId());
-        NameserverChannelSupport.bindInstance(
-                event.getChannel(), request.getServiceName(), request.getInstanceId());
+        // 临时实例归连接所有，断线自动清理；persistent 独立于连接，只能显式注销或由健康检查标不健康。
+        if (request.isEphemeral()) {
+            NameserverChannelSupport.bindInstance(
+                    event.getChannel(), request.getServiceName(), request.getInstanceId());
+        }
+        // 断线事件可能已经跑过（当时还没 bind）。仅临时实例需要在连接已死时回滚注册。
+        if (request.isEphemeral()
+                && event.getChannel() != null
+                && !event.getChannel().isActive()) {
+            RegistrySnapshot removed = services.getRegistry()
+                    .unregister(request.getServiceName(), request.getInstanceId());
+            NameserverChannelSupport.unbindInstance(
+                    event.getChannel(), request.getServiceName(), request.getInstanceId());
+            if (removed != null) {
+                services.getPushService().pushSnapshot(removed);
+            }
+            log.warn("{}, reason=channel-inactive-after-register",
+                    NameserverTrace.withServiceInstance(
+                            event, "register-aborted", request.getServiceName(), request.getInstanceId()));
+            return;
+        }
         services.getPushService().pushSnapshot(snapshot);
 
         AckMode ackMode = event.getAckMode();

@@ -1,7 +1,10 @@
 package com.rover.gateway.core.loadbalance;
 
+import com.rover.common.plugin.PluginJarScanner;
 import com.rover.common.plugin.PluginSpiLoader;
+import com.rover.common.plugin.PluginSpiLoader.PluginLoadResult;
 import com.rover.common.spi.loadbalance.LoadBalancer;
+import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,6 +19,12 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public final class LoadBalancerFactory {
+
+    /**
+     * 当前仍在使用的插件 LB 所依赖的 ClassLoader。
+     * 切策略时关掉上一个，避免 create 每次 new loader 却从不 close。
+     */
+    private static volatile URLClassLoader retainedPluginClassLoader;
 
     private LoadBalancerFactory() {
     }
@@ -32,22 +41,46 @@ public final class LoadBalancerFactory {
 
         Map<String, LoadBalancer> builtins = builtins();
         if (builtins.containsKey(key)) {
+            // 内置策略不依赖插件 loader；若之前挂着插件 loader，一并释放
+            releaseRetainedPluginClassLoader();
             return builtins.get(key);
         }
 
         // plugins SPI：META-INF/services/com.rover.common.spi.loadbalance.LoadBalancer
-        for (LoadBalancer plugin : PluginSpiLoader.load(LoadBalancer.class, pluginDir).instances()) {
-            if (plugin.name() != null && plugin.name().equalsIgnoreCase(normalized)) {
-                log.info("使用插件负载均衡: name={}, class={}", plugin.name(), plugin.getClass().getName());
-                return plugin;
+        PluginLoadResult<LoadBalancer> result = PluginSpiLoader.load(LoadBalancer.class, pluginDir);
+        try {
+            for (LoadBalancer plugin : result.instances()) {
+                if (plugin.name() != null && plugin.name().equalsIgnoreCase(normalized)) {
+                    log.info("使用插件负载均衡: name={}, class={}", plugin.name(), plugin.getClass().getName());
+                    retainPluginClassLoader(result.classLoader());
+                    // loader 已移交 retain，避免 finally 再关
+                    result = new PluginLoadResult<>(
+                            result.instances(), null, result.jarCount(), result.directory());
+                    return plugin;
+                }
             }
+        } finally {
+            result.close();
         }
 
-        // 全限定类名
+        // 全限定类名：实例可能在首次 choose 时才加载同 jar 的辅助类，loader 必须随实例保留。
         if (normalized.contains(".")) {
-            LoadBalancer custom = PluginSpiLoader.newInstance(LoadBalancer.class, normalized, pluginDir);
-            log.info("使用自定义负载均衡类: {}", custom.getClass().getName());
-            return custom;
+            ClassLoader loader = PluginSpiLoader.classLoaderFor(pluginDir);
+            try {
+                LoadBalancer custom = PluginSpiLoader.newInstance(LoadBalancer.class, normalized, loader);
+                if (loader instanceof URLClassLoader urlClassLoader) {
+                    retainPluginClassLoader(urlClassLoader);
+                } else {
+                    releaseRetainedPluginClassLoader();
+                }
+                log.info("使用自定义负载均衡类: {}", custom.getClass().getName());
+                return custom;
+            } catch (RuntimeException ex) {
+                if (loader instanceof URLClassLoader urlClassLoader) {
+                    PluginJarScanner.closeQuietly(urlClassLoader);
+                }
+                throw ex;
+            }
         }
 
         throw new IllegalArgumentException(
@@ -58,12 +91,35 @@ public final class LoadBalancerFactory {
 
     public static List<String> supportedNames(String pluginDir) {
         List<String> names = new ArrayList<>(builtins().keySet());
-        for (LoadBalancer plugin : PluginSpiLoader.load(LoadBalancer.class, pluginDir).instances()) {
-            if (plugin.name() != null && !plugin.name().isBlank()) {
-                names.add(plugin.name());
+        // 仅枚举名字，实例不长期持有，扫完立刻 close ClassLoader
+        try (PluginLoadResult<LoadBalancer> result =
+                PluginSpiLoader.load(LoadBalancer.class, pluginDir)) {
+            for (LoadBalancer plugin : result.instances()) {
+                if (plugin.name() != null && !plugin.name().isBlank()) {
+                    names.add(plugin.name());
+                }
             }
         }
         return names;
+    }
+
+    private static void retainPluginClassLoader(URLClassLoader next) {
+        URLClassLoader previous = retainedPluginClassLoader;
+        retainedPluginClassLoader = next;
+        if (previous != null && previous != next) {
+            PluginJarScanner.closeQuietly(previous);
+        }
+    }
+
+    private static void releaseRetainedPluginClassLoader() {
+        URLClassLoader previous = retainedPluginClassLoader;
+        retainedPluginClassLoader = null;
+        PluginJarScanner.closeQuietly(previous);
+    }
+
+    /** Gateway 关闭时释放当前负载均衡插件 loader。 */
+    public static void shutdown() {
+        releaseRetainedPluginClassLoader();
     }
 
     private static Map<String, LoadBalancer> builtins() {

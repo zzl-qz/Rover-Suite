@@ -112,8 +112,9 @@ public abstract class AbstractManageApi {
         }
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("key", event.getKey());
-        resp.put("value", event.getNewValue());
-        resp.put("oldValue", event.getOldValue());
+        boolean sensitive = item != null && item.isSensitive();
+        resp.put("value", sensitive ? "******" : event.getNewValue());
+        resp.put("oldValue", sensitive ? "******" : event.getOldValue());
         resp.put("applyMode", event.getApplyMode() == null ? "" : event.getApplyMode().name());
         resp.put("message", ConfigApplyMode.HOT_RELOAD.equals(event.getApplyMode())
                 ? "已热更新并落盘"

@@ -185,8 +185,6 @@ public class GatewayManageApi extends AbstractManageApi {
         status.put("loadBalanceStrategy", runtime.getLoadBalanceStrategy().get());
         status.put("requestTimeoutMillis", runtime.getProxyClient().getRequestTimeoutMillis());
         status.put("connectTimeoutMillis", runtime.getConnectTimeoutMillis());
-        status.put("routeOverlay", runtime.getRouteOverlayStore().getPath().toString());
-        status.put("configOverlay", runtime.getConfigManager().getOverlayStore().getPath().toString());
         return JsonCodec.toJson(status);
     }
 
@@ -195,7 +193,6 @@ public class GatewayManageApi extends AbstractManageApi {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("message", message);
         resp.put("routeCount", routes.size());
-        resp.put("overlay", runtime.getRouteOverlayStore().getPath().toString());
         resp.put("routes", routeMaps(routes));
         return JsonCodec.toJson(resp);
     }

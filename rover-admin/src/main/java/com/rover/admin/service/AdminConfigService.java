@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 /**
@@ -18,6 +20,7 @@ import org.springframework.stereotype.Service;
  * Description: 通过 HTTP 聚合 Gateway / Nameserver 管理口数据的服务层
  */
 @Service
+@Slf4j
 public class AdminConfigService {
 
     /** Gateway 状态接口缺失 discoveryType 字段时的默认展示值 */
@@ -34,9 +37,13 @@ public class AdminConfigService {
     }
 
     public Map<String, Object> loadStatus() {
+        CompletableFuture<Map<String, Object>> gateway = CompletableFuture.supplyAsync(
+                () -> fetchStatus(properties.getGatewayUrl(), "Gateway"));
+        CompletableFuture<Map<String, Object>> nameserver = CompletableFuture.supplyAsync(
+                () -> fetchStatus(properties.getNameserverManageUrl(), "Nameserver"));
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("gateway", fetchStatus(properties.getGatewayUrl(), "Gateway"));
-        result.put("nameserver", fetchStatus(properties.getNameserverManageUrl(), "Nameserver"));
+        result.put("gateway", gateway.join());
+        result.put("nameserver", nameserver.join());
         return result;
     }
 
@@ -45,6 +52,7 @@ public class AdminConfigService {
             JsonNode status = httpClient.getJson(properties.getGatewayUrl(), "/_manage/status");
             return status.path("discoveryType").asText(DISCOVERY_TYPE_STATIC);
         } catch (Exception ex) {
+            log.warn("读取 Gateway discoveryType 失败", ex);
             return DISCOVERY_TYPE_UNKNOWN;
         }
     }
@@ -169,9 +177,10 @@ public class AdminConfigService {
             status.put("data", node);
             status.put("error", "");
         } catch (Exception ex) {
+            log.warn("读取组件状态失败: label={}, baseUrl={}", label, baseUrl, ex);
             status.put("reachable", false);
             status.put("data", null);
-            status.put("error", ex.getMessage() == null ? "不可达" : ex.getMessage());
+            status.put("error", "不可达");
         }
         return status;
     }
@@ -184,10 +193,11 @@ public class AdminConfigService {
             }
             return configs;
         } catch (Exception ex) {
+            log.warn("读取配置列表失败: component={}", component, ex);
             Map<String, Object> error = new LinkedHashMap<>();
             error.put("component", component);
             error.put("key", component + ".*");
-            error.put("description", "读取失败: " + ex.getMessage());
+            error.put("description", "读取失败");
             error.put("value", "");
             error.put("defaultValue", "");
             error.put("applyMode", ConfigApplyMode.HOT_RELOAD.name());

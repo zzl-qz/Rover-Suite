@@ -19,7 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-07 14:10:00
- * Description: 定时扫描注册表：临时实例超时剔除并推送、非临时实例超时标记不健康，参数可热更新
+ * Description: 定时扫描注册表：临时实例超时剔除并推送、非临时实例超时标不健康（bump revision 后推送），参数可热更新
  */
 @Slf4j
 public class HealthChecker {
@@ -94,14 +94,14 @@ public class HealthChecker {
         }
     }
 
-    public void start() {
+    public synchronized void start() {
         if (!started.compareAndSet(false, true)) {
             return;
         }
         schedule(checkIntervalMillis.get());
     }
 
-    public void shutdown() {
+    public synchronized void shutdown() {
         started.set(false);
         ScheduledFuture<?> current = future;
         if (current != null) {
@@ -156,8 +156,14 @@ public class HealthChecker {
             if (idle <= heartbeatTimeout) {
                 continue;
             }
-            if (instance.isHealthy()) {
-                instance.setHealthy(false);
+            // 走注册表：翻转时 bump revision，后面统一推送，订阅方才能摘掉不健康实例
+            RegistrySnapshot snapshot =
+                    registry.markUnhealthy(
+                            instance.getServiceName(),
+                            instance.getInstanceId(),
+                            now - heartbeatTimeout);
+            if (snapshot != null) {
+                changed.add(snapshot);
                 metrics.markUnhealthy(instance.getServiceName(), instance.getInstanceId(), idle);
                 log.warn("心跳超时，标记实例不健康: {}#{} idle={}ms",
                         instance.getServiceName(), instance.getInstanceId(), idle);

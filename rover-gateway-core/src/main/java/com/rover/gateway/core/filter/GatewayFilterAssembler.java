@@ -80,6 +80,7 @@ public class GatewayFilterAssembler {
                 }
             }
         } else {
+            pluginFilterLoader.close();
             log.info("External filters disabled by config, only builtin filters will run");
         }
 
@@ -99,5 +100,10 @@ public class GatewayFilterAssembler {
                     filter.getClass().getName());
         }
         return List.copyOf(orderedFilters);
+    }
+
+    /** Gateway 关闭时释放当前 Filter 插件 loader。 */
+    public void close() {
+        pluginFilterLoader.close();
     }
 }

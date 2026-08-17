@@ -16,14 +16,18 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
 
@@ -40,6 +44,9 @@ public class HttpProxyClient {
 
     /** 默认单次请求超时（毫秒）。 */
     public static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 30000;
+
+    /** 后端响应体最大缓冲；当前仍回写 FullHttpResponse，必须在聚合阶段设置硬上限。 */
+    public static final int DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
     /** 复用同一个 HttpClient，避免每次请求都新建连接池。 */
     private final HttpClient httpClient;
@@ -104,7 +111,7 @@ public class HttpProxyClient {
         }
 
         return httpClient
-                .sendAsync(proxyRequest, HttpResponse.BodyHandlers.ofByteArray())
+                .sendAsync(proxyRequest, limitedByteArrayHandler(DEFAULT_MAX_RESPONSE_BYTES))
                 .handle((proxyResponse, err) -> {
                     inFlight.decrementAndGet();
                     if (err != null) {
@@ -122,29 +129,36 @@ public class HttpProxyClient {
             String targetUrl,
             long startNanos) {
         Throwable cause = unwrap(err);
+        String safeTarget = redactTargetUrl(targetUrl);
         if (cause instanceof HttpTimeoutException) {
-            log.warn("Proxy request timeout, targetUrl={}", targetUrl, cause);
-            writeProxyError(ctx, HttpResponseStatus.GATEWAY_TIMEOUT, "后端请求超时", targetUrl);
+            log.warn("Proxy request timeout, targetUrl={}", safeTarget, cause);
+            writeProxyError(ctx, HttpResponseStatus.GATEWAY_TIMEOUT, "后端请求超时");
             return new ProxyResult(HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true);
         }
+        if (cause instanceof ResponseTooLargeException) {
+            log.warn("Proxy response too large, targetUrl={}, limit={}",
+                    safeTarget, DEFAULT_MAX_RESPONSE_BYTES);
+            writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应体超过网关上限");
+            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), false, false);
+        }
         if (cause instanceof ConnectException) {
-            log.warn("Proxy target connection error, targetUrl={}", targetUrl, cause);
-            writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端连接失败", targetUrl);
+            log.warn("Proxy target connection error, targetUrl={}", safeTarget, cause);
+            writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端连接失败");
             return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
         }
         if (cause instanceof InterruptedException) {
             Thread.currentThread().interrupt();
-            log.warn("Proxy request interrupted, targetUrl={}", targetUrl, cause);
-            writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "代理请求被中断", targetUrl);
+            log.warn("Proxy request interrupted, targetUrl={}", safeTarget, cause);
+            writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "代理请求被中断");
             return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
         }
         if (cause instanceof IllegalArgumentException) {
-            log.warn("Invalid proxy target URL, targetUrl={}", targetUrl, cause);
-            writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "目标 URL 非法", targetUrl);
+            log.warn("Invalid proxy target URL, targetUrl={}", safeTarget, cause);
+            writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "目标 URL 非法");
             return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
         }
-        log.warn("Proxy request IO error, targetUrl={}", targetUrl, cause);
-        writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应异常", targetUrl);
+        log.warn("Proxy request IO error, targetUrl={}", safeTarget, cause);
+        writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应异常");
         return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
     }
 
@@ -225,8 +239,8 @@ public class HttpProxyClient {
 
         String clientIp = clientIp(ctx);
         if (clientIp != null && !clientIp.isBlank()) {
-            // 如果上游已经带了 X-Forwarded-For，就追加当前客户端 IP。
-            builder.setHeader("X-Forwarded-For", forwardedFor(request, clientIp));
+            // 未配置可信代理链时丢弃客户端自带 XFF，只写直连地址，避免后端信任伪造首段。
+            builder.setHeader("X-Forwarded-For", clientIp);
         }
     }
 
@@ -247,16 +261,14 @@ public class HttpProxyClient {
         ctx.writeAndFlush(response);
     }
 
-    /** 代理失败时返回统一 JSON 错误，方便排查目标地址。 */
+    /** 代理失败时返回统一 JSON 错误；目标 URL 只写服务端脱敏日志，不回显给调用方。 */
     private void writeProxyError(
             ChannelHandlerContext ctx,
             HttpResponseStatus status,
-            String message,
-            String targetUrl) {
+            String message) {
         Map<String, Object> error = new LinkedHashMap<>();
         error.put("code", status.code());
         error.put("message", message);
-        error.put("targetUrl", targetUrl);
         byte[] body = JsonCodec.toJson(error).getBytes(StandardCharsets.UTF_8);
         FullHttpResponse response = new DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1,
@@ -300,12 +312,92 @@ public class HttpProxyClient {
                 || "x-forwarded-proto".equals(normalizedName);
     }
 
-    /** 组装 X-Forwarded-For：保留上游链路，再追加当前直连客户端 IP。 */
-    private String forwardedFor(FullHttpRequest request, String clientIp) {
-        String forwardedFor = request.headers().get("X-Forwarded-For");
-        if (forwardedFor == null || forwardedFor.isBlank()) {
-            return clientIp;
+    private static HttpResponse.BodyHandler<byte[]> limitedByteArrayHandler(int maxBytes) {
+        return responseInfo -> new LimitedByteArraySubscriber(maxBytes);
+    }
+
+    /** 在 java.net.http 交付数据时计数，超限立即取消订阅，避免先整包落堆再检查。 */
+    static final class LimitedByteArraySubscriber
+            implements HttpResponse.BodySubscriber<byte[]> {
+
+        private final int maxBytes;
+        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
+        private final CompletableFuture<byte[]> body = new CompletableFuture<>();
+        private Flow.Subscription subscription;
+        private int received;
+
+        LimitedByteArraySubscriber(int maxBytes) {
+            this.maxBytes = maxBytes;
         }
-        return forwardedFor + ", " + clientIp;
+
+        @Override
+        public java.util.concurrent.CompletionStage<byte[]> getBody() {
+            return body;
+        }
+
+        @Override
+        public void onSubscribe(Flow.Subscription subscription) {
+            this.subscription = subscription;
+            subscription.request(1);
+        }
+
+        @Override
+        public void onNext(List<ByteBuffer> buffers) {
+            try {
+                for (ByteBuffer buffer : buffers) {
+                    int length = buffer.remaining();
+                    if (length > maxBytes - received) {
+                        subscription.cancel();
+                        body.completeExceptionally(new ResponseTooLargeException(maxBytes));
+                        return;
+                    }
+                    byte[] chunk = new byte[length];
+                    buffer.get(chunk);
+                    output.writeBytes(chunk);
+                    received += length;
+                }
+                subscription.request(1);
+            } catch (Throwable ex) {
+                subscription.cancel();
+                body.completeExceptionally(ex);
+            }
+        }
+
+        @Override
+        public void onError(Throwable throwable) {
+            body.completeExceptionally(throwable);
+        }
+
+        @Override
+        public void onComplete() {
+            body.complete(output.toByteArray());
+        }
+    }
+
+    private static final class ResponseTooLargeException extends RuntimeException {
+        private ResponseTooLargeException(int maxBytes) {
+            super("response body exceeds " + maxBytes + " bytes");
+        }
+    }
+
+    /** 日志只保留 scheme/host/port/path，去掉 query 与 userInfo。 */
+    public static String redactTargetUrl(String targetUrl) {
+        if (targetUrl == null || targetUrl.isBlank()) {
+            return targetUrl;
+        }
+        try {
+            URI uri = URI.create(targetUrl);
+            return new URI(
+                    uri.getScheme(),
+                    null,
+                    uri.getHost(),
+                    uri.getPort(),
+                    uri.getPath(),
+                    null,
+                    null).toString();
+        } catch (Exception ignored) {
+            int query = targetUrl.indexOf('?');
+            return query < 0 ? targetUrl : targetUrl.substring(0, query);
+        }
     }
 }

@@ -4,11 +4,13 @@ import com.rover.gateway.core.filter.DefaultFilterChain;
 import com.rover.gateway.core.filter.GatewayRequestContext;
 import com.rover.gateway.core.manage.GatewayManageApi;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.runtime.GatewayRuntime;
 import com.rover.gateway.core.trace.RequestTrace;
 import com.rover.gateway.core.trace.TraceSettings;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.handler.codec.TooLongFrameException;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -48,7 +50,8 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
     /** 收到完整 HTTP 请求的入口：管理口短路，业务请求走过滤器链。 */
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, FullHttpRequest request) {
-        String requestPath = new QueryStringDecoder(request.uri()).path();
+        // 业务路由和上游拼接必须保留原始转义，避免 %20/%2F/中文被提前解码后生成非法 URI。
+        String requestPath = new QueryStringDecoder(request.uri()).rawPath();
         // 管理口不进业务过滤器链
         if (manageApi.supports(requestPath)) {
             manageApi.handle(ctx, request, requestPath);
@@ -128,7 +131,7 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
                     context.getRequest().method().name(),
                     context.getRequestPath(),
                     route == null ? null : route.getId(),
-                    context.getTargetUrl(),
+                    HttpProxyClient.redactTargetUrl(context.getTargetUrl()),
                     context.getStatusCode() == null ? 500 : context.getStatusCode(),
                     System.currentTimeMillis() - totalCostMs,
                     totalCostMs,
@@ -158,7 +161,7 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         if (cause instanceof TooLongFrameException) {
-            writeText(ctx, HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large");
+            writeText(ctx, HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large", true);
             return;
         }
         log.warn("Gateway request handling error", cause);
@@ -167,6 +170,14 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
 
     /** 向客户端写纯文本响应。 */
     private void writeText(ChannelHandlerContext ctx, HttpResponseStatus status, String responseBody) {
+        writeText(ctx, status, responseBody, false);
+    }
+
+    private void writeText(
+            ChannelHandlerContext ctx,
+            HttpResponseStatus status,
+            String responseBody,
+            boolean closeConnection) {
         byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
         FullHttpResponse response = new DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1,
@@ -174,6 +185,11 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
                 Unpooled.wrappedBuffer(body));
         response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
-        ctx.writeAndFlush(response);
+        if (closeConnection) {
+            response.headers().set(HttpHeaderNames.CONNECTION, "close");
+            ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        } else {
+            ctx.writeAndFlush(response);
+        }
     }
 }

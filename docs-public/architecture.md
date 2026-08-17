@@ -109,6 +109,12 @@ Spring Boot startup
 
 Configuration prefix: `rover.nameserver.*`
 
+Nameserver registry notes:
+
+- Each service has a monotonic `revision`. Register, unregister, and health flips all bump it and push a snapshot to subscribers.
+- Ephemeral instances are removed after heartbeat expiry. Persistent instances are marked unhealthy (not deleted) and the change is pushed.
+- Events on the same TCP connection are applied in publish order so disconnect cannot race ahead of register.
+
 ---
 
 ## 6. Extension points

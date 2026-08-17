@@ -9,7 +9,11 @@ import com.rover.nameserver.client.connection.NameserverClientOptions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.RejectedExecutionException;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -31,6 +35,8 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
 
     /** 后台对账任务，周期性 query 并比对 revision。 */
     private final PeriodicTask reconcileTask;
+    /** 拒推后的立即对账使用有界线程池，避免每次拒推都创建新线程。 */
+    private final ThreadPoolExecutor forceQueryExecutor;
 
     /** 指定发现配置构造。 */
     public NameserverServiceDiscovery(DiscoverySettings settings) {
@@ -48,6 +54,20 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
                 .autoReconnect(true)
                 .build());
         this.reconcileTask = new PeriodicTask("gateway-nameserver-reconcile");
+        this.forceQueryExecutor = new ThreadPoolExecutor(
+                1,
+                2,
+                30,
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(128),
+                runnable -> {
+                    Thread thread = new Thread(runnable, "gateway-force-query");
+                    thread.setDaemon(true);
+                    return thread;
+                },
+                (task, executor) -> log.warn(
+                        "强制全量对账队列已满或已关闭，丢弃任务: queued={}",
+                        executor.getQueue().size()));
     }
 
     /** 连接 Nameserver、订阅初始服务列表、启动定时对账。 */
@@ -68,25 +88,27 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
 
     /** 连续拒推后的立即全量拉取；丢到旁路线程，避免堵 Netty IO。 */
     private void forceQueryAsync(String serviceName, String group) {
-        Thread t = new Thread(() -> {
-            try {
-                if (!client.isActive()) {
-                    return;
+        try {
+            forceQueryExecutor.execute(() -> {
+                try {
+                    if (!client.isActive()) {
+                        return;
+                    }
+                    client.getInstanceCache().consumeForceQuery(serviceName, group);
+                    QueryResponseBody remote = client.query(serviceName, group, false);
+                    log.info(
+                            "连续拒绝推送后强制全量: serviceName={}, revision={}, epoch={}, size={}",
+                            serviceName,
+                            remote.getRevision(),
+                            remote.getEpoch(),
+                            remote.getInstances() == null ? 0 : remote.getInstances().size());
+                } catch (Exception ex) {
+                    log.warn("强制全量对账失败: serviceName={}", serviceName, ex);
                 }
-                client.getInstanceCache().consumeForceQuery(serviceName, group);
-                QueryResponseBody remote = client.query(serviceName, group, false);
-                log.info(
-                        "连续拒绝推送后强制全量: serviceName={}, revision={}, epoch={}, size={}",
-                        serviceName,
-                        remote.getRevision(),
-                        remote.getEpoch(),
-                        remote.getInstances() == null ? 0 : remote.getInstances().size());
-            } catch (Exception ex) {
-                log.warn("强制全量对账失败: serviceName={}, msg={}", serviceName, ex.getMessage());
-            }
-        }, "gateway-force-query-" + serviceName);
-        t.setDaemon(true);
-        t.start();
+            });
+        } catch (RejectedExecutionException ex) {
+            log.debug("强制全量线程池已关闭，忽略任务: serviceName={}", serviceName);
+        }
     }
 
     /** 从本地缓存取实例，优先返回健康实例；全不健康时退回全部缓存。 */
@@ -130,6 +152,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
     @Override
     public void close() {
         reconcileTask.stop();
+        forceQueryExecutor.shutdownNow();
         client.shutdown();
     }
 
@@ -188,7 +211,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
                             remote.getInstances() == null ? 0 : remote.getInstances().size());
                 }
             } catch (Exception ex) {
-                log.debug("对账失败: serviceName={}, msg={}", spec.getServiceName(), ex.getMessage());
+                log.warn("对账失败: serviceName={}", spec.getServiceName(), ex);
             }
         }
     }

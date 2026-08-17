@@ -18,8 +18,20 @@ public interface ServiceRegistry {
     /** 注销实例，返回新快照；实例不存在时返回 null（调用方应跳过推送）。 */
     RegistrySnapshot unregister(String serviceName, String instanceId);
 
-    /** 刷新实例心跳并恢复健康；返回 false 表示实例不存在（客户端应先注册）。 */
-    boolean heartbeat(String serviceName, String instanceId);
+    /**
+     * 刷新实例心跳。
+     * 实例不存在 → {@link HeartbeatResult#notFound()}；
+     * 仅刷新时间 → {@link HeartbeatResult#touched()}；
+     * 从不健康恢复 → {@link HeartbeatResult#recovered(RegistrySnapshot)}（已 bump revision）。
+     */
+    HeartbeatResult heartbeat(String serviceName, String instanceId);
+
+    /**
+     * 将实例标记为不健康。
+     * 若状态确有变化则 bump revision 并返回快照；实例不存在或已是不健康则返回 null。
+     */
+    RegistrySnapshot markUnhealthy(
+            String serviceName, String instanceId, long heartbeatDeadlineMillis);
 
     /** 按服务、组过滤查询实例（healthyOnly 时仅返回健康实例），返回防御性副本。 */
     List<ServiceInstance> query(String serviceName, String group, boolean healthyOnly);

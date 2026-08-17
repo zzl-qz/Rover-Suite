@@ -6,6 +6,7 @@ import com.rover.admin.service.ConfigUpdateResult;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
@@ -22,6 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
  */
 @RestController
 @RequestMapping("/api")
+@Slf4j
 public class AdminConfigController {
 
     private final AdminConfigService configService;
@@ -33,11 +36,19 @@ public class AdminConfigController {
     /** 仪表盘聚合数据：组件状态 + 发现模式 + 指标快照 + 自洽校验。 */
     @GetMapping("/overview")
     public Map<String, Object> overview() {
+        CompletableFuture<Map<String, Object>> status =
+                CompletableFuture.supplyAsync(configService::loadStatus);
+        CompletableFuture<String> discoveryType =
+                CompletableFuture.supplyAsync(configService::discoveryType);
+        CompletableFuture<JsonNode> metrics =
+                CompletableFuture.supplyAsync(() -> safeMetrics(configService::loadMetrics));
+        CompletableFuture<JsonNode> selfcheck =
+                CompletableFuture.supplyAsync(() -> safeMetrics(configService::loadSelfcheck));
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("status", configService.loadStatus());
-        result.put("discoveryType", configService.discoveryType());
-        result.put("metrics", safeMetrics(() -> configService.loadMetrics()));
-        result.put("selfcheck", safeMetrics(() -> configService.loadSelfcheck()));
+        result.put("status", status.join());
+        result.put("discoveryType", discoveryType.join());
+        result.put("metrics", metrics.join());
+        result.put("selfcheck", selfcheck.join());
         return result;
     }
 
@@ -104,7 +115,6 @@ public class AdminConfigController {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("component", component);
         resp.put("key", key);
-        resp.put("value", value);
         resp.put("message", result.getMessage());
         if (result.getPayload() != null) {
             resp.put("payload", result.getPayload());
@@ -117,8 +127,9 @@ public class AdminConfigController {
         try {
             return supplier.get();
         } catch (Exception ex) {
+            log.warn("Admin 指标聚合读取失败", ex);
             return com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
-                    .put("error", ex.getMessage() == null ? "读取失败" : ex.getMessage());
+                    .put("error", "读取失败");
         }
     }
 
