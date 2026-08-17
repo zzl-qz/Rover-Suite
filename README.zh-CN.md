@@ -28,7 +28,7 @@
 
 > 后端有多个单体项目（可能是 Java/Python/PHP/Go 等不同语言），前端多个 App 各自硬编码后端端口，用 Nginx 做反向代理需要手动维护大量静态配置，上 OpenResty/APISIX 又太重、不好定制。
 
-Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务启动后自动注册，网关实时感知实例变化，无需手动维护 IP 端口。
+Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务启动后自动注册，网关通过快照推送与周期对账感知实例变化，无需手动维护 IP 端口。
 
 | 组件 | 说明 |
 | :--- | :--- |
@@ -47,7 +47,7 @@ Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务�
 | **独立进程部署** | 注册中心与网关均可单独打包运行，两个 jar 即可跑通全链路 |
 | **低侵入接入** | 引入 Starter 并完成 YAML 配置即可注册，支持优雅下线 |
 | **多语言注册** | 提供 Node.js、Python、Go、PHP、C++ 的 HTTP+JSON Registrar 参考实现 |
-| **健康检查** | 心跳超时自动剔除临时实例 / 标记持久实例不健康，网关实时感知 |
+| **健康检查** | 心跳超时自动剔除临时实例 / 标记持久实例不健康，网关通过推送与对账更新缓存 |
 | **静态 / 动态路由** | 支持固定上游与注册中心动态发现，共用负载均衡能力 |
 | **多种负载均衡** | 轮询、加权轮询、随机、IP Hash、最少连接数 |
 | **聚焦的扩展面** | Filter/负载均衡插件 JAR，以及源码级服务发现与注册适配层 |
@@ -60,41 +60,29 @@ Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务�
 ## 🗺️ 架构概览
 
 ```mermaid
-flowchart LR
-    subgraph Callers["调用方"]
-        C1[客户端 / 浏览器]
-        C2[外部系统]
-    end
+flowchart TB
+    C["客户端 / 外部系统"]
+    G["Rover-Gateway<br/>接入 · 过滤 · 发现 · 负载均衡 · 代理"]
+    J["Java 业务服务"]
+    O["Node · Python · Go · PHP · C++ 服务"]
+    N[("Rover-Nameserver<br/>共享内存注册表")]
 
-    subgraph GW["Rover-Gateway"]
-        H[HTTP Server]
-        F[FilterChain]
-        D[服务发现]
-        P[反向代理]
-        H --> F --> P
-        D --> P
-    end
+    C -->|HTTP 请求| G
+    G -->|动态路由| J
+    G -->|动态路由| O
+    J -.->|Starter · TCP :8888<br/>注册 / 心跳| N
+    O -.->|Registrar · HTTP JSON :8889<br/>注册 / 心跳| N
+    N -.->|实例推送 + 查询对账| G
 
-    subgraph NS["Rover-Nameserver"]
-        T[TCP 适配层]
-        A[HTTP Registration API]
-        R[共享内存注册表]
-        T --> R
-        A --> R
-    end
-
-    subgraph Biz["业务服务"]
-        S1[Java + Starter]
-        S2[Node / Python / Go / PHP / C++]
-    end
-
-    C1 --> H
-    C2 --> H
-    P -->|HTTP| S1
-    P -->|HTTP| S2
-    S1 -->|TCP| T
-    S2 -->|HTTP + JSON| A
-    R -.->|实例变更| D
+    classDef caller fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
+    classDef nameserver fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
+    class C caller;
+    class G gateway;
+    class J,O service;
+    class N nameserver;
+    linkStyle default stroke:#64748B,stroke-width:1.4px;
 ```
 
 模块依赖与主链路说明见 **[架构与权衡](./docs-public/architecture.zh-CN.md)**。
@@ -137,8 +125,9 @@ cd roverSuite
 mvn clean install -DskipTests
 ```
 
-启动本地 demo 前，请按详细指南复制两份内置配置，并将 Nameserver 与 Gateway 绑定到 `127.0.0.1`。
-向后兼容默认值会监听所有网卡且鉴权为空，不能直接暴露到局域网或公网。
+启动本地 demo 前，请按详细指南复制两份内置配置，并将 Gateway 改为 `8080`。指南同时把监听地址收紧到
+`127.0.0.1`，避免本地联调意外对外暴露。项目默认监听所有网卡且鉴权为空，是为了零配置启动与可信网络内使用；
+有访问控制要求时再配置绑定地址、token、CORS 与外层网络策略。
 
 ### 2. 启动 Nameserver
 
@@ -222,7 +211,7 @@ rover:
 rover:
   nameserver:
     clientApiEnabled: true
-    token: "请替换为内网私有 token"
+    token: "" # 可选；配置后 Registrar 需发送同一个 Bearer token
 ```
 
 接入示例见 [Node.js、Python、Go、PHP、C++ Registrar](./examples/http-registration/README.md)。它们只实现提供方生命周期（`register → heartbeat → unregister`）；Java 查询与 Gateway 推送订阅继续使用现有 TCP 链路。
@@ -245,17 +234,22 @@ rover:
         stripPrefix: /api/demo
 ```
 
-### 生产安全基线
+### 可选部署加固
 
-监听地址默认绑定 `0.0.0.0`，管理口与注册/订阅协议默认不鉴权（向后兼容）。如需加固：
+监听地址默认绑定 `0.0.0.0`，管理口与注册/订阅协议默认不鉴权。这是为了本地或可信网络中的零配置接入，
+不是强制安全策略。如部署跨越信任边界，可按需加固：
 
 - `rover.nameserver.bindHost` / `manageBindHost`、`rover.gateway.server.bindHost` —— 收紧监听地址
 - `rover.nameserver.token` / `adminToken`、`rover.gateway.adminToken`、`rover.admin.admin-token` —— 开启 token 鉴权
 
 开启协议 token 后，Starter 使用 `rover.nameserver.token`，Gateway 发现使用
 `rover.gateway.discovery.nameserver.token`，HTTP Registrar 把同一个值作为 Bearer token 发送。Admin 使用独立的
-`X-Rover-Admin-Token` 管理请求头。HTTP Registration API 默认关闭。生产环境应将控制端口放在可信内网，并为协议面/管理面配置不同 token。所有配置项都在对应 YAML 中带注释。
-token 只做鉴权，不加密流量。TCP `8888` 应只在私网中使用，HTTP 由外层终止 HTTPS；Gateway `/_manage/**` 与业务流量共用监听端口，应通过 `adminToken` 和外层 ACL/代理共同保护。
+`X-Rover-Admin-Token` 管理请求头。HTTP Registration API 默认关闭。需要隔离时，可将控制端口放在可信网络，
+并为协议面与管理面配置不同 token。token 只做鉴权，不加密流量；需要链路加密时由 VPN、TLS 隧道或外层
+HTTPS 代理承担。Gateway `/_manage/**` 与业务流量共用监听端口，可通过 `adminToken` 和外层 ACL/代理限制访问。
+
+当前源码仍是单机 `1.0.0-SNAPSHOT`。已知运行边界（包括最后实例空快照、分组发现、冷启动恢复和代理缓冲）
+集中记录在[使用指南](./docs-public/user-guide.zh-CN.md#9-当前运行边界)。
 
 ---
 

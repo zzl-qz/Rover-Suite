@@ -19,7 +19,7 @@ rover:
     # 留空 = 关闭管理口鉴权（向后兼容）
     adminToken: ""
     # 是否启用 /v1/client/** HTTP+JSON 注册/心跳/注销接口（默认关闭，按需显式开启）
-    # 开启且允许远程访问时必须配置上面的 token，并限制 managePort 的网络来源
+    # 默认允许空 token 零配置接入；有访问控制要求时配置 token，并按需限制 managePort 来源
     clientApiEnabled: false
     # 心跳超时(ms)：超过则把实例标记为不健康（非临时实例）
     heartbeatTimeoutMillis: 15000

@@ -28,7 +28,7 @@
 
 > You have multiple monolithic backend services (possibly in Java/Python/PHP/Go), multiple frontend apps each hardcoding backend ports, Nginx requires manually maintaining static configs, and OpenResty/APISIX feels too heavy and hard to customize.
 
-Rover-Suite provides an **all-in-one lightweight solution with a built-in registry**: backend services auto-register on startup, the gateway detects instance changes in real time — no manual IP/port maintenance needed.
+Rover-Suite provides an **all-in-one lightweight solution with a built-in registry**: backend services auto-register on startup, while the gateway tracks instance changes through snapshot push plus periodic reconciliation — no manual IP/port maintenance needed.
 
 | Component | Description |
 | :--- | :--- |
@@ -47,7 +47,7 @@ Rover-Suite provides an **all-in-one lightweight solution with a built-in regist
 | **Standalone processes** | Two jars are enough to run the full request path |
 | **Low-intrusion SDK** | Register with Starter + YAML only, supports graceful shutdown |
 | **Multi-language registration** | HTTP+JSON Registrar references for Node.js, Python, Go, PHP, and C++ |
-| **Health check** | Heartbeat timeout auto-evicts ephemeral instances / marks persistent ones unhealthy, gateway notified in real time |
+| **Health check** | Heartbeat timeout auto-evicts ephemeral instances / marks persistent ones unhealthy; Gateway refreshes through push and reconciliation |
 | **Static / dynamic routing** | Fixed upstreams and registry-based discovery share load balancing |
 | **Multiple load balancing** | Round-robin, weighted round-robin, random, IP hash, least connections |
 | **Focused extension points** | Filter and load-balancer plugin JARs; source-level service-discovery and registration adapters |
@@ -60,41 +60,29 @@ Rover-Suite provides an **all-in-one lightweight solution with a built-in regist
 ## 🗺️ Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Callers["Clients"]
-        C1[Browser / App]
-        C2[External]
-    end
+flowchart TB
+    C["Clients / External Systems"]
+    G["Rover-Gateway<br/>Ingress · Filters · Discovery · Load Balancing · Proxy"]
+    J["Java Services"]
+    O["Node · Python · Go · PHP · C++ Services"]
+    N[("Rover-Nameserver<br/>Shared In-Memory Registry")]
 
-    subgraph GW["Rover-Gateway"]
-        H[HTTP Server]
-        F[FilterChain]
-        D[Discovery]
-        P[Reverse Proxy]
-        H --> F --> P
-        D --> P
-    end
+    C -->|HTTP requests| G
+    G -->|dynamic routing| J
+    G -->|dynamic routing| O
+    J -.->|Starter · TCP :8888<br/>register / heartbeat| N
+    O -.->|Registrar · HTTP JSON :8889<br/>register / heartbeat| N
+    N -.->|snapshot push + query reconciliation| G
 
-    subgraph NS["Rover-Nameserver"]
-        T[TCP adapter]
-        A[HTTP Registration API]
-        R[Shared in-memory registry]
-        T --> R
-        A --> R
-    end
-
-    subgraph Biz["Business Services"]
-        S1[Java + Starter]
-        S2[Node / Python / Go / PHP / C++]
-    end
-
-    C1 --> H
-    C2 --> H
-    P -->|HTTP| S1
-    P -->|HTTP| S2
-    S1 -->|TCP| T
-    S2 -->|HTTP + JSON| A
-    R -.->|instance updates| D
+    classDef caller fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
+    classDef nameserver fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
+    class C caller;
+    class G gateway;
+    class J,O service;
+    class N nameserver;
+    linkStyle default stroke:#64748B,stroke-width:1.4px;
 ```
 
 See **[docs-public/architecture.md](./docs-public/architecture.md)** for module dependencies and request flow.
@@ -137,9 +125,10 @@ cd roverSuite
 mvn clean install -DskipTests
 ```
 
-Before starting the local demo, follow the detailed guide to copy both bundled configs and bind Nameserver and
-Gateway to `127.0.0.1`. The compatibility defaults bind all interfaces with empty authentication and must not be
-exposed to a LAN or the internet.
+Before starting the local demo, follow the detailed guide to copy both bundled configs and move Gateway to
+`8080`. The guide also binds listeners to `127.0.0.1` so local development is not exposed accidentally. The
+project intentionally defaults to all-interface, unauthenticated listeners for zero-config startup on a trusted
+network; configure bind addresses, tokens, CORS, and outer network policy when access control is required.
 
 ### 2. Start Nameserver
 
@@ -225,7 +214,7 @@ For non-Java providers, enable the opt-in HTTP Registration API on Nameserver an
 rover:
   nameserver:
     clientApiEnabled: true
-    token: "replace-with-a-private-token"
+    token: "" # optional; when set, Registrars send the same value as a Bearer token
 ```
 
 See [the Node.js, Python, Go, PHP, and C++ reference integrations](./examples/http-registration/README.md). They only implement the provider lifecycle (`register → heartbeat → unregister`); Java discovery queries and Gateway push subscriptions remain on the existing TCP path.
@@ -248,20 +237,26 @@ rover:
         stripPrefix: /api/demo
 ```
 
-### Production security baseline
+### Optional deployment hardening
 
-Listeners bind `0.0.0.0` by default and management/protocol auth is disabled for backward compatibility. To harden a deployment:
+Listeners bind `0.0.0.0` by default and management/protocol auth is disabled. This intentionally favors zero-config
+startup on a local or trusted network rather than enforcing a security policy. When a deployment crosses a trust
+boundary, harden it as needed:
 
 - `rover.nameserver.bindHost` / `manageBindHost`, `rover.gateway.server.bindHost` — restrict listen addresses
 - `rover.nameserver.token` / `adminToken`, `rover.gateway.adminToken`, `rover.admin.admin-token` — enable token auth
 
 When a protocol token is set, the Starter uses `rover.nameserver.token`, Gateway discovery uses
 `rover.gateway.discovery.nameserver.token`, and HTTP Registrars send the same value as a Bearer token. Admin
-uses the separate `X-Rover-Admin-Token` management header. The HTTP Registration API is disabled by default.
-Keep control ports on a trusted network and use different protocol/admin token values in production. All options
-are documented with comments in `rover-nameserver.yml`, `rover-gateway.yml`, and Rover-Admin's `application.yml`.
-Tokens authenticate but do not encrypt traffic. Keep TCP `8888` private, terminate HTTPS externally for HTTP,
-and protect Gateway `/_manage/**`, which shares the business listener, with `adminToken` plus an outer ACL/proxy.
+uses the separate `X-Rover-Admin-Token` management header. The HTTP Registration API is disabled by default. When
+isolation is needed, keep control ports on a trusted network and use different protocol/admin token values.
+Tokens authenticate but do not encrypt traffic. Use a private network, VPN, TLS tunnel, or outer HTTPS proxy when
+transport encryption is required. Gateway `/_manage/**` shares the business listener and can be restricted with
+`adminToken` plus an outer ACL/proxy.
+
+The source tree is still a single-node `1.0.0-SNAPSHOT`. Current runtime boundaries — including last-instance empty
+snapshots, grouped discovery, cold-start recovery, and proxy buffering — are documented in the
+[User Guide](./docs-public/user-guide.md#9-current-runtime-boundaries).
 
 ---
 

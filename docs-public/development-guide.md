@@ -219,6 +219,14 @@ Preserve these invariants:
 - Old owners, disconnect callbacks, and stale expiry scans cannot delete a newer owner.
 - Online instances remain in-memory soft state unless an explicit architecture change is accepted.
 
+These are target invariants for an extension; they do not imply that every discovery edge case is already closed.
+See the [User Guide](./user-guide.md#9-current-runtime-boundaries) for the current last-instance empty-snapshot and
+multi-`group` push boundaries. Changes to registry snapshots, push, or the Gateway cache must cover all of these:
+
+- An exact-group subscription receives only that group's instances, while a wildcard subscription receives the full service snapshot.
+- Within one epoch, a legitimate higher-revision empty snapshot can remove the final instance and cannot be rolled back by an older empty snapshot.
+- Query/reconciliation restores current Nameserver state after a push is lost or rejected, or an initial subscription fails.
+
 ## 7. ServiceDiscovery adapter
 
 [`ServiceDiscovery`](../rover-common/src/main/java/com/rover/common/spi/discovery/ServiceDiscovery.java) defines

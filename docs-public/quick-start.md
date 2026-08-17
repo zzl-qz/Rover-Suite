@@ -34,11 +34,11 @@ mvn clean install -DskipTests
 Use `install`, not only `package`: the project currently uses `1.0.0-SNAPSHOT`, which is not published to a
 public Maven repository, and the demo/other local projects resolve the artifacts from your local Maven cache.
 
-## 3. Configure local-only listeners and Gateway port 8080
+## 3. Configure local listeners and Gateway port 8080
 
-The bundled configurations bind to all interfaces and leave authentication empty for compatibility. For this
-local demo, copy both complete files to the external configuration directory, then bind them to loopback. Do not
-expose the default unauthenticated management endpoints to a LAN or the internet.
+The bundled configuration intentionally favors zero-config startup: listeners bind all interfaces and authentication
+is empty, which is convenient on a local or trusted network. This guide copies both complete files and binds the
+demo to loopback to avoid accidental exposure; a trusted deployment may deliberately keep the defaults.
 
 ```bash
 mkdir -p config
@@ -131,13 +131,16 @@ You can also inspect the process logs for:
 
 Stop the demo with `Ctrl+C`. A normal Spring shutdown performs a best-effort deregistration. Then stop the
 Gateway and Nameserver.
+Nameserver removes the deregistered instance immediately. The current Gateway protects a last-instance empty push,
+so its local cache is cleared no later than the next query reconciliation — up to `reconcileIntervalMs` (30 seconds)
+with the default configuration.
 
 ## First-run troubleshooting
 
 | Symptom | Check |
 | :--- | :--- |
 | Gateway cannot bind | Confirm that the external Gateway config uses `8080`, not the bundled default `80`. |
-| Gateway returns no available instance | Start Nameserver before the demo, then check that both use `127.0.0.1:8888`. The Java client retries registration every 5 seconds. |
+| Gateway returns no available instance | Start Nameserver before the demo, then check that both use `127.0.0.1:8888`. The Java provider retries every 5 seconds. If Gateway started first, the current version may wait until the next 30-second reconciliation; restarting Gateway also refreshes immediately. |
 | Gateway route is not found | Check `businessPrefix: /api`, `serviceName: demo-service`, and that a stale `config/routes.overlay.json` is not overriding YAML routes. |
 | Gateway gets connection refused from the provider | `rover.nameserver.host` must be reachable from the Gateway. `127.0.0.1` is only correct when all processes run on one machine. |
 | Authentication fails | Nameserver, Starter, and Gateway discovery must use the same protocol token. See the [User Guide](./user-guide.md). |
