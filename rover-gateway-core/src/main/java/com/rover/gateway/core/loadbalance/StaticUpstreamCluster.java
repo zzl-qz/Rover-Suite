@@ -1,5 +1,6 @@
 package com.rover.gateway.core.loadbalance;
 
+import com.rover.common.constants.HttpConstants;
 import com.rover.common.model.ServiceInstance;
 import com.rover.gateway.core.route.RouteConfig;
 import java.net.URI;
@@ -17,11 +18,8 @@ import java.util.Set;
 public final class StaticUpstreamCluster {
 
     /** 默认权重。 */
-    private static final int DEFAULT_WEIGHT = 100;
-
-    private static final int HTTP_PORT = 80;
-
-    private static final int HTTPS_PORT = 443;
+    private static final String METADATA_SCHEME = "scheme";
+    private static final String METADATA_BASE_URL = "baseUrl";
 
     private StaticUpstreamCluster() {
     }
@@ -83,15 +81,15 @@ public final class StaticUpstreamCluster {
         instance.setInstanceId(dedupeKey);
         instance.setHealthy(true);
         instance.setWeight(parsed.weight());
-        instance.getMetadata().put("scheme", parsed.scheme());
-        instance.getMetadata().put("baseUrl", parsed.baseUrl());
+        instance.getMetadata().put(METADATA_SCHEME, parsed.scheme());
+        instance.getMetadata().put(METADATA_BASE_URL, parsed.baseUrl());
         out.add(instance);
     }
 
     /** 解析 http://host:port 或 http://host:port|weight。 */
     static ParsedEndpoint parse(String raw) {
         String urlPart = raw;
-        int weight = DEFAULT_WEIGHT;
+        int weight = ServiceInstance.DEFAULT_WEIGHT;
         int bar = raw.lastIndexOf('|');
         if (bar > 0 && bar < raw.length() - 1) {
             String maybeWeight = raw.substring(bar + 1).trim();
@@ -103,7 +101,8 @@ public final class StaticUpstreamCluster {
         try {
             URI uri = URI.create(urlPart);
             String scheme = uri.getScheme();
-            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            if (!HttpConstants.SCHEME_HTTP.equalsIgnoreCase(scheme)
+                    && !HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(scheme)) {
                 throw new IllegalArgumentException("只支持 http/https: " + raw);
             }
             if (uri.getHost() == null || uri.getHost().isBlank()) {
@@ -111,7 +110,9 @@ public final class StaticUpstreamCluster {
             }
             int port = uri.getPort();
             if (port < 0) {
-                port = "https".equalsIgnoreCase(scheme) ? HTTPS_PORT : HTTP_PORT;
+                port = HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(scheme)
+                        ? HttpConstants.DEFAULT_HTTPS_PORT
+                        : HttpConstants.DEFAULT_HTTP_PORT;
             }
             String baseUrl = scheme.toLowerCase(Locale.ROOT) + "://" + formatHost(uri.getHost()) + ":" + port;
             return new ParsedEndpoint(scheme.toLowerCase(Locale.ROOT), uri.getHost(), port, weight, baseUrl);
@@ -127,11 +128,11 @@ public final class StaticUpstreamCluster {
         if (instance == null) {
             return null;
         }
-        String base = instance.getMetadata() == null ? null : instance.getMetadata().get("baseUrl");
+        String base = instance.getMetadata() == null ? null : instance.getMetadata().get(METADATA_BASE_URL);
         if (base != null && !base.isBlank()) {
             return base;
         }
-        return "http://" + formatHost(instance.getHost()) + ":" + instance.getPort();
+        return HttpConstants.SCHEME_HTTP + "://" + formatHost(instance.getHost()) + ":" + instance.getPort();
     }
 
     private static String formatHost(String host) {

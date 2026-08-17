@@ -18,14 +18,19 @@ import org.springframework.core.env.Environment;
  */
 @AutoConfiguration
 @ConditionalOnClass(NameserverClient.class)
-@ConditionalOnProperty(prefix = "rover.nameserver", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(
+        prefix = RoverNameserverProperties.PREFIX,
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 @EnableConfigurationProperties(RoverNameserverProperties.class)
 public class NameserverAutoConfiguration {
 
     @Bean(destroyMethod = "shutdown")
     @ConditionalOnMissingBean // 容器中无同类型 Bean 时才创建
     public NameserverClient nameserverClient(RoverNameserverProperties properties) {
-        HostPort address = HostPort.require(properties.getAddress(), "rover.nameserver.address");
+        HostPort address = HostPort.require(
+                properties.getAddress(), RoverNameserverProperties.PREFIX + ".address");
         NameserverClientOptions options = NameserverClientOptions.builder()
                 .host(address.host())
                 .port(address.port())

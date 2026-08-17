@@ -7,6 +7,7 @@ import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteOverlayStore;
 import com.rover.gateway.core.server.GatewayHttpServer;
+import com.rover.common.util.ServiceKeys;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -67,7 +68,7 @@ public class GatewayApplication {
             if (route.getServiceName() == null || route.getServiceName().isBlank()) {
                 continue;
             }
-            String key = route.getServiceName() + "#" + (route.getGroup() == null ? "" : route.getGroup());
+            String key = ServiceKeys.serviceGroup(route.getServiceName(), route.getGroup());
             DiscoverySettings.ServiceSubscribeSpec spec = new DiscoverySettings.ServiceSubscribeSpec();
             spec.setServiceName(route.getServiceName());
             spec.setGroup(route.getGroup());

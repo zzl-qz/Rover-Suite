@@ -1,6 +1,7 @@
 package com.rover.gateway.core.filter;
 
 import com.rover.common.spi.filter.Filter;
+import com.rover.common.plugin.PluginSpiLoader;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.common.spi.loadbalance.LoadBalancer;
@@ -58,7 +59,7 @@ public class GatewayFilterAssembler {
 
         if (settings == null || settings.isEnabled()) {
             // 1) 从 plugins 目录自动发现 SPI 过滤器。
-            String pluginDir = settings == null ? "plugins" : settings.getPluginDir();
+            String pluginDir = settings == null ? PluginSpiLoader.DEFAULT_DIR : settings.getPluginDir();
             for (Filter pluginFilter : pluginFilterLoader.loadFromDirectory(pluginDir)) {
                 filters.putIfAbsent(pluginFilter.getClass().getName(), pluginFilter);
             }

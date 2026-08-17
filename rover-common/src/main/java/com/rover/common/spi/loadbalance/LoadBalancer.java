@@ -10,7 +10,7 @@ import com.rover.common.model.ServiceInstance;
 public interface LoadBalancer {
 
     /** 内置负载均衡策略名：轮询（也是默认策略） */
-    String ROUND_ROBIN = "round_robin";
+    String ROUND_ROBIN = BuiltinLoadBalanceStrategy.ROUND_ROBIN.configName();
 
     /**
      * 策略名，配置 gateway.loadbalance.strategy 用这个匹配。

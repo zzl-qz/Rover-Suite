@@ -1,5 +1,7 @@
 package com.rover.gateway.core.trace;
 
+import com.rover.gateway.core.config.GatewayDefaults;
+
 /**
  * Author: Daylight
  * Description: 请求时间线采集配置（支持热更新）：
@@ -11,10 +13,10 @@ public class TraceSettings {
     private volatile boolean enabled = true;
 
     /** 慢请求阈值（毫秒），总耗时超过即记录。 */
-    private volatile long slowThresholdMillis = 100;
+    private volatile long slowThresholdMillis = GatewayDefaults.TRACE_SLOW_THRESHOLD_MILLIS;
 
     /** 采样率 0~1，0 表示只记慢请求，1 表示全量。 */
-    private volatile double sampleRate = 0;
+    private volatile double sampleRate = GatewayDefaults.TRACE_SAMPLE_RATE;
 
     public boolean isEnabled() {
         return enabled;

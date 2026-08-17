@@ -3,6 +3,7 @@ package com.rover.gateway.core.loadbalance;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.loadbalance.LoadBalanceContext;
 import com.rover.common.spi.loadbalance.LoadBalancer;
+import com.rover.common.spi.loadbalance.BuiltinLoadBalanceStrategy;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -19,7 +20,7 @@ public class LeastConnectionsLoadBalancer implements LoadBalancer {
 
     @Override
     public String name() {
-        return "least_connections";
+        return BuiltinLoadBalanceStrategy.LEAST_CONNECTIONS.configName();
     }
 
     @Override

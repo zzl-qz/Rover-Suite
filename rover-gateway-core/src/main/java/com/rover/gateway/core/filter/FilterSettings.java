@@ -1,5 +1,6 @@
 package com.rover.gateway.core.filter;
 
+import com.rover.common.plugin.PluginSpiLoader;
 import java.util.List;
 
 /**
@@ -13,7 +14,7 @@ public class FilterSettings {
     private volatile boolean enabled = true;
 
     /** 用户扩展 jar 目录，默认是运行目录下的 plugins。 */
-    private volatile String pluginDir = "plugins";
+    private volatile String pluginDir = PluginSpiLoader.DEFAULT_DIR;
 
     /**
      * 额外按全限定类名加载的过滤器。
@@ -34,7 +35,9 @@ public class FilterSettings {
     }
 
     public void setPluginDir(String pluginDir) {
-        this.pluginDir = pluginDir == null || pluginDir.isBlank() ? "plugins" : pluginDir.trim();
+        this.pluginDir = pluginDir == null || pluginDir.isBlank()
+                ? PluginSpiLoader.DEFAULT_DIR
+                : pluginDir.trim();
     }
 
     public List<String> getClasses() {
