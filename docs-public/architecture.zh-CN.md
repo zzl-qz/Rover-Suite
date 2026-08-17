@@ -76,8 +76,8 @@ flowchart TB
 
 `8888` 与 `8889` 属于同一个 Nameserver 进程。HTTP Registration API 不会增加 Sidecar、Agent、守护进程、
 独立 Server 进程或额外部署 JAR。该 API 默认关闭，需要显式配置
-`rover.nameserver.clientApiEnabled: true`。只要 API 可以从可信本机环境之外访问，就应配置非空的
-`rover.nameserver.token`。
+`rover.nameserver.clientApiEnabled: true`。Rover 不强制开启鉴权；部署跨越信任边界时，可以配置非空的
+`rover.nameserver.token`、收紧监听地址或增加外层网络策略。
 
 ---
 
@@ -213,6 +213,12 @@ Gateway 启动
 真正的 pull 链路是 Gateway 查询与对账。Push 是低延迟通知路径；query 是修复路径，用于启动、重连、
 推送丢失或被拒绝，以及 `epoch` / `revision` 对账。
 
+这不是强实时一致性承诺。当前实现有两个明确边界：最后一个实例产生的空快照会先被 Gateway 的推空保护拒绝，
+最迟到下一次周期对账才清空；Gateway 启动时如果 Nameserver 不可用，首次订阅失败也可能到下一次对账才恢复。
+默认 `reconcileIntervalMs=30000`，因此两类窗口最长约 30 秒。
+
+`group` 是查询与订阅过滤条件，不属于实例唯一键。当前多组快照推送隔离仍在收口，默认空 group 是推荐使用方式。
+
 相关实现：
 
 - [`PushService`](../rover-nameserver-core/src/main/java/com/rover/nameserver/core/push/PushService.java)
@@ -220,6 +226,7 @@ Gateway 启动
 - [`NameserverServiceDiscovery`](../rover-gateway-core/src/main/java/com/rover/gateway/core/discovery/NameserverServiceDiscovery.java)
 
 Nameserver 短暂不可用时，Gateway 会继续使用本地实例缓存提供请求服务；连接恢复后，周期 query/reconcile 会修复缓存。
+如果不可用发生在 Gateway 第一次订阅之前，恢复可能等到下一次对账。
 
 ---
 
@@ -231,7 +238,8 @@ HTTP 链路面向这样的场景优化：小团队需要支持多种服务提供
 | :--- | :--- | :--- |
 | 非 Java 服务提供方使用标准 HTTP+JSON | 普通工具即可检查；每种语言只需少量代码 | 相比紧凑二进制心跳，有更多 Header 与 JSON 解析开销 |
 | 使用可复制的小型 Registrar，而不是完整 SDK | 无需维护多语言包发布矩阵与多套发现缓存 | 非 Java 调用方只获得注册能力 |
-| 复用现有 Nameserver HTTP 监听器 | 无需 Sidecar、Agent、守护进程或额外部署构件 | Registration API 与管理 API 共用 `8889`，必须保持鉴权域隔离 |
+| 复用现有 Nameserver HTTP 监听器 | 无需 Sidecar、Agent、守护进程或额外部署构件 | Registration API 与管理 API 共用 `8889`；两套 token 域独立但默认均可留空 |
+| 默认全网卡监听、空 token | 本地或可信网络零配置启动 | 安全边界由部署方按需通过 bind、token、ACL、VPN/TLS 建立 |
 | 固定重试间隔 | 恢复行为可预测，状态机简单 | 超大规模实例同时恢复时可能产生尖峰；当前参考有意保持固定策略 |
 | HTTP 租约过期 | 无需主动探活配置，也没有服务端探测扇出 | HTTP 异常退出的摘除速度慢于确认 TCP 断连 |
 | 纯内存在线状态 | 不恢复陈旧端点，也不依赖存储组件 | Nameserver 重启后客户端必须重新注册 |
@@ -272,6 +280,11 @@ HTTP 请求
 ```
 
 服务发现不在请求热路径上：请求路由读取 Gateway 本地缓存，不会为每个请求同步查询 Nameserver。
+
+当前代理链路聚合完整请求体和响应体，默认请求体上限为 1 MiB，响应体硬上限为 16 MiB；它面向普通 HTTP API，
+不提供 WebSocket、SSE 或通用流式代理。动态发现中，如果持久实例全部被标记为不健康，Gateway 会回退到缓存中的
+全部实例继续尝试，属于可用性优先的 fail-open 策略。静态上游 URL 只使用 scheme、host 与 port，路径改写应通过
+路由的 `stripPrefix` 等配置完成，而不是依赖上游 URL 的基路径。
 
 ---
 

@@ -34,10 +34,10 @@ mvn clean install -DskipTests
 这里要使用 `install`，不只是 `package`。项目当前使用尚未发布到公共 Maven 仓库的
 `1.0.0-SNAPSHOT`，demo 或其他本地项目需要从本机 Maven 仓库解析依赖。
 
-## 3. 配置仅本机监听与 Gateway 8080 端口
+## 3. 配置本机监听与 Gateway 8080 端口
 
-内置配置为了向后兼容默认监听所有网卡，且鉴权为空。本地 demo 请先复制两份完整配置，再将监听地址收紧到回环网卡。
-不要向局域网或公网暴露默认无鉴权的管理接口。
+内置配置有意采用“零配置优先”：默认监听所有网卡且鉴权为空，适合本地或可信网络快速启动。
+本指南为了避免联调时意外对外暴露，复制两份完整配置并将监听地址收紧到回环网卡；可信网络环境也可以自行保留默认监听方式。
 
 ```bash
 mkdir -p config
@@ -126,13 +126,15 @@ curl -i http://127.0.0.1:8080/api/hello
 ## 6. 停止
 
 先对 demo 按 `Ctrl+C`。正常的 Spring 关闭流程会尽力注销实例，然后再停止 Gateway 和 Nameserver。
+Nameserver 会立即删除已注销实例；当前 Gateway 对最后一个实例的空快照带保护，最迟会在下一次查询对账时清空本地缓存，
+默认上限约为 `reconcileIntervalMs`（30 秒）。
 
 ## 首次启动排障
 
 | 现象 | 检查项 |
 | :--- | :--- |
 | Gateway 端口绑定失败 | 确认外部 Gateway 配置使用 `8080`，而不是内置默认值 `80`。 |
-| Gateway 提示无可用实例 | 先启动 Nameserver，再确认 demo 与 Gateway 都使用 `127.0.0.1:8888`。Java 客户端每 5 秒固定重试。 |
+| Gateway 提示无可用实例 | 先启动 Nameserver，再确认 demo 与 Gateway 都使用 `127.0.0.1:8888`。Java 服务每 5 秒固定重试；如果 Gateway 先于 Nameserver 启动，当前版本最迟在下一次 30 秒对账时补齐发现，也可以直接重启 Gateway。 |
 | 匹配不到路由 | 检查 `businessPrefix: /api`、`serviceName: demo-service`，并确认没有遗留的 `config/routes.overlay.json` 覆盖 YAML 路由。 |
 | Gateway 连接业务服务被拒绝 | `rover.nameserver.host` 必须是 Gateway 可达地址。只有三个进程都在同一台机器上时才能使用 `127.0.0.1`。 |
 | 鉴权失败 | Nameserver、Starter 与 Gateway 发现必须使用同一个协议 token。参见[使用指南](./user-guide.zh-CN.md)。 |

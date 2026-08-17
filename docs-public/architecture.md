@@ -76,8 +76,9 @@ flowchart TB
 
 Ports `8888` and `8889` belong to the same Nameserver process. The HTTP Registration API does not add a
 sidecar, daemon, separate server process, or separate deployment JAR. It is disabled by default and must be
-enabled explicitly with `rover.nameserver.clientApiEnabled: true`. A non-empty
-`rover.nameserver.token` should be configured whenever the API is reachable outside a trusted local environment.
+enabled explicitly with `rover.nameserver.clientApiEnabled: true`. Rover does not force authentication; when a
+deployment crosses a trust boundary, it can configure `rover.nameserver.token`, narrow the bind address, or add
+outer network policy.
 
 ---
 
@@ -225,6 +226,14 @@ HTTP Registration is therefore not strictly a “pull mode”: the provider acti
 pull path is Gateway reconciliation. Push is the low-latency notification path; query is the repair path for
 startup, reconnect, a missed or rejected push, and epoch/revision reconciliation.
 
+This is not a strong real-time consistency guarantee. Two current boundaries are explicit: Gateway protects the
+empty snapshot produced by the last instance and clears it at the next periodic reconciliation, while a failed
+initial subscription when Nameserver is unavailable may also recover only at that reconciliation. With the default
+`reconcileIntervalMs=30000`, either window can last roughly 30 seconds.
+
+`group` is a query/subscription filter rather than part of the instance identity. Multi-group snapshot isolation is
+still being finalized; the recommended current mode is an empty group.
+
 Relevant implementation:
 
 - [`PushService`](../rover-nameserver-core/src/main/java/com/rover/nameserver/core/push/PushService.java)
@@ -232,7 +241,8 @@ Relevant implementation:
 - [`NameserverServiceDiscovery`](../rover-gateway-core/src/main/java/com/rover/gateway/core/discovery/NameserverServiceDiscovery.java)
 
 Gateway continues serving from its local instance cache during a temporary Nameserver outage. Periodic query
-reconciliation repairs the cache after connectivity returns.
+reconciliation repairs the cache after connectivity returns. If the outage happens before Gateway's first
+subscription, recovery may wait until the next reconciliation.
 
 ---
 
@@ -245,7 +255,8 @@ maintaining a complete discovery SDK in every ecosystem.
 | :--- | :--- | :--- |
 | Standard HTTP+JSON for non-Java providers | Easy to inspect with ordinary tools; minimal language-specific code | More header and JSON parsing overhead than a compact binary heartbeat |
 | Small copyable Registrar instead of a full SDK | No package publishing matrix or cross-language discovery cache to maintain | Non-Java callers receive registration only |
-| Reuse the existing Nameserver HTTP listener | No sidecar, agent, daemon, or extra deployment artifact | Registration and management APIs share port `8889` and must remain separately authenticated |
+| Reuse the existing Nameserver HTTP listener | No sidecar, agent, daemon, or extra deployment artifact | Registration and management APIs share port `8889`; their token domains are separate but may both be left empty |
+| All-interface listeners and empty tokens by default | Zero-config startup on a local or trusted network | The deployer adds bind restrictions, tokens, ACLs, VPN, or TLS when needed |
 | Fixed retry interval | Predictable recovery behavior and simple state machines | Very large synchronized fleets may create a recovery spike; current references deliberately keep fixed behavior |
 | HTTP lease expiry | No active probe configuration or server-side probe fan-out | Abnormal HTTP instance removal is slower than a confirmed TCP disconnect |
 | Pure in-memory online state | No stale endpoint restoration and no storage dependency | Clients must re-register after a Nameserver restart |
@@ -290,6 +301,13 @@ HTTP request
 
 Discovery is outside the hot request path: request routing reads the Gateway's local cache rather than querying
 the Nameserver synchronously for every request.
+
+The current proxy path aggregates complete request and response bodies. The default request-body limit is 1 MiB,
+and the hard response-body limit is 16 MiB. It targets ordinary HTTP APIs and does not provide WebSocket, SSE, or
+general streaming proxying. If every persistent discovered instance is unhealthy, Gateway falls back to the full
+cached set and keeps trying, which is an availability-first fail-open policy. A static upstream URL contributes only
+its scheme, host, and port; use route options such as `stripPrefix` for path rewriting instead of relying on a base
+path in the upstream URL.
 
 ---
 

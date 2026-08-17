@@ -31,7 +31,8 @@ rover:
 - `/v1/client/**`：`Authorization: Bearer <rover.nameserver.token>`
 - `/_manage/**`：`X-Rover-Admin-Token: <rover.nameserver.adminToken>`
 
-内置配置为了向后兼容默认留空 token。远程开启 HTTP 注册时，必须配置非空协议 token、绑定内网地址，并在网络层限制来源。
+内置配置有意留空 token，便于本地或可信网络零配置接入。HTTP 注册不强制开启鉴权；如果部署跨越信任边界，
+可配置非空协议 token、收紧监听地址，并在网络层限制来源。
 
 ## 2. Java Spring Boot Starter
 
@@ -90,7 +91,7 @@ rover:
 | `service-name` | `spring.application.name` | 注册服务名 |
 | `instance-id` | 解析后的 `host:port` | 服务内唯一实例键 |
 | `host`、`port` | 自动探测 | 向 Gateway 公布的地址 |
-| `group`、`zone`、`metadata` | 空 | 部署与自定义元数据 |
+| `group`、`zone`、`metadata` | 空 | 部署与自定义元数据；当前版本建议 `group` 保持为空 |
 | `weight` | `100` | 负载均衡权重 |
 | `ephemeral` | `true` | 断连/过期后摘除 |
 | `token` | 空 | Nameserver 协议 token |
@@ -100,6 +101,12 @@ rover:
 | `register-retry-interval-ms` | `5000` | 首次注册固定重试间隔 |
 
 Starter 在 `ApplicationReadyEvent` 后注册，Nameserver 不可用时持续固定重试，重连后重放本地状态，正常关闭时尽力注销。
+
+### 2.3 当前分组边界
+
+注册表身份始终是 `serviceName + instanceId`，`group` 只是查询、订阅和路由过滤字段，不参与实例唯一键。
+当前版本的多组快照推送隔离仍在收口：同一 `serviceName` 下同时使用多个非空 group 时，推送缓存可能暂时混入其他组，
+随后由周期查询对账修复。正式依赖分组隔离前应先完成对应修复；当前单机使用建议保持 `group` 为空。
 
 ## 3. HTTP+JSON 注册
 
@@ -194,6 +201,7 @@ curl -i -X POST http://127.0.0.1:8889/v1/client/instances/unregister \
 - HTTP 客户端通过心跳 `INSTANCE_NOT_FOUND` 发现租约丢失，然后立即重新注册。
 - Nameserver 不会因为某个地址以前注册过就恢复它。
 - Nameserver 不会主动调用服务提供方的健康接口；客户端上报与 TTL 决定存活。
+- Nameserver 收到注销后会立即移除实例；当前 Gateway 对最后实例的空推送带保护，本地缓存最迟在下一次周期对账时清空，默认最多约 30 秒。
 
 这种设计接受短暂的重注册窗口，避免恢复陈旧地址。权衡说明见[架构文档](./architecture.zh-CN.md#4-软状态租约与纯内存恢复)。
 

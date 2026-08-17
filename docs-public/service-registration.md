@@ -33,8 +33,9 @@ domains:
 - `/v1/client/**`: `Authorization: Bearer <rover.nameserver.token>`
 - `/_manage/**`: `X-Rover-Admin-Token: <rover.nameserver.adminToken>`
 
-The bundled configuration leaves tokens empty for compatibility. When remote HTTP registration is enabled,
-configure a non-empty protocol token, bind to a private address, and restrict the port at the network layer.
+The bundled configuration intentionally leaves tokens empty for zero-config use on a local or trusted network.
+HTTP registration does not force authentication. When a deployment crosses a trust boundary, configure a protocol
+token, narrow the bind address, and restrict the port at the network layer as needed.
 
 ## 2. Java Spring Boot Starter
 
@@ -93,7 +94,7 @@ Common options:
 | `service-name` | `spring.application.name` | Registered service name |
 | `instance-id` | resolved `host:port` | Unique instance key within a service |
 | `host`, `port` | auto-detected | Address advertised to Gateway |
-| `group`, `zone`, `metadata` | empty | Placement and custom metadata |
+| `group`, `zone`, `metadata` | empty | Placement and custom metadata; keep `group` empty in the current version |
 | `weight` | `100` | Load-balancing weight |
 | `ephemeral` | `true` | Remove after disconnect/expiry |
 | `token` | empty | Nameserver protocol token |
@@ -104,6 +105,14 @@ Common options:
 
 The lifecycle registers after `ApplicationReadyEvent`, retries while Nameserver is unavailable, replays state
 after reconnect, and performs best-effort deregistration during normal shutdown.
+
+### 2.3 Current group boundary
+
+Registry identity is always `serviceName + instanceId`; `group` is a query, subscription, and routing filter rather
+than part of the instance key. Multi-group snapshot isolation is still being finalized in the current version: when
+one `serviceName` uses several non-empty groups, a pushed cache may temporarily contain instances from another group
+until periodic query reconciliation repairs it. Keep `group` empty unless this behavior has been fixed and validated
+for your build.
 
 ## 3. HTTP+JSON registration
 
@@ -207,6 +216,8 @@ every 50–100 ms, and `close()` during shutdown.
 - HTTP clients discover the missing lease through heartbeat `INSTANCE_NOT_FOUND` and immediately re-register.
 - Nameserver never restores an old address merely because it was registered before restart.
 - Nameserver does not actively call provider health endpoints; client reports and TTL determine liveness.
+- Nameserver removes a deregistered instance immediately. The current Gateway protects a last-instance empty push,
+  so its local cache is cleared no later than the next periodic reconciliation, up to about 30 seconds by default.
 
 This design accepts a short re-registration window to avoid restoring stale endpoints. See
 [Architecture](./architecture.md#4-soft-state-leases-and-in-memory-recovery) for the trade-off.
