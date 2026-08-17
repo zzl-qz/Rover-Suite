@@ -60,41 +60,29 @@ Rover-Suite provides an **all-in-one lightweight solution with a built-in regist
 ## 🗺️ Architecture
 
 ```mermaid
-flowchart LR
-    subgraph Callers["Clients"]
-        C1[Browser / App]
-        C2[External]
-    end
+flowchart TB
+    C["Clients / External Systems"]
+    G["Rover-Gateway<br/>Ingress · Filters · Discovery · Load Balancing · Proxy"]
+    J["Java Services"]
+    O["Node · Python · Go · PHP · C++ Services"]
+    N[("Rover-Nameserver<br/>Shared In-Memory Registry")]
 
-    subgraph GW["Rover-Gateway"]
-        H[HTTP Server]
-        F[FilterChain]
-        D[Discovery]
-        P[Reverse Proxy]
-        H --> F --> P
-        D --> P
-    end
+    C -->|HTTP requests| G
+    G -->|dynamic routing| J
+    G -->|dynamic routing| O
+    J -.->|Starter · TCP :8888<br/>register / heartbeat| N
+    O -.->|Registrar · HTTP JSON :8889<br/>register / heartbeat| N
+    N -.->|snapshot push + query reconciliation| G
 
-    subgraph NS["Rover-Nameserver"]
-        T[TCP adapter]
-        A[HTTP Registration API]
-        R[Shared in-memory registry]
-        T --> R
-        A --> R
-    end
-
-    subgraph Biz["Business Services"]
-        S1[Java + Starter]
-        S2[Node / Python / Go / PHP / C++]
-    end
-
-    C1 --> H
-    C2 --> H
-    P -->|HTTP| S1
-    P -->|HTTP| S2
-    S1 -->|TCP| T
-    S2 -->|HTTP + JSON| A
-    R -.->|instance updates| D
+    classDef caller fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
+    classDef nameserver fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
+    class C caller;
+    class G gateway;
+    class J,O service;
+    class N nameserver;
+    linkStyle default stroke:#64748B,stroke-width:1.4px;
 ```
 
 See **[docs-public/architecture.md](./docs-public/architecture.md)** for module dependencies and request flow.
