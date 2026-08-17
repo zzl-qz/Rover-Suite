@@ -74,6 +74,7 @@ public class NameserverManageApi extends AbstractManageApi {
         status.put("up", true);
         status.put("port", runtime.getOptions().getPort());
         status.put("managePort", runtime.getOptions().getManagePort());
+        status.put("clientApiEnabled", runtime.getOptions().isClientApiEnabled());
         status.put("instanceCount", runtime.getRegistry().listAllRecords().size());
         status.put("pushEnabled", runtime.getPushService().isPushEnabled());
         status.put("healthCheckIntervalMillis", runtime.getHealthChecker().getCheckIntervalMillis());

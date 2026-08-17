@@ -14,8 +14,11 @@ import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.push.PushService;
 import com.rover.nameserver.core.push.SubscriptionManager;
+import com.rover.nameserver.core.registration.RegistrationOwner;
+import com.rover.nameserver.core.registration.RegistrationService;
 import com.rover.nameserver.core.registry.InMemoryServiceRegistry;
 import com.rover.nameserver.core.server.NameserverServerOptions;
+import io.netty.channel.DefaultChannelId;
 import io.netty.channel.embedded.EmbeddedChannel;
 import org.junit.jupiter.api.Test;
 
@@ -39,7 +42,8 @@ class PersistentInstanceLifecycleTest {
                 new DefaultWriteAckPolicy(),
                 options,
                 generation,
-                metrics);
+                metrics,
+                new RegistrationService(registry, pushService, metrics));
         EmbeddedChannel channel = new EmbeddedChannel();
         RegisterEvent event = new RegisterEvent();
         event.setChannel(channel);
@@ -52,6 +56,52 @@ class PersistentInstanceLifecycleTest {
         assertEquals(1, registry.query("svc", null, false).size());
         assertNull(channel.attr(NameserverChannelSupport.BOUND_INSTANCES).get());
         channel.finishAndReleaseAll();
+    }
+
+    @Test
+    void disconnectingOldChannelDoesNotRemoveInstanceTakenOverByNewChannel() {
+        InMemoryServiceRegistry registry = new InMemoryServiceRegistry();
+        SubscriptionManager subscriptions = new SubscriptionManager();
+        NameserverGeneration generation = NameserverGeneration.processLocal();
+        NameserverMetricsRegistry metrics = new NameserverMetricsRegistry();
+        PushService pushService = new PushService(subscriptions, true, generation, metrics);
+        NameserverServerOptions options = NameserverServerOptions.builder()
+                .writeAckMode(AckMode.SINGLE)
+                .replicationFactor(1)
+                .build();
+        NameserverServices services = new NameserverServices(
+                registry,
+                subscriptions,
+                pushService,
+                new DefaultWriteAckPolicy(),
+                options,
+                generation,
+                metrics,
+                new RegistrationService(registry, pushService, metrics));
+        EmbeddedChannel oldChannel = new EmbeddedChannel(DefaultChannelId.newInstance());
+        EmbeddedChannel newChannel = new EmbeddedChannel(DefaultChannelId.newInstance());
+        RegistrationOwner newOwner = NameserverChannelSupport.registrationOwner(newChannel);
+        RegisterListener listener = new RegisterListener(services);
+
+        listener.onEvent(registerEvent(oldChannel, request(true)));
+        listener.onEvent(registerEvent(newChannel, request(true)));
+        new ChannelInactiveListener(services).onEvent(ChannelInactiveEvent.of(oldChannel));
+
+        assertEquals(1, registry.query("svc", null, false).size());
+        assertEquals(newOwner, registry.listAllRecords().get(0).getOwner());
+
+        new ChannelInactiveListener(services).onEvent(ChannelInactiveEvent.of(newChannel));
+        assertEquals(0, registry.query("svc", null, false).size());
+        oldChannel.finishAndReleaseAll();
+        newChannel.finishAndReleaseAll();
+    }
+
+    private static RegisterEvent registerEvent(EmbeddedChannel channel, RegisterRequest request) {
+        RegisterEvent event = new RegisterEvent();
+        event.setChannel(channel);
+        event.setAckMode(AckMode.SINGLE);
+        event.setRequest(request);
+        return event;
     }
 
     private static RegisterRequest request(boolean ephemeral) {

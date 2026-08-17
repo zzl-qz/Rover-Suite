@@ -3,6 +3,8 @@ package com.rover.nameserver.core.registry;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.protocol.RegisterRequest;
 import com.rover.nameserver.core.model.InstanceRecord;
+import com.rover.nameserver.core.registration.RegistrationOwner;
+import com.rover.nameserver.core.registration.RegistrationResult;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -28,43 +30,62 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
     /** 每个服务自己的版本号，变更时 +1 */
     private final Map<String, AtomicLong> revisions = new ConcurrentHashMap<>();
 
-    /** 注册实例（同 instanceId 覆盖旧记录），版本号 +1 并返回新快照。 */
+    /**
+     * 注册或续租实例：同 owner、同数据只刷新心跳；数据或 owner 变化时原子替换并 bump revision。
+     */
     @Override
-    public RegistrySnapshot register(RegisterRequest request) {
-        InstanceRecord record = InstanceRecord.from(request);
-        String serviceName = record.getInstance().getServiceName();
-        String instanceId = record.getInstance().getInstanceId();
+    public RegistrationResult register(RegisterRequest request, RegistrationOwner owner) {
+        InstanceRecord candidate = InstanceRecord.from(request, owner);
+        String serviceName = candidate.getInstance().getServiceName();
+        String instanceId = candidate.getInstance().getInstanceId();
 
         synchronized (lockFor(serviceName)) {
+            InstanceRecord current = find(serviceName, instanceId);
+            if (current != null
+                    && current.isOwnedBy(owner)
+                    && current.hasSameRegistration(request)) {
+                boolean recovered = current.touchHeartbeat();
+                if (!recovered) {
+                    return RegistrationResult.unchanged(revisionOf(serviceName));
+                }
+                long revision = bumpRevision(serviceName);
+                log.info("实例重新注册恢复健康: {}#{} revision={}", serviceName, instanceId, revision);
+                return RegistrationResult.changed(
+                        snapshotOf(serviceName, current.getInstance().getGroup(), revision));
+            }
+
             // 和外层注销走同一把 compute，避免「空了就摘」把刚 put 进去的新实例一起摘掉
             services.compute(serviceName, (key, instances) -> {
                 Map<String, InstanceRecord> map =
                         instances == null ? new ConcurrentHashMap<>() : instances;
-                map.put(instanceId, record);
+                map.put(instanceId, candidate);
                 return map;
             });
             long revision = bumpRevision(serviceName);
             log.info("实例注册成功: {}#{} revision={}", serviceName, instanceId, revision);
-            return snapshotOf(serviceName, record.getInstance().getGroup(), revision);
+            return RegistrationResult.changed(
+                    snapshotOf(serviceName, candidate.getInstance().getGroup(), revision));
         }
     }
 
-    /** 注销实例，版本号 +1 并返回新快照；实例不存在时返回 null（调用方无需推送）。 */
+    /** 仅当前 owner 可以注销；旧连接/session 不得误删已被新 owner 接管的实例。 */
     @Override
-    public RegistrySnapshot unregister(String serviceName, String instanceId) {
+    public RegistrationResult unregister(
+            String serviceName, String instanceId, RegistrationOwner owner) {
         synchronized (lockFor(serviceName)) {
-            InstanceRecord[] removed = new InstanceRecord[1];
-            services.computeIfPresent(serviceName, (key, current) -> {
-                removed[0] = current.remove(instanceId);
-                // 空了就摘掉这个 key；和 register 的 compute 互斥，不会误删刚注册的实例
-                return current.isEmpty() ? null : current;
-            });
-            if (removed[0] == null) {
-                return null;
+            InstanceRecord current = find(serviceName, instanceId);
+            long currentRevision = revisionOf(serviceName);
+            if (current == null) {
+                return RegistrationResult.notFound(currentRevision);
             }
+            if (!current.isOwnedBy(owner)) {
+                return RegistrationResult.ownerMismatch(currentRevision);
+            }
+            removeRecord(serviceName, instanceId);
             long revision = bumpRevision(serviceName);
             log.info("实例注销: {}#{} revision={}", serviceName, instanceId, revision);
-            return snapshotOf(serviceName, removed[0].getInstance().getGroup(), revision);
+            return RegistrationResult.changed(
+                    snapshotOf(serviceName, current.getInstance().getGroup(), revision));
         }
     }
 
@@ -72,19 +93,24 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
      * 处理一次心跳：刷新最近心跳时间；若从不健康恢复则 bump revision。
      */
     @Override
-    public HeartbeatResult heartbeat(String serviceName, String instanceId) {
+    public RegistrationResult heartbeat(
+            String serviceName, String instanceId, RegistrationOwner owner) {
         synchronized (lockFor(serviceName)) {
             InstanceRecord record = find(serviceName, instanceId);
+            long currentRevision = revisionOf(serviceName);
             if (record == null) {
-                return HeartbeatResult.notFound();
+                return RegistrationResult.notFound(currentRevision);
+            }
+            if (!record.isOwnedBy(owner)) {
+                return RegistrationResult.ownerMismatch(currentRevision);
             }
             boolean recovered = record.touchHeartbeat();
             if (!recovered) {
-                return HeartbeatResult.touched();
+                return RegistrationResult.unchanged(currentRevision);
             }
             long revision = bumpRevision(serviceName);
             log.info("实例心跳恢复健康: {}#{} revision={}", serviceName, instanceId, revision);
-            return HeartbeatResult.recovered(
+            return RegistrationResult.changed(
                     snapshotOf(serviceName, record.getInstance().getGroup(), revision));
         }
     }
@@ -156,14 +182,25 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
         return all;
     }
 
-    /**
-     * 移除过期实例（健康检查专用入口）：语义与 {@link #unregister} 相同。
-     *
-     * @return 移除后的快照；实例不存在（已被并发注销）时返回 null
-     */
+    /** 健康检查专用条件删除：owner 和超时条件都必须仍成立。 */
     @Override
-    public RegistrySnapshot removeExpired(String serviceName, String instanceId) {
-        return unregister(serviceName, instanceId);
+    public RegistrySnapshot removeExpired(
+            String serviceName,
+            String instanceId,
+            RegistrationOwner expectedOwner,
+            long heartbeatDeadlineMillis) {
+        synchronized (lockFor(serviceName)) {
+            InstanceRecord current = find(serviceName, instanceId);
+            if (current == null
+                    || !current.isOwnedBy(expectedOwner)
+                    || !current.isHeartbeatExpired(heartbeatDeadlineMillis)) {
+                return null;
+            }
+            removeRecord(serviceName, instanceId);
+            long revision = bumpRevision(serviceName);
+            log.info("过期实例剔除: {}#{} revision={}", serviceName, instanceId, revision);
+            return snapshotOf(serviceName, current.getInstance().getGroup(), revision);
+        }
     }
 
     /** 按服务名+实例 ID 查找记录（含中间 map 判空），用于心跳与内部查询 */
@@ -173,6 +210,14 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
             return null;
         }
         return instances.get(instanceId);
+    }
+
+    /** 调用方已持有 service stripe lock；删除末实例时同时清理外层服务键。 */
+    private void removeRecord(String serviceName, String instanceId) {
+        services.computeIfPresent(serviceName, (key, current) -> {
+            current.remove(instanceId);
+            return current.isEmpty() ? null : current;
+        });
     }
 
     /** 服务版本号 +1（首次变更时懒创建计数器）；revision 单调递增，客户端/推送方可据此判断快照新旧。 */

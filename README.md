@@ -4,7 +4,7 @@
 
 <br/>
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [Architecture](docs-public/architecture.md)
+[English](README.md) · [简体中文](README.zh-CN.md) · [Documentation](docs-public/README.md) · [Architecture](docs-public/architecture.md)
 
 <br/>
 
@@ -32,7 +32,7 @@ Rover-Suite provides an **all-in-one lightweight solution with a built-in regist
 
 | Component | Description |
 | :--- | :--- |
-| **Rover-Nameserver** | TCP-based service registry (heartbeat, health check, instance change push) |
+| **Rover-Nameserver** | In-memory service registry with Java TCP and multi-language HTTP registration |
 | **Rover-Gateway** | Netty HTTP gateway (routing, discovery, load balancing, reverse proxy) |
 | **Rover-Starter** | Spring Boot integration for auto-registration and graceful shutdown |
 | **Rover-Admin** | Optional console for runtime configuration management |
@@ -46,10 +46,11 @@ Rover-Suite provides an **all-in-one lightweight solution with a built-in regist
 | **Self-contained core** | Nameserver and Gateway are built on Netty without Spring Cloud |
 | **Standalone processes** | Two jars are enough to run the full request path |
 | **Low-intrusion SDK** | Register with Starter + YAML only, supports graceful shutdown |
+| **Multi-language registration** | HTTP+JSON Registrar references for Node.js, Python, Go, PHP, and C++ |
 | **Health check** | Heartbeat timeout auto-evicts ephemeral instances / marks persistent ones unhealthy, gateway notified in real time |
 | **Static / dynamic routing** | Fixed upstreams and registry-based discovery share load balancing |
 | **Multiple load balancing** | Round-robin, weighted round-robin, random, IP hash, least connections |
-| **Extensible SPI** | Filters, load balancers, and service discovery adapters; supports plugin jar hot-loading |
+| **Focused extension points** | Filter and load-balancer plugin JARs; source-level service-discovery and registration adapters |
 | **Runtime management** | Admin console for viewing and updating runtime config, hot route updates |
 | **Management security** | Configurable bind address + token auth for the management API and registration/subscription protocol |
 | **Java native** | Customize with Java SPI, zero learning cost for Java teams, source code fully modifiable |
@@ -75,20 +76,24 @@ flowchart LR
     end
 
     subgraph NS["Rover-Nameserver"]
-        R[Register / Heartbeat / Push]
+        T[TCP adapter]
+        A[HTTP Registration API]
+        R[Shared in-memory registry]
+        T --> R
+        A --> R
     end
 
     subgraph Biz["Business Services"]
-        S1[Service + Starter]
-        S2[Service + Starter]
+        S1[Java + Starter]
+        S2[Node / Python / Go / PHP / C++]
     end
 
     C1 --> H
     C2 --> H
     P -->|HTTP| S1
     P -->|HTTP| S2
-    S1 -->|TCP| R
-    S2 -->|TCP| R
+    S1 -->|TCP| T
+    S2 -->|HTTP + JSON| A
     R -.->|instance updates| D
 ```
 
@@ -107,7 +112,7 @@ See **[docs-public/architecture.md](./docs-public/architecture.md)** for module 
 | `rover-nameserver-starter` | Spring Boot Starter |
 | `rover-gateway-core` | Gateway core |
 | `rover-gateway-bootstrap` | Gateway executable |
-| `rover-gateway-adapter-nacos` | External registry adapter |
+| `rover-gateway-adapter-nacos` | Reserved adapter skeleton; Nacos runtime integration is not implemented yet |
 | `rover-admin` | Admin console |
 | `rover-gateway-test/demo/backend` | Test backend service for gateway verification |
 | `rover-gateway-test/demo/frontend` | Test frontend panel (separate from core suite) |
@@ -115,6 +120,9 @@ See **[docs-public/architecture.md](./docs-public/architecture.md)** for module 
 ---
 
 ## 🚀 Quick Start
+
+For the complete first-run path, including the recommended local `8080` Gateway config and verification
+commands, see the **[Quick Start guide](./docs-public/quick-start.md)**.
 
 ### Prerequisites
 
@@ -126,8 +134,12 @@ See **[docs-public/architecture.md](./docs-public/architecture.md)** for module 
 ```bash
 git clone https://gitee.com/zzl-java/roverSuite.git
 cd roverSuite
-mvn clean package -DskipTests
+mvn clean install -DskipTests
 ```
+
+Before starting the local demo, follow the detailed guide to copy both bundled configs and bind Nameserver and
+Gateway to `127.0.0.1`. The compatibility defaults bind all interfaces with empty authentication and must not be
+exposed to a LAN or the internet.
 
 ### 2. Start Nameserver
 
@@ -143,15 +155,16 @@ Default TCP port: `8888`.
 java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.jar
 ```
 
-Port is configured in `rover-gateway.yml` (change to `8080` locally if needed).
+The bundled configuration uses port `80`; the detailed guide sets the external local configuration to `8080`.
+External configuration has priority over the classpath file.
 
 ### 4. (Optional) Test the gateway
 
 If you want to test gateway routing and load balancing:
 
 ```bash
-# Backend test service
-mvn -pl rover-gateway-test/demo/backend spring-boot:run --server.port=8081
+# Backend test service (after the full build above)
+java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
 
 # Frontend test panel (separate project)
 cd rover-gateway-test/demo/frontend && npm install && npm run dev
@@ -171,7 +184,12 @@ Default URL: `http://127.0.0.1:9090`
 
 ## 🔌 Integration
 
+Detailed setup and lifecycle behavior are documented in **[Service Registration](./docs-public/service-registration.md)**.
+
 ### Dependency
+
+The current `1.0.0-SNAPSHOT` must first be installed from this source tree; it is not documented as published to
+a public Maven repository yet.
 
 ```xml
 <dependency>
@@ -201,6 +219,17 @@ rover:
     heartbeat-interval-ms: 5000
 ```
 
+For non-Java providers, enable the opt-in HTTP Registration API on Nameserver and copy the small Registrar for your language:
+
+```yaml
+rover:
+  nameserver:
+    clientApiEnabled: true
+    token: "replace-with-a-private-token"
+```
+
+See [the Node.js, Python, Go, PHP, and C++ reference integrations](./examples/http-registration/README.md). They only implement the provider lifecycle (`register → heartbeat → unregister`); Java discovery queries and Gateway push subscriptions remain on the existing TCP path.
+
 Gateway example:
 
 ```yaml
@@ -219,14 +248,20 @@ rover:
         stripPrefix: /api/demo
 ```
 
-### Security (optional)
+### Production security baseline
 
 Listeners bind `0.0.0.0` by default and management/protocol auth is disabled for backward compatibility. To harden a deployment:
 
 - `rover.nameserver.bindHost` / `manageBindHost`, `rover.gateway.server.bindHost` — restrict listen addresses
 - `rover.nameserver.token` / `adminToken`, `rover.gateway.adminToken`, `rover.admin.admin-token` — enable token auth
 
-When a token is set, clients must present the same value: the Starter and Gateway discovery read `rover.nameserver.token`, and Admin sends `X-Rover-Admin-Token` to management endpoints. All options are documented with comments in `rover-nameserver.yml`, `rover-gateway.yml`, and `rover-admin`'s `application.yml`.
+When a protocol token is set, the Starter uses `rover.nameserver.token`, Gateway discovery uses
+`rover.gateway.discovery.nameserver.token`, and HTTP Registrars send the same value as a Bearer token. Admin
+uses the separate `X-Rover-Admin-Token` management header. The HTTP Registration API is disabled by default.
+Keep control ports on a trusted network and use different protocol/admin token values in production. All options
+are documented with comments in `rover-nameserver.yml`, `rover-gateway.yml`, and Rover-Admin's `application.yml`.
+Tokens authenticate but do not encrypt traffic. Keep TCP `8888` private, terminate HTTPS externally for HTTP,
+and protect Gateway `/_manage/**`, which shares the business listener, with `adminToken` plus an outer ACL/proxy.
 
 ---
 
@@ -237,7 +272,7 @@ When a token is set, clients must present the same value: the Starter and Gatewa
 | Dimension | Nginx | OpenResty / APISIX | Spring Cloud | **Rover-Suite** |
 | :--- | :--- | :--- | :--- | :--- |
 | Service discovery | None, static config | Requires external registry | Yes (Nacos, etc.) | **Built-in registry** |
-| Backend onboarding | Manually maintain upstreams | Manually configure routes | Add SDK | **Add Starter, auto-register** |
+| Backend onboarding | Manually maintain upstreams | Manually configure routes | Add SDK | **Starter or small HTTP Registrar** |
 | Customization | C modules | Lua scripts | Java | **Java SPI, zero learning cost** |
 | Deployment deps | None | etcd (APISIX) | Heavier ecosystem | **Two jars, no external deps** |
 | Fit | Static proxying | Large-scale traffic governance | Large-scale microservices | **Small teams, multi-monolith, lightweight** |
@@ -265,32 +300,38 @@ When a token is set, clients must present the same value: the Starter and Gatewa
 - [x] Nameserver register / heartbeat / push / health check
 - [x] Gateway routing, discovery, load balancing (5 strategies), and reverse proxy
 - [x] Spring Boot Starter (auto-registration + graceful shutdown)
+- [x] HTTP+JSON Registration API (Node/Python/Go/PHP/C++ providers)
 - [x] Admin runtime management (config hot-reload, hot route updates)
-- [x] SPI plugin extension (Filter, load balancer, service discovery)
+- [x] SPI plugin extension (Filter and load balancer) plus source-level service-discovery contract
 - [x] Runtime config management (YAML + hot-reload)
+- [x] Lightweight in-memory metrics and bounded request trace timeline management APIs
 
 **Planned:**
 
-- [ ] Observability (built-in lightweight metrics + Admin dashboard)
-- [ ] Request trace timeline (gateway phase breakdown + traceId propagation)
-- [ ] HTTP registration API (for non-Java services: Python/PHP/Go, etc.)
+- [ ] Observability dashboard and production-grade metrics export
+- [ ] Distributed tracing integration beyond the local Gateway timeline
 - [ ] Traffic governance (rate limiting, auth, circuit breaking)
 - [ ] External registry adapters
-- [ ] Nameserver persistence and cluster high availability
+- [ ] Nameserver cluster high availability (online instances remain lease-based soft state)
 
 ---
 
 ## 📚 Documentation
 
 - [Public docs index](./docs-public/README.md)
+- [Quick Start](./docs-public/quick-start.md)
+- [User Guide](./docs-public/user-guide.md)
+- [Service Registration](./docs-public/service-registration.md)
 - [Architecture](./docs-public/architecture.md)
+- [Development Guide](./docs-public/development-guide.md)
 - [Gateway test suite](./rover-gateway-test/demo/README.md) - **Test project only**
 
 ---
 
 ## 🤝 Contributing
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md); build, extension,
+compatibility, and validation details are in the [Development Guide](./docs-public/development-guide.md).
 
 ---
 

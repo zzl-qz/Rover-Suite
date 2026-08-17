@@ -31,6 +31,7 @@ public class NameserverApplication {
                 .manageBindHost(props.getManageBindHost())
                 .token(props.getToken())
                 .adminToken(props.getAdminToken())
+                .clientApiEnabled(props.isClientApiEnabled())
                 .writeAckMode(config.resolveWriteAckMode())
                 .allowClientAckOverride(props.isAllowClientAckOverride())
                 .clusterEnabled(props.getCluster().isEnabled())

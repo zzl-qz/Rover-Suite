@@ -1,0 +1,207 @@
+# User Guide
+
+[简体中文](./user-guide.zh-CN.md) · [Documentation index](./README.md)
+
+This guide covers day-to-day configuration and operation. Use the [Quick Start](./quick-start.md) first if you
+have not run the demo. Provider lifecycle details are kept in [Service Registration](./service-registration.md).
+
+## 1. Processes and ports
+
+| Process or listener | Default | Used by |
+| :--- | :--- | :--- |
+| Nameserver TCP | `8888` | Java registration, Gateway query/subscribe, instance push |
+| Nameserver HTTP | `8889` | `/_manage/**` and optional `/v1/client/**` registration |
+| Gateway HTTP | `80` in the bundled YAML | Application traffic and Gateway management; use `8080` for local development |
+| Demo backend | `8081` | Example `demo-service` |
+| Admin | `9090` | Optional web console |
+
+The Nameserver HTTP listener is not a separate component. `managePort: 0` disables both the management API and
+the HTTP Registration API (named Client API in internal configuration).
+
+## 2. Configuration loading
+
+Standalone processes use this startup priority:
+
+```text
+working-directory config/<file>.yml
+  > classpath <file>.yml
+  > code defaults
+```
+
+The primary bundled files are:
+
+- [`rover-nameserver.yml`](../rover-nameserver-bootstrap/src/main/resources/rover-nameserver.yml)
+- [`rover-gateway.yml`](../rover-gateway-bootstrap/src/main/resources/rover-gateway.yml)
+
+Copy the complete bundled file to `./config/` before changing it. The external file wins as a startup source;
+it is not textually merged with the classpath file. The standalone YAML loader does not expand `${ENV_VAR}`.
+Mount a protected configuration file or generate one in your deployment workflow, and never commit real tokens.
+
+After YAML is loaded, supported runtime keys may be overlaid by:
+
+- `config/nameserver-runtime.overlay.json`
+- `config/gateway-runtime.overlay.json`
+- `config/routes.overlay.json`
+
+If `routes.overlay.json` exists, it replaces the YAML route list. Delete or update a stale overlay when a route
+change in YAML appears to have no effect. Listener ports, bind hosts, tokens, discovery type, HTTP Registration API
+enablement, plugin paths, and CORS are startup settings and require a restart.
+
+## 3. Configure Nameserver
+
+A production-oriented baseline is:
+
+```yaml
+rover:
+  nameserver:
+    port: 8888
+    bindHost: 10.0.0.10
+    managePort: 8889
+    manageBindHost: 10.0.0.10
+    token: "replace-with-a-protocol-token"
+    adminToken: "replace-with-a-different-admin-token"
+    clientApiEnabled: false
+    heartbeatTimeoutMillis: 15000
+    healthCheckIntervalMillis: 5000
+    instanceExpireMillis: 30000
+    pushEnabled: true
+```
+
+Enable `clientApiEnabled` only when non-Java providers use HTTP registration. Online instances are lease-based,
+in-memory soft state; the Nameserver does not actively probe provider ports or restore historical registrations.
+See [Architecture](./architecture.md) for the rationale.
+
+## 4. Configure Gateway discovery
+
+### Nameserver discovery
+
+```yaml
+rover:
+  gateway:
+    port: 8080
+    discovery:
+      type: nameserver
+      nameserver:
+        address: 10.0.0.10:8888
+        token: "replace-with-the-same-protocol-token"
+        reconcileIntervalMs: 30000
+    loadbalance:
+      strategy: round_robin
+```
+
+The Gateway token key is `rover.gateway.discovery.nameserver.token`; its value must match
+`rover.nameserver.token` on the Nameserver. The Gateway keeps a local instance cache, receives snapshot pushes,
+and periodically queries for reconciliation. Requests do not synchronously query Nameserver.
+
+### Static upstreams
+
+Use static discovery when you do not need registration:
+
+```yaml
+rover:
+  gateway:
+    discovery:
+      type: static
+    routes:
+      - id: static-orders
+        businessPrefix: /orders
+        targetUrls:
+          - http://10.0.1.10:8080
+          - http://10.0.1.11:8080|200
+        stripPrefix: /orders
+```
+
+The optional `|200` suffix is the upstream weight. Static and Nameserver discovery use the same load-balancing
+strategies: `round_robin`, `random`, `weighted_round_robin`, `ip_hash`, and `least_connections`.
+
+## 5. Define routes
+
+Nameserver-backed route:
+
+```yaml
+routes:
+  - id: order-api
+    businessPrefix: /api/orders
+    serviceName: order-service
+    stripPrefix: /api
+```
+
+| Field | Meaning |
+| :--- | :--- |
+| `id` | Unique route identifier |
+| `businessPrefix` | Incoming path prefix used for matching |
+| `serviceName` | Nameserver service name for dynamic discovery |
+| `targetUrls` | Fixed upstream list for a static route |
+| `stripPrefix` | Prefix removed before proxying; use `""` to preserve the full path |
+
+A route should normally use either `serviceName` or `targetUrls`, according to the selected discovery mode.
+
+## 6. Register providers
+
+- Spring Boot service: use the Starter; no startup-class code is required. See
+  [Java Starter registration](./service-registration.md#2-java-spring-boot-starter).
+- Node.js, Python, Go, long-running PHP, or C++: use the small HTTP Registrar references. See
+  [HTTP registration](./service-registration.md#3-httpjson-registration).
+
+The current Maven coordinates use `1.0.0-SNAPSHOT` and are not documented as publicly published. Run
+`mvn clean install -DskipTests` from this source tree before resolving the Starter from another local project,
+or replace the version once an official release repository is announced.
+
+## 7. Management and Admin
+
+With the bundled local Nameserver configuration, `adminToken` is empty and these endpoints are accessible
+without a header:
+
+```bash
+curl http://127.0.0.1:8889/_manage/status
+curl http://127.0.0.1:8889/_manage/instances
+```
+
+When `adminToken` is non-empty, management calls require:
+
+```text
+X-Rover-Admin-Token: <adminToken>
+```
+
+The Bearer protocol token does not authorize management calls. Conversely, the admin header does not authorize
+`/v1/client/**`. Keep the two token values different in production.
+
+Rover-Admin is optional:
+
+```bash
+mvn -pl rover-admin spring-boot:run
+```
+
+If the Gateway runs on `8080` instead of its bundled port, update Rover-Admin's Gateway URL accordingly.
+
+## 8. Production baseline
+
+- Bind `8888` and `8889` to a private address and restrict both ports with network policy or a firewall.
+- Configure non-empty, different protocol and admin tokens.
+- Keep `/v1/client/**` disabled unless it is used.
+- Gateway `/_manage/**` shares the public Gateway listener with business traffic. Configure a non-empty Gateway
+  `adminToken` and block the management path at an outer proxy/ACL when it should not be remotely reachable.
+- TCP `8888`, Nameserver HTTP, and Gateway HTTP do not provide built-in TLS. A token authenticates but does not
+  encrypt traffic: keep TCP on a private network/VPN/TLS tunnel and terminate HTTPS at a trusted proxy for HTTP.
+- Register an address reachable from the Gateway; do not use `127.0.0.1` across hosts or Pods.
+- Give every concurrently reachable replica a unique `instanceId`.
+- Start registration only after the business listener is ready and close it during graceful shutdown.
+- Monitor registration failures, expiry removals, available-instance count, and Gateway upstream failures.
+
+Rover-Suite currently targets a trusted small-team deployment rather than a tenant-aware public control plane.
+See the [Architecture non-goals](./architecture.md#7-explicit-non-goals) before exposing control ports.
+
+## 9. Troubleshooting
+
+| Symptom | Likely cause |
+| :--- | :--- |
+| Configuration edit is ignored | The process was launched from another working directory, a runtime overlay wins, or the setting requires restart. |
+| Java provider cannot authenticate | `rover.nameserver.token` in the application does not match Nameserver. |
+| Gateway cannot discover services | Check `rover.gateway.discovery.nameserver.address` and `.token`; these are Gateway keys, not Starter keys. |
+| HTTP Registrar receives `404 NOT_FOUND` | `clientApiEnabled` is false, the path is wrong, or the HTTP listener is disabled. Enable the Registration API and restart. |
+| HTTP Registrar receives `409 STALE_SESSION` | Another process registered the same `serviceName + instanceId`. Give replicas unique IDs and one owner per endpoint. |
+| Provider is visible but unreachable | The registered host/port is not reachable from Gateway. |
+| YAML route is ignored | `config/routes.overlay.json` is replacing the YAML route list. |
+
+Further reading: [Service Registration](./service-registration.md), [Architecture](./architecture.md), and
+[Development Guide](./development-guide.md).
