@@ -60,41 +60,29 @@ Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务�
 ## 🗺️ 架构概览
 
 ```mermaid
-flowchart LR
-    subgraph Callers["调用方"]
-        C1[客户端 / 浏览器]
-        C2[外部系统]
-    end
+flowchart TB
+    C["客户端 / 外部系统"]
+    G["Rover-Gateway<br/>接入 · 过滤 · 发现 · 负载均衡 · 代理"]
+    J["Java 业务服务"]
+    O["Node · Python · Go · PHP · C++ 服务"]
+    N[("Rover-Nameserver<br/>共享内存注册表")]
 
-    subgraph GW["Rover-Gateway"]
-        H[HTTP Server]
-        F[FilterChain]
-        D[服务发现]
-        P[反向代理]
-        H --> F --> P
-        D --> P
-    end
+    C -->|HTTP 请求| G
+    G -->|动态路由| J
+    G -->|动态路由| O
+    J -.->|Starter · TCP :8888<br/>注册 / 心跳| N
+    O -.->|Registrar · HTTP JSON :8889<br/>注册 / 心跳| N
+    N -.->|实例推送 + 查询对账| G
 
-    subgraph NS["Rover-Nameserver"]
-        T[TCP 适配层]
-        A[HTTP Registration API]
-        R[共享内存注册表]
-        T --> R
-        A --> R
-    end
-
-    subgraph Biz["业务服务"]
-        S1[Java + Starter]
-        S2[Node / Python / Go / PHP / C++]
-    end
-
-    C1 --> H
-    C2 --> H
-    P -->|HTTP| S1
-    P -->|HTTP| S2
-    S1 -->|TCP| T
-    S2 -->|HTTP + JSON| A
-    R -.->|实例变更| D
+    classDef caller fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
+    classDef nameserver fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
+    class C caller;
+    class G gateway;
+    class J,O service;
+    class N nameserver;
+    linkStyle default stroke:#64748B,stroke-width:1.4px;
 ```
 
 模块依赖与主链路说明见 **[架构与权衡](./docs-public/architecture.zh-CN.md)**。
