@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Author: Daylight
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Component;
  * Description: 调用组件 /_manage 管理接口的 HTTP 客户端
  */
 @Component
+@Slf4j
 public class ManageHttpClient {
 
     /** 连接超时（秒） */
@@ -133,8 +135,8 @@ public class ManageHttpClient {
             if (node.has("message")) {
                 message = node.get("message").asText();
             }
-        } catch (Exception ignored) {
-            // 用原始 body
+        } catch (Exception parseError) {
+            log.debug("管理接口错误响应不是合法 JSON: status={}", response.statusCode(), parseError);
         }
         throw new IllegalStateException(message);
     }

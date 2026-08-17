@@ -20,6 +20,9 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class InMemoryServiceRegistry implements ServiceRegistry {
 
+    private static final int LOCK_STRIPES = 256;
+    private final Object[] serviceLocks = createServiceLocks();
+
     /** serviceName -> (instanceId -> 记录) */
     private final Map<String, Map<String, InstanceRecord>> services = new ConcurrentHashMap<>();
     /** 每个服务自己的版本号，变更时 +1 */
@@ -32,69 +35,103 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
         String serviceName = record.getInstance().getServiceName();
         String instanceId = record.getInstance().getInstanceId();
 
-        // computeIfAbsent 保证多个实例并发注册同一新服务时只创建一个中间 map
-        services.computeIfAbsent(serviceName, key -> new ConcurrentHashMap<>())
-                .put(instanceId, record);
-        long revision = bumpRevision(serviceName);
-        log.info("实例注册成功: {}#{} revision={}", serviceName, instanceId, revision);
-        return snapshotOf(serviceName, record.getInstance().getGroup(), revision);
+        synchronized (lockFor(serviceName)) {
+            // 和外层注销走同一把 compute，避免「空了就摘」把刚 put 进去的新实例一起摘掉
+            services.compute(serviceName, (key, instances) -> {
+                Map<String, InstanceRecord> map =
+                        instances == null ? new ConcurrentHashMap<>() : instances;
+                map.put(instanceId, record);
+                return map;
+            });
+            long revision = bumpRevision(serviceName);
+            log.info("实例注册成功: {}#{} revision={}", serviceName, instanceId, revision);
+            return snapshotOf(serviceName, record.getInstance().getGroup(), revision);
+        }
     }
 
     /** 注销实例，版本号 +1 并返回新快照；实例不存在时返回 null（调用方无需推送）。 */
     @Override
     public RegistrySnapshot unregister(String serviceName, String instanceId) {
-        Map<String, InstanceRecord> instances = services.get(serviceName);
-        if (instances == null) {
-            return null;
+        synchronized (lockFor(serviceName)) {
+            InstanceRecord[] removed = new InstanceRecord[1];
+            services.computeIfPresent(serviceName, (key, current) -> {
+                removed[0] = current.remove(instanceId);
+                // 空了就摘掉这个 key；和 register 的 compute 互斥，不会误删刚注册的实例
+                return current.isEmpty() ? null : current;
+            });
+            if (removed[0] == null) {
+                return null;
+            }
+            long revision = bumpRevision(serviceName);
+            log.info("实例注销: {}#{} revision={}", serviceName, instanceId, revision);
+            return snapshotOf(serviceName, removed[0].getInstance().getGroup(), revision);
         }
-        InstanceRecord removed = instances.remove(instanceId);
-        if (removed == null) {
-            return null;
-        }
-        // 服务下最后一个实例也注销时，顺带清掉服务级条目，避免空 map 残留
-        if (instances.isEmpty()) {
-            services.remove(serviceName, instances);
-        }
-        long revision = bumpRevision(serviceName);
-        log.info("实例注销: {}#{} revision={}", serviceName, instanceId, revision);
-        return snapshotOf(serviceName, removed.getInstance().getGroup(), revision);
     }
 
     /**
-     * 处理一次心跳：仅刷新记录的最近心跳时间（并恢复健康状态），不改版本号。
-     *
-     * @return true 表示实例存在且心跳已刷新；false 表示实例不存在（客户端应先注册）
+     * 处理一次心跳：刷新最近心跳时间；若从不健康恢复则 bump revision。
      */
     @Override
-    public boolean heartbeat(String serviceName, String instanceId) {
-        InstanceRecord record = find(serviceName, instanceId);
-        if (record == null) {
-            return false;
+    public HeartbeatResult heartbeat(String serviceName, String instanceId) {
+        synchronized (lockFor(serviceName)) {
+            InstanceRecord record = find(serviceName, instanceId);
+            if (record == null) {
+                return HeartbeatResult.notFound();
+            }
+            boolean recovered = record.touchHeartbeat();
+            if (!recovered) {
+                return HeartbeatResult.touched();
+            }
+            long revision = bumpRevision(serviceName);
+            log.info("实例心跳恢复健康: {}#{} revision={}", serviceName, instanceId, revision);
+            return HeartbeatResult.recovered(
+                    snapshotOf(serviceName, record.getInstance().getGroup(), revision));
         }
-        record.touchHeartbeat();
-        return true;
+    }
+
+    /**
+     * 标记实例不健康：仅在此前为健康时 bump revision 并返回快照。
+     */
+    @Override
+    public RegistrySnapshot markUnhealthy(
+            String serviceName, String instanceId, long heartbeatDeadlineMillis) {
+        synchronized (lockFor(serviceName)) {
+            InstanceRecord record = find(serviceName, instanceId);
+            if (record == null) {
+                return null;
+            }
+            ServiceInstance instance = record.getInstance();
+            if (instance == null || !record.markUnhealthyIfExpired(heartbeatDeadlineMillis)) {
+                return null;
+            }
+            long revision = bumpRevision(serviceName);
+            log.info("实例标记不健康: {}#{} revision={}", serviceName, instanceId, revision);
+            return snapshotOf(serviceName, instance.getGroup(), revision);
+        }
     }
 
     /** 按服务、组过滤查询实例（healthyOnly 时仅健康），返回防御性副本避免调用方改动内部状态。 */
     @Override
     public List<ServiceInstance> query(String serviceName, String group, boolean healthyOnly) {
-        Map<String, InstanceRecord> instances = services.get(serviceName);
-        if (instances == null || instances.isEmpty()) {
-            return List.of();
-        }
-        List<ServiceInstance> result = new ArrayList<>();
-        for (InstanceRecord record : instances.values()) {
-            ServiceInstance instance = record.getInstance();
-            // 分组过滤：请求指定了非空 group 且与实例组不一致时跳过
-            if (group != null && !group.isBlank() && !Objects.equals(group, instance.getGroup())) {
-                continue;
+        synchronized (lockFor(serviceName)) {
+            Map<String, InstanceRecord> instances = services.get(serviceName);
+            if (instances == null || instances.isEmpty()) {
+                return List.of();
             }
-            if (healthyOnly && !instance.isHealthy()) {
-                continue;
+            List<ServiceInstance> result = new ArrayList<>();
+            for (InstanceRecord record : instances.values()) {
+                ServiceInstance instance = record.getInstance();
+                // 分组过滤：请求指定了非空 group 且与实例组不一致时跳过
+                if (group != null && !group.isBlank() && !Objects.equals(group, instance.getGroup())) {
+                    continue;
+                }
+                if (healthyOnly && !instance.isHealthy()) {
+                    continue;
+                }
+                result.add(copyOf(instance));
             }
-            result.add(copyOf(instance));
+            return result;
         }
-        return result;
     }
 
     /**
@@ -166,5 +203,18 @@ public class InMemoryServiceRegistry implements ServiceRegistry {
         copy.setEphemeral(source.isEphemeral());
         copy.setMetadata(source.getMetadata() == null ? new HashMap<>() : new HashMap<>(source.getMetadata()));
         return copy;
+    }
+
+    private Object lockFor(String serviceName) {
+        int index = Math.floorMod(serviceName == null ? 0 : serviceName.hashCode(), LOCK_STRIPES);
+        return serviceLocks[index];
+    }
+
+    private static Object[] createServiceLocks() {
+        Object[] locks = new Object[LOCK_STRIPES];
+        for (int i = 0; i < locks.length; i++) {
+            locks[i] = new Object();
+        }
+        return locks;
     }
 }

@@ -6,6 +6,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -24,6 +25,8 @@ public class PendingRequestTable<T> implements AutoCloseable {
     private final ScheduledExecutorService timeoutScheduler;
     private final int maxPending;
     private final AtomicBoolean closed = new AtomicBoolean(false);
+    /** 精确限制在途数量，避免 size()+put 的并发超限。 */
+    private final Semaphore capacity;
     private final boolean ownsScheduler;
 
     /** 默认：最多 10000 个在途请求，内部自建超时调度线程池 */
@@ -39,6 +42,7 @@ public class PendingRequestTable<T> implements AutoCloseable {
     /** 全参数构造；timeoutScheduler 为 null 时内部自建守护线程池 */
     public PendingRequestTable(int maxPending, ScheduledExecutorService timeoutScheduler) {
         this.maxPending = Math.max(1, maxPending);
+        this.capacity = new Semaphore(this.maxPending);
         if (timeoutScheduler == null) {
             ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, r -> {
                 Thread thread = new Thread(r, "pending-request-timeout");
@@ -60,7 +64,7 @@ public class PendingRequestTable<T> implements AutoCloseable {
      */
     public CompletableFuture<T> create(long requestId, long timeoutMs) {
         ensureOpen();
-        if (pending.size() >= maxPending) {
+        if (!capacity.tryAcquire()) {
             throw new IllegalStateException("在途请求过多: " + pending.size());
         }
 
@@ -68,19 +72,35 @@ public class PendingRequestTable<T> implements AutoCloseable {
         Entry<T> entry = new Entry<>(future);
         Entry<T> previous = pending.putIfAbsent(requestId, entry);
         if (previous != null) {
+            capacity.release();
             throw new IllegalStateException("重复的 requestId: " + requestId);
+        }
+
+        // close 可能发生在首次 ensureOpen 之后；登记后再次确认，确保不会留下永不完成的 Future。
+        if (closed.get() && pending.remove(requestId, entry)) {
+            capacity.release();
+            future.completeExceptionally(new IllegalStateException("PendingRequestTable 已关闭"));
+            throw new IllegalStateException("PendingRequestTable 已关闭");
         }
 
         // 登记超时任务，到期移除挂起项并终止等待
         long delay = Math.max(timeoutMs, 1L);
-        entry.timeoutFuture = timeoutScheduler.schedule(() -> {
-            // 超时：移除挂起项并以 TimeoutException 终止等待中的 Future
-            Entry<T> removed = pending.remove(requestId);
+        try {
+            entry.timeoutFuture = timeoutScheduler.schedule(() -> {
+                // 超时：移除挂起项并以 TimeoutException 终止等待中的 Future
+                Entry<T> removed = removeEntry(requestId);
+                if (removed != null) {
+                    removed.future.completeExceptionally(
+                            new TimeoutException("等待响应超时, requestId=" + requestId + ", timeoutMs=" + delay));
+                }
+            }, delay, TimeUnit.MILLISECONDS);
+        } catch (RuntimeException scheduleError) {
+            Entry<T> removed = removeEntry(requestId);
             if (removed != null) {
-                removed.future.completeExceptionally(
-                        new TimeoutException("等待响应超时, requestId=" + requestId + ", timeoutMs=" + delay));
+                removed.future.completeExceptionally(scheduleError);
             }
-        }, delay, TimeUnit.MILLISECONDS);
+            throw scheduleError;
+        }
 
         // 注册兜底任务，正常完成或异常完成都把超时任务取消掉
         future.whenComplete((value, error) -> {
@@ -95,7 +115,7 @@ public class PendingRequestTable<T> implements AutoCloseable {
     /** 请求成功：先移除再完成保证只唤醒一次；false 表示已超时或 requestId 不存在。 */
     public boolean complete(long requestId, T value) {
         // 先移除再完成，保证只唤醒一次；remove 返回 null 说明已被超时任务清掉
-        Entry<T> entry = pending.remove(requestId);
+        Entry<T> entry = removeEntry(requestId);
         if (entry == null) {
             return false;
         }
@@ -104,7 +124,7 @@ public class PendingRequestTable<T> implements AutoCloseable {
 
     /** 请求失败：以异常终止等待中的 Future；false 表示已超时或 requestId 不存在。 */
     public boolean fail(long requestId, Throwable error) {
-        Entry<T> entry = pending.remove(requestId);
+        Entry<T> entry = removeEntry(requestId);
         if (entry == null) {
             return false;
         }
@@ -143,6 +163,14 @@ public class PendingRequestTable<T> implements AutoCloseable {
         if (closed.get()) {
             throw new IllegalStateException("PendingRequestTable 已关闭");
         }
+    }
+
+    private Entry<T> removeEntry(long requestId) {
+        Entry<T> removed = pending.remove(requestId);
+        if (removed != null) {
+            capacity.release();
+        }
+        return removed;
     }
 
     /** 挂起项：future 为等待方回调，timeoutFuture 指向已登记的超时任务。 */

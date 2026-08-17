@@ -7,6 +7,7 @@ import com.rover.common.protocol.RoverMessage;
 import com.rover.common.codec.RoverMessageCodecSupport;
 import com.rover.nameserver.core.server.NameserverServerOptions;
 import io.netty.channel.Channel;
+import io.netty.util.Attribute;
 import io.netty.util.AttributeKey;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -18,9 +19,13 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public final class NameserverChannelSupport {
 
-    /** 挂在 channel 上：这条连接注册过哪些 service#instance */
-    public static final AttributeKey<Set<String>> BOUND_INSTANCES =
+    /** 挂在 channel 上：这条连接注册过哪些临时实例。 */
+    public static final AttributeKey<Set<BoundInstance>> BOUND_INSTANCES =
             AttributeKey.valueOf("nameserverBoundInstances");
+
+    /** 结构化绑定键，避免 serviceName / instanceId 中出现分隔符时解析错误。 */
+    public record BoundInstance(String serviceName, String instanceId) {
+    }
 
     private NameserverChannelSupport() {
     }
@@ -64,22 +69,36 @@ public final class NameserverChannelSupport {
     }
 
     public static void bindInstance(Channel channel, String serviceName, String instanceId) {
-        Set<String> bound = channel.attr(BOUND_INSTANCES).get();
-        if (bound == null) {
-            bound = ConcurrentHashMap.newKeySet();
-            channel.attr(BOUND_INSTANCES).set(bound);
+        if (channel == null || serviceName == null || instanceId == null) {
+            return;
         }
-        bound.add(serviceName + "#" + instanceId);
+        // setIfAbsent：避免并发注册时两个线程各 new 一个 Set，后写覆盖先写丢绑定
+        Attribute<Set<BoundInstance>> attr = channel.attr(BOUND_INSTANCES);
+        Set<BoundInstance> bound = attr.get();
+        if (bound == null) {
+            Set<BoundInstance> created = ConcurrentHashMap.newKeySet();
+            bound = attr.setIfAbsent(created);
+            if (bound == null) {
+                bound = created;
+            }
+        }
+        bound.add(new BoundInstance(serviceName, instanceId));
     }
 
     public static void unbindInstance(Channel channel, String serviceName, String instanceId) {
-        Set<String> bound = channel.attr(BOUND_INSTANCES).get();
+        if (channel == null) {
+            return;
+        }
+        Set<BoundInstance> bound = channel.attr(BOUND_INSTANCES).get();
         if (bound != null) {
-            bound.remove(serviceName + "#" + instanceId);
+            bound.remove(new BoundInstance(serviceName, instanceId));
         }
     }
 
-    public static Set<String> takeBoundInstances(Channel channel) {
+    public static Set<BoundInstance> takeBoundInstances(Channel channel) {
+        if (channel == null) {
+            return Set.of();
+        }
         return channel.attr(BOUND_INSTANCES).getAndSet(null);
     }
 

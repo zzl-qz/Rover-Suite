@@ -76,7 +76,7 @@ public final class JsonCodec {
                 }
                 return new String[]{keyNode.asText(), value};
             } catch (JsonProcessingException ex) {
-                return null;
+                throw new IllegalArgumentException("请求 JSON 格式错误", ex);
             }
         }
         String key = null;

@@ -21,6 +21,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
+import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
 import java.util.List;
@@ -215,6 +216,7 @@ public class GatewayHttpServer {
                             ch.pipeline()
                                     .addLast(new HttpServerCodec())
                                     .addLast(new HttpObjectAggregator(maxContentLengthBytes))
+                                    .addLast(new HttpServerKeepAliveHandler())
                                     .addLast(new CorsHandler(corsSettings))
                                     .addLast(bizGroup, new GatewayHttpServerHandler(runtime));
                         }
@@ -252,6 +254,7 @@ public class GatewayHttpServer {
         } catch (Exception ex) {
             log.warn("关闭服务发现失败", ex);
         }
+        runtime.close();
     }
 
     /** 按 discovery.type 创建对应的 ServiceDiscovery 实现。 */

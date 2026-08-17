@@ -36,12 +36,20 @@ public final class IpUtil {
                 Enumeration<InetAddress> addresses = network.getInetAddresses();
                 while (addresses.hasMoreElements()) {
                     InetAddress address = addresses.nextElement();
-                    if (!address.isLoopbackAddress() && address.getHostAddress().indexOf(':') < 0) {
+                    if (!address.isLoopbackAddress()
+                            && !address.isLinkLocalAddress()
+                            && !address.isAnyLocalAddress()
+                            && !address.isMulticastAddress()
+                            && address.getHostAddress().indexOf(':') < 0) {
                         return address.getHostAddress();
                     }
                 }
             }
-            return InetAddress.getLocalHost().getHostAddress();
+            InetAddress fallback = InetAddress.getLocalHost();
+            if (!fallback.isLinkLocalAddress() && fallback.getHostAddress().indexOf(':') < 0) {
+                return fallback.getHostAddress();
+            }
+            return "127.0.0.1";
         } catch (Exception ex) {
             log.warn("自动探测本机 IP 失败，回退 127.0.0.1", ex);
             return "127.0.0.1";

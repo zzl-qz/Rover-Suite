@@ -71,7 +71,8 @@ public final class StaticUpstreamCluster {
             return;
         }
         ParsedEndpoint parsed = parse(raw.trim());
-        String dedupeKey = parsed.host().toLowerCase(Locale.ROOT) + ":" + parsed.port();
+        String dedupeKey = parsed.scheme() + "://"
+                + parsed.host().toLowerCase(Locale.ROOT) + ":" + parsed.port();
         if (!seen.add(dedupeKey)) {
             return;
         }
@@ -112,7 +113,7 @@ public final class StaticUpstreamCluster {
             if (port < 0) {
                 port = "https".equalsIgnoreCase(scheme) ? HTTPS_PORT : HTTP_PORT;
             }
-            String baseUrl = scheme.toLowerCase(Locale.ROOT) + "://" + uri.getHost() + ":" + port;
+            String baseUrl = scheme.toLowerCase(Locale.ROOT) + "://" + formatHost(uri.getHost()) + ":" + port;
             return new ParsedEndpoint(scheme.toLowerCase(Locale.ROOT), uri.getHost(), port, weight, baseUrl);
         } catch (IllegalArgumentException ex) {
             throw ex;
@@ -130,7 +131,14 @@ public final class StaticUpstreamCluster {
         if (base != null && !base.isBlank()) {
             return base;
         }
-        return "http://" + instance.getHost() + ":" + instance.getPort();
+        return "http://" + formatHost(instance.getHost()) + ":" + instance.getPort();
+    }
+
+    private static String formatHost(String host) {
+        if (host == null) {
+            return "";
+        }
+        return host.indexOf(':') >= 0 && !host.startsWith("[") ? "[" + host + "]" : host;
     }
 
     record ParsedEndpoint(String scheme, String host, int port, int weight, String baseUrl) {

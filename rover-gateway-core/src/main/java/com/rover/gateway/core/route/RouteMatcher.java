@@ -51,6 +51,12 @@ public class RouteMatcher {
         if (pattern == null || pattern.isBlank() || path == null || path.isBlank()) {
             return false;
         }
+        while (pattern.length() > 1 && pattern.endsWith("/")) {
+            pattern = pattern.substring(0, pattern.length() - 1);
+        }
+        if ("/".equals(pattern)) {
+            return path.startsWith("/");
+        }
         return path.equals(pattern) || path.startsWith(pattern + "/");
     }
 

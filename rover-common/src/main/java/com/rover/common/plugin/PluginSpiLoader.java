@@ -4,7 +4,6 @@ import java.net.URL;
 import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +30,7 @@ public final class PluginSpiLoader {
     /**
      * 从插件目录 SPI 加载某接口的全部实现（按类名去重）。
      * 目录不存在或无 jar 时返回空结果，classLoader 为 null。
+     * 调用方负责在不再需要时 close 返回的 classLoader（见 {@link PluginLoadResult#close()}）。
      */
     public static <T> PluginLoadResult<T> load(Class<T> type, String pluginDir) {
         Objects.requireNonNull(type, "type");
@@ -52,6 +52,7 @@ public final class PluginSpiLoader {
 
     /**
      * 为插件目录构建 ClassLoader；无 jar 时退回当前线程 ContextClassLoader。
+     * 若返回的是新建的 URLClassLoader，调用方必须在不用时 close。
      */
     public static ClassLoader classLoaderFor(String pluginDir) {
         Path directory = resolveDirectory(pluginDir);
@@ -91,13 +92,9 @@ public final class PluginSpiLoader {
         }
     }
 
-    /** 便捷：用插件目录（或 classpath）反射创建。 */
-    public static <T> T newInstance(Class<T> type, String className, String pluginDir) {
-        return newInstance(type, className, classLoaderFor(pluginDir));
-    }
-
     /**
-     * SPI 加载结果。
+     * SPI 加载结果。可 try-with-resources 关闭 ClassLoader。
+     * 若实例仍要长期使用，请先取出 classLoader 自行托管，不要直接 close 本结果。
      *
      * @param instances   去重后的实例
      * @param classLoader 插件 ClassLoader；未加载到 jar 时为 null
@@ -108,7 +105,7 @@ public final class PluginSpiLoader {
             List<T> instances,
             URLClassLoader classLoader,
             int jarCount,
-            Path directory) {
+            Path directory) implements AutoCloseable {
 
         public static <T> PluginLoadResult<T> empty() {
             return new PluginLoadResult<>(List.of(), null, 0, null);
@@ -116,6 +113,11 @@ public final class PluginSpiLoader {
 
         public boolean isEmpty() {
             return instances == null || instances.isEmpty();
+        }
+
+        @Override
+        public void close() {
+            PluginJarScanner.closeQuietly(classLoader);
         }
     }
 }

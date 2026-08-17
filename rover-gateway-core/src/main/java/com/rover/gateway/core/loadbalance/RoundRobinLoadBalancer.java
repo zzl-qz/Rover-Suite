@@ -15,6 +15,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class RoundRobinLoadBalancer implements LoadBalancer {
 
+    private static final int MAX_COUNTER_KEYS = 4096;
+
     private final Map<String, AtomicInteger> counters = new ConcurrentHashMap<>();
 
     @Override
@@ -29,6 +31,9 @@ public class RoundRobinLoadBalancer implements LoadBalancer {
         }
         List<ServiceInstance> instances = context.getInstances();
         String key = context.getClusterKey() == null ? "default" : context.getClusterKey();
+        if (!counters.containsKey(key) && counters.size() >= MAX_COUNTER_KEYS) {
+            counters.clear();
+        }
         AtomicInteger counter = counters.computeIfAbsent(key, ignored -> new AtomicInteger());
         int index = Math.floorMod(counter.getAndIncrement(), instances.size());
         return instances.get(index);
