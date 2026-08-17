@@ -34,6 +34,9 @@ public final class NameserverConstants {
     /** 默认临时实例过期时间 */
     public static final long DEFAULT_INSTANCE_EXPIRE_MILLIS = 30_000L;
 
+    /** HTTP Registration Client 默认心跳/注册重试间隔 */
+    public static final long DEFAULT_CLIENT_REPORT_INTERVAL_MILLIS = 5_000L;
+
     /** 默认地址 host:port */
     public static final String DEFAULT_ADDRESS = DEFAULT_HOST + ":" + DEFAULT_PORT;
 

@@ -8,8 +8,8 @@ import com.rover.nameserver.core.event.model.HeartbeatEvent;
 import com.rover.nameserver.core.event.support.NameserverChannelSupport;
 import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.event.support.NameserverTrace;
-import com.rover.nameserver.core.registry.HeartbeatResult;
-import com.rover.nameserver.core.registry.RegistrySnapshot;
+import com.rover.nameserver.core.registration.RegistrationOwner;
+import com.rover.nameserver.core.registration.RegistrationResult;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -39,9 +39,10 @@ public class HeartbeatListener implements EventListener<HeartbeatEvent> {
                     NameserverChannelSupport.badRequest("心跳参数不完整"));
             return;
         }
-        HeartbeatResult result = services.getRegistry()
-                .heartbeat(request.getServiceName(), request.getInstanceId());
-        if (!result.isFound()) {
+        RegistrationOwner owner = NameserverChannelSupport.registrationOwner(event.getChannel());
+        RegistrationResult result = services.getRegistrationService()
+                .heartbeat(request.getServiceName(), request.getInstanceId(), owner);
+        if (result.isNotFound()) {
             log.warn("{}", NameserverTrace.withServiceInstance(
                     event, "heartbeat-not-found", request.getServiceName(), request.getInstanceId()));
             NameserverChannelSupport.replyFail(
@@ -52,13 +53,19 @@ public class HeartbeatListener implements EventListener<HeartbeatEvent> {
                     "实例不存在，请先注册");
             return;
         }
-        RegistrySnapshot recovered = result.healthRecoveredSnapshot();
-        if (recovered != null) {
-            services.getPushService().pushSnapshot(recovered);
+        if (result.isOwnerMismatch()) {
+            log.warn("{}", NameserverTrace.withServiceInstance(
+                    event, "heartbeat-owner-mismatch", request.getServiceName(), request.getInstanceId()));
+            NameserverChannelSupport.replyFail(
+                    event.getChannel(),
+                    event.getRequestId(),
+                    event.isOneway(),
+                    StatusConstants.CONFLICT,
+                    "实例已由新会话接管，请重新注册");
+            return;
         }
-        services.getMetrics().heartbeat(request.getServiceName(), request.getInstanceId());
         CommonResponseBody body = CommonResponseBody.success();
-        body.setRevision(services.getRegistry().revisionOf(request.getServiceName()));
+        body.setRevision(result.revision());
         NameserverChannelSupport.fillNode(services.getOptions(), body);
         NameserverChannelSupport.fillGeneration(services, body);
         NameserverChannelSupport.reply(

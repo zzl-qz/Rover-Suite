@@ -51,6 +51,33 @@ public final class JsonCodec {
     }
 
     /**
+     * 将 JSON 对象反序列化为指定类型，供轻量 HTTP API 共用。
+     *
+     * @param json JSON 字符串
+     * @param type 目标类型
+     * @param <T>  目标类型参数
+     * @return 反序列化后的对象
+     * @throws IllegalArgumentException JSON 为空、格式错误或无法映射到目标类型
+     */
+    public static <T> T fromJson(String json, Class<T> type) {
+        if (json == null || json.isBlank()) {
+            throw new IllegalArgumentException("请求 JSON 不能为空");
+        }
+        if (type == null) {
+            throw new IllegalArgumentException("目标类型不能为空");
+        }
+        try {
+            T value = MAPPER.readValue(json, type);
+            if (value == null) {
+                throw new IllegalArgumentException("请求 JSON 不能是 null");
+            }
+            return value;
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException("请求 JSON 格式错误", ex);
+        }
+    }
+
+    /**
      * 解析管理口 key/value 请求体，支持 JSON 对象或 urlencoded 表单。
      *
      * @param body        请求体

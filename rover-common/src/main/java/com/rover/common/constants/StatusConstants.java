@@ -17,6 +17,8 @@ public final class StatusConstants {
     public static final int BAD_REQUEST = 400;
     /** 目标服务不存在 */
     public static final int SERVICE_NOT_FOUND = 404;
+    /** 当前会话已失去实例所有权 */
+    public static final int CONFLICT = 409;
     /** 鉴权失败 */
     public static final int UNAUTHORIZED = 401;
     /** 服务端内部错误 */

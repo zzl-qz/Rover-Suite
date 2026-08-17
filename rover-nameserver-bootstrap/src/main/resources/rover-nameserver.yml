@@ -8,9 +8,9 @@ rover:
     port: 8888
     # TCP 监听地址：默认 0.0.0.0 监听所有网卡；可收紧到 127.0.0.1 或内网 IP
     bindHost: 0.0.0.0
-    # Admin 调这个 HTTP 管理口，不是 TCP 8888
+    # Admin 管理 API 与多语言客户端注册 API 共用的 HTTP 端口，不是 TCP 8888
     managePort: 8889
-    # 管理口监听地址：默认 0.0.0.0；建议生产收紧到 127.0.0.1（配合防火墙）
+    # HTTP 监听地址：远程 Registrar 需要可达；生产建议绑定内网 IP，并用防火墙限制来源
     manageBindHost: 0.0.0.0
     # 集群协议鉴权 token：非空时，客户端注册/注销/订阅必须携带相同 token，否则回 401
     # 留空 = 关闭协议层鉴权（向后兼容）
@@ -18,6 +18,9 @@ rover:
     # 管理口鉴权 token：非空时，访问 /_manage/** 必须带 X-Rover-Admin-Token 请求头
     # 留空 = 关闭管理口鉴权（向后兼容）
     adminToken: ""
+    # 是否启用 /v1/client/** HTTP+JSON 注册/心跳/注销接口（默认关闭，按需显式开启）
+    # 开启且允许远程访问时必须配置上面的 token，并限制 managePort 的网络来源
+    clientApiEnabled: false
     # 心跳超时(ms)：超过则把实例标记为不健康（非临时实例）
     heartbeatTimeoutMillis: 15000
     # 健康检查扫描间隔(ms)

@@ -15,7 +15,7 @@
     <!-- 网关配置 -->
     <div class="config-panel">
       <label>网关地址：</label>
-      <input v-model="gatewayUrl" placeholder="http://localhost:80" />
+      <input v-model="gatewayUrl" placeholder="http://localhost:8080" />
       <button @click="updateGateway">更新</button>
       <button @click="resetStats" class="btn-reset">重置统计</button>
     </div>
@@ -190,7 +190,7 @@ import { ref, reactive } from 'vue'
 import axios from 'axios'
 
 // 网关地址配置
-const gatewayUrl = ref('http://localhost:80')
+const gatewayUrl = ref('http://localhost:8080')
 
 // 创建可配置的 axios 实例
 let request = axios.create({

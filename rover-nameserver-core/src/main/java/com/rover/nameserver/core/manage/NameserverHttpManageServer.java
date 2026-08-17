@@ -2,19 +2,17 @@ package com.rover.nameserver.core.manage;
 
 import com.rover.common.constants.NameserverConstants;
 import com.rover.common.constants.ProtocolConstants;
+import com.rover.nameserver.core.clientapi.NameserverClientApi;
 import com.rover.nameserver.core.runtime.NameserverRuntime;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.SimpleChannelInboundHandler;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
-import io.netty.handler.codec.http.QueryStringDecoder;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
 import lombok.extern.slf4j.Slf4j;
@@ -22,7 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-10 16:45:00
- * Description: 基于 Netty 的轻量 HTTP 管理口，与 TCP 注册口并行监听，将请求转交 NameserverManageApi 并管理启停生命周期
+ * Description: 基于 Netty 的轻量 HTTP 服务，与 TCP 端口并行监听 Client API 和管理 API
  */
 @Slf4j
 public class NameserverHttpManageServer {
@@ -39,6 +37,12 @@ public class NameserverHttpManageServer {
     private final String bindHost;
     /** 管理 API 处理器，负责路由与 JSON 响应 */
     private final NameserverManageApi manageApi;
+    /** 非 Java 服务提供方的注册生命周期 API。 */
+    private final NameserverClientApi clientApi;
+    /** Client API 开关，仅用于启动日志。 */
+    private final boolean clientApiEnabled;
+    /** 是否以无 token 方式开放 Client API，仅用于启动安全告警。 */
+    private final boolean unsecuredClientApi;
 
     /** Netty boss 线程组，负责 accept */
     private EventLoopGroup bossGroup;
@@ -55,6 +59,15 @@ public class NameserverHttpManageServer {
                 ? NameserverConstants.DEFAULT_BIND_HOST
                 : bindHost.trim();
         this.manageApi = new NameserverManageApi(runtime);
+        this.clientApiEnabled = runtime.getOptions().isClientApiEnabled();
+        this.unsecuredClientApi = clientApiEnabled
+                && (runtime.getOptions().getToken() == null
+                || runtime.getOptions().getToken().isBlank());
+        this.clientApi = new NameserverClientApi(
+                runtime.getRegistrationService(),
+                runtime.getOptions(),
+                runtime.getPushService()::getEpoch,
+                runtime.getHealthChecker()::getInstanceExpireMillis);
     }
 
     /** 启动 HTTP 管理口；port<=0 时只打日志并返回。 */
@@ -76,19 +89,19 @@ public class NameserverHttpManageServer {
                             ch.pipeline()
                                     .addLast(new HttpServerCodec())
                                     .addLast(new HttpObjectAggregator(MAX_BODY_BYTES))
-                                    .addLast(bizGroup, new SimpleChannelInboundHandler<FullHttpRequest>() {
-                                        @Override
-                                        protected void channelRead0(
-                                                io.netty.channel.ChannelHandlerContext ctx,
-                                                FullHttpRequest request) {
-                                            String path = new QueryStringDecoder(request.uri()).path();
-                                            manageApi.handle(ctx, request, path);
-                                        }
-                                    });
+                                    .addLast(bizGroup, new NameserverHttpApiHandler(clientApi, manageApi));
                         }
                     });
             serverChannel = bootstrap.bind(bindHost, port).sync().channel();
-            log.info("Nameserver HTTP manage server listening on {}:{}, prefix=/_manage", bindHost, port);
+            if (unsecuredClientApi) {
+                log.warn("HTTP Client API 已启用但 token 为空，任何可访问 {}:{} 的客户端都能写注册表；仅限可信开发网络",
+                        bindHost, port);
+            }
+            log.info(
+                    "Nameserver HTTP server listening on {}:{}, clientApiEnabled={}, prefixes=/v1/client,/_manage",
+                    bindHost,
+                    port,
+                    clientApiEnabled);
         } catch (Exception ex) {
             shutdown();
             throw new IllegalStateException("启动 Nameserver 管理口失败, port=" + port, ex);
