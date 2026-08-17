@@ -105,11 +105,11 @@ public class RouteValidator {
     private static RouteConfig copyRoute(RouteConfig route) {
         RouteConfig copy = new RouteConfig();
         copy.setId(trimToNull(route.getId()));
-        copy.setBusinessPrefix(trimToNull(route.getBusinessPrefix()));
+        copy.setBusinessPrefix(normalizePrefix(route.getBusinessPrefix()));
         copy.setTargetUrl(trimToNull(route.getTargetUrl()));
         copy.setServiceName(trimToNull(route.getServiceName()));
         copy.setGroup(trimToNull(route.getGroup()));
-        copy.setStripPrefix(trimToNull(route.getStripPrefix()));
+        copy.setStripPrefix(normalizePrefix(route.getStripPrefix()));
         List<String> urls = new ArrayList<>();
         if (route.getTargetUrls() != null) {
             for (String raw : route.getTargetUrls()) {
@@ -140,5 +140,17 @@ public class RouteValidator {
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /** 路由前缀除根路径外统一去掉尾斜杠，避免 /api 与 /api/ 产生不同匹配语义。 */
+    private static String normalizePrefix(String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return null;
+        }
+        while (normalized.length() > 1 && normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 }

@@ -2,11 +2,14 @@ package com.rover.common.event;
 
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.lang.reflect.TypeVariable;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.RejectedExecutionHandler;
@@ -27,6 +30,8 @@ import lombok.extern.slf4j.Slf4j;
 public class EventBus {
 
     private final Map<Class<? extends Event>, List<EventListener<?>>> listenerMap = new ConcurrentHashMap<>();
+    /** 有序事件：同一 orderKey 串行，避免同连接上注册/断线对打 */
+    private final ConcurrentHashMap<Object, SerialLane> serialLanes = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor;
     private final long shutdownTimeoutSeconds;
     private final AtomicBoolean initialized = new AtomicBoolean(false);
@@ -85,6 +90,7 @@ public class EventBus {
     /**
      * 异步发布：按事件具体类精确匹配。
      * 无监听器 / 已关闭 → 直接返回；单个监听器失败不影响其它。
+     * 若事件实现 {@link OrderedEvent} 且 orderKey 非空，则同一 key 按发布顺序串行。
      */
     public void publish(Event event) {
         if (event == null || closed.get()) {
@@ -95,10 +101,61 @@ public class EventBus {
             return;
         }
         publishCount.incrementAndGet();
+        Object orderKey = resolveOrderKey(event);
+        Runnable task = () -> dispatch(event, listeners);
         try {
-            executor.execute(() -> dispatch(event, listeners));
+            if (orderKey == null) {
+                executor.execute(task);
+            } else {
+                executeSerial(orderKey, task);
+            }
         } catch (RejectedExecutionException ex) {
             log.warn("异步事件提交被拒绝: event={}", event.getClass().getSimpleName(), ex);
+        }
+    }
+
+    private static Object resolveOrderKey(Event event) {
+        if (event instanceof OrderedEvent ordered) {
+            return ordered.orderKey();
+        }
+        return null;
+    }
+
+    /** 同一 key 排队，串到线程池里顺序执行，执行完若队列空则摘掉 lane，避免泄漏。 */
+    private void executeSerial(Object orderKey, Runnable task) {
+        SerialLane lane = serialLanes.computeIfAbsent(orderKey, key -> new SerialLane());
+        lane.queue.add(task);
+        drainSerial(orderKey, lane);
+    }
+
+    private void drainSerial(Object orderKey, SerialLane lane) {
+        if (!lane.running.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            executor.execute(() -> {
+                try {
+                    Runnable next;
+                    while ((next = lane.queue.poll()) != null) {
+                        next.run();
+                    }
+                } finally {
+                    lane.running.set(false);
+                    if (!lane.queue.isEmpty()) {
+                        drainSerial(orderKey, lane);
+                    } else {
+                        // 队列空且不再跑：尝试摘掉，减少已关闭连接的 key 残留
+                        serialLanes.remove(orderKey, lane);
+                        if (!lane.queue.isEmpty()) {
+                            SerialLane revived = serialLanes.computeIfAbsent(orderKey, key -> lane);
+                            drainSerial(orderKey, revived);
+                        }
+                    }
+                }
+            });
+        } catch (RuntimeException ex) {
+            lane.running.set(false);
+            throw ex;
         }
     }
 
@@ -113,6 +170,12 @@ public class EventBus {
                         event.getClass().getSimpleName(), listener.getClass().getName(), ex);
             }
         }
+    }
+
+    /** 单 key 串行车道：队列 + 是否已有 worker 在排空。 */
+    private static final class SerialLane {
+        private final ConcurrentLinkedQueue<Runnable> queue = new ConcurrentLinkedQueue<>();
+        private final AtomicBoolean running = new AtomicBoolean(false);
     }
 
     public void shutdown() {
@@ -151,19 +214,62 @@ public class EventBus {
         };
     }
 
-    /** 解析 Listener 直接实现的 EventListener&lt;T&gt; 上的 T */
+    /** 解析 Listener 直接或经泛型基类实现的 EventListener&lt;T&gt; 上的 T。 */
     @SuppressWarnings("unchecked")
     static Class<? extends Event> resolveEventType(EventListener<?> listener) {
-        for (Type type : listener.getClass().getGenericInterfaces()) {
-            if (type instanceof ParameterizedType parameterized
-                    && parameterized.getRawType() == EventListener.class) {
-                Type arg = parameterized.getActualTypeArguments()[0];
-                if (arg instanceof Class<?> clazz && Event.class.isAssignableFrom(clazz)) {
-                    return (Class<? extends Event>) clazz;
-                }
-            }
+        Type resolved = resolveEventType(listener.getClass(), new HashMap<>());
+        if (resolved instanceof Class<?> clazz && Event.class.isAssignableFrom(clazz)) {
+            return (Class<? extends Event>) clazz;
         }
         throw new IllegalArgumentException("无法解析监听器事件类型: " + listener.getClass().getName());
+    }
+
+    private static Type resolveEventType(Type type, Map<TypeVariable<?>, Type> bindings) {
+        if (type instanceof ParameterizedType parameterized) {
+            if (!(parameterized.getRawType() instanceof Class<?> rawClass)) {
+                return null;
+            }
+            Type[] actual = parameterized.getActualTypeArguments();
+            TypeVariable<?>[] variables = rawClass.getTypeParameters();
+            Map<TypeVariable<?>, Type> nested = new HashMap<>(bindings);
+            for (int i = 0; i < variables.length; i++) {
+                nested.put(variables[i], resolveBinding(actual[i], bindings));
+            }
+            if (rawClass == EventListener.class) {
+                return resolveBinding(actual[0], bindings);
+            }
+            return resolveFromClass(rawClass, nested);
+        }
+        if (type instanceof Class<?> clazz) {
+            return resolveFromClass(clazz, bindings);
+        }
+        return null;
+    }
+
+    private static Type resolveFromClass(Class<?> clazz, Map<TypeVariable<?>, Type> bindings) {
+        for (Type genericInterface : clazz.getGenericInterfaces()) {
+            Type resolved = resolveEventType(genericInterface, bindings);
+            if (resolved != null) {
+                return resolved;
+            }
+        }
+        Type superclass = clazz.getGenericSuperclass();
+        if (superclass != null && superclass != Object.class) {
+            return resolveEventType(superclass, bindings);
+        }
+        return null;
+    }
+
+    private static Type resolveBinding(Type type, Map<TypeVariable<?>, Type> bindings) {
+        Type current = type;
+        while (current instanceof TypeVariable<?> variable && bindings.containsKey(variable)) {
+            Type next = bindings.get(variable);
+            if (next == current) {
+                break;
+            }
+            current = next;
+        }
+        return current;
     }
 
     public static class Config {
@@ -172,6 +278,8 @@ public class EventBus {
         private int queueCapacity = 1024;
         private long keepAliveSeconds = 60;
         private long shutdownTimeoutSeconds = 5;
+        // 默认 CallerRunsPolicy：线程池/队列撑不住时回退到发布线程执行，不丢事件。
+        // 正常路径仍走异步池；只有背压打满才会偶发占到 Netty/业务发布线程。
         private RejectedExecutionHandler rejectedExecutionHandler = new ThreadPoolExecutor.CallerRunsPolicy();
 
         public Config corePoolSize(int corePoolSize) {

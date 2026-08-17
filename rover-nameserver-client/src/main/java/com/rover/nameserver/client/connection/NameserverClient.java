@@ -152,9 +152,9 @@ public class NameserverClient implements AutoCloseable {
         request.setInstanceId(instanceId);
         request.setToken(options.getToken());
         CommonResponseBody response = requestSync(ProtocolConstants.UNREGISTER_REQUEST, request);
-        // 双向删除：服务端注销成功后，本地备份也一并清掉，避免重连后误补注册
-        registeredInstances.remove(instanceKey(serviceName, instanceId));
         ensureSuccess(response, "注销失败");
+        // 双向删除：确认服务端注销成功后再清本地备份，失败时重连仍能补注册
+        registeredInstances.remove(instanceKey(serviceName, instanceId));
         return response;
     }
 
@@ -170,6 +170,7 @@ public class NameserverClient implements AutoCloseable {
         request.setServiceName(serviceName);
         request.setInstanceId(instanceId);
         request.setClientTimeMillis(System.currentTimeMillis());
+        request.setToken(options.getToken());
         return requestSync(ProtocolConstants.HEARTBEAT_REQUEST, request);
     }
 
@@ -186,6 +187,7 @@ public class NameserverClient implements AutoCloseable {
         request.setServiceName(serviceName);
         request.setGroup(group);
         request.setHealthyOnly(healthyOnly);
+        request.setToken(options.getToken());
 
         CommonResponseBody response = requestSync(ProtocolConstants.QUERY_REQUEST, request);
         ensureSuccess(response, "查询失败");
@@ -244,9 +246,10 @@ public class NameserverClient implements AutoCloseable {
         UnsubscribeRequest request = new UnsubscribeRequest();
         request.setServiceName(serviceName);
         request.setGroup(group);
+        request.setToken(options.getToken());
         CommonResponseBody response = requestSync(ProtocolConstants.UNSUBSCRIBE_REQUEST, request);
-        subscriptions.remove(subscribeKey(serviceName, group));
         ensureSuccess(response, "取消订阅失败");
+        subscriptions.remove(subscribeKey(serviceName, group));
         return response;
     }
 

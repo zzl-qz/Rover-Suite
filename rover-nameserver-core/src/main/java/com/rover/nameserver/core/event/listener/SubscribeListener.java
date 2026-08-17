@@ -45,7 +45,7 @@ public class SubscribeListener implements EventListener<SubscribeEvent> {
                 request.getGroup(),
                 services.getRegistry().revisionOf(request.getServiceName()),
                 services.getRegistry().query(request.getServiceName(), request.getGroup(), false));
-        services.getPushService().pushSnapshot(snapshot);
+        services.getPushService().pushSnapshotTo(snapshot, event.getChannel());
 
         CommonResponseBody body = CommonResponseBody.success();
         body.setRevision(snapshot.getRevision());

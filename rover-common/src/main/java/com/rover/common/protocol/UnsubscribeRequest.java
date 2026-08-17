@@ -14,4 +14,6 @@ public class UnsubscribeRequest {
     private String serviceName;
     /** 分组，空表示全部解除 */
     private String group;
+    /** 集群鉴权 token，服务端开启鉴权时校验；空表示不鉴权 */
+    private String token;
 }

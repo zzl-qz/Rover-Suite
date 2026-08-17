@@ -25,6 +25,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -63,6 +64,9 @@ public class NameserverTcpServer {
     private EventLoopGroup workerGroup;
     private EventExecutorGroup bizGroup;
     private Channel serverChannel;
+    /** 生命周期保护：防止重复 start 创建第二套线程组。 */
+    private final AtomicBoolean started = new AtomicBoolean(false);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /** 便捷构造：默认内存注册表 + 默认写确认策略 */
     public NameserverTcpServer(NameserverServerOptions options) {
@@ -121,6 +125,13 @@ public class NameserverTcpServer {
      * @throws IllegalStateException 绑定或初始化失败（含端口被占用）
      */
     public void start() {
+        if (closed.get()) {
+            throw new IllegalStateException("Nameserver 已关闭，不能重新启动");
+        }
+        if (!started.compareAndSet(false, true)) {
+            log.warn("Nameserver 已启动，忽略重复 start");
+            return;
+        }
         // boss 单线程接受连接；worker 处理 IO 读写；biz 独立线程组跑业务，避免阻塞 IO 线程
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup();
@@ -162,6 +173,10 @@ public class NameserverTcpServer {
 
     /** 优雅关闭：按依赖逆序关闭管理口 → 健康检查 → 服务端 channel → 各线程组，可安全重复调用。 */
     public void shutdown() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        started.set(false);
         manageServer.shutdown();
         healthChecker.shutdown();
         eventBus.shutdown();

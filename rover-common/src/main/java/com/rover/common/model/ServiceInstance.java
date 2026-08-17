@@ -22,8 +22,8 @@ public class ServiceInstance {
     private String instanceId;
     /** 注册时间（毫秒） */
     private long registerTime;
-    /** 是否健康 */
-    private boolean healthy = true;
+    /** 是否健康；心跳线程和健康检查线程都会改，必须看得见对方的写 */
+    private volatile boolean healthy = true;
     /** 负载权重 */
     private int weight = 100;
     /** 逻辑分组 */

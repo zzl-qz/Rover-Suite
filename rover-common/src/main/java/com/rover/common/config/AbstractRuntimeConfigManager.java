@@ -19,6 +19,8 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManager {
 
+    private static final String MASKED_VALUE = "******";
+
     /** 配置项注册表：key -> ConfigItem */
     private final Map<String, ConfigItem> configs = new ConcurrentHashMap<>();
     /** overlay 持久化存储，供 status 接口展示路径 */
@@ -44,10 +46,21 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
     /** 注册一个可热更新、非敏感的内置配置项，并附带预设可选值（管理端渲染为可选择项，仍允许自定义输入）。 */
     protected final void addConfig(
             String key, String value, String defaultValue, String description, List<String> options) {
+        addConfig(key, value, defaultValue, description, options, false);
+    }
+
+    /** 注册内置配置项，可显式标记敏感值；对外列表会脱敏，overlay 仍保存真实值。 */
+    protected final void addConfig(
+            String key,
+            String value,
+            String defaultValue,
+            String description,
+            List<String> options,
+            boolean sensitive) {
         configs.put(
                 key,
                 new ConfigItem(
-                        key, value, defaultValue, description, ConfigApplyMode.HOT_RELOAD, false,
+                        key, value, defaultValue, description, ConfigApplyMode.HOT_RELOAD, sensitive,
                         options == null ? List.of() : List.copyOf(options)));
     }
 
@@ -66,7 +79,9 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
     public void seed(String key, String value) {
         ConfigItem item = configs.get(key);
         if (item != null && value != null) {
-            item.setValue(value);
+            String normalized = value.trim();
+            validate(key, normalized);
+            item.setValue(normalize(key, normalized));
         }
     }
 
@@ -78,7 +93,12 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
         Map<String, String> overlay = overlayStore.load();
         for (Map.Entry<String, String> entry : overlay.entrySet()) {
             if (supports(entry.getKey())) {
-                seed(entry.getKey(), entry.getValue());
+                try {
+                    seed(entry.getKey(), entry.getValue());
+                } catch (IllegalArgumentException ex) {
+                    throw new IllegalStateException(
+                            componentName + " 配置覆盖非法: key=" + entry.getKey(), ex);
+                }
             }
         }
         log.info("已加载 {} 配置覆盖: path={}, size={}",
@@ -87,7 +107,7 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
 
     /** 把当前全量配置以「空旧值 + 当前值」事件重放给运行时，用于 bind 后落地。 */
     public void reapplyAll() {
-        for (ConfigItem item : listConfigs()) {
+        for (ConfigItem item : rawConfigCopies()) {
             ConfigChangeEvent event = new ConfigChangeEvent(
                     item.getKey(),
                     null,
@@ -102,7 +122,12 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
     public List<ConfigItem> listConfigs() {
         List<ConfigItem> items = new ArrayList<>(configs.size());
         for (ConfigItem item : configs.values()) {
-            items.add(copyOf(item));
+            ConfigItem copy = copyOf(item);
+            if (copy.isSensitive()) {
+                copy.setValue(MASKED_VALUE);
+                copy.setDefaultValue(MASKED_VALUE);
+            }
+            items.add(copy);
         }
         items.sort(Comparator.comparing(ConfigItem::getKey));
         return items;
@@ -114,7 +139,7 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
     }
 
     @Override
-    public ConfigChangeEvent updateConfig(String key, String value) {
+    public synchronized ConfigChangeEvent updateConfig(String key, String value) {
         ConfigItem item = configs.get(key);
         if (item == null) {
             throw new IllegalArgumentException("未知 " + componentName + " 配置项：" + key);
@@ -127,8 +152,6 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
         String normalized = value == null ? "" : value.trim();
         validate(key, normalized);
         normalized = normalize(key, normalized);
-        item.setValue(normalized);
-
         ConfigChangeEvent event = new ConfigChangeEvent(
                 item.getKey(),
                 oldValue,
@@ -136,14 +159,30 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
                 item.getApplyMode(),
                 System.currentTimeMillis());
         applyChange(event);
-        persistOverlay();
-        return event;
+        item.setValue(normalized);
+        try {
+            persistOverlay();
+            return event;
+        } catch (RuntimeException persistError) {
+            item.setValue(oldValue);
+            try {
+                applyChange(new ConfigChangeEvent(
+                        item.getKey(),
+                        normalized,
+                        oldValue,
+                        item.getApplyMode(),
+                        System.currentTimeMillis()));
+            } catch (RuntimeException rollbackError) {
+                persistError.addSuppressed(rollbackError);
+            }
+            throw persistError;
+        }
     }
 
     /** 把当前全量配置按键序写入 overlay 文件。 */
     private void persistOverlay() {
         Map<String, String> snapshot = new LinkedHashMap<>();
-        for (ConfigItem item : listConfigs()) {
+        for (ConfigItem item : rawConfigCopies()) {
             snapshot.put(item.getKey(), item.getValue());
         }
         overlayStore.save(snapshot);
@@ -159,5 +198,14 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
                 item.getApplyMode(),
                 item.isSensitive(),
                 item.getOptions() == null ? List.of() : List.copyOf(item.getOptions()));
+    }
+
+    private List<ConfigItem> rawConfigCopies() {
+        List<ConfigItem> items = new ArrayList<>(configs.size());
+        for (ConfigItem item : configs.values()) {
+            items.add(copyOf(item));
+        }
+        items.sort(Comparator.comparing(ConfigItem::getKey));
+        return items;
     }
 }

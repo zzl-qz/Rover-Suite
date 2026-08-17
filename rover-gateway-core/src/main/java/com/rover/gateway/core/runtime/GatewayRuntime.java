@@ -144,7 +144,9 @@ public class GatewayRuntime {
         String pluginDir = this.filterSettings.getPluginDir();
         this.loadBalancer.set(LoadBalancerFactory.create(LoadBalancer.ROUND_ROBIN, pluginDir));
         this.loadBalanceStrategy.set(LoadBalancer.ROUND_ROBIN);
-        this.routeMatcherRef.set(new RouteMatcher(routes == null ? List.of() : routes));
+        List<RouteConfig> initialRoutes = routeValidator.normalizeAndValidate(
+                routes == null ? List.of() : routes);
+        this.routeMatcherRef.set(new RouteMatcher(initialRoutes));
         rebuildFilters();
     }
 
@@ -256,7 +258,7 @@ public class GatewayRuntime {
     }
 
     /** 新增或按 businessPrefix/id 替换单条路由，返回更新后的完整路由表。 */
-    public List<RouteConfig> addOrReplaceRoute(RouteConfig route) {
+    public synchronized List<RouteConfig> addOrReplaceRoute(RouteConfig route) {
         List<RouteConfig> current = new ArrayList<>(getRouteMatcher().listRoutes());
         String prefix = route.getBusinessPrefix();
         current.removeIf(item -> prefix != null && prefix.equals(item.getBusinessPrefix()));
@@ -268,7 +270,7 @@ public class GatewayRuntime {
     }
 
     /** 按 id 或 businessPrefix 删除路由，返回删除后的完整路由表。 */
-    public List<RouteConfig> removeRoute(String idOrPrefix) {
+    public synchronized List<RouteConfig> removeRoute(String idOrPrefix) {
         if (idOrPrefix == null || idOrPrefix.isBlank()) {
             throw new IllegalArgumentException("删除路由需要 id 或 businessPrefix");
         }
@@ -302,5 +304,11 @@ public class GatewayRuntime {
                 loadBalancer.get(),
                 metricsRegistry);
         filters.set(assembled);
+    }
+
+    /** 释放运行时持有的插件资源。 */
+    public void close() {
+        assembler.close();
+        LoadBalancerFactory.shutdown();
     }
 }

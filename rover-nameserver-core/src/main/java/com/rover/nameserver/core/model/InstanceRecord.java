@@ -15,8 +15,8 @@ public class InstanceRecord {
 
     /** 对外实例信息 */
     private ServiceInstance instance;
-    /** 最近心跳时间 */
-    private long lastHeartbeatMillis;
+    /** 最近心跳时间；健康检查线程要读，必须看得见心跳线程的写 */
+    private volatile long lastHeartbeatMillis;
 
     /**
      * 从注册请求构造实例记录：补全服务端默认值（注册时间、健康状态、权重、元数据），
@@ -50,11 +50,34 @@ public class InstanceRecord {
         return record;
     }
 
-    /** 刷新心跳时间并恢复健康；被健康检查标不健康的实例，下次心跳即可自动恢复。 */
-    public void touchHeartbeat() {
+    /**
+     * 刷新心跳时间并恢复健康。
+     * @return 此前不健康、这次被拉回健康则为 true，调用方要 bump revision 并推送
+     */
+    public synchronized boolean touchHeartbeat() {
         this.lastHeartbeatMillis = System.currentTimeMillis();
-        if (this.instance != null) {
-            this.instance.setHealthy(true);
+        if (this.instance == null) {
+            return false;
         }
+        boolean recovered = !this.instance.isHealthy();
+        this.instance.setHealthy(true);
+        return recovered;
+    }
+
+    /**
+     * 仅当最近心跳仍早于截止时间时标记不健康。
+     * 与 {@link #touchHeartbeat()} 使用同一把记录锁，避免新心跳插在超时检查与状态翻转之间。
+     *
+     * @param heartbeatDeadlineMillis 最近心跳必须小于等于此时间才算超时
+     * @return 健康状态是否从 true 翻转为 false
+     */
+    public synchronized boolean markUnhealthyIfExpired(long heartbeatDeadlineMillis) {
+        if (instance == null
+                || !instance.isHealthy()
+                || lastHeartbeatMillis > heartbeatDeadlineMillis) {
+            return false;
+        }
+        instance.setHealthy(false);
+        return true;
     }
 }

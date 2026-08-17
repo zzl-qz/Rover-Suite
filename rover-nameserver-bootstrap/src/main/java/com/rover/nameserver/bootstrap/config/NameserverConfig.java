@@ -64,7 +64,7 @@ public class NameserverConfig {
         private int managePort = NameserverConstants.DEFAULT_MANAGE_PORT;
         /** HTTP 管理口监听地址，默认 0.0.0.0 */
         private String manageBindHost = "0.0.0.0";
-        /** 集群协议鉴权 token（注册/注销/订阅）；空表示不鉴权 */
+        /** 集群协议鉴权 token（所有请求）；空表示不鉴权 */
         private String token;
         /** HTTP 管理口鉴权 token；空表示不鉴权 */
         private String adminToken;

@@ -110,17 +110,25 @@ public class NameserverRequestDispatcher {
     }
 
     private void publishHeartbeat(Channel channel, RoverMessage message) {
+        HeartbeatRequest request = RoverMessageCodecSupport.decodeBody(message, HeartbeatRequest.class);
+        if (!authorized(channel, message, request.getToken())) {
+            return;
+        }
         HeartbeatEvent event = new HeartbeatEvent();
         fillBase(event, channel, message);
-        event.setRequest(RoverMessageCodecSupport.decodeBody(message, HeartbeatRequest.class));
+        event.setRequest(request);
         log.debug("{}", NameserverTrace.of(event, "publish-HeartbeatEvent"));
         eventBus.publish(event);
     }
 
     private void publishQuery(Channel channel, RoverMessage message) {
+        QueryRequest request = RoverMessageCodecSupport.decodeBody(message, QueryRequest.class);
+        if (!authorized(channel, message, request.getToken())) {
+            return;
+        }
         QueryEvent event = new QueryEvent();
         fillBase(event, channel, message);
-        event.setRequest(RoverMessageCodecSupport.decodeBody(message, QueryRequest.class));
+        event.setRequest(request);
         log.debug("{}", NameserverTrace.of(event, "publish-QueryEvent"));
         eventBus.publish(event);
     }
@@ -138,9 +146,13 @@ public class NameserverRequestDispatcher {
     }
 
     private void publishUnsubscribe(Channel channel, RoverMessage message) {
+        UnsubscribeRequest request = RoverMessageCodecSupport.decodeBody(message, UnsubscribeRequest.class);
+        if (!authorized(channel, message, request.getToken())) {
+            return;
+        }
         UnsubscribeEvent event = new UnsubscribeEvent();
         fillBase(event, channel, message);
-        event.setRequest(RoverMessageCodecSupport.decodeBody(message, UnsubscribeRequest.class));
+        event.setRequest(request);
         log.debug("{}", NameserverTrace.of(event, "publish-UnsubscribeEvent"));
         eventBus.publish(event);
     }
@@ -154,7 +166,7 @@ public class NameserverRequestDispatcher {
 
     /**
      * 校验协议层 token。服务端未配置 token 时放行；配置后必须与请求携带的 token 完全一致，
-     * 否则回 401 并阻止事件进入业务 Listener，实现注册/注销/订阅的纵深防御。
+     * 否则回 401 并阻止事件进入业务 Listener，保证所有协议请求使用同一套鉴权语义。
      */
     private boolean authorized(Channel channel, RoverMessage message, String providedToken) {
         String expected = services.getOptions().getToken();

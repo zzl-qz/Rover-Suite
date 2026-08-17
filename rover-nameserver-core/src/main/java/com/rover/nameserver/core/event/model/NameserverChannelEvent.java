@@ -1,6 +1,7 @@
 package com.rover.nameserver.core.event.model;
 
 import com.rover.common.event.Event;
+import com.rover.common.event.OrderedEvent;
 import com.rover.common.protocol.AckMode;
 import io.netty.channel.Channel;
 import lombok.Data;
@@ -13,11 +14,17 @@ import lombok.EqualsAndHashCode;
  */
 @Data
 @EqualsAndHashCode(callSuper = false)
-public abstract class NameserverChannelEvent extends Event {
+public abstract class NameserverChannelEvent extends Event implements OrderedEvent {
 
     private Channel channel;
     private long requestId;
     private boolean oneway;
     /** 协商后的 ACK 模式；部分事件用得到 */
     private AckMode ackMode;
+
+    /** 同一条连接上的注册 / 心跳 / 断线按发布顺序串行，避免断线抢跑把实例留下。 */
+    @Override
+    public Object orderKey() {
+        return channel;
+    }
 }

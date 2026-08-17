@@ -8,6 +8,8 @@ import com.rover.nameserver.core.event.model.HeartbeatEvent;
 import com.rover.nameserver.core.event.support.NameserverChannelSupport;
 import com.rover.nameserver.core.event.support.NameserverServices;
 import com.rover.nameserver.core.event.support.NameserverTrace;
+import com.rover.nameserver.core.registry.HeartbeatResult;
+import com.rover.nameserver.core.registry.RegistrySnapshot;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -37,8 +39,9 @@ public class HeartbeatListener implements EventListener<HeartbeatEvent> {
                     NameserverChannelSupport.badRequest("心跳参数不完整"));
             return;
         }
-        boolean ok = services.getRegistry().heartbeat(request.getServiceName(), request.getInstanceId());
-        if (!ok) {
+        HeartbeatResult result = services.getRegistry()
+                .heartbeat(request.getServiceName(), request.getInstanceId());
+        if (!result.isFound()) {
             log.warn("{}", NameserverTrace.withServiceInstance(
                     event, "heartbeat-not-found", request.getServiceName(), request.getInstanceId()));
             NameserverChannelSupport.replyFail(
@@ -48,6 +51,10 @@ public class HeartbeatListener implements EventListener<HeartbeatEvent> {
                     StatusConstants.SERVICE_NOT_FOUND,
                     "实例不存在，请先注册");
             return;
+        }
+        RegistrySnapshot recovered = result.healthRecoveredSnapshot();
+        if (recovered != null) {
+            services.getPushService().pushSnapshot(recovered);
         }
         services.getMetrics().heartbeat(request.getServiceName(), request.getInstanceId());
         CommonResponseBody body = CommonResponseBody.success();

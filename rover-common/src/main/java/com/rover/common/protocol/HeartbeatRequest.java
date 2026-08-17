@@ -20,4 +20,6 @@ public class HeartbeatRequest {
     private long clientTimeMillis;
     /** 扩展信息，预留 */
     private Map<String, String> metadata = new HashMap<>();
+    /** 集群鉴权 token，服务端开启鉴权时校验；空表示不鉴权 */
+    private String token;
 }

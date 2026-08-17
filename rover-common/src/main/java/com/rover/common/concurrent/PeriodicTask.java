@@ -21,6 +21,8 @@ public class PeriodicTask implements AutoCloseable {
     private final ScheduledExecutorService executor;
     /** 是否已启动，CAS 保证 start 幂等 */
     private final AtomicBoolean started = new AtomicBoolean(false);
+    /** stop/close 为终态；底层 executor 关闭后不再伪装成可重启。 */
+    private final AtomicBoolean closed = new AtomicBoolean(false);
     /** 当前调度任务的句柄，stop 时用来取消 */
     private volatile ScheduledFuture<?> future;
 
@@ -36,7 +38,10 @@ public class PeriodicTask implements AutoCloseable {
     }
 
     /** 固定延迟调度，语义接近 while+sleep 但更好停；幂等，重复调用忽略。 */
-    public void start(Runnable task, long initialDelayMs, long periodMs) {
+    public synchronized void start(Runnable task, long initialDelayMs, long periodMs) {
+        if (closed.get()) {
+            throw new IllegalStateException("周期任务已关闭，不能重新启动: " + name);
+        }
         // compareAndSet 保证只启动一次，重复调用直接忽略
         if (!started.compareAndSet(false, true)) {
             return;
@@ -49,8 +54,10 @@ public class PeriodicTask implements AutoCloseable {
     }
 
     /** 停止任务：取消当前调度并关闭内部线程池，幂等可重复调用。 */
-    public void stop() {
-        started.set(false);
+    public synchronized void stop() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
         ScheduledFuture<?> current = future;
         if (current != null) {
             current.cancel(false); // 不中断正在执行的那一次，等它自然结束

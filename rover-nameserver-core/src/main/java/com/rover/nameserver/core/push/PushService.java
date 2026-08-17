@@ -73,15 +73,7 @@ public class PushService {
             return;
         }
         metrics.push(snapshot.getServiceName(), subscribers.size());
-
-        String epoch = generation.epoch();
-        ServicePushBody body = new ServicePushBody();
-        body.setServiceName(snapshot.getServiceName());
-        body.setGroup(snapshot.getGroup());
-        body.setInstances(snapshot.getInstances());
-        body.setRevision(snapshot.getRevision());
-        body.setEpoch(epoch);
-        body.setPushType(PushType.SNAPSHOT.name());
+        ServicePushBody body = toPushBody(snapshot);
 
         long pushId = pushIdGenerator.getAndIncrement();
         for (Channel channel : subscribers) {
@@ -102,8 +94,35 @@ public class PushService {
         log.info("推送服务变更: service={}, revision={}, epoch={}, term={}, subscribers={}",
                 snapshot.getServiceName(),
                 snapshot.getRevision(),
-                epoch,
+                body.getEpoch(),
                 generation.term(),
                 subscribers.size());
+    }
+
+    /** 初次订阅只向发起订阅的连接发送当前快照，避免把老订阅者全部广播一遍。 */
+    public void pushSnapshotTo(RegistrySnapshot snapshot, Channel channel) {
+        if (!pushEnabled.get() || snapshot == null || channel == null || !channel.isActive()) {
+            return;
+        }
+        metrics.push(snapshot.getServiceName(), 1);
+        ServicePushBody body = toPushBody(snapshot);
+        long pushId = pushIdGenerator.getAndIncrement();
+        channel.writeAndFlush(RoverMessageCodecSupport.push(pushId, body)).addListener(future -> {
+            if (!future.isSuccess()) {
+                log.warn("初始快照推送失败: service={}, channel={}",
+                        snapshot.getServiceName(), channel.remoteAddress(), future.cause());
+            }
+        });
+    }
+
+    private ServicePushBody toPushBody(RegistrySnapshot snapshot) {
+        ServicePushBody body = new ServicePushBody();
+        body.setServiceName(snapshot.getServiceName());
+        body.setGroup(snapshot.getGroup());
+        body.setInstances(snapshot.getInstances());
+        body.setRevision(snapshot.getRevision());
+        body.setEpoch(generation.epoch());
+        body.setPushType(PushType.SNAPSHOT.name());
+        return body;
     }
 }

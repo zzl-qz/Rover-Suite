@@ -67,27 +67,35 @@ public class InstanceCache {
             long revision,
             List<ServiceInstance> instances) {
         String key = cacheKey(serviceName, group);
-        CacheEntry current = cache.get(key);
         List<ServiceInstance> incoming = instances == null ? List.of() : instances;
+        ApplyOutcome[] outcome = {ApplyOutcome.APPLIED};
+        CacheEntry[] notifyEntry = new CacheEntry[1];
+        cache.compute(key, (ignored, current) -> {
+            // 推空保护：疑似误推空，先保住本地，并累计拒绝次数触发强制对账
+            if (incoming.isEmpty() && current != null && !current.instances.isEmpty()) {
+                outcome[0] = ApplyOutcome.REJECTED_EMPTY_PROTECT;
+                if (incrementReject(current)) {
+                    notifyEntry[0] = current;
+                }
+                return current;
+            }
 
-        // 推空保护：疑似误推空，先保住本地，并累计拒绝次数触发强制对账
-        if (incoming.isEmpty() && current != null && !current.instances.isEmpty()) {
-            bumpReject(current);
-            return ApplyOutcome.REJECTED_EMPTY_PROTECT;
+            // 同世代且更旧 → 拒（乱序旧包）；epoch 为空视为老协议，不做拒旧
+            if (isOlderSameEpoch(current, epoch, revision)) {
+                outcome[0] = ApplyOutcome.REJECTED_STALE;
+                if (incrementReject(current)) {
+                    notifyEntry[0] = current;
+                }
+                return current;
+            }
+
+            return new CacheEntry(
+                    serviceName, group, epoch, revision, copy(incoming), new AtomicInteger());
+        });
+        if (notifyEntry[0] != null) {
+            notifyForceQuery(notifyEntry[0]);
         }
-
-        // 同世代且更旧 → 拒（乱序旧包）；epoch 为空视为老协议，不做拒旧
-        if (current != null
-                && epoch != null
-                && !epoch.isBlank()
-                && epoch.equals(current.epoch)
-                && revision < current.revision) {
-            bumpReject(current);
-            return ApplyOutcome.REJECTED_STALE;
-        }
-
-        cache.put(key, new CacheEntry(serviceName, group, epoch, revision, copy(incoming), new AtomicInteger()));
-        return ApplyOutcome.APPLIED;
+        return outcome[0];
     }
 
     /**
@@ -100,7 +108,14 @@ public class InstanceCache {
             long revision,
             List<ServiceInstance> instances) {
         String key = cacheKey(serviceName, group);
-        cache.put(key, new CacheEntry(serviceName, group, epoch, revision, copy(instances), new AtomicInteger()));
+        cache.compute(key, (ignored, current) -> {
+            // query 可能比并发 push 更晚返回；同 epoch 下不得用旧快照覆盖新推送。
+            if (isOlderSameEpoch(current, epoch, revision)) {
+                return current;
+            }
+            return new CacheEntry(
+                    serviceName, group, epoch, revision, copy(instances), new AtomicInteger());
+        });
     }
 
     /** @deprecated 兼容旧调用，等价于对账覆盖 */
@@ -163,14 +178,22 @@ public class InstanceCache {
         cache.clear();
     }
 
-    private void bumpReject(CacheEntry current) {
-        int n = current.rejectCount.incrementAndGet();
-        // 刚达到阈值时通知一次，避免每次拒绝都刷
-        if (n == FORCE_QUERY_AFTER_REJECTS) {
-            for (BiConsumer<String, String> listener : forceQueryListeners) {
-                listener.accept(current.serviceName, current.group);
-            }
+    private boolean incrementReject(CacheEntry current) {
+        return current.rejectCount.incrementAndGet() == FORCE_QUERY_AFTER_REJECTS;
+    }
+
+    private void notifyForceQuery(CacheEntry current) {
+        for (BiConsumer<String, String> listener : forceQueryListeners) {
+            listener.accept(current.serviceName, current.group);
         }
+    }
+
+    private boolean isOlderSameEpoch(CacheEntry current, String epoch, long revision) {
+        return current != null
+                && epoch != null
+                && !epoch.isBlank()
+                && epoch.equals(current.epoch)
+                && revision < current.revision;
     }
 
     private String cacheKey(String serviceName, String group) {

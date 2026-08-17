@@ -68,5 +68,7 @@ public final class ProtocolFlags {
             throw new IllegalArgumentException(
                     "协议 flags 包含尚未支持的扩展位: 0x" + Integer.toHexString(unknown));
         }
+        // ACK_MODE_MASK 只是位范围；0b11 落在掩码内但没有对应 AckMode，也必须在解码层拒绝。
+        ackModeOf(flags);
     }
 }

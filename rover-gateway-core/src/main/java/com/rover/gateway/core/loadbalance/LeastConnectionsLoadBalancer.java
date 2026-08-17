@@ -31,9 +31,8 @@ public class LeastConnectionsLoadBalancer implements LoadBalancer {
         ServiceInstance best = null;
         int bestCount = Integer.MAX_VALUE;
         for (ServiceInstance instance : instances) {
-            int count = inFlight
-                    .computeIfAbsent(instanceKey(instance), ignored -> new AtomicInteger())
-                    .get();
+            AtomicInteger counter = inFlight.get(instanceKey(instance));
+            int count = counter == null ? 0 : counter.get();
             if (count < bestCount) {
                 bestCount = count;
                 best = instance;
@@ -57,7 +56,10 @@ public class LeastConnectionsLoadBalancer implements LoadBalancer {
         }
         AtomicInteger counter = inFlight.get(instanceKey(instance));
         if (counter != null) {
-            counter.updateAndGet(v -> Math.max(0, v - 1));
+            int remaining = counter.updateAndGet(v -> Math.max(0, v - 1));
+            if (remaining == 0) {
+                inFlight.remove(instanceKey(instance), counter);
+            }
         }
     }
 

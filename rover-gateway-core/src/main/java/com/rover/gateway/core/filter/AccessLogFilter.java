@@ -4,6 +4,7 @@ import com.rover.common.spi.filter.Filter;
 import com.rover.common.spi.filter.FilterChain;
 import com.rover.common.spi.filter.RequestContext;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.proxy.HttpProxyClient;
 import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 
@@ -57,7 +58,9 @@ public class AccessLogFilter implements Filter {
                     gatewayContext.getRequestPath(),
                     route == null ? "-" : route.getId(),
                     route == null ? "-" : route.getBusinessPrefix(),
-                    gatewayContext.getTargetUrl() == null ? "-" : gatewayContext.getTargetUrl(),
+                    gatewayContext.getTargetUrl() == null
+                            ? "-"
+                            : HttpProxyClient.redactTargetUrl(gatewayContext.getTargetUrl()),
                     statusCode == null ? "-" : statusCode,
                     costMillis);
         });

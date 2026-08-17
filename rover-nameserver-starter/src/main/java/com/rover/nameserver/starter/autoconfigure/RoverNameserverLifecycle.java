@@ -112,7 +112,7 @@ public class RoverNameserverLifecycle implements ApplicationListener<Application
                     registerRequest.getHost(),
                     registerRequest.getPort());
         } catch (Exception ex) {
-            log.warn("注册失败，{}ms 后重试: {}", properties.getRegisterRetryIntervalMs(), ex.getMessage());
+            log.warn("注册失败，{}ms 后重试", properties.getRegisterRetryIntervalMs(), ex);
         }
     }
 

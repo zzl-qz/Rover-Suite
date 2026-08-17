@@ -13,6 +13,8 @@ import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.QueryStringDecoder;
+import io.netty.util.concurrent.DefaultEventExecutorGroup;
+import io.netty.util.concurrent.EventExecutorGroup;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -22,6 +24,9 @@ import lombok.extern.slf4j.Slf4j;
  */
 @Slf4j
 public class NameserverHttpManageServer {
+
+    /** 管理 API 可能执行配置落盘，必须与 Netty IO EventLoop 隔离。 */
+    private static final int MANAGE_BIZ_THREADS = 2;
 
     /** HTTP 请求体大小上限（字节），注册/心跳请求都很小，1MB 足够。 */
     private static final int MAX_BODY_BYTES = 1024 * 1024;
@@ -37,6 +42,8 @@ public class NameserverHttpManageServer {
     private EventLoopGroup bossGroup;
     /** Netty worker 线程组，负责 IO */
     private EventLoopGroup workerGroup;
+    /** 管理 API 业务线程组，承载阻塞文件 IO。 */
+    private EventExecutorGroup bizGroup;
     /** 服务端 channel，关闭时使用 */
     private Channel serverChannel;
 
@@ -54,6 +61,7 @@ public class NameserverHttpManageServer {
         }
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup(1);
+        bizGroup = new DefaultEventExecutorGroup(MANAGE_BIZ_THREADS);
         try {
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
@@ -64,7 +72,7 @@ public class NameserverHttpManageServer {
                             ch.pipeline()
                                     .addLast(new HttpServerCodec())
                                     .addLast(new HttpObjectAggregator(MAX_BODY_BYTES))
-                                    .addLast(new SimpleChannelInboundHandler<FullHttpRequest>() {
+                                    .addLast(bizGroup, new SimpleChannelInboundHandler<FullHttpRequest>() {
                                         @Override
                                         protected void channelRead0(
                                                 io.netty.channel.ChannelHandlerContext ctx,
@@ -90,6 +98,9 @@ public class NameserverHttpManageServer {
         }
         if (workerGroup != null) {
             workerGroup.shutdownGracefully();
+        }
+        if (bizGroup != null) {
+            bizGroup.shutdownGracefully();
         }
         if (bossGroup != null) {
             bossGroup.shutdownGracefully();

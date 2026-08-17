@@ -103,7 +103,7 @@ public class RouteAndProxyFilter implements Filter {
                 route.getId(),
                 route.getBusinessPrefix(),
                 route.getServiceName(),
-                targetUrl,
+                HttpProxyClient.redactTargetUrl(targetUrl),
                 loadBalancer == null ? "none" : loadBalancer.name());
 
         ServiceInstance instance = chosen.instance();
@@ -197,11 +197,7 @@ public class RouteAndProxyFilter implements Filter {
     }
 
     private static String resolveClientIp(GatewayRequestContext context) {
-        String forwarded = context.getRequest().headers().get("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            int comma = forwarded.indexOf(',');
-            return (comma >= 0 ? forwarded.substring(0, comma) : forwarded).trim();
-        }
+        // 未配置可信代理列表前，只信任直连地址；客户端可自行伪造 X-Forwarded-For。
         SocketAddress remote = context.getChannelContext().channel().remoteAddress();
         if (remote instanceof InetSocketAddress inet) {
             return inet.getAddress() == null ? inet.getHostString() : inet.getAddress().getHostAddress();
@@ -212,8 +208,9 @@ public class RouteAndProxyFilter implements Filter {
     private String joinUrl(String baseUrl, String requestUri, String requestPath, String stripPrefix) {
         String query = extractQuery(requestUri);
         String forwardPath = requestPath;
-        if (shouldStripPrefix(stripPrefix, requestPath)) {
-            forwardPath = requestPath.substring(stripPrefix.length());
+        String normalizedStripPrefix = normalizePrefix(stripPrefix);
+        if (shouldStripPrefix(normalizedStripPrefix, requestPath)) {
+            forwardPath = requestPath.substring(normalizedStripPrefix.length());
             if (forwardPath.isBlank()) {
                 forwardPath = "/";
             }
@@ -226,6 +223,17 @@ public class RouteAndProxyFilter implements Filter {
             return false;
         }
         return requestPath.equals(stripPrefix) || requestPath.startsWith(stripPrefix + "/");
+    }
+
+    private String normalizePrefix(String prefix) {
+        if (prefix == null) {
+            return null;
+        }
+        String normalized = prefix.trim();
+        while (normalized.length() > 1 && normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 
     private String extractQuery(String requestUri) {

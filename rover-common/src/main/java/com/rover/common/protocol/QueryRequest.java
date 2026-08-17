@@ -16,4 +16,6 @@ public class QueryRequest {
     private String group;
     /** 是否只返回健康实例 */
     private boolean healthyOnly = true;
+    /** 集群鉴权 token，服务端开启鉴权时校验；空表示不鉴权 */
+    private String token;
 }

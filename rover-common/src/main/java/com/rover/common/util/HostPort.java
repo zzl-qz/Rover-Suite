@@ -33,11 +33,25 @@ public record HostPort(String host, int port) {
             return null;
         }
         String value = raw.trim();
-        int idx = value.lastIndexOf(':');
+        int idx;
+        String host;
+        if (value.startsWith("[")) {
+            int closing = value.indexOf(']');
+            if (closing <= 1 || closing + 1 >= value.length() || value.charAt(closing + 1) != ':') {
+                throw new IllegalArgumentException(fieldName + " IPv6 格式应为 [host]:port，当前=" + raw);
+            }
+            host = value.substring(1, closing).trim();
+            idx = closing + 1;
+        } else {
+            idx = value.lastIndexOf(':');
+            if (value.indexOf(':') != idx) {
+                throw new IllegalArgumentException(fieldName + " IPv6 地址必须用 [] 包裹，当前=" + raw);
+            }
+            host = idx <= 0 ? "" : value.substring(0, idx).trim();
+        }
         if (idx <= 0 || idx == value.length() - 1) {
             throw new IllegalArgumentException(fieldName + " 格式应为 host:port，当前=" + raw);
         }
-        String host = value.substring(0, idx).trim();
         int port;
         try {
             port = Integer.parseInt(value.substring(idx + 1).trim());
