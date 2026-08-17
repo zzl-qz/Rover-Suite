@@ -3,6 +3,7 @@ package com.rover.admin.web;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.rover.admin.service.AdminConfigService;
 import com.rover.admin.service.ConfigUpdateResult;
+import com.rover.common.constants.ManageApiPaths;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,7 +24,7 @@ import lombok.extern.slf4j.Slf4j;
  * 页面为静态 SPA（src/main/resources/static），通过同源 /api/* 调用本控制器。
  */
 @RestController
-@RequestMapping("/api")
+@RequestMapping(AdminApiPaths.PREFIX)
 @Slf4j
 public class AdminConfigController {
 
@@ -34,7 +35,7 @@ public class AdminConfigController {
     }
 
     /** 仪表盘聚合数据：组件状态 + 发现模式 + 指标快照 + 自洽校验。 */
-    @GetMapping("/overview")
+    @GetMapping(AdminApiPaths.OVERVIEW)
     public Map<String, Object> overview() {
         CompletableFuture<Map<String, Object>> status =
                 CompletableFuture.supplyAsync(configService::loadStatus);
@@ -53,43 +54,44 @@ public class AdminConfigController {
     }
 
     /** 路由列表。 */
-    @GetMapping("/routes")
+    @GetMapping(AdminApiPaths.ROUTES)
     public List<Map<String, Object>> routes() {
         return configService.listRoutes();
     }
 
     /** 新增/更新一条路由，返回更新后的完整路由表响应。 */
-    @PostMapping("/routes")
+    @PostMapping(AdminApiPaths.ROUTES)
     public Map<String, Object> saveRoute(@RequestBody Map<String, String> route) {
         return configService.saveRoute(route);
     }
 
     /** 按 businessPrefix 删除路由。 */
-    @DeleteMapping("/routes")
-    public Map<String, Object> deleteRoute(@RequestParam("businessPrefix") String businessPrefix) {
+    @DeleteMapping(AdminApiPaths.ROUTES)
+    public Map<String, Object> deleteRoute(
+            @RequestParam(ManageApiPaths.PARAM_BUSINESS_PREFIX) String businessPrefix) {
         return configService.deleteRoute(businessPrefix);
     }
 
     /** 注册实例列表（Nameserver 管理口）。 */
-    @GetMapping("/instances")
+    @GetMapping(AdminApiPaths.INSTANCES)
     public List<Map<String, Object>> instances() {
         return configService.listInstances();
     }
 
     /** Nameserver 指标快照（注册概况 + 生命周期计数 + TCP 连接 + JVM）。 */
-    @GetMapping("/nameserver/metrics")
+    @GetMapping(AdminApiPaths.NAMESERVER_METRICS)
     public JsonNode nameserverMetrics() {
         return safeMetrics(() -> configService.loadNameserverMetrics());
     }
 
     /** Nameserver 最近事件列表。 */
-    @GetMapping("/events")
+    @GetMapping(AdminApiPaths.EVENTS)
     public List<Map<String, Object>> events() {
         return configService.loadEvents();
     }
 
     /** Gateway 请求链路时间线，支持 traceId/path/slow 过滤。 */
-    @GetMapping("/traces")
+    @GetMapping(AdminApiPaths.TRACES)
     public JsonNode traces(@RequestParam(required = false) String traceId,
                            @RequestParam(required = false) String path,
                            @RequestParam(required = false) String slow) {
@@ -100,13 +102,13 @@ public class AdminConfigController {
     }
 
     /** 配置列表（gateway + nameserver 聚合）。 */
-    @GetMapping("/configs")
+    @GetMapping(AdminApiPaths.CONFIGS)
     public List<Map<String, Object>> configs() {
         return configService.listConfigs();
     }
 
     /** 更新配置：body 形如 {"component":"gateway","key":"...","value":"..."}。 */
-    @PostMapping("/configs")
+    @PostMapping(AdminApiPaths.CONFIGS)
     public Map<String, Object> updateConfig(@RequestBody Map<String, String> body) {
         String component = body.getOrDefault("component", "");
         String key = body.getOrDefault("key", "");

@@ -1,6 +1,7 @@
 package com.rover.gateway.bootstrap.config;
 
 import com.rover.common.config.YamlConfigLoader;
+import com.rover.common.config.ConfigFiles;
 
 /**
  * Author: Daylight
@@ -9,7 +10,7 @@ import com.rover.common.config.YamlConfigLoader;
  */
 public class GatewayConfigLoader {
 
-    private static final String CONFIG_FILE = "rover-gateway.yml";
+    private static final String CONFIG_FILE = ConfigFiles.GATEWAY_YAML;
 
     private final YamlConfigLoader<GatewayConfig> delegate =
             new YamlConfigLoader<>(CONFIG_FILE, GatewayConfig.class, GatewayConfig::validate);

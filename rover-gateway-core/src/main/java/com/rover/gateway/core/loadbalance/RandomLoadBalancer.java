@@ -3,6 +3,7 @@ package com.rover.gateway.core.loadbalance;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.loadbalance.LoadBalanceContext;
 import com.rover.common.spi.loadbalance.LoadBalancer;
+import com.rover.common.spi.loadbalance.BuiltinLoadBalanceStrategy;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -15,7 +16,7 @@ public class RandomLoadBalancer implements LoadBalancer {
 
     @Override
     public String name() {
-        return "random";
+        return BuiltinLoadBalanceStrategy.RANDOM.configName();
     }
 
     @Override

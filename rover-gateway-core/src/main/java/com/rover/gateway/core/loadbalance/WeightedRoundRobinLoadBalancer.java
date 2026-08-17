@@ -3,6 +3,7 @@ package com.rover.gateway.core.loadbalance;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.loadbalance.LoadBalanceContext;
 import com.rover.common.spi.loadbalance.LoadBalancer;
+import com.rover.common.spi.loadbalance.BuiltinLoadBalanceStrategy;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,7 +24,7 @@ public class WeightedRoundRobinLoadBalancer implements LoadBalancer {
 
     @Override
     public String name() {
-        return "weighted_round_robin";
+        return BuiltinLoadBalanceStrategy.WEIGHTED_ROUND_ROBIN.configName();
     }
 
     @Override

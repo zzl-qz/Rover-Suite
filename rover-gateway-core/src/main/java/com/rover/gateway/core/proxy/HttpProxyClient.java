@@ -1,6 +1,8 @@
 package com.rover.gateway.core.proxy;
 
 import com.rover.common.json.JsonCodec;
+import com.rover.common.constants.HttpConstants;
+import com.rover.gateway.core.config.GatewayDefaults;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -24,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -40,13 +43,23 @@ import lombok.extern.slf4j.Slf4j;
 public class HttpProxyClient {
 
     /** 默认连接超时（毫秒）。 */
-    public static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = 3000;
+    public static final int DEFAULT_CONNECT_TIMEOUT_MILLIS = GatewayDefaults.CONNECT_TIMEOUT_MILLIS;
 
     /** 默认单次请求超时（毫秒）。 */
-    public static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = 30000;
+    public static final int DEFAULT_REQUEST_TIMEOUT_MILLIS = GatewayDefaults.REQUEST_TIMEOUT_MILLIS;
 
     /** 后端响应体最大缓冲；当前仍回写 FullHttpResponse，必须在聚合阶段设置硬上限。 */
-    public static final int DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+    public static final int DEFAULT_MAX_RESPONSE_BYTES = GatewayDefaults.MAX_RESPONSE_BODY_BYTES;
+
+    private static final Set<String> HOP_BY_HOP_HEADERS = Set.of(
+            "connection", "accept-encoding", "content-length", "expect", "host", "keep-alive",
+            "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade");
+
+    private static final Set<String> MANAGED_FORWARD_HEADERS = Set.of(
+            HttpConstants.REQUEST_ID_HEADER.toLowerCase(Locale.ROOT),
+            HttpConstants.FORWARDED_FOR_HEADER.toLowerCase(Locale.ROOT),
+            HttpConstants.FORWARDED_HOST_HEADER.toLowerCase(Locale.ROOT),
+            HttpConstants.FORWARDED_PROTO_HEADER.toLowerCase(Locale.ROOT));
 
     /** 复用同一个 HttpClient，避免每次请求都新建连接池。 */
     private final HttpClient httpClient;
@@ -224,23 +237,23 @@ public class HttpProxyClient {
             ChannelHandlerContext ctx,
             FullHttpRequest request,
             HttpRequest.Builder builder) {
-        String requestId = request.headers().get("X-Request-Id");
+        String requestId = request.headers().get(HttpConstants.REQUEST_ID_HEADER);
         if (requestId == null || requestId.isBlank()) {
             requestId = UUID.randomUUID().toString();
         }
 
-        builder.setHeader("X-Request-Id", requestId);
-        builder.setHeader("X-Forwarded-Proto", "http");
+        builder.setHeader(HttpConstants.REQUEST_ID_HEADER, requestId);
+        builder.setHeader(HttpConstants.FORWARDED_PROTO_HEADER, HttpConstants.SCHEME_HTTP);
 
         String host = request.headers().get(HttpHeaderNames.HOST);
         if (host != null && !host.isBlank()) {
-            builder.setHeader("X-Forwarded-Host", host);
+            builder.setHeader(HttpConstants.FORWARDED_HOST_HEADER, host);
         }
 
         String clientIp = clientIp(ctx);
         if (clientIp != null && !clientIp.isBlank()) {
             // 未配置可信代理链时丢弃客户端自带 XFF，只写直连地址，避免后端信任伪造首段。
-            builder.setHeader("X-Forwarded-For", clientIp);
+            builder.setHeader(HttpConstants.FORWARDED_FOR_HEADER, clientIp);
         }
     }
 
@@ -274,7 +287,7 @@ public class HttpProxyClient {
                 HttpVersion.HTTP_1_1,
                 status,
                 Unpooled.wrappedBuffer(body));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json; charset=UTF-8");
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpConstants.MEDIA_TYPE_JSON_UTF8);
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
         ctx.writeAndFlush(response);
     }
@@ -289,27 +302,13 @@ public class HttpProxyClient {
     /** 协议层 Header，代理时不原样转发，避免兼容问题。 */
     private boolean isHopByHopHeader(String name) {
         String normalizedName = name.toLowerCase(Locale.ROOT);
-        return "connection".equals(normalizedName)
-                || "accept-encoding".equals(normalizedName)
-                || "content-length".equals(normalizedName)
-                || "expect".equals(normalizedName)
-                || "host".equals(normalizedName)
-                || "keep-alive".equals(normalizedName)
-                || "proxy-authenticate".equals(normalizedName)
-                || "proxy-authorization".equals(normalizedName)
-                || "te".equals(normalizedName)
-                || "trailer".equals(normalizedName)
-                || "transfer-encoding".equals(normalizedName)
-                || "upgrade".equals(normalizedName);
+        return HOP_BY_HOP_HEADERS.contains(normalizedName);
     }
 
     /** 这些转发头由 Gateway 统一生成，避免和客户端原始值冲突。 */
     private boolean isManagedForwardHeader(String name) {
         String normalizedName = name.toLowerCase(Locale.ROOT);
-        return "x-request-id".equals(normalizedName)
-                || "x-forwarded-for".equals(normalizedName)
-                || "x-forwarded-host".equals(normalizedName)
-                || "x-forwarded-proto".equals(normalizedName);
+        return MANAGED_FORWARD_HEADERS.contains(normalizedName);
     }
 
     private static HttpResponse.BodyHandler<byte[]> limitedByteArrayHandler(int maxBytes) {

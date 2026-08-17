@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.admin.config.AdminProperties;
+import com.rover.common.constants.HttpConstants;
+import com.rover.common.constants.ManageApiPaths;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -31,9 +33,6 @@ public class ManageHttpClient {
     /** 单次请求超时（秒） */
     private static final int REQUEST_TIMEOUT_SECONDS = 5;
 
-    /** 管理口鉴权 token（X-Rover-Admin-Token）；空表示不鉴权 */
-    private static final String ADMIN_TOKEN_HEADER = "X-Rover-Admin-Token";
-
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(CONNECT_TIMEOUT_SECONDS))
             .build();
@@ -46,12 +45,12 @@ public class ManageHttpClient {
     }
 
     public JsonNode getJson(String baseUrl, String path) throws IOException, InterruptedException {
-        return send(baseUrl, path, "GET", null, null);
+        return send(baseUrl, path, HttpConstants.METHOD_GET, null, null);
     }
 
     public List<Map<String, Object>> getList(String baseUrl, String path)
             throws IOException, InterruptedException {
-        HttpResponse<String> response = raw(baseUrl, path, "GET", null, null);
+        HttpResponse<String> response = raw(baseUrl, path, HttpConstants.METHOD_GET, null, null);
         ensureOk(response);
         return objectMapper.readValue(response.body(), new TypeReference<>() {
         });
@@ -62,7 +61,8 @@ public class ManageHttpClient {
         String body = "key=" + URLEncoder.encode(key, StandardCharsets.UTF_8)
                 + "&value=" + URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8);
         HttpResponse<String> response = raw(
-                baseUrl, "/_manage/configs", "POST", body, "application/x-www-form-urlencoded");
+                baseUrl, ManageApiPaths.CONFIGS, HttpConstants.METHOD_POST, body,
+                HttpConstants.MEDIA_TYPE_FORM);
         ensureOk(response);
         return objectMapper.readValue(response.body(), new TypeReference<>() {});
     }
@@ -70,7 +70,8 @@ public class ManageHttpClient {
     public Map<String, Object> putJson(String baseUrl, String path, Object payload)
             throws IOException, InterruptedException {
         String body = objectMapper.writeValueAsString(payload);
-        HttpResponse<String> response = raw(baseUrl, path, "PUT", body, "application/json");
+        HttpResponse<String> response = raw(
+                baseUrl, path, HttpConstants.METHOD_PUT, body, HttpConstants.MEDIA_TYPE_JSON);
         ensureOk(response);
         return objectMapper.readValue(response.body(), new TypeReference<>() {
         });
@@ -79,7 +80,8 @@ public class ManageHttpClient {
     public Map<String, Object> postJson(String baseUrl, String path, Object payload)
             throws IOException, InterruptedException {
         String body = objectMapper.writeValueAsString(payload);
-        HttpResponse<String> response = raw(baseUrl, path, "POST", body, "application/json");
+        HttpResponse<String> response = raw(
+                baseUrl, path, HttpConstants.METHOD_POST, body, HttpConstants.MEDIA_TYPE_JSON);
         ensureOk(response);
         return objectMapper.readValue(response.body(), new TypeReference<>() {
         });
@@ -87,7 +89,7 @@ public class ManageHttpClient {
 
     public Map<String, Object> delete(String baseUrl, String path)
             throws IOException, InterruptedException {
-        HttpResponse<String> response = raw(baseUrl, path, "DELETE", null, null);
+        HttpResponse<String> response = raw(baseUrl, path, HttpConstants.METHOD_DELETE, null, null);
         ensureOk(response);
         return objectMapper.readValue(response.body(), new TypeReference<>() {
         });
@@ -107,17 +109,17 @@ public class ManageHttpClient {
                 .uri(URI.create(trimSlash(baseUrl) + path))
                 .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS));
         if (contentType != null) {
-            builder.header("Content-Type", contentType);
+            builder.header(HttpConstants.CONTENT_TYPE_HEADER, contentType);
         }
         String adminToken = properties.getAdminToken();
         if (adminToken != null && !adminToken.isBlank()) {
-            builder.header(ADMIN_TOKEN_HEADER, adminToken);
+            builder.header(HttpConstants.ADMIN_TOKEN_HEADER, adminToken);
         }
-        if ("GET".equals(method)) {
+        if (HttpConstants.METHOD_GET.equals(method)) {
             builder.GET();
-        } else if ("DELETE".equals(method)) {
+        } else if (HttpConstants.METHOD_DELETE.equals(method)) {
             builder.DELETE();
-        } else if ("PUT".equals(method)) {
+        } else if (HttpConstants.METHOD_PUT.equals(method)) {
             builder.PUT(HttpRequest.BodyPublishers.ofString(body == null ? "" : body));
         } else {
             builder.POST(HttpRequest.BodyPublishers.ofString(body == null ? "" : body));

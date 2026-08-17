@@ -17,6 +17,8 @@ import java.util.Map;
  */
 public final class JvmMetricsCollector {
 
+    private static final long BYTES_PER_MEBIBYTE = 1024L * 1024L;
+
     private JvmMetricsCollector() {
     }
 
@@ -78,7 +80,7 @@ public final class JvmMetricsCollector {
     }
 
     private static long bytesToMb(long bytes) {
-        return bytes < 0 ? 0 : bytes / (1024 * 1024);
+        return bytes < 0 ? 0 : bytes / BYTES_PER_MEBIBYTE;
     }
 
     private static double round2(double value) {

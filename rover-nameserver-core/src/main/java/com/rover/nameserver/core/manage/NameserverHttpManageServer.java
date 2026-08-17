@@ -1,5 +1,7 @@
 package com.rover.nameserver.core.manage;
 
+import com.rover.common.constants.NameserverConstants;
+import com.rover.common.constants.ProtocolConstants;
 import com.rover.nameserver.core.runtime.NameserverRuntime;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
@@ -29,7 +31,7 @@ public class NameserverHttpManageServer {
     private static final int MANAGE_BIZ_THREADS = 2;
 
     /** HTTP 请求体大小上限（字节），注册/心跳请求都很小，1MB 足够。 */
-    private static final int MAX_BODY_BYTES = 1024 * 1024;
+    private static final int MAX_BODY_BYTES = ProtocolConstants.MAX_BODY_LENGTH;
 
     /** HTTP 管理口监听端口，0 或未配置表示不启用 */
     private final int port;
@@ -49,7 +51,9 @@ public class NameserverHttpManageServer {
 
     public NameserverHttpManageServer(int port, String bindHost, NameserverRuntime runtime) {
         this.port = port;
-        this.bindHost = bindHost == null || bindHost.isBlank() ? "0.0.0.0" : bindHost.trim();
+        this.bindHost = bindHost == null || bindHost.isBlank()
+                ? NameserverConstants.DEFAULT_BIND_HOST
+                : bindHost.trim();
         this.manageApi = new NameserverManageApi(runtime);
     }
 

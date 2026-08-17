@@ -1,6 +1,7 @@
 package com.rover.gateway.core.route;
 
 import com.rover.common.json.JsonCodec;
+import com.rover.common.config.ConfigFiles;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,7 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 public class RouteOverlayStore {
 
     /** 默认 overlay 文件路径：config/routes.overlay.json */
-    public static final Path DEFAULT_PATH = Path.of("config", "routes.overlay.json");
+    public static final Path DEFAULT_PATH = ConfigFiles.ROUTES_OVERLAY;
 
     /** overlay 文件路径。 */
     private final Path path;
@@ -74,13 +75,13 @@ public class RouteOverlayStore {
             List<Map<String, Object>> rows = new ArrayList<>();
             for (RouteConfig route : routes) {
                 Map<String, Object> row = new LinkedHashMap<>();
-                row.put("id", nullToEmpty(route.getId()));
-                row.put("businessPrefix", nullToEmpty(route.getBusinessPrefix()));
-                row.put("targetUrl", nullToEmpty(route.getTargetUrl()));
-                row.put("targetUrls", joinTargetUrls(route.getTargetUrls()));
-                row.put("serviceName", nullToEmpty(route.getServiceName()));
-                row.put("group", nullToEmpty(route.getGroup()));
-                row.put("stripPrefix", nullToEmpty(route.getStripPrefix()));
+                row.put(RouteField.ID.jsonName(), nullToEmpty(route.getId()));
+                row.put(RouteField.BUSINESS_PREFIX.jsonName(), nullToEmpty(route.getBusinessPrefix()));
+                row.put(RouteField.TARGET_URL.jsonName(), nullToEmpty(route.getTargetUrl()));
+                row.put(RouteField.TARGET_URLS.jsonName(), joinTargetUrls(route.getTargetUrls()));
+                row.put(RouteField.SERVICE_NAME.jsonName(), nullToEmpty(route.getServiceName()));
+                row.put(RouteField.GROUP.jsonName(), nullToEmpty(route.getGroup()));
+                row.put(RouteField.STRIP_PREFIX.jsonName(), nullToEmpty(route.getStripPrefix()));
                 rows.add(row);
             }
             // 落盘用缩进 JSON，方便人眼看；解析不挑格式
@@ -96,13 +97,13 @@ public class RouteOverlayStore {
         List<RouteConfig> routes = new ArrayList<>();
         for (Map<String, String> row : rows) {
             RouteConfig route = new RouteConfig();
-            route.setId(blankToNull(row.get("id")));
-            route.setBusinessPrefix(blankToNull(row.get("businessPrefix")));
-            route.setTargetUrl(blankToNull(row.get("targetUrl")));
-            route.setTargetUrls(splitTargetUrls(row.get("targetUrls")));
-            route.setServiceName(blankToNull(row.get("serviceName")));
-            route.setGroup(blankToNull(row.get("group")));
-            route.setStripPrefix(blankToNull(row.get("stripPrefix")));
+            route.setId(blankToNull(row.get(RouteField.ID.jsonName())));
+            route.setBusinessPrefix(blankToNull(row.get(RouteField.BUSINESS_PREFIX.jsonName())));
+            route.setTargetUrl(blankToNull(row.get(RouteField.TARGET_URL.jsonName())));
+            route.setTargetUrls(splitTargetUrls(row.get(RouteField.TARGET_URLS.jsonName())));
+            route.setServiceName(blankToNull(row.get(RouteField.SERVICE_NAME.jsonName())));
+            route.setGroup(blankToNull(row.get(RouteField.GROUP.jsonName())));
+            route.setStripPrefix(blankToNull(row.get(RouteField.STRIP_PREFIX.jsonName())));
             routes.add(route);
         }
         return routes;

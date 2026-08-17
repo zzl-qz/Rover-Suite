@@ -1,13 +1,16 @@
 package com.rover.gateway.core.server;
 
+import com.rover.common.constants.HttpConstants;
 import com.rover.gateway.core.filter.DefaultFilterChain;
 import com.rover.gateway.core.filter.GatewayRequestContext;
+import com.rover.gateway.core.filter.GatewayContextKeys;
 import com.rover.gateway.core.manage.GatewayManageApi;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.runtime.GatewayRuntime;
 import com.rover.gateway.core.trace.RequestTrace;
 import com.rover.gateway.core.trace.TraceSettings;
+import com.rover.gateway.core.trace.TracePhase;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelFutureListener;
@@ -68,7 +71,7 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
         GatewayRequestContext context = new GatewayRequestContext(ctx, request, requestPath);
         // 生成/透传 traceId，供后端日志关联（转发时随请求头原样透传）
         ensureTraceId(request, context);
-        context.markPhase("receive", System.nanoTime() - context.getStartNanos());
+        context.markPhase(TracePhase.RECEIVE.phaseName(), System.nanoTime() - context.getStartNanos());
 
         // 异步推进过滤器链，收尾统一放在完成回调里，不阻塞业务线程等待上游。
         CompletableFuture<Void> chainFuture;
@@ -97,12 +100,12 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
 
     /** 请求头已有 traceId 则沿用，否则生成；同时写入上下文属性。 */
     private void ensureTraceId(FullHttpRequest request, GatewayRequestContext context) {
-        String traceId = request.headers().get("X-Rover-Trace-Id");
+        String traceId = request.headers().get(HttpConstants.TRACE_ID_HEADER);
         if (traceId == null || traceId.isBlank()) {
             traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-            request.headers().set("X-Rover-Trace-Id", traceId);
+            request.headers().set(HttpConstants.TRACE_ID_HEADER, traceId);
         }
-        context.setAttribute("traceId", traceId);
+        context.setAttribute(GatewayContextKeys.TRACE_ID, traceId);
     }
 
     /** 慢请求或采样命中时记录链路时间线（写回耗时按剩余时间兜底，保证各阶段之和等于总耗时）。 */
@@ -114,7 +117,7 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
         long totalNanos = System.nanoTime() - context.getStartNanos();
         long totalCostMs = totalNanos / 1_000_000;
         long writeNanos = Math.max(0, totalNanos - context.phaseCostSumNanos());
-        context.markPhase("write", writeNanos);
+        context.markPhase(TracePhase.WRITE.phaseName(), writeNanos);
 
         boolean slow = totalCostMs >= settings.getSlowThresholdMillis();
         boolean sampled = settings.getSampleRate() > 0
@@ -124,7 +127,7 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
         }
 
         try {
-            String traceId = String.valueOf(context.getAttribute("traceId"));
+            String traceId = String.valueOf(context.getAttribute(GatewayContextKeys.TRACE_ID));
             RouteConfig route = context.getRoute();
             RequestTrace trace = new RequestTrace(
                     traceId,
@@ -183,7 +186,7 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
                 HttpVersion.HTTP_1_1,
                 status,
                 Unpooled.wrappedBuffer(body));
-        response.headers().set(HttpHeaderNames.CONTENT_TYPE, "text/plain; charset=UTF-8");
+        response.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpConstants.MEDIA_TYPE_TEXT_UTF8);
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
         if (closeConnection) {
             response.headers().set(HttpHeaderNames.CONNECTION, "close");

@@ -1,5 +1,7 @@
 package com.rover.gateway.core.metrics;
 
+import com.rover.gateway.core.config.GatewayDefaults;
+
 /**
  * Author: Daylight
  * Description: 指标采集运行时配置：总开关与滑动窗口时长，均支持热更新
@@ -10,7 +12,7 @@ public class MetricsSettings {
     private volatile boolean enabled = true;
 
     /** 滑动窗口时长（秒），按秒聚合，默认保留最近 5 分钟。 */
-    private volatile int windowSeconds = 300;
+    private volatile int windowSeconds = GatewayDefaults.METRICS_WINDOW_SECONDS;
 
     public boolean isEnabled() {
         return enabled;

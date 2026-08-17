@@ -30,14 +30,18 @@ public class GatewayRuntimeConfigApplier implements ConfigApplier {
         String key = event.getKey();
         String value = event.getNewValue();
         switch (key) {
-            case "gateway.filter.enabled" -> current.applyFilterEnabled(Boolean.parseBoolean(value));
-            case "gateway.request.timeoutMillis" -> current.applyRequestTimeoutMillis(parsePositiveLong(value, key));
-            case "gateway.loadbalance.strategy" -> current.applyLoadBalanceStrategy(value);
-            case "gateway.metrics.enabled" -> current.applyMetricsEnabled(Boolean.parseBoolean(value));
-            case "gateway.metrics.windowSeconds" -> current.applyMetricsWindowSeconds(parsePositiveInt(value, key));
-            case "gateway.trace.enabled" -> current.applyTraceEnabled(Boolean.parseBoolean(value));
-            case "gateway.trace.slowThresholdMillis" -> current.applyTraceSlowThresholdMillis(parsePositiveLong(value, key));
-            case "gateway.trace.sampleRate" -> current.applyTraceSampleRate(Double.parseDouble(value.trim()));
+            case GatewayRuntimeConfigKeys.FILTER_ENABLED -> current.applyFilterEnabled(Boolean.parseBoolean(value));
+            case GatewayRuntimeConfigKeys.REQUEST_TIMEOUT_MILLIS ->
+                    current.applyRequestTimeoutMillis(parsePositiveLong(value, key));
+            case GatewayRuntimeConfigKeys.LOAD_BALANCE_STRATEGY -> current.applyLoadBalanceStrategy(value);
+            case GatewayRuntimeConfigKeys.METRICS_ENABLED -> current.applyMetricsEnabled(Boolean.parseBoolean(value));
+            case GatewayRuntimeConfigKeys.METRICS_WINDOW_SECONDS ->
+                    current.applyMetricsWindowSeconds(parsePositiveInt(value, key));
+            case GatewayRuntimeConfigKeys.TRACE_ENABLED -> current.applyTraceEnabled(Boolean.parseBoolean(value));
+            case GatewayRuntimeConfigKeys.TRACE_SLOW_THRESHOLD_MILLIS ->
+                    current.applyTraceSlowThresholdMillis(parsePositiveLong(value, key));
+            case GatewayRuntimeConfigKeys.TRACE_SAMPLE_RATE ->
+                    current.applyTraceSampleRate(Double.parseDouble(value.trim()));
             default -> log.warn("忽略未支持热更新的 Gateway 配置: {}", key);
         }
         log.info("Gateway 配置已热更新: {}={} (old={})", key, value, event.getOldValue());

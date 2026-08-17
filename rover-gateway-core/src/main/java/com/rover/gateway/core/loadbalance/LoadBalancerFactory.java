@@ -4,6 +4,7 @@ import com.rover.common.plugin.PluginJarScanner;
 import com.rover.common.plugin.PluginSpiLoader;
 import com.rover.common.plugin.PluginSpiLoader.PluginLoadResult;
 import com.rover.common.spi.loadbalance.LoadBalancer;
+import com.rover.common.spi.loadbalance.BuiltinLoadBalanceStrategy;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -85,7 +86,7 @@ public final class LoadBalancerFactory {
 
         throw new IllegalArgumentException(
                 "不支持的负载均衡策略: " + strategy
-                        + "，可选: round_robin/random/weighted_round_robin/ip_hash/least_connections"
+                        + "，内置可选: " + String.join("/", BuiltinLoadBalanceStrategy.configNames())
                         + "，或 plugins SPI name，或自定义类全名");
     }
 

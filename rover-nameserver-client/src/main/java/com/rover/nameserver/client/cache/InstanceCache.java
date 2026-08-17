@@ -1,6 +1,7 @@
 package com.rover.nameserver.client.cache;
 
 import com.rover.common.model.ServiceInstance;
+import com.rover.common.util.ServiceKeys;
 import com.rover.common.protocol.ServicePushBody;
 import java.util.ArrayList;
 import java.util.List;
@@ -197,7 +198,7 @@ public class InstanceCache {
     }
 
     private String cacheKey(String serviceName, String group) {
-        return serviceName + "#" + (group == null ? "" : group);
+        return ServiceKeys.serviceGroup(serviceName, group);
     }
 
     private List<ServiceInstance> copy(List<ServiceInstance> source) {

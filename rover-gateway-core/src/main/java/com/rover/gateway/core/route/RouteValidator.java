@@ -1,5 +1,6 @@
 package com.rover.gateway.core.route;
 
+import com.rover.common.constants.HttpConstants;
 import com.rover.common.model.ServiceInstance;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
@@ -88,7 +89,8 @@ public class RouteValidator {
         try {
             URI uri = URI.create(targetUrl);
             String scheme = uri.getScheme();
-            if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            if (!HttpConstants.SCHEME_HTTP.equalsIgnoreCase(scheme)
+                    && !HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(scheme)) {
                 throw new IllegalArgumentException("targetUrl 只支持 http/https: " + targetUrl);
             }
             if (uri.getHost() == null || uri.getHost().isBlank()) {

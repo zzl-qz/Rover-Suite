@@ -35,7 +35,7 @@ public class YamlConfigLoader<T> {
      */
     public YamlConfigLoader(String configFile, Class<T> configType, Consumer<T> validator) {
         this.configFile = configFile;
-        this.externalConfig = Path.of("config", configFile);
+        this.externalConfig = Path.of(ConfigFiles.DIRECTORY, configFile);
         this.configType = configType;
         this.validator = validator;
     }

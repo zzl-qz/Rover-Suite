@@ -12,6 +12,9 @@ import lombok.Data;
 @Data
 public class ServiceInstance {
 
+    /** 未显式配置时的标准权重。 */
+    public static final int DEFAULT_WEIGHT = 100;
+
     /** 服务名 */
     private String serviceName;
     /** 实例地址 */
@@ -25,7 +28,7 @@ public class ServiceInstance {
     /** 是否健康；心跳线程和健康检查线程都会改，必须看得见对方的写 */
     private volatile boolean healthy = true;
     /** 负载权重 */
-    private int weight = 100;
+    private int weight = DEFAULT_WEIGHT;
     /** 逻辑分组 */
     private String group;
     /** 机房/可用区，预留 */

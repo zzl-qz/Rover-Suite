@@ -41,13 +41,13 @@ public class NameserverRuntimeConfigApplier implements ConfigApplier {
         // 按 key 分发：时间类配置落到 HealthChecker，开关类配置落到 PushService；
         // 未知 key 只告警不报错，避免单条配置问题拖垮整体热更新
         switch (key) {
-            case "nameserver.health.checkIntervalMillis" ->
+            case NameserverRuntimeConfigKeys.HEALTH_CHECK_INTERVAL_MILLIS ->
                     current.getHealthChecker().setCheckIntervalMillis(parsePositiveLong(value, key));
-            case "nameserver.heartbeat.timeoutMillis" ->
+            case NameserverRuntimeConfigKeys.HEARTBEAT_TIMEOUT_MILLIS ->
                     current.getHealthChecker().setHeartbeatTimeoutMillis(parsePositiveLong(value, key));
-            case "nameserver.instance.expireMillis" ->
+            case NameserverRuntimeConfigKeys.INSTANCE_EXPIRE_MILLIS ->
                     current.getHealthChecker().setInstanceExpireMillis(parsePositiveLong(value, key));
-            case "nameserver.push.enabled" ->
+            case NameserverRuntimeConfigKeys.PUSH_ENABLED ->
                     current.getPushService().setPushEnabled(Boolean.parseBoolean(value));
             default -> log.warn("忽略未支持热更新的 Nameserver 配置: {}", key);
         }

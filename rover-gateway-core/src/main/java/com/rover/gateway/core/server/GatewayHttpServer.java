@@ -1,11 +1,14 @@
 package com.rover.gateway.core.server;
 
 import com.rover.gateway.core.config.GatewayRuntimeConfigManager;
+import com.rover.gateway.core.config.GatewayDefaults;
+import com.rover.gateway.core.config.GatewayRuntimeConfigKeys;
+import com.rover.gateway.core.config.GatewaySystemProperties;
+import com.rover.common.constants.ManageApiPaths;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
 import com.rover.gateway.core.discovery.NoopServiceDiscovery;
-import com.rover.common.constants.ProtocolConstants;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.filter.FilterSettings;
@@ -49,7 +52,7 @@ public class GatewayHttpServer {
 
     /** 业务线程池实际大小（系统属性可覆盖）。 */
     private static final int BIZ_THREADS =
-            Integer.getInteger("rover.gateway.bizThreads", DEFAULT_BIZ_THREADS);
+            Integer.getInteger(GatewaySystemProperties.BIZ_THREADS, DEFAULT_BIZ_THREADS);
 
     /** 监听端口。 */
     @Getter
@@ -81,7 +84,7 @@ public class GatewayHttpServer {
 
     /** 最简构造：仅指定端口，其余用默认值。 */
     public GatewayHttpServer(int port) {
-        this(port, List.of(), ProtocolConstants.MAX_BODY_LENGTH,
+        this(port, List.of(), GatewayDefaults.MAX_REQUEST_BODY_BYTES,
                 HttpProxyClient.DEFAULT_CONNECT_TIMEOUT_MILLIS,
                 HttpProxyClient.DEFAULT_REQUEST_TIMEOUT_MILLIS,
                 new FilterSettings(), defaultStaticDiscovery());
@@ -89,7 +92,7 @@ public class GatewayHttpServer {
 
     /** 指定端口和初始路由表构造。 */
     public GatewayHttpServer(int port, List<RouteConfig> routes) {
-        this(port, routes, ProtocolConstants.MAX_BODY_LENGTH,
+        this(port, routes, GatewayDefaults.MAX_REQUEST_BODY_BYTES,
                 HttpProxyClient.DEFAULT_CONNECT_TIMEOUT_MILLIS,
                 HttpProxyClient.DEFAULT_REQUEST_TIMEOUT_MILLIS,
                 new FilterSettings(), defaultStaticDiscovery());
@@ -146,7 +149,8 @@ public class GatewayHttpServer {
             String loadBalanceStrategy,
             CorsSettings corsSettings) {
         this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
-                filterSettings, discoverySettings, loadBalanceStrategy, corsSettings, "0.0.0.0", null);
+                filterSettings, discoverySettings, loadBalanceStrategy, corsSettings,
+                GatewayDefaults.BIND_HOST, null);
     }
 
     /** 全参数构造（含绑定地址与管理口 token）。 */
@@ -163,7 +167,7 @@ public class GatewayHttpServer {
             String bindHost,
             String adminToken) {
         this.port = port;
-        this.bindHost = bindHost == null || bindHost.isBlank() ? "0.0.0.0" : bindHost.trim();
+        this.bindHost = bindHost == null || bindHost.isBlank() ? GatewayDefaults.BIND_HOST : bindHost.trim();
         this.adminToken = adminToken;
         this.maxContentLengthBytes = maxContentLengthBytes;
         this.corsSettings = corsSettings == null ? new CorsSettings() : corsSettings;
@@ -174,10 +178,10 @@ public class GatewayHttpServer {
                 ? LoadBalancer.ROUND_ROBIN
                 : loadBalanceStrategy.trim();
         GatewayRuntimeConfigManager configManager = new GatewayRuntimeConfigManager();
-        configManager.seed("gateway.filter.enabled", String.valueOf(
+        configManager.seed(GatewayRuntimeConfigKeys.FILTER_ENABLED, String.valueOf(
                 filterSettings == null || filterSettings.isEnabled()));
-        configManager.seed("gateway.request.timeoutMillis", String.valueOf(requestTimeoutMillis));
-        configManager.seed("gateway.loadbalance.strategy", lbStrategy);
+        configManager.seed(GatewayRuntimeConfigKeys.REQUEST_TIMEOUT_MILLIS, String.valueOf(requestTimeoutMillis));
+        configManager.seed(GatewayRuntimeConfigKeys.LOAD_BALANCE_STRATEGY, lbStrategy);
         // YAML 之后叠 Admin 落盘的配置
         configManager.loadOverlayIfPresent();
 
@@ -223,8 +227,8 @@ public class GatewayHttpServer {
                     });
 
             serverChannel = bootstrap.bind(bindHost, port).sync().channel();
-            log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, managePrefix=/_manage",
-                    bindHost, port, runtime.getDiscoveryType());
+            log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, managePrefix={}",
+                    bindHost, port, runtime.getDiscoveryType(), ManageApiPaths.PREFIX);
         } catch (InterruptedException err) {
             Thread.currentThread().interrupt();
             shutdown();

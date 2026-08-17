@@ -1,5 +1,7 @@
 package com.rover.gateway.core.server;
 
+import com.rover.common.constants.HttpConstants;
+import com.rover.gateway.core.config.GatewayDefaults;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.Data;
@@ -19,13 +21,19 @@ public class CorsSettings {
 
     /** 允许跨域请求的方法。 */
     private List<String> allowedMethods =
-            new ArrayList<>(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
+            new ArrayList<>(List.of(
+                    HttpConstants.METHOD_GET,
+                    HttpConstants.METHOD_POST,
+                    HttpConstants.METHOD_PUT,
+                    HttpConstants.METHOD_DELETE,
+                    HttpConstants.METHOD_PATCH,
+                    HttpConstants.METHOD_OPTIONS));
 
     /** 允许跨域请求携带的头；* 表示任意。 */
     private List<String> allowedHeaders = new ArrayList<>(List.of("*"));
 
     /** 预检（OPTIONS）结果缓存秒数。 */
-    private long maxAgeSeconds = 1800;
+    private long maxAgeSeconds = GatewayDefaults.CORS_MAX_AGE_SECONDS;
 
     /** 是否允许携带凭证（Cookie/Authorization 等）；开启后不允许用 * 通配 Origin。 */
     private boolean credentials = false;
@@ -55,7 +63,13 @@ public class CorsSettings {
     /** 拼接 Access-Control-Allow-Methods。 */
     public String joinAllowedMethods() {
         if (allowedMethods == null || allowedMethods.isEmpty()) {
-            return "GET, POST, PUT, DELETE, PATCH, OPTIONS";
+            return String.join(", ", List.of(
+                    HttpConstants.METHOD_GET,
+                    HttpConstants.METHOD_POST,
+                    HttpConstants.METHOD_PUT,
+                    HttpConstants.METHOD_DELETE,
+                    HttpConstants.METHOD_PATCH,
+                    HttpConstants.METHOD_OPTIONS));
         }
         return String.join(", ", allowedMethods);
     }
