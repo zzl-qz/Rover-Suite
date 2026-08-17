@@ -207,6 +207,13 @@ flowchart LR
 - 旧 owner、断连回调和过时过期扫描不能删除新 owner。
 - 除非明确通过架构变更，在线实例继续保持纯内存软状态。
 
+这些是扩展层必须遵守的目标不变量，不表示当前所有发现边缘都已经收口。当前最后实例空快照与多 `group` 推送隔离的
+已知边界见[使用指南](./user-guide.zh-CN.md#9-当前运行边界)。修改注册表快照、推送或 Gateway 缓存时，必须同时覆盖：
+
+- 精确分组订阅只能收到该组实例，通配订阅应收到完整服务快照。
+- 同一 epoch 内更高 revision 的合法空快照能够清除最后一个实例，且不能被旧空快照回滚。
+- push 丢失、拒绝或首次订阅失败后，query/reconcile 能恢复到 Nameserver 当前状态。
+
 ## 7. ServiceDiscovery 适配
 
 [`ServiceDiscovery`](../rover-common/src/main/java/com/rover/common/spi/discovery/ServiceDiscovery.java)

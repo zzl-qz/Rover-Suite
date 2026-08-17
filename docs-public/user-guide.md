@@ -113,6 +113,8 @@ rover:
 
 The optional `|200` suffix is the upstream weight. Static and Nameserver discovery use the same load-balancing
 strategies: `round_robin`, `random`, `weighted_round_robin`, `ip_hash`, and `least_connections`.
+Static upstreams currently use only the URL scheme, host, and port. Do not put a base path in `targetUrl` or
+`targetUrls`; express path transformation with the route's `stripPrefix`.
 
 ## 5. Define routes
 
@@ -131,6 +133,7 @@ routes:
 | `id` | Unique route identifier |
 | `businessPrefix` | Incoming path prefix used for matching |
 | `serviceName` | Nameserver service name for dynamic discovery |
+| `group` | Optional group filter; keep it empty while multi-group push isolation is being finalized |
 | `targetUrls` | Fixed upstream list for a static route |
 | `stripPrefix` | Prefix removed before proxying; use `""` to preserve the full path |
 
@@ -164,7 +167,20 @@ X-Rover-Admin-Token: <adminToken>
 ```
 
 The Bearer protocol token does not authorize management calls. Conversely, the admin header does not authorize
-`/v1/client/**`. Keep the two token values different in production.
+`/v1/client/**`. When authentication domains need isolation, use different values for the two tokens.
+
+Built-in management endpoints:
+
+| Component | Path and method | Purpose |
+| :--- | :--- | :--- |
+| Gateway | `GET /_manage/status` | Listener, discovery, route, and runtime status |
+| Gateway | `GET/PUT/POST/DELETE /_manage/routes` | List, replace, add/update, or delete routes |
+| Gateway | `GET/POST /_manage/configs` | List or update registered runtime settings |
+| Gateway | `GET /_manage/metrics`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, self-check, and Prometheus text |
+| Gateway | `GET /_manage/traces` | Bounded request timeline with `traceId`, `path`, and `slow` filters |
+| Nameserver | `GET /_manage/status`, `/instances` | Runtime status and current in-memory instances |
+| Nameserver | `GET/POST /_manage/configs` | List or update registered runtime settings |
+| Nameserver | `GET /_manage/metrics`, `/events` | Registration metrics and recent events |
 
 Rover-Admin is optional:
 
@@ -174,7 +190,11 @@ mvn -pl rover-admin spring-boot:run
 
 If the Gateway runs on `8080` instead of its bundled port, update Rover-Admin's Gateway URL accordingly.
 
-## 8. Production baseline
+## 8. Optional deployment hardening
+
+Rover intentionally defaults to all-interface listeners and empty tokens for zero-config startup on a local or
+trusted network; it does not enforce one security policy. When a deployment crosses a trust boundary, select the
+hardening measures it needs:
 
 - Bind `8888` and `8889` to a private address and restrict both ports with network policy or a firewall.
 - Configure non-empty, different protocol and admin tokens.
@@ -188,16 +208,39 @@ If the Gateway runs on `8080` instead of its bundled port, update Rover-Admin's 
 - Start registration only after the business listener is ready and close it during graceful shutdown.
 - Monitor registration failures, expiry removals, available-instance count, and Gateway upstream failures.
 
-Rover-Suite currently targets a trusted small-team deployment rather than a tenant-aware public control plane.
-See the [Architecture non-goals](./architecture.md#7-explicit-non-goals) before exposing control ports.
+Rover-Suite currently targets single-node or trusted-network deployments for small teams rather than a tenant-aware
+public control plane. The deployer chooses hardening when exposing control ports; see the
+[Architecture non-goals](./architecture.md#7-explicit-non-goals).
 
-## 9. Troubleshooting
+## 9. Current runtime boundaries
+
+- The current build is a single-node `1.0.0-SNAPSHOT`; it does not provide Nameserver HA or persistence-based
+  restoration of online instances.
+- Discovery is push-first with periodic query reconciliation, not strongly real-time. A last-instance empty push is
+  currently protected by Gateway, so the cache clears at the next reconciliation — up to about 30 seconds by
+  default. Requests in that window may still select the recently stopped address.
+- If Nameserver is unavailable when Gateway starts, the failed initial subscription may not be recovered until the
+  next reconciliation, again up to about 30 seconds by default.
+- Multi-group push isolation is still being finalized; keep `group` empty for the current build. See
+  [Service Registration](./service-registration.md#23-current-group-boundary).
+- When all persistent instances are marked unhealthy, Gateway currently falls back to the complete cached list — a
+  fail-open policy.
+- Gateway aggregates complete requests and responses. WebSocket, SSE, and streaming proxying are not supported;
+  the default request-body limit is 1 MiB and the hard response-body limit is 16 MiB.
+- Static upstream URLs preserve only scheme, host, and port; URL base paths are not preserved.
+
+These boundaries do not prevent the ordinary single-node HTTP API and empty-group use case, but should be evaluated
+for strict removal consistency, group isolation, streaming protocols, or an internet-facing control plane.
+
+## 10. Troubleshooting
 
 | Symptom | Likely cause |
 | :--- | :--- |
 | Configuration edit is ignored | The process was launched from another working directory, a runtime overlay wins, or the setting requires restart. |
 | Java provider cannot authenticate | `rover.nameserver.token` in the application does not match Nameserver. |
 | Gateway cannot discover services | Check `rover.gateway.discovery.nameserver.address` and `.token`; these are Gateway keys, not Starter keys. |
+| Nameserver is back but Gateway still has no instance | A failed initial watch may wait until the next reconciliation; wait for `reconcileIntervalMs` or restart Gateway. |
+| Traffic briefly targets the last stopped instance | Gateway's empty-snapshot protection clears it at the next reconciliation, up to about 30 seconds by default. |
 | HTTP Registrar receives `404 NOT_FOUND` | `clientApiEnabled` is false, the path is wrong, or the HTTP listener is disabled. Enable the Registration API and restart. |
 | HTTP Registrar receives `409 STALE_SESSION` | Another process registered the same `serviceName + instanceId`. Give replicas unique IDs and one owner per endpoint. |
 | Provider is visible but unreachable | The registered host/port is not reachable from Gateway. |

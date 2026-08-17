@@ -10,9 +10,9 @@ Nameserver 开关、Java Starter 对比、鉴权、恢复与多 worker 总体说
 Node.js、Python 和 Go 使用各自标准库；PHP 使用运行环境常见的 cURL 扩展；C++ 使用 libcurl。
 没有任何实现会引入 Agent、Sidecar 或新的 Rover 常驻组件。
 
-Nameserver 的 HTTP Client API 默认关闭。接入前需要在服务端显式设置
-`clientApiEnabled: true`；生产环境同时应配置非空 `rover.nameserver.token`，
-并只向业务服务所在的可信网络开放 HTTP 端口。
+Nameserver 的 HTTP Registration API（内部配置名称为 Client API）默认关闭。接入前需要在服务端显式设置
+`clientApiEnabled: true`。token 可以保持为空以便在本地或可信网络零配置接入；有访问控制要求时，
+再配置非空 `rover.nameserver.token`，并按部署环境限制 HTTP 端口来源。
 
 ## 共同语义
 
