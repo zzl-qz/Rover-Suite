@@ -52,18 +52,31 @@ Nameserver 有意保留两种服务提供方传输方式，但只维护一套注
 
 ```mermaid
 flowchart TB
-    Client["客户端"] --> GW["Rover-Gateway"]
-    GW --> JavaService["Java 业务服务"]
-    GW --> OtherService["Node / Python / Go / PHP / C++ 服务"]
+    subgraph Traffic["业务流量"]
+        direction LR
+        Client["客户端"] -->|"HTTP"| GW["Rover-Gateway"]
+        GW -->|"路由与代理"| Service["业务服务"]
+    end
 
-    JavaService -->|"TCP 注册 / 心跳 :8888"| NS["Rover-Nameserver"]
-    OtherService -->|"HTTP JSON 注册 / 心跳 :8889"| NS
+    subgraph Control["注册与发现"]
+        direction LR
+        Java["Java · Starter"] -->|"TCP · 8888"| NS["Rover-Nameserver"]
+        Other["其他语言 · Registrar"] -->|"HTTP+JSON · 8889"| NS
+        NS -->|"推送 / 查询对账"| Cache["Gateway 实例缓存"]
+    end
 
-    NS -->|"TCP 实例快照推送 :8888"| GW
-    GW -->|"TCP 查询 / 对账 :8888"| NS
+    Cache -.-> GW
 
-    Admin["Rover-Admin"] -.->|"HTTP 管理接口 :8889"| NS
-    Admin -.-> GW
+    classDef edge fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
+    classDef registry fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
+    class Client,Java,Other,Cache edge;
+    class GW gateway;
+    class Service service;
+    class NS registry;
+    style Traffic fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
+    style Control fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
 ```
 
 | 进程或监听器 | 默认端口 | 用途 |
@@ -143,13 +156,39 @@ HTTP API 只覆盖服务提供方注册生命周期，不会把查询、订阅�
 ### 3.3 共享领域模型
 
 ```mermaid
-flowchart LR
-    TCP["TCP 协议适配层"] --> RS["RegistrationService"]
-    HTTP["HTTP JSON 适配层"] --> RS
-    RS --> Registry["InMemoryServiceRegistry"]
-    RS --> Push["PushService"]
-    Health["HealthChecker"] --> Registry
-    Health --> Push
+flowchart TB
+    subgraph Adapter["传输适配"]
+        direction LR
+        TCP["TCP"]
+        HTTP["HTTP+JSON"]
+    end
+
+    RS["RegistrationService"]
+
+    subgraph Core["注册核心"]
+        direction LR
+        Registry["内存注册表"]
+        Push["快照推送"]
+        Metrics["指标"]
+    end
+
+    Health["HealthChecker"]
+    TCP --> RS
+    HTTP --> RS
+    RS --> Registry
+    RS --> Push
+    RS --> Metrics
+    Health -.-> Registry
+    Health -.-> Push
+
+    classDef adapter fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef domain fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef core fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:1.5px;
+    class TCP,HTTP,Health adapter;
+    class RS domain;
+    class Registry,Push,Metrics core;
+    style Adapter fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
+    style Core fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
 ```
 
 共享领域层统一负责注册、心跳、注销、owner 检查、revision 变化、指标与变更通知；注册表负责原子的比较与更新。
@@ -307,6 +346,15 @@ flowchart TB
     GC --> NA["rover-gateway-adapter-nacos"]
     ST --> DM["rover-demo"]
     CM --> AD["rover-admin"]
+
+    classDef shared fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:2px;
+    classDef core fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:1.5px;
+    classDef app fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
+    classDef experimental fill:#FFF7ED,stroke:#F97316,color:#7C2D12,stroke-width:1.5px;
+    class CM shared;
+    class NC,NK,GC core;
+    class ST,NS,GB,DM,AD app;
+    class NA experimental;
 ```
 
 约定：
@@ -331,4 +379,4 @@ flowchart TB
 
 当前没有持续监听插件目录的 watcher。要让替换后的 JAR 可预测地生效，需要重建相关运行时对象或重启 Gateway。
 
-贡献边界与验证命令见[二次开发指南](./development-guide.zh-CN.md)。
+二开边界与验证命令见[二次开发指南](./development-guide.zh-CN.md)。
