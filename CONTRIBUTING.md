@@ -75,6 +75,6 @@ Include:
 PR 中请说明：解决什么问题、哪些内容不在范围内、兼容/运维影响、实际验证命令与结果、配置/安全/迁移注意事项，以及已知限制。
 
 By contributing, you agree that your contribution is licensed under the repository's
-[Apache License 2.0](./LICENSE).
+[Non-Commercial License](./LICENSE).
 
-提交贡献即表示你同意该贡献按本仓库的 [Apache License 2.0](./LICENSE) 许可。
+提交贡献即表示你同意该贡献按本仓库的 [非商用许可](./LICENSE) 许可。
