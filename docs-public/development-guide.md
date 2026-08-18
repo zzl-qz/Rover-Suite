@@ -2,8 +2,9 @@
 
 [简体中文](./development-guide.zh-CN.md) · [Documentation index](./README.md)
 
-This guide is for contributors and teams maintaining a private fork. Rover-Suite favors explicit Java extension
-points and a small deployment surface; choose the narrowest extension that solves the problem.
+This guide is for project maintainers and teams maintaining a private fork. Rover-Suite favors explicit Java
+extension points and a small deployment surface; choose the narrowest extension that solves the problem. The public
+repository accepts feedback through Issues only and does not accept external pull requests.
 
 ## 1. Local development
 
@@ -190,12 +191,36 @@ Both current transports converge on
 [`RegistrationService`](../rover-nameserver-core/src/main/java/com/rover/nameserver/core/registration/RegistrationService.java):
 
 ```mermaid
-flowchart LR
-    TCP["TCP listeners"] --> RS["RegistrationService"]
-    HTTP["NameserverClientApi"] --> RS
-    RS --> Registry["ServiceRegistry"]
-    RS --> Push["PushService"]
-    RS --> Metrics["Metrics"]
+flowchart TB
+    subgraph Adapter["Transport adapters"]
+        direction LR
+        TCP["TCP listeners"]
+        HTTP["NameserverClientApi"]
+    end
+
+    RS["RegistrationService"]
+
+    subgraph Core["Shared orchestration"]
+        direction LR
+        Registry["ServiceRegistry"]
+        Push["PushService"]
+        Metrics["Metrics"]
+    end
+
+    TCP --> RS
+    HTTP --> RS
+    RS --> Registry
+    RS --> Push
+    RS --> Metrics
+
+    classDef adapter fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef domain fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef core fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:1.5px;
+    class TCP,HTTP adapter;
+    class RS domain;
+    class Registry,Push,Metrics core;
+    style Adapter fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
+    style Core fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
 ```
 
 A new adapter should only handle wire decoding, authentication, DTO validation, owner construction, and status
@@ -276,7 +301,7 @@ The project is currently `1.0.0-SNAPSHOT`; do not assume stable binary compatibi
 - Never reuse removed protocol field IDs or silently change status-machine meanings.
 - Update both language variants of public docs whenever user-visible behavior changes.
 
-## 10. Validation and contribution checklist
+## 10. Validation and change checklist
 
 Registrar checks:
 
@@ -290,13 +315,14 @@ cmake -S examples/http-registration/cpp -B build/rover-http
 cmake --build build/rover-http
 ```
 
-Before opening a pull request:
+Before merging into a maintained branch:
 
 - Run the focused tests for changed modules and `mvn test` or `mvn clean verify` for cross-module changes.
 - Add concurrency/error/reload tests for new core or plugin behavior.
 - Keep secrets, local `config/` files, generated binaries, and IDE files out of the commit.
 - Preserve unrelated user changes in a dirty worktree.
 - Update OpenAPI, examples, both root READMEs, and public guides when their contract changes.
-- Describe behavior changes, compatibility impact, verification commands, and known runtime limitations in the PR.
+- Record behavior changes, compatibility impact, verification commands, and known runtime limitations.
 
-Issues and pull requests are welcome. Keep changes focused so a small team can review, revert, and maintain them.
+Use Issues for public feedback. External pull requests are not accepted. Private-fork changes should still remain
+focused so a small team can review, revert, and maintain them.

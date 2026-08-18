@@ -61,28 +61,31 @@ Rover-Suite provides an **all-in-one lightweight solution with a built-in regist
 
 ```mermaid
 flowchart TB
-    C["Clients / External Systems"]
-    G["Rover-Gateway<br/>Ingress · Filters · Discovery · Load Balancing · Proxy"]
-    J["Java Services"]
-    O["Node · Python · Go · PHP · C++ Services"]
-    N[("Rover-Nameserver<br/>Shared In-Memory Registry")]
+    subgraph Request["Request path"]
+        direction LR
+        C["Clients"] -->|"HTTP"| G["Rover-Gateway"]
+        G -->|"Route and proxy"| S["Business services"]
+    end
 
-    C -->|HTTP requests| G
-    G -->|dynamic routing| J
-    G -->|dynamic routing| O
-    J -.->|Starter · TCP :8888<br/>register / heartbeat| N
-    O -.->|Registrar · HTTP JSON :8889<br/>register / heartbeat| N
-    N -.->|snapshot push + query reconciliation| G
+    subgraph Discovery["Registration and discovery"]
+        direction LR
+        J["Java · Starter"] -->|"TCP · 8888"| N["Rover-Nameserver"]
+        O["Other languages · Registrar"] -->|"HTTP+JSON · 8889"| N
+        N -->|"Snapshot push / query reconcile"| K["Gateway instance cache"]
+    end
 
-    classDef caller fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    K -.-> G
+
+    classDef edge fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
     classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
     classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
-    classDef nameserver fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
-    class C caller;
+    classDef registry fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
+    class C,J,O,K edge;
     class G gateway;
-    class J,O service;
-    class N nameserver;
-    linkStyle default stroke:#64748B,stroke-width:1.4px;
+    class S service;
+    class N registry;
+    style Request fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
+    style Discovery fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
 ```
 
 See **[docs-public/architecture.md](./docs-public/architecture.md)** for module dependencies and request flow.
@@ -323,10 +326,11 @@ snapshots, grouped discovery, cold-start recovery, and proxy buffering — are d
 
 ---
 
-## 🤝 Contributing
+## 💬 Issues and feedback
 
-Issues and pull requests are welcome. Start with [CONTRIBUTING.md](./CONTRIBUTING.md); build, extension,
-compatibility, and validation details are in the [Development Guide](./docs-public/development-guide.md).
+The project accepts Issues only and does not accept external pull requests or merge requests. Read the
+[Issue Guide](./CONTRIBUTING.md) before reporting a bug or proposing a feature. Teams maintaining a private fork
+can use the [Development Guide](./docs-public/development-guide.md).
 
 ---
 
@@ -338,8 +342,8 @@ Licensed under the [Apache License 2.0](./LICENSE).
 
 ## 📮 Contact
 
-- Repository: https://gitee.com/zzl-java/roverSuite
-- Issues: please open a ticket in the repository
+- Repository: [gitee.com/zzl-java/roverSuite](https://gitee.com/zzl-java/roverSuite)
+- Issues: [report a bug or request a feature](https://gitee.com/zzl-java/roverSuite/issues)
 
 <p align="center">
   <sub>Rover-Suite — Lightweight microservice infrastructure.</sub>
