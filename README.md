@@ -12,13 +12,17 @@
 ![Netty](https://img.shields.io/badge/Netty-4.1-blue?style=flat-square)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square)
 ![Maven](https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square)
-![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)
+![License](https://img.shields.io/badge/License-Non--Commercial-e95f6d?style=flat-square)
 
 <br/>
 
 [Intro](#-introduction) · [Features](#-features) · [Architecture](#-architecture) · [Quick Start](#-quick-start) · [Integration](#-integration) · [Roadmap](#-roadmap)
 
 </div>
+
+> **作者 Author：Daylight**
+>
+> **⚠️ 非商用声明 Non-Commercial Notice：本软件仅供个人免费使用，禁止任何形式的商业售卖、转卖、套壳换皮重新发布（详见 [LICENSE](LICENSE)）。发现闲鱼/淘宝等渠道倒卖请告知作者，感谢！**
 
 ---
 
@@ -332,7 +336,15 @@ compatibility, and validation details are in the [Development Guide](./docs-publ
 
 ## 📄 License
 
-Licensed under the [Apache License 2.0](./LICENSE).
+**非商用许可 Non-Commercial License** — 作者：Daylight。
+
+- 允许个人免费使用与传播（须保留作者署名与本协议）。
+- **禁止商业用途**：禁止销售、转卖、收费提供服务、在电商平台（闲鱼/淘宝/拼多多等）倒卖。
+- **禁止套壳换皮**：禁止对本软件改名、换肤、重新打包后冒充自有产品发布。
+- 二次开发公开发布须显著标注原作者，并遵守同样的非商用限制。
+- 内置第三方组件遵循各自许可证。
+
+完整条款见 [LICENSE](LICENSE)。发现任何渠道倒卖本软件，欢迎通过 GitHub Issues 联系作者举报。
 
 ---
 
