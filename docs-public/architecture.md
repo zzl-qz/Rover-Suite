@@ -52,18 +52,31 @@ Transport adapters do not maintain separate registration rules.
 
 ```mermaid
 flowchart TB
-    Client["Clients"] --> GW["Rover-Gateway"]
-    GW --> JavaService["Java business service"]
-    GW --> OtherService["Node / Python / Go / PHP / C++ service"]
+    subgraph Traffic["Business traffic"]
+        direction LR
+        Client["Clients"] -->|"HTTP"| GW["Rover-Gateway"]
+        GW -->|"Route and proxy"| Service["Business services"]
+    end
 
-    JavaService -->|"TCP register / heartbeat :8888"| NS["Rover-Nameserver"]
-    OtherService -->|"HTTP JSON register / heartbeat :8889"| NS
+    subgraph Control["Registration and discovery"]
+        direction LR
+        Java["Java · Starter"] -->|"TCP · 8888"| NS["Rover-Nameserver"]
+        Other["Other languages · Registrar"] -->|"HTTP+JSON · 8889"| NS
+        NS -->|"Push / query reconcile"| Cache["Gateway instance cache"]
+    end
 
-    NS -->|"TCP instance snapshot push :8888"| GW
-    GW -->|"TCP query / reconcile :8888"| NS
+    Cache -.-> GW
 
-    Admin["Rover-Admin"] -.->|"HTTP management :8889"| NS
-    Admin -.-> GW
+    classDef edge fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
+    classDef registry fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
+    class Client,Java,Other,Cache edge;
+    class GW gateway;
+    class Service service;
+    class NS registry;
+    style Traffic fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
+    style Control fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
 ```
 
 | Process or listener | Default port | Purpose |
@@ -150,13 +163,39 @@ Implementation and contract:
 ### 3.3 One shared domain model
 
 ```mermaid
-flowchart LR
-    TCP["TCP protocol adapter"] --> RS["RegistrationService"]
-    HTTP["HTTP JSON adapter"] --> RS
-    RS --> Registry["InMemoryServiceRegistry"]
-    RS --> Push["PushService"]
-    Health["HealthChecker"] --> Registry
-    Health --> Push
+flowchart TB
+    subgraph Adapter["Transport adapters"]
+        direction LR
+        TCP["TCP"]
+        HTTP["HTTP+JSON"]
+    end
+
+    RS["RegistrationService"]
+
+    subgraph Core["Registration core"]
+        direction LR
+        Registry["In-memory registry"]
+        Push["Snapshot push"]
+        Metrics["Metrics"]
+    end
+
+    Health["HealthChecker"]
+    TCP --> RS
+    HTTP --> RS
+    RS --> Registry
+    RS --> Push
+    RS --> Metrics
+    Health -.-> Registry
+    Health -.-> Push
+
+    classDef adapter fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef domain fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef core fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:1.5px;
+    class TCP,HTTP,Health adapter;
+    class RS domain;
+    class Registry,Push,Metrics core;
+    style Adapter fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
+    style Core fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
 ```
 
 The shared domain layer owns registration, heartbeat, deregistration, ownership checks, revision changes,
@@ -330,6 +369,15 @@ flowchart TB
     GC --> NA["rover-gateway-adapter-nacos"]
     ST --> DM["rover-demo"]
     CM --> AD["rover-admin"]
+
+    classDef shared fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:2px;
+    classDef core fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:1.5px;
+    classDef app fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
+    classDef experimental fill:#FFF7ED,stroke:#F97316,color:#7C2D12,stroke-width:1.5px;
+    class CM shared;
+    class NC,NK,GC core;
+    class ST,NS,GB,DM,AD app;
+    class NA experimental;
 ```
 
 Conventions:
@@ -356,4 +404,4 @@ Conventions:
 There is no continuous plugin-directory watcher. Rebuilding the relevant runtime object or restarting Gateway is
 required before a replaced JAR is used predictably.
 
-For contribution boundaries and validation commands, see the [Development Guide](./development-guide.md).
+For extension boundaries and validation commands, see the [Development Guide](./development-guide.md).
