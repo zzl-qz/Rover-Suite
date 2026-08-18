@@ -1,80 +1,71 @@
-# Contributing to Rover-Suite / 参与 Rover-Suite
+# Issue Guide / Issue 反馈指南
 
-Thank you for improving Rover-Suite. Focused issues and pull requests are welcome. The project is maintained
-with a small-team mindset: changes should be understandable, testable, and easy to revert.
+Rover-Suite is open source under Apache License 2.0 and is maintained with a small-team workflow. Public
+collaboration happens through **Issues only**. The repository does not accept external pull requests or merge
+requests; maintainers evaluate Issues and implement accepted changes in the main repository.
 
-感谢你参与 Rover-Suite。欢迎聚焦的 Issue 与 Pull Request。本项目按小团队方式维护：变更应当容易理解、可验证、可回滚。
+Rover-Suite 按 Apache License 2.0 开源，并采用小团队维护方式。公开协作入口**仅开放 Issue**，不接收外部
+Pull Request 或 Merge Request。维护者会评估 Issue，并在主仓库中实现采纳的修改。
 
-## Before coding / 开始前
+[Open an Issue / 提交 Issue](https://gitee.com/zzl-java/roverSuite/issues)
 
-1. Search existing issues and pull requests.
-2. For a behavior change or large refactor, open an issue first and explain the problem, scope, compatibility
-   impact, and smallest viable design.
-3. Read the [Architecture](./docs-public/architecture.md) and
-   [Development Guide](./docs-public/development-guide.md) before changing a core contract.
+## Before opening an Issue / 提交前
 
-1. 先搜索已有 Issue 与 Pull Request。
-2. 如果要修改行为或大规模重构，请先提 Issue，说明问题、范围、兼容影响与最小可行方案。
-3. 修改核心契约前，请阅读[架构说明](./docs-public/architecture.zh-CN.md)与
-   [二次开发指南](./docs-public/development-guide.zh-CN.md)。
+1. Search existing Issues to avoid duplicates.
+2. Check the [Quick Start](./docs-public/quick-start.md), [User Guide](./docs-public/user-guide.md), and
+   [current runtime boundaries](./docs-public/user-guide.md#9-current-runtime-boundaries).
+3. Reproduce the problem with the smallest configuration possible.
+4. Remove tokens, private addresses, personal data, and business payloads from logs and screenshots.
 
-## Build and test / 构建与测试
+1. 先搜索已有 Issue，避免重复提交。
+2. 阅读[快速上手](./docs-public/quick-start.zh-CN.md)、[使用指南](./docs-public/user-guide.zh-CN.md)与
+   [当前运行边界](./docs-public/user-guide.zh-CN.md#9-当前运行边界)。
+3. 尽量使用最小配置稳定复现问题。
+4. 提交日志和截图前，移除 token、私有地址、个人信息与业务数据。
 
-```bash
-mvn clean verify
-```
+## Bug report / 缺陷反馈
 
-For a focused Java change, use `mvn -pl <module> -am test`, then run the wider suite before submission. When
-changing a cross-language Registrar, run the matching language checks listed in the
-[Development Guide](./docs-public/development-guide.md#10-validation-and-contribution-checklist).
+Please include:
 
-Java 定向变更可以先执行 `mvn -pl <module> -am test`，提交前再跑更完整的测试。修改跨语言 Registrar 时，请执行
-[二次开发指南](./docs-public/development-guide.zh-CN.md#10-验证与贡献检查)中对应的语言检查。
+- Rover-Suite version, tag, or commit ID.
+- JDK, Maven, operating system, and deployment mode.
+- Affected component: Gateway, Nameserver, Starter, Admin, or a Registrar example.
+- Minimal configuration with secrets removed.
+- Exact reproduction steps, expected behavior, and actual behavior.
+- Relevant logs, HTTP status/body, stack trace, and whether the issue is reproducible.
 
-## Change rules / 变更规则
+请提供：
 
-- Keep each pull request focused on one problem.
-- Add tests for bug fixes and user-visible behavior.
-- Preserve registration ownership, idempotency, revision, push, and pure in-memory lease invariants unless the
-  pull request explicitly proposes an architecture change.
-- Do not bypass `RegistrationService` from a new registration transport.
-- Do not advertise reserved or skeleton integrations as supported.
-- Do not commit tokens, private endpoints, local `config/` files, IDE files, logs, or build artifacts.
-- Do not include unrelated formatting or generated-file churn.
+- Rover-Suite 版本、Tag 或 Commit ID。
+- JDK、Maven、操作系统与部署方式。
+- 受影响组件：Gateway、Nameserver、Starter、Admin 或 Registrar 示例。
+- 已删除密钥的最小配置。
+- 完整复现步骤、预期行为与实际行为。
+- 相关日志、HTTP 状态与响应、异常栈，以及问题是否能稳定复现。
 
-- 每个 Pull Request 只聚焦一个问题。
-- Bug 修复与用户可见行为必须补测试。
-- 除非 PR 明确提出架构变更，否则保留注册 owner、幂等、revision、push 与纯内存租约语义。
-- 新的注册传输层不能绕过 `RegistrationService`。
-- 不要把预留枚举或骨架模块宣传为已支持。
-- 不要提交 token、私有地址、本地 `config/`、IDE 文件、日志或构建产物。
-- 不要夹带无关格式化或生成文件噪音。
+## Feature request / 功能建议
 
-## Documentation / 文档
+Describe the real use case first, then explain the current limitation and the smallest useful outcome. Include
+compatibility, deployment, maintenance, and performance considerations when relevant. Large frameworks or new
+dependencies should explain why existing extension points or a small source-level adapter are insufficient.
 
-Public behavior is not complete until its documentation is updated. In the same pull request, update as needed:
+请先说明真实使用场景，再描述当前限制与最小可用目标。涉及兼容、部署、维护成本或性能时一并说明。建议引入大型框架
+或新依赖时，应解释为什么现有扩展点或小型源码适配层无法解决问题。
 
-- OpenAPI for HTTP contract changes.
-- Reference implementations for lifecycle changes.
-- Root English and Chinese READMEs for positioning or entry-point changes.
-- English and Chinese public guides for configuration or usage changes.
-- Architecture documentation for a changed invariant or trade-off.
+## Security and privacy / 安全与隐私
 
-公开行为只有在文档同步后才算完成。HTTP 契约、生命周期、项目入口、配置/使用方式或架构不变量变化时，请在同一 PR 中同步对应 OpenAPI、示例、中英文 README 与公开指南。
+Do not publish real credentials, exploitable private endpoints, or personal data in an Issue. This repository does
+not currently provide a private vulnerability-reporting channel; submit only sanitized information that is safe to
+disclose publicly. Tokens authenticate requests but do not encrypt traffic.
 
-## Pull request description / PR 说明
+不要在 Issue 中公开真实凭据、可直接利用的私有地址或个人信息。仓库目前不提供私密漏洞报告通道，请仅提交可公开的
+脱敏信息。Token 只提供鉴权，不负责链路加密。
 
-Include:
+## Maintainers and private forks / 维护者与私有分支
 
-- What problem is solved and what is deliberately out of scope.
-- Compatibility and operational impact.
-- Exact verification commands and results.
-- Configuration, security, or migration notes.
-- Known limitations and follow-up work.
+Teams maintaining a private fork can follow the [Development Guide](./docs-public/development-guide.md) or
+[二次开发指南](./docs-public/development-guide.zh-CN.md). A behavior change should update tests, OpenAPI when
+applicable, examples, both root READMEs, and the corresponding public guides in the same change.
 
-PR 中请说明：解决什么问题、哪些内容不在范围内、兼容/运维影响、实际验证命令与结果、配置/安全/迁移注意事项，以及已知限制。
-
-By contributing, you agree that your contribution is licensed under the repository's
-[Non-Commercial License](./LICENSE).
-
-提交贡献即表示你同意该贡献按本仓库的 [非商用许可](./LICENSE) 许可。
+维护私有分支的团队可参考[二次开发指南](./docs-public/development-guide.zh-CN.md)。用户可见行为发生变化时，应在
+同一次变更中同步测试、必要的 OpenAPI、示例、中英文 README 与对应公开文档。

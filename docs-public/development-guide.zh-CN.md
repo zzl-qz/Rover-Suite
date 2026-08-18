@@ -2,7 +2,7 @@
 
 [English](./development-guide.md) · [文档索引](./README.md)
 
-本文面向开源贡献者和维护私有分支的团队。Rover-Suite 倾向使用显式的 Java 扩展点和尽可能小的部署面，请优先选择能解决问题的最小扩展方式。
+本文面向项目维护者和维护私有分支的团队。Rover-Suite 倾向使用显式的 Java 扩展点和尽可能小的部署面，请优先选择能解决问题的最小扩展方式。公开仓库仅通过 Issue 收集反馈，不接收外部 Pull Request。
 
 ## 1. 本地开发
 
@@ -181,12 +181,36 @@ rover:
 [`RegistrationService`](../rover-nameserver-core/src/main/java/com/rover/nameserver/core/registration/RegistrationService.java)：
 
 ```mermaid
-flowchart LR
-    TCP["TCP listeners"] --> RS["RegistrationService"]
-    HTTP["NameserverClientApi"] --> RS
-    RS --> Registry["ServiceRegistry"]
-    RS --> Push["PushService"]
-    RS --> Metrics["Metrics"]
+flowchart TB
+    subgraph Adapter["传输适配"]
+        direction LR
+        TCP["TCP listeners"]
+        HTTP["NameserverClientApi"]
+    end
+
+    RS["RegistrationService"]
+
+    subgraph Core["统一编排"]
+        direction LR
+        Registry["ServiceRegistry"]
+        Push["PushService"]
+        Metrics["Metrics"]
+    end
+
+    TCP --> RS
+    HTTP --> RS
+    RS --> Registry
+    RS --> Push
+    RS --> Metrics
+
+    classDef adapter fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
+    classDef domain fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
+    classDef core fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:1.5px;
+    class TCP,HTTP adapter;
+    class RS domain;
+    class Registry,Push,Metrics core;
+    style Adapter fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
+    style Core fill:#FFFFFF,stroke:#CBD5E1,stroke-width:1px;
 ```
 
 新 adapter 只应处理传输编解码、鉴权、DTO 校验、owner 构造与状态映射。必须调用 `RegistrationService`；直接写
@@ -258,7 +282,7 @@ flowchart LR
 - 不要复用已删除的协议字段 ID，不要静默修改状态机含义。
 - 用户可见行为变更时，同步更新中英文公开文档。
 
-## 10. 验证与贡献检查
+## 10. 验证与变更检查
 
 Registrar 检查：
 
@@ -272,13 +296,13 @@ cmake -S examples/http-registration/cpp -B build/rover-http
 cmake --build build/rover-http
 ```
 
-提交 Pull Request 前：
+合入维护分支前：
 
 - 运行变更模块的定向测试；跨模块变更运行 `mvn test` 或 `mvn clean verify`。
 - 新的 core/插件行为补充并发、异常与重载测试。
 - 不要提交密钥、本地 `config/` 文件、生成二进制和 IDE 文件。
 - 在脏工作区保留其他用户变更。
 - 契约变更时同步更新 OpenAPI、示例、两份根 README 与公开指南。
-- PR 中说明行为变化、兼容影响、验证命令与已知运行限制。
+- 在变更记录中说明行为变化、兼容影响、验证命令与已知运行限制。
 
-欢迎通过 Issue 与 Pull Request 参与。请保持变更聚焦，让小团队可以轻松审阅、回滚和维护。
+公开反馈请提交 Issue。项目不接收外部 Pull Request；维护私有分支时仍建议保持变更聚焦，便于小团队审阅、回滚和维护。

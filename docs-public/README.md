@@ -27,7 +27,8 @@ choose the guide that matches your task.
 - [English README](../README.md)
 - [中文 README](../README.zh-CN.md)
 - [Gateway demo and test suite](../rover-gateway-test/demo/README.md)
-- [Contributing](../CONTRIBUTING.md)
+- [Issue feedback policy](../CONTRIBUTING.md)
+- [Open an Issue / 提交 Issue](https://gitee.com/zzl-java/roverSuite/issues)
 - [Apache 2.0 License](../LICENSE)
 
 Current source status: JDK 17+, Maven build, version `1.0.0-SNAPSHOT`. Snapshot artifacts are built from source
@@ -43,6 +44,6 @@ and buffered proxying are listed in [User Guide: Current runtime boundaries](./u
 运行边界统一记录在[使用指南：当前运行边界](./user-guide.zh-CN.md#9-当前运行边界)，避免 README 与真实代码能力不一致。
 
 Documentation should describe released code, not planned behavior. When a public contract, configuration key, or
-extension boundary changes, update the corresponding guide and both root READMEs in the same pull request.
+extension boundary changes, update the corresponding guide and both root READMEs in the same change.
 
-公开文档只描述当前代码已实现的行为。修改公开契约、配置项或扩展边界时，请在同一个提交中同步更新对应指南与中英文 README。
+公开文档只描述当前代码已实现的行为。修改公开契约、配置项或扩展边界时，请在同一次变更中同步更新对应指南与中英文 README。
