@@ -24,7 +24,7 @@ cp rover-gateway-bootstrap/src/main/resources/rover-gateway.yml config/rover-gat
 cp rover-nameserver-bootstrap/src/main/resources/rover-nameserver.yml config/rover-nameserver.yml
 ```
 
-将 `config/rover-gateway.yml` 中的 Gateway `port` 改为 `8080`、`server.bindHost` 改为 `127.0.0.1`，并保留内置的 `demo-api` 路由和 Nameserver 发现配置。
+将 `config/rover-gateway.yml` 中的 Gateway `port` 改为你需要的值（仓库默认是 `80`；本 README 示例也可继续用 `8080`）、`server.bindHost` 改为 `127.0.0.1`，并保留内置的 `demo-api` 路由和 Nameserver 发现配置。
 将 `config/rover-nameserver.yml` 的 `bindHost` 和 `manageBindHost` 都改为 `127.0.0.1`。这样本地空 token 管理接口不会暴露给局域网。
 
 ## 2. 启动基础组件
@@ -63,9 +63,10 @@ Starter 在每个 Web Server ready 后将实际端口注册到 `127.0.0.1:8888`�
 
 ```bash
 curl -sS http://127.0.0.1:8889/_manage/instances
-curl -sS http://127.0.0.1:8080/api/hello
-curl -sS 'http://127.0.0.1:8080/api/echo?msg=rover'
-curl -sS http://127.0.0.1:8080/api/health
+# 下面端口以你的 Gateway 配置为准：仓库默认 80，示例常用 8080
+curl -sS http://127.0.0.1/api/hello
+curl -sS 'http://127.0.0.1/api/echo?msg=rover'
+curl -sS http://127.0.0.1/api/health
 ```
 
 多次请求 `/api/hello`，观察 JSON 中的 `port` 字段，可以验证当前负载均衡策略。
@@ -80,7 +81,7 @@ npm install
 npm run dev
 ```
 
-访问 `http://127.0.0.1:3000`。面板默认使用 `http://localhost:8080`，也可在页面中修改 Gateway 地址。
+访问 `http://127.0.0.1:3000`。面板默认使用 `http://localhost`（端口 80），也可在页面中修改 Gateway 地址。
 
 面板可用于验证：
 

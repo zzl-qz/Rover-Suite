@@ -176,11 +176,11 @@ Built-in management endpoints:
 | Gateway | `GET /_manage/status` | Listener, discovery, route, and runtime status |
 | Gateway | `GET/PUT/POST/DELETE /_manage/routes` | List, replace, add/update, or delete routes |
 | Gateway | `GET/POST /_manage/configs` | List or update registered runtime settings |
-| Gateway | `GET /_manage/metrics`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, self-check, and Prometheus text |
+| Gateway | `GET /_manage/metrics`, `/metrics/live`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, lightweight live snapshot (`range=60|300`), self-check, and Prometheus text |
 | Gateway | `GET /_manage/traces` | Bounded request timeline with `traceId`, `path`, and `slow` filters |
 | Nameserver | `GET /_manage/status`, `/instances` | Runtime status and current in-memory instances |
 | Nameserver | `GET/POST /_manage/configs` | List or update registered runtime settings |
-| Nameserver | `GET /_manage/metrics`, `/events` | Registration metrics and recent events |
+| Nameserver | `GET /_manage/metrics`, `/metrics/live`, `/events` | Registration metrics, live snapshot, and recent events |
 
 Rover-Admin is optional:
 
@@ -188,7 +188,13 @@ Rover-Admin is optional:
 mvn -pl rover-admin spring-boot:run
 ```
 
-If the Gateway runs on `8080` instead of its bundled port, update Rover-Admin's Gateway URL accordingly.
+Open `http://127.0.0.1:9090`. The dashboard polls `/api/live` every second for instant traffic and JVM,
+and refreshes component status about every 15 seconds. Request traces honor Gateway
+`gateway.trace.sampleRate`: `0` records only slow requests (default); set it to `1` in Admin config to
+capture ordinary traffic without restart.
+
+If the Gateway runs on a non-default port (bundled default is often `80`), point Rover-Admin's Gateway
+base URL at that listener.
 
 ## 8. Optional deployment hardening
 
