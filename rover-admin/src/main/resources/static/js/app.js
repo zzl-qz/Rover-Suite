@@ -1,6 +1,6 @@
 /**
- * Rover Admin - 轻量控制台
- * Vue 3 (CDN) + ECharts：侧边栏多页面（仪表盘/路由/实例/配置），仪表盘每 5 秒轮询。
+ * Rover Admin：Vue 3 + ECharts。
+ * 仪表盘 1 秒拉 /api/live，15 秒拉 overview；轮询绝不打整页 loading。
  */
 const { createApp } = Vue;
 
@@ -23,12 +23,15 @@ async function api(url, options) {
     return json;
 }
 
-const EMPTY_TOTAL = {
-    requests: 0, windowRequests: 0, expiredRequests: 0, qps: 0,
-    avgMillis: 0, p95Millis: 0, p99Millis: 0, maxMillis: 0, errorRequests: 0,
+const EMPTY_TRAFFIC = {
+    instantQps: 0, currentSecondRequests: 0, qps5s: 0, qps60s: 0, qps300s: 0,
+    instantAvgMillis: 0, windowRequests: 0, avgMillis: 0, p95Millis: 0, p99Millis: 0,
+    maxMillis: 0, errorRequests: 0, idle: true,
     status: { '2xx': 0, '3xx': 0, '4xx': 0, '5xx': 0 },
-    gatewayErrors: { routeUnmatched: 0, proxyTimeout: 0, upstreamConnectFail: 0 },
 };
+const EMPTY_RES = { activeConnections: 0, inflightRequests: 0, upstreamInFlight: 0 };
+const EMPTY_ERR = { routeUnmatched: 0, proxyTimeout: 0, upstreamConnectFail: 0 };
+const EMPTY_INSTANT = { heartbeat: 0, query: 0, push: 0, register: 0 };
 
 createApp({
     data() {
@@ -43,29 +46,29 @@ createApp({
                 { id: 'configs', label: '配置管理', icon: ICONS.configs },
             ],
             loading: false,
+            liveRange: 60,
+            live: null,
+            liveFailCount: 0,
+            liveInFlight: false,
+            updatedAt: 0,
+            envOpen: false,
+            selectedRouteId: null,
+            jvmHistory: { gateway: [], nameserver: [] },
 
-            // 仪表盘数据
             discoveryType: 'UNKNOWN',
             status: { gateway: null, nameserver: null },
-            metrics: null,
             metricsError: null,
             selfcheck: null,
             instances: [],
 
-            // 路由页
             routes: [],
             routesError: null,
             savingRoute: false,
             editingPrefix: null,
+            routeDrawerOpen: false,
             routeForm: { id: '', businessPrefix: '', serviceName: '', targetUrl: '', targetUrls: '', group: '', stripPrefix: '' },
 
-            // 实例页
             instancesError: null,
-
-            // Nameserver 指标（仪表盘 JVM 卡片）
-            nameserverMetrics: null,
-
-            // 请求追踪页
             traces: [],
             tracesMeta: null,
             tracesError: null,
@@ -73,23 +76,20 @@ createApp({
             selectedTrace: null,
             waterfallChart: null,
 
-            // 最近事件页
             events: [],
             eventsError: null,
+            knownEventKeys: new Set(),
 
-            // 配置页
             configs: [],
             configsError: null,
             configBusyKey: null,
-            openConfigKey: null,
 
-            // Toast
             toasts: [],
             toastSeq: 0,
-
-            // 图表实例
-            charts: { qps: null, status: null, routes: null },
-            pollTimer: null,
+            charts: { qps: null, status: null },
+            liveTimer: null,
+            overviewTimer: null,
+            pageTimer: null,
         };
     },
 
@@ -100,89 +100,131 @@ createApp({
         },
         pageSubtitle() {
             return {
-                dashboard: 'Gateway 流量与组件健康总览',
-                traces: '网关内各阶段耗时拆解与 traceId 透传',
+                dashboard: '数字看不懂就悬停；顶栏 1m/5m 决定「近窗」多长',
+                traces: '点一行在表内展开阶段耗时',
                 routes: '路由规则热更新与落盘',
-                instances: 'Nameserver 注册实例实时状态',
-                events: '注册 / 注销 / 剔除等生命周期日志',
-                configs: 'Gateway / Nameserver 运行时配置',
+                instances: 'Nameserver 注册实例',
+                events: '注册 / 注销 / 剔除等生命周期',
+                configs: '按组件改运行时配置，脏了才保存',
             }[this.page] || '';
         },
-        total() {
-            return (this.metrics && this.metrics.total) ? this.metrics.total : EMPTY_TOTAL;
+        gw() {
+            return (this.live && this.live.gateway && !this.live.gateway.error) ? this.live.gateway : null;
         },
-        gatewayJvm() {
-            return (this.metrics && this.metrics.jvm) ? this.metrics.jvm : null;
+        ns() {
+            return (this.live && this.live.nameserver && !this.live.nameserver.error) ? this.live.nameserver : null;
         },
-        nameserverJvm() {
-            return (this.nameserverMetrics && this.nameserverMetrics.jvm)
-                ? this.nameserverMetrics.jvm : null;
+        gwTraffic() { return (this.gw && this.gw.traffic) ? this.gw.traffic : EMPTY_TRAFFIC; },
+        gwRes() { return (this.gw && this.gw.resources) ? this.gw.resources : EMPTY_RES; },
+        gatewayErrors() { return (this.gw && this.gw.gatewayErrors) ? this.gw.gatewayErrors : EMPTY_ERR; },
+        windowStatus() { return this.gwTraffic.status || EMPTY_TRAFFIC.status; },
+        liveRoutes() { return (this.gw && this.gw.routes) ? this.gw.routes : []; },
+        selectedRoute() {
+            return this.liveRoutes.find(r => r.routeId === this.selectedRouteId) || null;
+        },
+        nsInstant() { return (this.ns && this.ns.instant) ? this.ns.instant : EMPTY_INSTANT; },
+        nsRes() { return (this.ns && this.ns.resources) ? this.ns.resources : EMPTY_RES; },
+        nsReg() { return (this.ns && this.ns.registry) ? this.ns.registry : null; },
+        nsHealthy() { return this.nsReg ? this.nsReg.healthyInstances : this.healthyCount; },
+        nsInstances() { return this.nsReg ? this.nsReg.instanceCount : this.instances.length; },
+        nsUnhealthy() { return this.nsReg ? this.nsReg.unhealthyInstances : this.unhealthyCount; },
+        gatewayJvm() { return (this.gw && this.gw.jvm) ? this.gw.jvm : null; },
+        nameserverJvm() { return (this.ns && this.ns.jvm) ? this.ns.jvm : null; },
+        displayQps() {
+            const t = this.gwTraffic;
+            if (t.instantQps > 0) return t.instantQps;
+            return t.currentSecondRequests || 0;
+        },
+        qpsHint() {
+            const t = this.gwTraffic;
+            if (t.idle && !t.currentSecondRequests) return '最近 1s 无请求';
+            if (t.instantQps === 0 && t.currentSecondRequests > 0) return '本秒已有 ' + t.currentSecondRequests;
+            return '上一秒 · 近 5s ' + this.num(t.qps5s);
+        },
+        liveState() {
+            if (this.liveFailCount >= 3) return 'down';
+            if (this.liveFailCount > 0) return 'warn';
+            return 'ok';
+        },
+        liveStateLabel() {
+            if (this.liveState === 'down') {
+                return this.page === 'dashboard' ? '实时中断' : '组件中断';
+            }
+            if (this.liveState === 'warn') {
+                return this.page === 'dashboard' ? '实时抖动' : '组件抖动';
+            }
+            return this.page === 'dashboard' ? '实时' : '在线';
+        },
+        livePillTitle() {
+            if (this.page === 'dashboard') {
+                return '仪表盘每秒拉 live；绿=正常，黄=偶发失败，红=连续失败';
+            }
+            return '后台仍在拉 live 探测组件可达；本页数据按各自刷新节奏更新';
+        },
+        updatedAtText() {
+            if (!this.updatedAt) return '';
+            const d = new Date(this.updatedAt);
+            const pad = n => String(n).padStart(2, '0');
+            return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        },
+        jvmWarn() {
+            const g = this.gatewayJvm;
+            const n = this.nameserverJvm;
+            return (g && g.heapUsedPercent >= 85) || (n && n.heapUsedPercent >= 85)
+                || this.gcWindow('gateway').count >= 8 || this.gcWindow('nameserver').count >= 8;
         },
         gatewayOk() {
+            if (this.gw) return true;
             return Boolean(this.status.gateway && this.status.gateway.reachable);
         },
         nameserverOk() {
+            if (this.ns) return true;
             return Boolean(this.status.nameserver && this.status.nameserver.reachable);
         },
         gatewayData() { return this.status.gateway ? this.status.gateway.data : null; },
-        gatewayError() { return this.status.gateway ? this.status.gateway.error : ''; },
         nameserverData() { return this.status.nameserver ? this.status.nameserver.data : null; },
-        nameserverError() { return this.status.nameserver ? this.status.nameserver.error : ''; },
-        selfcheckOk() {
-            return Boolean(this.selfcheck && this.selfcheck.ok);
-        },
+        selfcheckOk() { return Boolean(this.selfcheck && this.selfcheck.ok); },
         selfcheckText() {
-            if (!this.selfcheck) return '自洽校验 -';
-            return this.selfcheck.ok ? '数据自洽 ✓' : '数据不一致 ✗';
+            if (!this.selfcheck) return '自洽校验尚未拉取';
+            return this.selfcheck.ok ? '累计加和自洽' : '累计加和不一致';
+        },
+        selfcheckShort() {
+            if (!this.selfcheck) return '自洽 -';
+            return this.selfcheck.ok ? '自洽' : '不一致';
         },
         healthyCount() { return this.instances.filter(i => i.healthy).length; },
         unhealthyCount() { return this.instances.filter(i => !i.healthy).length; },
-        serviceCount() {
-            return new Set(this.instances.map(i => i.serviceName)).size;
-        },
-        serviceSummary() {
-            const map = new Map();
-            for (const ins of this.instances) {
-                const key = ins.serviceName;
-                if (!map.has(key)) map.set(key, { serviceName: key, total: 0, healthy: 0 });
-                const row = map.get(key);
-                row.total++;
-                if (ins.healthy) row.healthy++;
-            }
-            return [...map.values()];
+        configGroups() {
+            const titles = { gateway: 'Gateway', nameserver: 'Nameserver' };
+            return ['gateway', 'nameserver'].map(component => ({
+                component,
+                title: titles[component],
+                items: this.configs.filter(c => c.component === component),
+            }));
         },
     },
 
     mounted() {
-        // 首屏默认在仪表盘，DOM 就绪后初始化图表
         this.$nextTick(() => this.initCharts());
-        this.refreshAll();
-        this.pollTimer = setInterval(() => {
-            if (this.page === 'dashboard') this.fetchDashboard();
-        }, 5000);
-        this.instancesTimer = setInterval(() => {
-            if (this.page === 'instances') this.fetchInstances();
-        }, 10000);
-        this.tracesTimer = setInterval(() => {
-            if (this.page === 'traces') this.fetchTraces();
-        }, 5000);
-        this.eventsTimer = setInterval(() => {
-            if (this.page === 'events') this.fetchEvents();
-        }, 5000);
+        this.fetchLive();
+        this.fetchOverview();
+        this.liveTimer = setInterval(() => this.fetchLive(), 1000);
+        this.overviewTimer = setInterval(() => {
+            if (this.page === 'dashboard') this.fetchOverview();
+        }, 15000);
+        this.pageTimer = setInterval(() => this.pollCurrentPage(), 3000);
         this._resizeHandler = () => this.resizeCharts();
         window.addEventListener('resize', this._resizeHandler);
     },
 
     beforeUnmount() {
-        clearInterval(this.pollTimer);
-        clearInterval(this.instancesTimer);
-        clearInterval(this.tracesTimer);
-        clearInterval(this.eventsTimer);
+        clearInterval(this.liveTimer);
+        clearInterval(this.overviewTimer);
+        clearInterval(this.pageTimer);
         window.removeEventListener('resize', this._resizeHandler);
     },
 
     methods: {
-        // ===== 通用 =====
         toast(type, message) {
             const id = ++this.toastSeq;
             this.toasts.push({ id, type, message });
@@ -209,12 +251,7 @@ createApp({
             const pad = n => String(n).padStart(2, '0');
             return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
         },
-        fmtFullTime(millis) {
-            if (!millis) return '-';
-            const d = new Date(millis);
-            const pad = n => String(n).padStart(2, '0');
-            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-        },
+        fmtFullTime(millis) { return this.fmtTime(millis); },
         fmtUptime(seconds) {
             if (seconds === null || seconds === undefined) return '-';
             const s = Number(seconds);
@@ -224,66 +261,138 @@ createApp({
             const m = Math.floor((s % 3600) / 60);
             return (h >= 24 ? Math.floor(h / 24) + 'd ' : '') + (h % 24) + 'h ' + m + 'm';
         },
+        fmtHeap(jvm) {
+            if (!jvm) return '-';
+            return (jvm.heapUsedPercent || 0).toFixed(1) + '%';
+        },
+        fmtCpu(jvm) {
+            if (!jvm || jvm.processCpuPercent === undefined) return '-';
+            return Number(jvm.processCpuPercent).toFixed(1) + '%';
+        },
+        idleText(millis) {
+            if (!millis) return '-';
+            const sec = Math.max(0, Math.floor((Date.now() - millis) / 1000));
+            if (sec < 5) return '刚刚';
+            if (sec < 60) return sec + 's';
+            return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+        },
         switchPage(page) {
             this.page = page;
             this.refreshAll();
             if (page === 'dashboard') {
-                // v-if 切页会重建图表 DOM，必须销毁旧实例后重新初始化
                 this.disposeCharts();
                 this.$nextTick(() => this.initCharts());
             } else if (page !== 'traces') {
                 this.selectedTrace = null;
-                if (this.waterfallChart) {
-                    this.waterfallChart.dispose();
-                    this.waterfallChart = null;
-                }
+                this.disposeWaterfall();
             }
         },
         disposeCharts() {
             Object.values(this.charts).forEach(c => c && c.dispose());
-            this.charts = { qps: null, status: null, routes: null };
+            this.charts = { qps: null, status: null };
         },
-        refreshAll() {
-            if (this.page === 'dashboard') this.fetchDashboard();
+        disposeWaterfall() {
+            if (this.waterfallChart) {
+                this.waterfallChart.dispose();
+                this.waterfallChart = null;
+            }
+        },
+        async refreshAll() {
+            this.loading = true;
+            try {
+                if (this.page === 'dashboard') {
+                    await this.fetchLive();
+                    await this.fetchOverview();
+                }
+                if (this.page === 'traces') await this.fetchTraces();
+                if (this.page === 'routes') await this.fetchRoutes();
+                if (this.page === 'instances') await this.fetchInstances();
+                if (this.page === 'events') await this.fetchEvents();
+                if (this.page === 'configs') await this.fetchConfigs();
+            } finally {
+                this.loading = false;
+            }
+        },
+        pollCurrentPage() {
             if (this.page === 'traces') this.fetchTraces();
-            if (this.page === 'routes') this.fetchRoutes();
             if (this.page === 'instances') this.fetchInstances();
             if (this.page === 'events') this.fetchEvents();
-            if (this.page === 'configs') this.fetchConfigs();
+        },
+        setLiveRange(range) {
+            this.liveRange = range;
+            this.fetchLive();
         },
 
-        // ===== 仪表盘 =====
-        async fetchDashboard() {
-            this.loading = true;
-            this.metricsError = null;
+        async fetchLive() {
+            if (this.liveInFlight) return;
+            this.liveInFlight = true;
+            try {
+                const data = await api('/api/live?range=' + this.liveRange);
+                this.live = data;
+                this.updatedAt = data.serverTimeMillis || Date.now();
+                const gwFail = data.gateway && data.gateway.error;
+                const nsFail = data.nameserver && data.nameserver.error;
+                if (gwFail && nsFail) {
+                    this.liveFailCount += 1;
+                    if (this.liveFailCount >= 3) this.metricsError = 'Gateway / Nameserver live 都读不到';
+                } else {
+                    this.liveFailCount = 0;
+                    this.metricsError = gwFail ? 'Gateway live 读失败' : null;
+                }
+                this.pushJvmSample('gateway', this.gatewayJvm);
+                this.pushJvmSample('nameserver', this.nameserverJvm);
+                if (this.page === 'dashboard') this.updateCharts();
+            } catch (e) {
+                this.liveFailCount += 1;
+                if (this.liveFailCount >= 3) this.metricsError = e.message;
+            } finally {
+                this.liveInFlight = false;
+            }
+        },
+
+        async fetchOverview() {
             try {
                 const overview = await api('/api/overview');
                 this.status = overview.status || { gateway: null, nameserver: null };
                 this.discoveryType = overview.discoveryType || 'UNKNOWN';
-                this.metrics = overview.metrics && !overview.metrics.error ? overview.metrics : null;
-                if (overview.metrics && overview.metrics.error) {
-                    this.metricsError = overview.metrics.error;
-                }
                 this.selfcheck = overview.selfcheck && overview.selfcheck.error ? null : overview.selfcheck;
-                try {
-                    this.instances = await api('/api/instances');
-                } catch (e) {
-                    this.instances = [];
-                }
-                try {
-                    this.nameserverMetrics = await api('/api/nameserver/metrics');
-                    if (this.nameserverMetrics && this.nameserverMetrics.error) {
-                        this.nameserverMetrics = null;
-                    }
-                } catch (e) {
-                    this.nameserverMetrics = null;
-                }
-                this.updateCharts();
             } catch (e) {
-                this.metricsError = e.message;
-            } finally {
-                this.loading = false;
+                // overview 失败不影响 live
             }
+        },
+
+        pushJvmSample(side, jvm) {
+            if (!jvm) return;
+            const arr = this.jvmHistory[side];
+            arr.push({
+                t: Date.now(),
+                heap: Number(jvm.heapUsedPercent) || 0,
+                gcCount: Number(jvm.gcCount) || 0,
+                gcTime: Number(jvm.gcTimeMillis) || 0,
+            });
+            const cutoff = Date.now() - 60000;
+            this.jvmHistory[side] = arr.filter(s => s.t >= cutoff);
+        },
+        gcWindow(side) {
+            const arr = this.jvmHistory[side] || [];
+            if (arr.length < 2) return { count: 0, time: 0 };
+            const first = arr[0];
+            const last = arr[arr.length - 1];
+            return {
+                count: Math.max(0, last.gcCount - first.gcCount),
+                time: Math.max(0, last.gcTime - first.gcTime),
+            };
+        },
+        sparkPoints(side) {
+            const arr = this.jvmHistory[side] || [];
+            if (!arr.length) return '';
+            const w = 120;
+            const h = 28;
+            return arr.map((s, i) => {
+                const x = arr.length === 1 ? 0 : (i / (arr.length - 1)) * w;
+                const y = h - Math.min(100, s.heap) / 100 * (h - 2) - 1;
+                return x.toFixed(1) + ',' + y.toFixed(1);
+            }).join(' ');
         },
 
         initCharts() {
@@ -293,29 +402,22 @@ createApp({
             if (!this.charts.status && document.getElementById('chart-status')) {
                 this.charts.status = echarts.init(document.getElementById('chart-status'));
             }
-            if (!this.charts.routes && document.getElementById('chart-routes')) {
-                this.charts.routes = echarts.init(document.getElementById('chart-routes'));
-            }
             this.updateCharts();
         },
-
         resizeCharts() {
             Object.values(this.charts).forEach(c => c && c.resize());
+            if (this.waterfallChart) this.waterfallChart.resize();
         },
-
         updateCharts() {
-            if (!this.metrics) return;
             this.updateQpsChart();
             this.updateStatusChart();
-            this.updateRoutesChart();
         },
-
         updateQpsChart() {
             const chart = this.charts.qps;
-            if (!chart) return;
-            const series = (this.metrics.qpsSeries || []).slice(-120);
+            if (!chart || !this.gw) return;
+            const series = this.gw.qpsSeries || [];
             chart.setOption({
-                grid: { left: 42, right: 16, top: 24, bottom: 28 },
+                grid: { left: 42, right: 16, top: 16, bottom: 28 },
                 tooltip: { trigger: 'axis' },
                 xAxis: {
                     type: 'category',
@@ -345,11 +447,10 @@ createApp({
                 }],
             });
         },
-
         updateStatusChart() {
             const chart = this.charts.status;
             if (!chart) return;
-            const s = this.total.status || EMPTY_TOTAL.status;
+            const s = this.windowStatus;
             chart.setOption({
                 tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
                 legend: { bottom: 0, textStyle: { color: '#6b7a72', fontSize: 12 } },
@@ -371,49 +472,19 @@ createApp({
                 }],
             });
         },
-
-        updateRoutesChart() {
-            const chart = this.charts.routes;
-            if (!chart) return;
-            const rows = (this.metrics.routes || [])
-                .slice()
-                .sort((a, b) => b.windowRequests - a.windowRequests)
-                .slice(0, 8)
-                .reverse();
-            chart.setOption({
-                grid: { left: 8, right: 30, top: 10, bottom: 8, containLabel: true },
-                tooltip: {
-                    trigger: 'axis',
-                    axisPointer: { type: 'shadow' },
-                    formatter: (params) => {
-                        const r = rows[params[0].dataIndex];
-                        return `${r.routeId}<br/>请求 ${r.windowRequests}（累计 ${r.requests}）<br/>错误率 ${(r.errorRate * 100).toFixed(2)}%<br/>平均 ${r.avgMillis}ms / P95 ${r.p95Millis}ms`;
-                    },
-                },
-                xAxis: {
-                    type: 'value',
-                    minInterval: 1,
-                    splitLine: { lineStyle: { color: '#eef2ef' } },
-                    axisLabel: { color: '#6b7a72', fontSize: 11 },
-                },
-                yAxis: {
-                    type: 'category',
-                    data: rows.map(r => r.routeId),
-                    axisLine: { show: false },
-                    axisTick: { show: false },
-                    axisLabel: { color: '#1c2b25', fontSize: 12 },
-                },
-                series: [{
-                    type: 'bar',
-                    data: rows.map(r => r.windowRequests),
-                    barWidth: 14,
-                    itemStyle: { color: '#1f6f5b', borderRadius: [0, 6, 6, 0] },
-                    label: { show: true, position: 'right', color: '#6b7a72', fontSize: 11 },
-                }],
-            });
+        toggleRoute(routeId) {
+            this.selectedRouteId = this.selectedRouteId === routeId ? null : routeId;
+        },
+        instanceEntries(route) {
+            return route && route.instances ? Object.keys(route.instances) : [];
+        },
+        /** 指标里的特殊路由 id 换成可读文案。 */
+        routeLabel(routeId) {
+            if (!routeId) return '-';
+            if (routeId === '__unmatched__') return '未匹配';
+            return routeId;
         },
 
-        // ===== 请求追踪 =====
         async fetchTraces() {
             this.tracesError = null;
             const params = new URLSearchParams();
@@ -430,10 +501,12 @@ createApp({
                     slowThresholdMillis: data.slowThresholdMillis,
                 };
                 this.traces = data.traces || [];
-                // 若选中的请求还在列表里则保持展开，否则收起
                 if (this.selectedTrace
                     && !this.traces.some(t => t.traceId === this.selectedTrace.traceId)) {
                     this.selectedTrace = null;
+                    this.disposeWaterfall();
+                } else if (this.selectedTrace) {
+                    this.$nextTick(() => this.updateWaterfallChart());
                 }
             } catch (e) {
                 this.tracesError = e.message;
@@ -442,20 +515,21 @@ createApp({
         selectTrace(trace) {
             if (this.selectedTrace && this.selectedTrace.traceId === trace.traceId) {
                 this.selectedTrace = null;
-                if (this.waterfallChart) { this.waterfallChart.dispose(); this.waterfallChart = null; }
+                this.disposeWaterfall();
                 return;
             }
+            this.disposeWaterfall();
             this.selectedTrace = trace;
             this.$nextTick(() => this.updateWaterfallChart());
         },
         updateWaterfallChart() {
             if (!this.selectedTrace) return;
-            if (!document.getElementById('chart-waterfall')) return;
+            const el = document.getElementById('chart-waterfall');
+            if (!el) return;
             if (!this.waterfallChart) {
-                this.waterfallChart = echarts.init(document.getElementById('chart-waterfall'));
+                this.waterfallChart = echarts.init(el);
             }
             const phases = this.selectedTrace.phases || [];
-            // 瀑布图：每个阶段用“透明基座（累计起点）+ 实际耗时条”表达
             let offset = 0;
             const base = [];
             const costs = [];
@@ -542,14 +616,24 @@ createApp({
             return 'ok';
         },
 
-        // ===== 最近事件 =====
         async fetchEvents() {
             this.eventsError = null;
             try {
-                this.events = await api('/api/events');
+                const rows = await api('/api/events');
+                const nextKeys = new Set();
+                this.events = (rows || []).map(e => {
+                    const key = this.eventKey(e);
+                    nextKeys.add(key);
+                    e._fresh = this.knownEventKeys.size > 0 && !this.knownEventKeys.has(key);
+                    return e;
+                });
+                this.knownEventKeys = nextKeys;
             } catch (e) {
                 this.eventsError = e.message;
             }
+        },
+        eventKey(e) {
+            return [e.timestampMillis, e.type, e.serviceName, e.instanceId, e.detail].join('|');
         },
         eventLabel(type) {
             const map = {
@@ -572,7 +656,6 @@ createApp({
             return map[type] || 'comp';
         },
 
-        // ===== 路由 =====
         async fetchRoutes() {
             this.routesError = null;
             try {
@@ -585,18 +668,26 @@ createApp({
             this.routeForm = { id: '', businessPrefix: '', serviceName: '', targetUrl: '', targetUrls: '', group: '', stripPrefix: '' };
             this.editingPrefix = null;
         },
-        startEdit(route) {
-            this.editingPrefix = route.businessPrefix;
-            this.routeForm = {
-                id: route.id || '',
-                businessPrefix: route.businessPrefix || '',
-                serviceName: route.serviceName || '',
-                targetUrl: route.targetUrl || '',
-                targetUrls: route.targetUrls || '',
-                group: route.group || '',
-                stripPrefix: route.stripPrefix || '',
-            };
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+        openRouteDrawer(route) {
+            if (route) {
+                this.editingPrefix = route.businessPrefix;
+                this.routeForm = {
+                    id: route.id || '',
+                    businessPrefix: route.businessPrefix || '',
+                    serviceName: route.serviceName || '',
+                    targetUrl: route.targetUrl || '',
+                    targetUrls: route.targetUrls || '',
+                    group: route.group || '',
+                    stripPrefix: route.stripPrefix || '',
+                };
+            } else {
+                this.resetRouteForm();
+            }
+            this.routeDrawerOpen = true;
+        },
+        closeRouteDrawer() {
+            this.routeDrawerOpen = false;
+            this.resetRouteForm();
         },
         async saveRoute() {
             const form = this.routeForm;
@@ -616,7 +707,7 @@ createApp({
                     body: JSON.stringify(form),
                 });
                 this.toast('success', result.message || '路由已保存并热生效');
-                this.resetRouteForm();
+                this.closeRouteDrawer();
                 await this.fetchRoutes();
             } catch (e) {
                 this.toast('error', e.message);
@@ -635,7 +726,6 @@ createApp({
             }
         },
 
-        // ===== 实例 =====
         async fetchInstances() {
             this.instancesError = null;
             try {
@@ -645,40 +735,65 @@ createApp({
             }
         },
 
-        // ===== 配置 =====
         async fetchConfigs() {
             this.configsError = null;
             try {
-                this.configs = await api('/api/configs');
+                const rows = await api('/api/configs');
+                this.configs = (rows || []).map(c => {
+                    c._saved = c.value;
+                    return c;
+                });
             } catch (e) {
                 this.configsError = e.message;
             }
         },
-        async updateConfig(item) {
-            this.configBusyKey = item.key;
+        isDirty(c) {
+            return String(c.value) !== String(c._saved);
+        },
+        isBoolConfig(c) {
+            const opts = (c.options || []).map(v => String(v).toLowerCase());
+            return opts.length === 2 && opts.includes('true') && opts.includes('false');
+        },
+        isNumberConfig(c) {
+            const key = c.key || '';
+            if (/millis|seconds|rate|timeout|interval|expire/i.test(key)) return true;
+            return c.options && c.options.length && c.options.every(v => !Number.isNaN(Number(v)));
+        },
+        isEnumConfig(c) {
+            return c.options && c.options.length && !this.isBoolConfig(c) && !this.isNumberConfig(c);
+        },
+        numberUnit(c) {
+            if (/rate/i.test(c.key || '')) return '';
+            if (/seconds/i.test(c.key || '')) return '秒';
+            return 'ms';
+        },
+        numberStep(c) {
+            return /rate/i.test(c.key || '') ? '0.01' : '1';
+        },
+        numberMin(c) {
+            return /rate/i.test(c.key || '') ? '0' : '1';
+        },
+        numberMax(c) {
+            return /rate/i.test(c.key || '') ? '1' : undefined;
+        },
+        revertConfig(c) {
+            c.value = c._saved;
+        },
+        async updateConfig(c) {
+            this.configBusyKey = c.key;
             try {
                 const result = await api('/api/configs', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ component: item.component, key: item.key, value: item.value }),
+                    body: JSON.stringify({ component: c.component, key: c.key, value: String(c.value) }),
                 });
-                this.toast('success', `${item.component}.${item.key} 已更新：${result.message || ''}`);
+                this.toast('success', `${c.component}.${c.key} 已更新：${result.message || ''}`);
                 await this.fetchConfigs();
             } catch (e) {
                 this.toast('error', e.message);
             } finally {
                 this.configBusyKey = null;
             }
-        },
-        toggleConfigOptions(c) {
-            this.openConfigKey = (this.openConfigKey === c.key) ? null : c.key;
-        },
-        selectConfigOption(c, opt) {
-            c.value = opt;
-            this.openConfigKey = null;
-        },
-        closeConfigOptions() {
-            this.openConfigKey = null;
         },
     },
 }).mount('#app');

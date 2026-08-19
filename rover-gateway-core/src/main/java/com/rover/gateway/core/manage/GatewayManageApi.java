@@ -57,6 +57,12 @@ public class GatewayManageApi extends AbstractManageApi {
             writeJson(ctx, HttpResponseStatus.OK, statusJson());
             return true;
         }
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.METRICS_LIVE.equals(path)) {
+            QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
+            int range = ManageApiPaths.clampLiveRange(firstQuery(decoder, ManageApiPaths.PARAM_RANGE));
+            writeJson(ctx, HttpResponseStatus.OK, runtime.getMetricsRegistry().liveJson(range));
+            return true;
+        }
         if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.METRICS.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, runtime.getMetricsRegistry().snapshotJson());
             return true;

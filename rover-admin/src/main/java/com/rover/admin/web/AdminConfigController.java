@@ -34,23 +34,27 @@ public class AdminConfigController {
         this.configService = configService;
     }
 
-    /** 仪表盘聚合数据：组件状态 + 发现模式 + 指标快照 + 自洽校验。 */
+    /** 仪表盘聚合：组件状态 + 发现模式 + 自洽校验（不含全量 metrics，减轻 15 秒轮询）。 */
     @GetMapping(AdminApiPaths.OVERVIEW)
     public Map<String, Object> overview() {
         CompletableFuture<Map<String, Object>> status =
                 CompletableFuture.supplyAsync(configService::loadStatus);
         CompletableFuture<String> discoveryType =
                 CompletableFuture.supplyAsync(configService::discoveryType);
-        CompletableFuture<JsonNode> metrics =
-                CompletableFuture.supplyAsync(() -> safeMetrics(configService::loadMetrics));
         CompletableFuture<JsonNode> selfcheck =
                 CompletableFuture.supplyAsync(() -> safeMetrics(configService::loadSelfcheck));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", status.join());
         result.put("discoveryType", discoveryType.join());
-        result.put("metrics", metrics.join());
         result.put("selfcheck", selfcheck.join());
         return result;
+    }
+
+    /** 轻量实时数据：瞬时 QPS / 在途 / JVM / 近窗曲线，给 1 秒轮询。 */
+    @GetMapping(AdminApiPaths.LIVE)
+    public Map<String, Object> live(
+            @RequestParam(name = ManageApiPaths.PARAM_RANGE, required = false) String range) {
+        return configService.loadLive(ManageApiPaths.clampLiveRange(range));
     }
 
     /** 路由列表。 */

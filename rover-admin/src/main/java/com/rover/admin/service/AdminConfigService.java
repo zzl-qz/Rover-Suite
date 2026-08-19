@@ -101,6 +101,33 @@ public class AdminConfigService {
         return items;
     }
 
+    /** 读取 Gateway / Nameserver 轻量实时快照，给仪表盘 1 秒轮询。 */
+    public Map<String, Object> loadLive(int rangeSeconds) {
+        int range = ManageApiPaths.clampLiveRange(String.valueOf(rangeSeconds));
+        String query = "?" + ManageApiPaths.PARAM_RANGE + "=" + range;
+        CompletableFuture<JsonNode> gateway = CompletableFuture.supplyAsync(
+                () -> safeLive(properties.getGatewayUrl(), ManageApiPaths.METRICS_LIVE + query));
+        CompletableFuture<JsonNode> nameserver = CompletableFuture.supplyAsync(
+                () -> safeLive(properties.getNameserverManageUrl(), ManageApiPaths.METRICS_LIVE + query));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("serverTimeMillis", System.currentTimeMillis());
+        result.put("rangeSeconds", range);
+        result.put(RoverComponent.GATEWAY.id(), gateway.join());
+        result.put(RoverComponent.NAMESERVER.id(), nameserver.join());
+        return result;
+    }
+
+    private JsonNode safeLive(String baseUrl, String path) {
+        try {
+            return httpClient.getJson(baseUrl, path);
+        } catch (Exception ex) {
+            log.warn("读取 live 指标失败: url={} path={}", baseUrl, path, ex);
+            return com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                    .put("error", "读取失败")
+                    .put("reachable", false);
+        }
+    }
+
     /** 读取 Gateway 指标快照（/api/metrics）。 */
     public JsonNode loadMetrics() {
         try {

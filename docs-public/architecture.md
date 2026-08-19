@@ -33,7 +33,7 @@ Rover-Gateway
 | Gateway | Routing, local discovery cache, load balancing, reverse proxy, and filters |
 | Java Client / Starter | TCP registration, heartbeat, reconnect, state replay, and Spring Boot lifecycle integration |
 | HTTP Registrar | Minimal cross-language registration, heartbeat, retry, and best-effort deregistration |
-| Admin | Optional runtime configuration console |
+| Admin | Optional console: 1s live snapshot for instant traffic, off the proxy hot path |
 
 The Nameserver deliberately supports two provider-side transports while keeping one registration model:
 
