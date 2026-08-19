@@ -1,12 +1,10 @@
 import axios from 'axios'
 
 /**
- * Axios 实例配置
- * 注意：这里配置的是网关地址，前端请求会先到网关，再由网关代理到后端服务
+ * 备用 Axios 实例（页面主流程在 App.vue 里自建实例）。
+ * 默认对齐仓库 Gateway port: 80。
  */
-
-// 网关地址（根据实际部署情况修改）
-const GATEWAY_BASE_URL = 'http://localhost:8080'
+const GATEWAY_BASE_URL = 'http://localhost'
 
 const request = axios.create({
   baseURL: GATEWAY_BASE_URL,
@@ -16,7 +14,6 @@ const request = axios.create({
   }
 })
 
-// 请求拦截器
 request.interceptors.request.use(
   config => {
     console.log(`[Request] ${config.method.toUpperCase()} ${config.url}`)
@@ -28,7 +25,6 @@ request.interceptors.request.use(
   }
 )
 
-// 响应拦截器
 request.interceptors.response.use(
   response => {
     console.log(`[Response] ${response.status}`, response.data)

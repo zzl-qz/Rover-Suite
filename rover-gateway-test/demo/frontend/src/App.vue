@@ -15,9 +15,10 @@
     <!-- 网关配置 -->
     <div class="config-panel">
       <label>网关地址：</label>
-      <input v-model="gatewayUrl" placeholder="http://localhost:8080" />
+      <input v-model="gatewayUrl" placeholder="http://localhost" />
       <button @click="updateGateway">更新</button>
       <button @click="resetStats" class="btn-reset">重置统计</button>
+      <p class="config-hint">默认对齐仓库 Gateway 配置端口 80；若你改过网关端口，这里一并改。</p>
     </div>
 
     <!-- 基础接口测试 -->
@@ -190,7 +191,8 @@ import { ref, reactive } from 'vue'
 import axios from 'axios'
 
 // 网关地址配置
-const gatewayUrl = ref('http://localhost:8080')
+// 与 rover-gateway.yml 默认 port: 80 对齐；改过端口就在页面上改
+const gatewayUrl = ref('http://localhost')
 
 // 创建可配置的 axios 实例
 let request = axios.create({
@@ -203,7 +205,7 @@ const updateGateway = () => {
     baseURL: gatewayUrl.value,
     timeout: 10000
   })
-  alert(`网关地址已更新为: ${gatewayUrl.value}`)
+  showToast('success', `网关地址已切换为 ${gatewayUrl.value}，结果会显示在下方「最新响应」`)
 }
 
 // 自定义请求头
@@ -545,6 +547,14 @@ const formatJSON = (obj) => JSON.stringify(obj, null, 2)
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.config-hint {
+  flex-basis: 100%;
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #666;
+  line-height: 1.5;
 }
 
 .config-panel label {

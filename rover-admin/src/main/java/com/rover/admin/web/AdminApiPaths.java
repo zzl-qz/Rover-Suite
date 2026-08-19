@@ -8,6 +8,7 @@ public final class AdminApiPaths {
 
     public static final String PREFIX = "/api";
     public static final String OVERVIEW = "/overview";
+    public static final String LIVE = "/live";
     public static final String ROUTES = "/routes";
     public static final String INSTANCES = "/instances";
     public static final String NAMESERVER_METRICS = "/nameserver/metrics";

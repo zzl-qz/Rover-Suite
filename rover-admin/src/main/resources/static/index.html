@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rover Admin</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/css/app.css">
     <script src="https://unpkg.com/vue@3.4.21/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
 <body>
 <div id="app" v-cloak>
-    <!-- ============ 侧边栏 ============ -->
     <aside class="sidebar">
         <div class="brand">
             <div class="brand-mark">R</div>
@@ -37,7 +37,6 @@
         </div>
     </aside>
 
-    <!-- ============ 主区域 ============ -->
     <div class="main">
         <header class="topbar">
             <div class="topbar-left">
@@ -45,8 +44,17 @@
                 <span class="topbar-sub">{{ pageSubtitle }}</span>
             </div>
             <div class="topbar-right">
-                <span class="discovery-pill" v-if="discoveryType">
-                    <span class="dot ok"></span>发现模式 {{ discoveryType }}
+                <span class="live-pill" :class="liveState" :title="livePillTitle">
+                    <span class="dot" :class="liveState === 'ok' ? 'ok' : (liveState === 'down' ? 'down' : 'warn')"></span>
+                    {{ liveStateLabel }}
+                </span>
+                <span class="clock" v-if="page === 'dashboard' && updatedAtText">更新于 {{ updatedAtText }}</span>
+                <div class="range-chip" v-if="page === 'dashboard'">
+                    <button :class="{ on: liveRange === 60 }" @click="setLiveRange(60)">1m</button>
+                    <button :class="{ on: liveRange === 300 }" @click="setLiveRange(300)">5m</button>
+                </div>
+                <span class="discovery-pill" v-if="discoveryType && discoveryType !== 'UNKNOWN'">
+                    <span class="dot ok"></span>{{ discoveryType }}
                 </span>
                 <button class="btn ghost" @click="refreshAll" :disabled="loading">
                     {{ loading ? '刷新中...' : '刷新' }}
@@ -58,192 +66,267 @@
             <!-- ================= 仪表盘 ================= -->
             <section v-if="page === 'dashboard'" class="page">
                 <div v-if="metricsError" class="banner warn">
-                    <strong>Gateway 指标不可用</strong>
+                    <strong>实时中断</strong>
                     <span>{{ metricsError }}</span>
-                    <span class="banner-hint">请升级并重启 Gateway 后再查看。</span>
                 </div>
 
-                <!-- 统计卡片 -->
-                <div class="stat-grid">
-                    <div class="stat-card">
-                        <div class="stat-label">累计请求</div>
-                        <div class="stat-value">{{ num(total.requests) }}</div>
-                        <div class="stat-trend">窗口 {{ num(total.windowRequests) }} / 窗口外 {{ num(total.expiredRequests) }}</div>
+                <div class="metric-legend">
+                    <div class="legend-item">
+                        <strong>瞬时</strong>
+                        <span>此刻 / 上一整秒，每秒刷新</span>
                     </div>
-                    <div class="stat-card">
-                        <div class="stat-label">当前 QPS</div>
-                        <div class="stat-value">{{ num(total.qps) }}</div>
-                        <div class="stat-trend">窗口 {{ (metrics && metrics.windowSeconds) || 300 }}s</div>
+                    <div class="legend-item">
+                        <strong>近窗</strong>
+                        <span>最近 {{ liveRange }} 秒合计（右上角 1m/5m）</span>
                     </div>
-                    <div class="stat-card">
-                        <div class="stat-label">平均耗时</div>
-                        <div class="stat-value">{{ num(total.avgMillis) }}<small>ms</small></div>
-                        <div class="stat-trend">P95 {{ num(total.p95Millis) }}ms / P99 {{ num(total.p99Millis) }}ms / 最大 {{ num(total.maxMillis) }}ms</div>
+                    <div class="legend-item">
+                        <strong>累计</strong>
+                        <span>进程启动到现在，不会被 1m/5m 清掉</span>
                     </div>
-                    <div class="stat-card">
-                        <div class="stat-label">窗口错误</div>
-                        <div class="stat-value" :class="{ danger: total.errorRequests > 0 }">{{ num(total.errorRequests) }}</div>
-                        <div class="stat-trend">网关错误（累计）超时 {{ num(total.gatewayErrors.proxyTimeout) }} / 连接失败 {{ num(total.gatewayErrors.upstreamConnectFail) }}</div>
+                    <div class="legend-item">
+                        <strong>怎么看</strong>
+                        <span>鼠标悬停任意指标可见白话解释</span>
                     </div>
                 </div>
 
-                <!-- 组件状态 -->
-                <div class="card">
-                    <div class="card-head">
-                        <h2>组件状态</h2>
-                        <span class="card-hint">Gateway / Nameserver 管理口连通性</span>
+                <div class="pulse-bar">
+                    <div class="pulse-item" title="上一整秒完成了多少请求。本秒还在涨时会显示本秒已有多少。空闲时是 0 很正常。">
+                        <div class="stat-label">瞬时 QPS <i class="hint-dot">?</i></div>
+                        <div class="stat-value">{{ num(displayQps) }}</div>
+                        <div class="stat-trend">{{ qpsHint }}</div>
                     </div>
-                    <div class="comp-grid">
-                        <div class="comp-box" :class="{ down: !gatewayOk }">
-                            <div class="comp-head">
-                                <strong>Gateway</strong>
-                                <span class="badge" :class="gatewayOk ? 'ok' : 'bad'">{{ gatewayOk ? '在线' : '不可达' }}</span>
-                            </div>
-                            <div class="comp-kv" v-if="gatewayData">
-                                <div><span>端口</span>{{ gatewayData.port }}</div>
-                                <div><span>发现模式</span>{{ gatewayData.discoveryType }}</div>
-                                <div><span>路由数</span>{{ gatewayData.routeCount }}</div>
-                                <div><span>LB 策略</span>{{ gatewayData.loadBalanceStrategy }}</div>
-                                <div><span>请求超时</span>{{ gatewayData.requestTimeoutMillis }}ms</div>
-                            </div>
-                            <div class="comp-kv" v-else>
-                                <div class="bad">{{ gatewayError }}</div>
-                            </div>
-                        </div>
-                        <div class="comp-box" :class="{ down: !nameserverOk }">
-                            <div class="comp-head">
-                                <strong>Nameserver</strong>
-                                <span class="badge" :class="nameserverOk ? 'ok' : 'bad'">{{ nameserverOk ? '在线' : '不可达' }}</span>
-                            </div>
-                            <div class="comp-kv" v-if="nameserverData">
-                                <div><span>端口</span>{{ nameserverData.port }}</div>
-                                <div><span>管理口</span>{{ nameserverData.managePort }}</div>
-                                <div><span>实例数</span>{{ nameserverData.instanceCount }}</div>
-                                <div><span>心跳超时</span>{{ nameserverData.heartbeatTimeoutMillis }}ms</div>
-                                <div><span>推送</span>{{ nameserverData.pushEnabled ? '开启' : '关闭' }}</div>
-                            </div>
-                            <div class="comp-kv" v-else>
-                                <div class="bad">{{ nameserverError }}</div>
-                            </div>
-                        </div>
+                    <div class="pulse-item" title="网关手里已经接住、还没写完响应的请求数。长期偏高说明处理不过来或上游太慢。">
+                        <div class="stat-label">在途请求 <i class="hint-dot">?</i></div>
+                        <div class="stat-value">{{ num(gwRes.inflightRequests) }}</div>
+                        <div class="stat-trend">网关正在处理、还没回客户端</div>
+                    </div>
+                    <div class="pulse-item" title="已经转发给后端、还在等后端回包的请求数。比「在途」更靠后端一侧。">
+                        <div class="stat-label">上游在途 <i class="hint-dot">?</i></div>
+                        <div class="stat-value">{{ num(gwRes.upstreamInFlight) }}</div>
+                        <div class="stat-trend">已打到后端、还在等回包</div>
+                    </div>
+                    <div class="pulse-item" title="客户端连到网关的 TCP 连接数（Keep-Alive 会占着）。不是 QPS，也不是后端连接数。">
+                        <div class="stat-label">接入连接 <i class="hint-dot">?</i></div>
+                        <div class="stat-value">{{ num(gwRes.activeConnections) }}</div>
+                        <div class="stat-trend">客户端 → 网关的 TCP</div>
+                    </div>
+                    <div class="pulse-item" title="注册中心里健康实例 / 全部实例。左边变少说明有实例心跳超时或被摘除。">
+                        <div class="stat-label">实例健康 <i class="hint-dot">?</i></div>
+                        <div class="stat-value" :class="{ danger: nsUnhealthy > 0 }">{{ nsHealthy }}/{{ nsInstances }}</div>
+                        <div class="stat-trend">健康数 / 注册总数</div>
                     </div>
                 </div>
 
-                <!-- JVM 运行时 -->
-                <div class="card">
-                    <div class="card-head">
-                        <h2>JVM 运行时</h2>
-                        <span class="card-hint">Gateway / Nameserver 进程内存、线程与 GC</span>
-                    </div>
-                    <div class="jvm-grid">
-                        <div class="comp-box">
-                            <div class="comp-head"><strong>Gateway JVM</strong></div>
-                            <div v-if="gatewayJvm" class="jvm-body">
-                                <div class="jvm-row">
-                                    <span>堆内存</span>
-                                    <div class="bar"><div class="bar-fill" :style="{ width: Math.min(100, gatewayJvm.heapUsedPercent) + '%' }"></div></div>
-                                    <em>{{ gatewayJvm.heapUsedMb }} / {{ gatewayJvm.heapMaxMb }} MB（{{ gatewayJvm.heapUsedPercent }}%）</em>
-                                </div>
-                                <div class="jvm-row">
-                                    <span>非堆</span>
-                                    <b>{{ gatewayJvm.nonHeapUsedMb }} MB</b>
-                                </div>
-                                <div class="jvm-row">
-                                    <span>线程</span>
-                                    <b>{{ gatewayJvm.threadCount }}</b>
-                                </div>
-                                <div class="jvm-row" title="自进程启动以来的累计值（Counter，只增不减）：GC 总次数与 GC 暂停总耗时，不是频率">
-                                    <span>GC</span>
-                                    <b>{{ gatewayJvm.gcCount }} 次（累计）· 暂停 {{ gatewayJvm.gcTimeMillis }}ms · 平均 {{ gatewayJvm.gcCount > 0 ? (gatewayJvm.gcTimeMillis / gatewayJvm.gcCount).toFixed(1) : 0 }}ms/次</b>
-                                </div>
-                                <div class="jvm-row">
-                                    <span>运行时长</span>
-                                    <b>{{ fmtUptime(gatewayJvm.uptimeSeconds) }}</b>
-                                </div>
+                <div class="dash-grid">
+                    <div class="dash-left">
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>QPS 曲线</h2>
+                                <span class="card-hint">近 {{ liveRange }} 秒，每格 = 那一秒完成的请求数</span>
+                                <span class="latency-inline ml-auto"
+                                      title="瞬时均：上一整秒平均耗时。P95/P99：近窗里分别有 95%/99% 的请求比这个更快。P95 突然飙高通常比平均值更能说明偶发慢请求。">
+                                    瞬时均 {{ num(gwTraffic.instantAvgMillis) }}ms
+                                    · 窗 P95 {{ num(gwTraffic.p95Millis) }}ms
+                                    · P99 {{ num(gwTraffic.p99Millis) }}ms
+                                    <i class="hint-dot">?</i>
+                                </span>
                             </div>
-                            <div v-else class="muted">未获取到数据</div>
+                            <div id="chart-qps" class="chart"></div>
                         </div>
-                        <div class="comp-box">
-                            <div class="comp-head"><strong>Nameserver JVM</strong></div>
-                            <div v-if="nameserverJvm" class="jvm-body">
-                                <div class="jvm-row">
-                                    <span>堆内存</span>
-                                    <div class="bar"><div class="bar-fill" :style="{ width: Math.min(100, nameserverJvm.heapUsedPercent) + '%' }"></div></div>
-                                    <em>{{ nameserverJvm.heapUsedMb }} / {{ nameserverJvm.heapMaxMb }} MB（{{ nameserverJvm.heapUsedPercent }}%）</em>
-                                </div>
-                                <div class="jvm-row">
-                                    <span>非堆</span>
-                                    <b>{{ nameserverJvm.nonHeapUsedMb }} MB</b>
-                                </div>
-                                <div class="jvm-row">
-                                    <span>线程</span>
-                                    <b>{{ nameserverJvm.threadCount }}</b>
-                                </div>
-                                <div class="jvm-row" title="自进程启动以来的累计值（Counter，只增不减）：GC 总次数与 GC 暂停总耗时，不是频率">
-                                    <span>GC</span>
-                                    <b>{{ nameserverJvm.gcCount }} 次（累计）· 暂停 {{ nameserverJvm.gcTimeMillis }}ms · 平均 {{ nameserverJvm.gcCount > 0 ? (nameserverJvm.gcTimeMillis / nameserverJvm.gcCount).toFixed(1) : 0 }}ms/次</b>
-                                </div>
-                                <div class="jvm-row">
-                                    <span>运行时长</span>
-                                    <b>{{ fmtUptime(nameserverJvm.uptimeSeconds) }}</b>
-                                </div>
-                            </div>
-                            <div v-else class="muted">未获取到数据</div>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- 图表 -->
-                <div class="chart-grid">
-                    <div class="card">
-                        <div class="card-head">
-                            <h2>QPS 曲线</h2>
-                            <span class="card-hint">最近 {{ (metrics && metrics.windowSeconds) || 300 }} 秒，每秒请求数</span>
-                        </div>
-                        <div id="chart-qps" class="chart"></div>
-                    </div>
-                    <div class="card">
-                        <div class="card-head">
-                            <h2>状态码分布</h2>
-                            <span class="card-hint">累计请求按状态码归类</span>
-                            <span class="badge ml-auto" :class="selfcheckOk ? 'ok' : 'bad'" title="校验指标加和关系是否自洽（如 2xx+3xx+4xx+5xx == 请求总数）">{{ selfcheckText }}</span>
-                        </div>
-                        <div id="chart-status" class="chart"></div>
-                    </div>
-                </div>
-
-                <div class="chart-grid">
-                    <div class="card">
-                        <div class="card-head">
-                            <h2>路由流量 Top</h2>
-                            <span class="card-hint">窗口内请求量最高的路由</span>
-                        </div>
-                        <div id="chart-routes" class="chart tall"></div>
-                    </div>
-                    <div class="card">
-                        <div class="card-head">
-                            <h2>实例健康概览</h2>
-                            <span class="card-hint">来自 Nameserver 注册表</span>
-                        </div>
-                        <div class="inst-summary" v-if="instances.length">
-                            <div class="stat-grid mini">
-                                <div class="stat-card"><div class="stat-label">服务数</div><div class="stat-value">{{ serviceCount }}</div></div>
-                                <div class="stat-card"><div class="stat-label">实例数</div><div class="stat-value">{{ instances.length }}</div></div>
-                                <div class="stat-card"><div class="stat-label">健康</div><div class="stat-value ok">{{ healthyCount }}</div></div>
-                                <div class="stat-card"><div class="stat-label">不健康</div><div class="stat-value danger">{{ unhealthyCount }}</div></div>
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>路由 Top</h2>
+                                <span class="card-hint">按近窗请求量排序；点一行看打到了哪些上游</span>
                             </div>
-                            <table class="table">
-                                <thead><tr><th>服务</th><th>实例</th><th>健康</th></tr></thead>
+                            <div v-if="!(liveRoutes && liveRoutes.length)" class="empty slim">近窗还没有路由流量</div>
+                            <table v-else class="table compact">
+                                <thead><tr>
+                                    <th title="命中的路由 ID；「未匹配」= 没有任何路由接住这个路径">路由</th>
+                                    <th title="上一整秒该路由完成的请求数">上一秒</th>
+                                    <th :title="'近窗（' + liveRange + ' 秒）内该路由完成的请求总数'">近窗</th>
+                                    <th title="近窗内 5xx（或记为错误）占比。高了先看后端和超时配置">错误率</th>
+                                    <th title="近窗平均耗时 / P95 耗时（毫秒）">均 / P95</th>
+                                </tr></thead>
                                 <tbody>
-                                <tr v-for="s in serviceSummary" :key="s.serviceName">
-                                    <td><code>{{ s.serviceName }}</code></td>
-                                    <td>{{ s.total }}</td>
-                                    <td><span class="badge" :class="s.healthy === s.total ? 'ok' : 'warn'">{{ s.healthy }}/{{ s.total }}</span></td>
+                                <tr v-for="r in liveRoutes" :key="r.routeId"
+                                    class="clickable"
+                                    :class="{ on: selectedRouteId === r.routeId }"
+                                    @click="toggleRoute(r.routeId)">
+                                    <td><code>{{ routeLabel(r.routeId) }}</code></td>
+                                    <td>{{ num(r.lastSecondRequests) }}</td>
+                                    <td>{{ num(r.windowRequests) }}</td>
+                                    <td>{{ ((r.errorRate || 0) * 100).toFixed(1) }}%</td>
+                                    <td>{{ num(r.avgMillis) }} / {{ num(r.p95Millis) }}ms</td>
+                                </tr>
+                                <tr v-if="selectedRoute && selectedRoute.instances">
+                                    <td colspan="5" class="expand-cell">
+                                        <div class="upstream-note">该路由近窗打到各上游的次数（看负载是否均匀）</div>
+                                        <div class="upstream-chips">
+                                            <span v-for="(cnt, host) in selectedRoute.instances" :key="host" class="chip"
+                                                  :title="host + ' 近窗命中 ' + cnt + ' 次'">
+                                                {{ host }} · {{ cnt }}
+                                            </span>
+                                            <span v-if="!instanceEntries(selectedRoute).length" class="muted">还没有上游命中</span>
+                                        </div>
+                                    </td>
                                 </tr>
                                 </tbody>
                             </table>
                         </div>
-                        <div v-else class="empty">暂无注册实例</div>
+                    </div>
+
+                    <div class="dash-right">
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>状态码</h2>
+                                <span class="card-hint">近 {{ liveRange }} 秒占比；2xx 正常，4xx 客户端/未匹配，5xx 网关或上游故障</span>
+                                <span class="badge ml-auto" :class="selfcheckOk ? 'ok' : 'bad'"
+                                      :title="selfcheckText + '。自洽=各计数加起来对得上，不对说明采集异常。'">{{ selfcheckShort }}</span>
+                            </div>
+                            <div id="chart-status" class="chart"></div>
+                        </div>
+                        <div class="card">
+                        <div class="card-head">
+                            <h2>近窗错误</h2>
+                            <span class="card-hint">上面两个看近 {{ liveRange }} 秒；下面两个是启动至今累计</span>
+                        </div>
+                            <div class="error-kv">
+                                <div title="近窗内网关返回 5xx 的次数（含上游失败、网关内部错误等）">
+                                    <span>近窗 5xx</span><b>{{ num(windowStatus['5xx']) }}</b>
+                                </div>
+                                <div title="近窗内 4xx 次数。常见：路径未匹配、鉴权失败、业务 404">
+                                    <span>近窗 4xx</span><b>{{ num(windowStatus['4xx']) }}</b>
+                                </div>
+                                <div title="启动以来网关等上游超时的次数（常见响应 504）。不会随 1m/5m 清零">
+                                    <span>累计超时</span><b>{{ num(gatewayErrors.proxyTimeout) }}</b>
+                                </div>
+                                <div title="启动以来连不上上游的次数（常见响应 502）。不会随 1m/5m 清零">
+                                    <span>累计连接失败</span><b>{{ num(gatewayErrors.upstreamConnectFail) }}</b>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card">
+                        <div class="card-head">
+                            <h2>Nameserver 瞬时</h2>
+                            <span class="card-hint">都是「上一整秒」发生了几次；空闲显示 0 正常</span>
+                        </div>
+                            <div class="error-kv">
+                                <div title="上一秒有多少次实例心跳。服务还活着就会周期性心跳">
+                                    <span>心跳</span><b>{{ num(nsInstant.heartbeat) }}</b>
+                                </div>
+                                <div title="上一秒有多少次「查有哪些实例」。Gateway 对账或订阅兜底会触发">
+                                    <span>查询</span><b>{{ num(nsInstant.query) }}</b>
+                                </div>
+                                <div title="上一秒注册中心主动推送了几次变更。有注册/下线/不健康时会跳">
+                                    <span>推送</span><b>{{ num(nsInstant.push) }}</b>
+                                </div>
+                                <div title="当前连着 Nameserver 的 TCP 数（注册/心跳长连接）。不是实例数；实例看上面的「实例健康」">
+                                    <span>接入 TCP</span><b>{{ num(nsRes.activeConnections) }}</b>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="env-bar" :class="{ open: envOpen, warn: jvmWarn }">
+                    <button class="env-toggle" @click="envOpen = !envOpen"
+                            title="进程健康：堆/CPU/线程/GC。堆持续 >85% 或近 1 分钟 GC 很频繁才需要紧张。">
+                        <span>进程</span>
+                        <span class="env-summary">
+                            Gateway {{ gatewayOk ? '在线' : '离线' }}
+                            · 堆 {{ fmtHeap(gatewayJvm) }}
+                            · CPU {{ fmtCpu(gatewayJvm) }}
+                            · 线程 {{ gatewayJvm ? gatewayJvm.threadCount : '-' }}
+                            · NS {{ nameserverOk ? '在线' : '离线' }}
+                            · 堆 {{ fmtHeap(nameserverJvm) }}
+                            · 近 1 分钟 GC {{ gcWindow('gateway').count }}/{{ gcWindow('nameserver').count }}
+                        </span>
+                        <span class="env-caret">{{ envOpen ? '收起' : '展开' }}</span>
+                    </button>
+                    <div v-if="envOpen" class="jvm-grid">
+                        <div class="comp-box">
+                            <div class="comp-head">
+                                <strong>Gateway JVM</strong>
+                                <span class="card-hint">已用 / 已提交 / 上限</span>
+                            </div>
+                            <div v-if="gatewayJvm" class="jvm-body">
+                                <div class="jvm-row" title="堆：Java 对象内存。三个数=已用 / 已向 OS 申请 / 最大上限。百分比=已用÷上限">
+                                    <span>堆</span>
+                                    <div class="bar"><div class="bar-fill" :class="{ hot: gatewayJvm.heapUsedPercent >= 85 }"
+                                         :style="{ width: Math.min(100, gatewayJvm.heapUsedPercent) + '%' }"></div></div>
+                                    <em>{{ gatewayJvm.heapUsedMb }} / {{ gatewayJvm.heapCommittedMb }} / {{ gatewayJvm.heapMaxMb }} MB（{{ gatewayJvm.heapUsedPercent }}%）</em>
+                                </div>
+                                <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" title="近段堆占用走势">
+                                    <polyline :points="sparkPoints('gateway')" fill="none" stroke="#1f6f5b" stroke-width="1.5"/>
+                                </svg>
+                                <div class="jvm-row" title="年轻代短命对象；老年代活得久的对象。老年代持续涨要留意泄漏">
+                                    <span>年轻代 / 老年代</span><b>{{ gatewayJvm.youngUsedMb }} / {{ gatewayJvm.oldUsedMb }} MB</b>
+                                </div>
+                                <div class="jvm-row" title="元空间、代码缓存等，一般远小于堆">
+                                    <span>非堆</span><b>{{ gatewayJvm.nonHeapUsedMb }} MB</b>
+                                </div>
+                                <div class="jvm-row" title="进程 CPU 占用与活跃线程数。守护线程是后台辅助线程">
+                                    <span>CPU / 线程</span><b>{{ fmtCpu(gatewayJvm) }} · {{ gatewayJvm.threadCount }}（守护 {{ gatewayJvm.daemonThreadCount }}）</b>
+                                </div>
+                                <div class="jvm-row" title="最近 1 分钟垃圾回收次数和暂停总时长。次数突然变多、暂停变长会拖慢请求">
+                                    <span>近 1 分钟 GC</span><b>{{ gcWindow('gateway').count }} 次 · 暂停 {{ gcWindow('gateway').time }}ms</b>
+                                </div>
+                                <div class="jvm-row muted-row" title="启动以来的 GC 合计、进程运行时长和进程号">
+                                    <span>累计 GC</span><b>{{ gatewayJvm.gcCount }} 次 · {{ gatewayJvm.gcTimeMillis }}ms · 已跑 {{ fmtUptime(gatewayJvm.uptimeSeconds) }} · pid {{ gatewayJvm.pid }}</b>
+                                </div>
+                            </div>
+                            <div v-else class="muted">未获取到数据</div>
+                        </div>
+                        <div class="comp-box">
+                            <div class="comp-head">
+                                <strong>Nameserver JVM</strong>
+                                <span class="card-hint">含义同上，只是注册中心进程</span>
+                            </div>
+                            <div v-if="nameserverJvm" class="jvm-body">
+                                <div class="jvm-row" title="堆：已用 / 已提交 / 上限">
+                                    <span>堆</span>
+                                    <div class="bar"><div class="bar-fill" :class="{ hot: nameserverJvm.heapUsedPercent >= 85 }"
+                                         :style="{ width: Math.min(100, nameserverJvm.heapUsedPercent) + '%' }"></div></div>
+                                    <em>{{ nameserverJvm.heapUsedMb }} / {{ nameserverJvm.heapCommittedMb }} / {{ nameserverJvm.heapMaxMb }} MB（{{ nameserverJvm.heapUsedPercent }}%）</em>
+                                </div>
+                                <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none">
+                                    <polyline :points="sparkPoints('nameserver')" fill="none" stroke="#1f6f5b" stroke-width="1.5"/>
+                                </svg>
+                                <div class="jvm-row" title="年轻代 / 老年代占用">
+                                    <span>年轻代 / 老年代</span><b>{{ nameserverJvm.youngUsedMb }} / {{ nameserverJvm.oldUsedMb }} MB</b>
+                                </div>
+                                <div class="jvm-row" title="非堆内存">
+                                    <span>非堆</span><b>{{ nameserverJvm.nonHeapUsedMb }} MB</b>
+                                </div>
+                                <div class="jvm-row" title="CPU 与线程">
+                                    <span>CPU / 线程</span><b>{{ fmtCpu(nameserverJvm) }} · {{ nameserverJvm.threadCount }}（守护 {{ nameserverJvm.daemonThreadCount }}）</b>
+                                </div>
+                                <div class="jvm-row" title="近 1 分钟 GC">
+                                    <span>近 1 分钟 GC</span><b>{{ gcWindow('nameserver').count }} 次 · 暂停 {{ gcWindow('nameserver').time }}ms</b>
+                                </div>
+                                <div class="jvm-row muted-row" title="累计 GC 与运行时长">
+                                    <span>累计 GC</span><b>{{ nameserverJvm.gcCount }} 次 · {{ nameserverJvm.gcTimeMillis }}ms · 已跑 {{ fmtUptime(nameserverJvm.uptimeSeconds) }} · pid {{ nameserverJvm.pid }}</b>
+                                </div>
+                            </div>
+                            <div v-else class="muted">未获取到数据</div>
+                        </div>
+                        <div class="comp-box env-meta" v-if="gatewayData || nameserverData">
+                            <div class="comp-head"><strong>环境</strong><span class="card-hint">当前运行参数快照</span></div>
+                            <div class="comp-kv" v-if="gatewayData">
+                                <div title="网关对外监听端口"><span>Gateway 端口</span>{{ gatewayData.port }}</div>
+                                <div title="实例从哪来：NAMESERVER=注册中心，STATIC=配置写死"><span>发现</span>{{ gatewayData.discoveryType }}</div>
+                                <div title="当前生效的路由条数"><span>路由</span>{{ gatewayData.routeCount }}</div>
+                                <div title="多实例时怎么挑上游"><span>LB</span>{{ gatewayData.loadBalanceStrategy }}</div>
+                                <div title="等上游回包的最长时间，超时会记「累计超时」"><span>超时</span>{{ gatewayData.requestTimeoutMillis }}ms</div>
+                            </div>
+                            <div class="comp-kv" v-if="nameserverData">
+                                <div title="注册协议 TCP 端口"><span>NS 端口</span>{{ nameserverData.port }}</div>
+                                <div title="HTTP 管理口（Admin 也走这里查实例）"><span>管理口</span>{{ nameserverData.managePort }}</div>
+                                <div title="多久没心跳就判不健康"><span>心跳超时</span>{{ nameserverData.heartbeatTimeoutMillis }}ms</div>
+                                <div title="变更是否主动推给 Gateway"><span>推送</span>{{ nameserverData.pushEnabled ? '开' : '关' }}</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -252,52 +335,12 @@
             <section v-if="page === 'routes'" class="page">
                 <div class="card">
                     <div class="card-head">
-                        <h2>{{ editingPrefix ? '编辑路由' : '新增路由' }}</h2>
-                        <span class="card-hint">保存后 Gateway 立即热替换路由并落盘 overlay</span>
-                    </div>
-                    <div class="form-grid">
-                        <div class="field">
-                            <label>ID</label>
-                            <input v-model="routeForm.id" placeholder="demo-api">
-                        </div>
-                        <div class="field">
-                            <label>businessPrefix *</label>
-                            <input v-model="routeForm.businessPrefix" placeholder="/api/demo">
-                        </div>
-                        <div class="field">
-                            <label>stripPrefix</label>
-                            <input v-model="routeForm.stripPrefix" placeholder="/api/demo">
-                        </div>
-                        <div class="field" v-if="discoveryType === 'NAMESERVER'">
-                            <label>serviceName *</label>
-                            <input v-model="routeForm.serviceName" placeholder="demo-service">
-                        </div>
-                        <div class="field" v-if="discoveryType !== 'NAMESERVER'">
-                            <label>targetUrl</label>
-                            <input v-model="routeForm.targetUrl" placeholder="http://127.0.0.1:8081">
-                        </div>
-                        <div class="field" v-if="discoveryType !== 'NAMESERVER'">
-                            <label>targetUrls（多机，可带|权重）</label>
-                            <input v-model="routeForm.targetUrls" placeholder="http://127.0.0.1:8081,http://127.0.0.1:8082|200">
-                        </div>
-                        <div class="field">
-                            <label>group</label>
-                            <input v-model="routeForm.group" placeholder="可选">
-                        </div>
-                    </div>
-                    <div class="form-actions">
-                        <button class="btn primary" @click="saveRoute" :disabled="savingRoute">保存并热更新</button>
-                        <button class="btn ghost" @click="resetRouteForm">{{ editingPrefix ? '取消编辑' : '清空' }}</button>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <div class="card-head">
                         <h2>路由列表</h2>
-                        <span class="card-hint">共 {{ routes.length }} 条</span>
+                        <span class="card-hint">共 {{ routes.length }} 条，保存后立即热替换并落盘</span>
+                        <button class="btn primary ml-auto" @click="openRouteDrawer(null)">新增路由</button>
                     </div>
                     <div v-if="routesError" class="banner warn">{{ routesError }}</div>
-                    <div v-else-if="!routes.length" class="empty">还没有路由，先在上面表单加一条。</div>
+                    <div v-else-if="!routes.length" class="empty">还没有路由，点右上角加一条。</div>
                     <table v-else class="table">
                         <thead><tr>
                             <th>ID</th><th>前缀</th><th>serviceName</th><th>targetUrl</th>
@@ -308,11 +351,11 @@
                             <td>{{ r.id || '-' }}</td>
                             <td><code>{{ r.businessPrefix }}</code></td>
                             <td>{{ r.serviceName || '-' }}</td>
-                            <td>{{ r.targetUrl || '-' }}</td>
-                            <td>{{ r.targetUrls || '-' }}</td>
+                            <td class="ellipsis" :title="r.targetUrl">{{ r.targetUrl || '-' }}</td>
+                            <td class="ellipsis" :title="r.targetUrls">{{ r.targetUrls || '-' }}</td>
                             <td>{{ r.stripPrefix || '-' }}</td>
                             <td class="row-actions">
-                                <button class="btn mini" @click="startEdit(r)">编辑</button>
+                                <button class="btn mini" @click="openRouteDrawer(r)">编辑</button>
                                 <button class="btn mini danger" @click="deleteRoute(r.businessPrefix)">删除</button>
                             </td>
                         </tr>
@@ -334,7 +377,7 @@
                     <table v-else class="table">
                         <thead><tr>
                             <th>服务</th><th>实例 ID</th><th>地址</th><th>分组</th>
-                            <th>健康</th><th>临时</th><th>权重</th><th>最近心跳</th>
+                            <th>健康</th><th>临时</th><th>权重</th><th>最近心跳</th><th>已空闲</th>
                         </tr></thead>
                         <tbody>
                         <tr v-for="ins in instances" :key="ins.instanceId">
@@ -346,6 +389,7 @@
                             <td>{{ ins.ephemeral ? '临时' : '持久' }}</td>
                             <td>{{ ins.weight }}</td>
                             <td>{{ fmtTime(ins.lastHeartbeatMillis) }}</td>
+                            <td>{{ idleText(ins.lastHeartbeatMillis) }}</td>
                         </tr>
                         </tbody>
                     </table>
@@ -356,10 +400,15 @@
             <section v-if="page === 'traces'" class="page">
                 <div class="card">
                     <div class="card-head">
-                        <h2>请求链路时间线</h2>
+                        <h2>请求链路</h2>
                         <span class="card-hint" v-if="tracesMeta">
                             已记录 {{ tracesMeta.count }} 条（缓冲 {{ tracesMeta.capacity }}），采样率 {{ num(tracesMeta.sampleRate * 100) }}%，慢阈值 {{ tracesMeta.slowThresholdMillis }}ms
                         </span>
+                    </div>
+                    <div v-if="tracesMeta && tracesMeta.sampleRate === 0" class="banner tip">
+                        <strong>当前只记慢请求</strong>
+                        <span>采样率 = 0：总耗时达不到慢阈值（现在 {{ tracesMeta.slowThresholdMillis }}ms）的请求不会出现在这里。</span>
+                        <span class="banner-hint">要看普通请求：去「配置管理」把 <code>gateway.trace.sampleRate</code> 改成 <code>1</code> 并保存（热更新，不用重启）。</span>
                     </div>
                     <div class="filter-bar">
                         <input v-model="traceFilter.traceId" placeholder="traceId 过滤" class="filter-input">
@@ -370,58 +419,52 @@
                         <button class="btn ghost" @click="fetchTraces">查询</button>
                     </div>
                     <div v-if="tracesError" class="banner warn">{{ tracesError }}</div>
-                    <div v-else-if="!traces.length" class="empty">暂无请求记录，网关有流量后自动采集（默认只记录慢请求或按采样率）。</div>
+                    <div v-else-if="!traces.length" class="empty">
+                        暂无请求记录。
+                        <div class="empty-hint">网关有流量后按采样规则采集；点一行可展开阶段耗时。默认采样率 0 = 只记慢请求。</div>
+                    </div>
                     <table v-else class="table">
                         <thead><tr>
                             <th>时间</th><th>traceId</th><th>方法</th><th>路径</th>
-                            <th>路由</th><th>目标</th><th>状态</th><th>总耗时</th><th class="w-actions"></th>
+                            <th>路由</th><th>目标</th><th>状态</th><th>总耗时</th>
                         </tr></thead>
                         <tbody>
-                        <tr v-for="t in traces" :key="t.traceId"
-                            :class="{ 'row-slow': t.slow }"
-                            :style="selectedTrace && selectedTrace.traceId === t.traceId ? 'background:#e7f2ee' : ''">
-                            <td>{{ fmtTime(t.startMillis) }}</td>
-                            <td><code class="trace-id">{{ t.traceId }}</code></td>
-                            <td>{{ t.method }}</td>
-                            <td>{{ t.path }}</td>
-                            <td>{{ t.routeId || '-' }}</td>
-                            <td class="muted">{{ t.targetUrl || '-' }}</td>
-                            <td><span class="badge" :class="statusBadge(t.statusCode)">{{ t.statusCode }}</span></td>
-                            <td>
-                                <span :class="{ 'cost-slow': t.slow }">{{ num(t.totalCostMs) }}ms</span>
-                                <span v-if="t.slow" class="badge warn">慢</span>
-                            </td>
-                            <td class="row-actions">
-                                <button class="btn mini" @click="selectTrace(t)">{{ selectedTrace && selectedTrace.traceId === t.traceId ? '收起' : '时间线' }}</button>
-                            </td>
-                        </tr>
+                        <template v-for="t in traces" :key="t.traceId">
+                            <tr class="clickable" :class="{ 'row-slow': t.slow, on: selectedTrace && selectedTrace.traceId === t.traceId }"
+                                @click="selectTrace(t)">
+                                <td>{{ fmtTime(t.startMillis) }}</td>
+                                <td><code class="trace-id">{{ t.traceId }}</code></td>
+                                <td>{{ t.method }}</td>
+                                <td>{{ t.path }}</td>
+                                <td>{{ routeLabel(t.routeId) }}</td>
+                                <td class="ellipsis muted" :title="t.targetUrl">{{ t.targetUrl || '-' }}</td>
+                                <td><span class="badge" :class="statusBadge(t.statusCode)">{{ t.statusCode }}</span></td>
+                                <td>
+                                    <span :class="{ 'cost-slow': t.slow }">{{ num(t.totalCostMs) }}ms</span>
+                                    <span v-if="t.slow" class="badge warn">慢</span>
+                                </td>
+                            </tr>
+                            <tr v-if="selectedTrace && selectedTrace.traceId === t.traceId" class="expand-row">
+                                <td colspan="8">
+                                    <div class="trace-expand">
+                                        <div id="chart-waterfall" class="chart"></div>
+                                        <div class="phase-table">
+                                            <div class="phase-row head"><span>阶段</span><span>耗时</span><span class="phase-bar-col">占比</span></div>
+                                            <div v-for="p in selectedTrace.phases" :key="p.name" class="phase-row">
+                                                <span>{{ phaseLabel(p.name) }}</span>
+                                                <span>{{ num(p.costMs) }}ms</span>
+                                                <span class="phase-bar-col">
+                                                    <div class="phase-bar"><div class="phase-bar-fill"
+                                                         :style="{ width: phasePercent(p.costMs) + '%' }"></div></div>
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
                         </tbody>
                     </table>
-                </div>
-
-                <!-- 选中请求的瀑布图 -->
-                <div v-if="selectedTrace" class="card">
-                    <div class="card-head">
-                        <h2>阶段耗时拆解</h2>
-                        <span class="card-hint">
-                            {{ selectedTrace.method }} {{ selectedTrace.path }}
-                            → {{ selectedTrace.targetUrl || selectedTrace.routeId || '未匹配' }}
-                            总耗时 {{ num(selectedTrace.totalCostMs) }}ms
-                            <code class="trace-id">{{ selectedTrace.traceId }}</code>
-                        </span>
-                    </div>
-                    <div id="chart-waterfall" class="chart tall"></div>
-                    <div class="phase-table">
-                        <div class="phase-row head"><span>阶段</span><span>耗时</span><span class="phase-bar-col">占比</span></div>
-                        <div v-for="p in selectedTrace.phases" :key="p.name" class="phase-row">
-                            <span>{{ phaseLabel(p.name) }}</span>
-                            <span>{{ num(p.costMs) }}ms</span>
-                            <span class="phase-bar-col">
-                                <div class="phase-bar"><div class="phase-bar-fill"
-                                     :style="{ width: phasePercent(p.costMs) + '%' }"></div></div>
-                            </span>
-                        </div>
-                    </div>
                 </div>
             </section>
 
@@ -430,7 +473,7 @@
                 <div class="card">
                     <div class="card-head">
                         <h2>最近事件</h2>
-                        <span class="card-hint">Nameserver 注册/注销/剔除/标不健康/推送 操作日志，内存保留最近 200 条</span>
+                        <span class="card-hint">Nameserver 注册/注销/剔除/标不健康/推送，内存保留最近 200 条</span>
                     </div>
                     <div v-if="eventsError" class="banner warn">{{ eventsError }}</div>
                     <div v-else-if="!events.length" class="empty">暂无事件，客户端注册/注销后此处会实时展示。</div>
@@ -439,7 +482,7 @@
                             <th>时间</th><th>类型</th><th>服务</th><th>实例</th><th>详情</th>
                         </tr></thead>
                         <tbody>
-                        <tr v-for="(e, idx) in events" :key="idx">
+                        <tr v-for="e in events" :key="eventKey(e)" :class="{ flash: e._fresh }">
                             <td>{{ fmtFullTime(e.timestampMillis) }}</td>
                             <td><span class="badge" :class="eventBadge(e.type)">{{ eventLabel(e.type) }}</span></td>
                             <td><code>{{ e.serviceName }}</code></td>
@@ -453,58 +496,103 @@
 
             <!-- ================= 配置管理 ================= -->
             <section v-if="page === 'configs'" class="page">
-                <div class="card">
-                    <div class="card-head">
-                        <h2>运行时配置</h2>
-                        <span class="card-hint">低风险项可热更新，改完立即生效并落盘，重启后仍保留</span>
-                    </div>
-                    <div v-if="configsError" class="banner warn">{{ configsError }}</div>
-                    <div v-else-if="!configs.length" class="empty">暂无配置项</div>
-                    <table v-else class="table">
-                        <thead><tr>
-                            <th>组件</th><th>配置项</th><th>说明</th><th>生效</th><th>当前值</th>
-                        </tr></thead>
-                        <tbody>
-                        <tr v-for="c in configs" :key="c.component + c.key" :class="{ 'row-error': c.error }">
-                            <td><span class="badge comp">{{ c.component }}</span></td>
-                            <td><code>{{ c.key }}</code></td>
-                            <td>
-                                <div>{{ c.description }}</div>
-                                <small class="muted">默认：{{ c.defaultValue }}</small>
-                            </td>
-                            <td><span class="badge" :class="c.hotReloadable ? 'ok' : 'restart'">
-                                {{ c.hotReloadable ? '可热更新' : '需重启' }}</span></td>
-                            <td class="config-cell">
-                                <div class="config-form" v-if="!c.error">
-                                    <!-- 自定义下拉：可点选预设值，也可自由输入自定义值；再次点击收起 -->
-                                    <div class="combobox" :class="{ 'has-options': c.options && c.options.length }">
-                                        <input v-model="c.value"
-                                               @click="toggleConfigOptions(c)"
-                                               @blur="closeConfigOptions"
-                                               :placeholder="(c.options && c.options.length) ? '点选或输入自定义值' : ''">
-                                        <div v-if="openConfigKey === c.key && c.options && c.options.length"
-                                             class="combobox-dropdown">
-                                            <div v-for="opt in c.options" :key="opt" class="combobox-option"
-                                                 @mousedown.prevent="selectConfigOption(c, opt)">
-                                                {{ opt }}
-                                            </div>
-                                        </div>
+                <div v-if="configsError" class="banner warn">{{ configsError }}</div>
+                <div class="config-grid">
+                    <div class="card" v-for="group in configGroups" :key="group.component">
+                        <div class="card-head">
+                            <h2>{{ group.title }}</h2>
+                            <span class="card-hint">{{ group.items.length }} 项 · 改完右侧会出现保存</span>
+                        </div>
+                        <div v-if="group.component === 'gateway'" class="banner tip slim">
+                            <span>想看请求追踪里的普通流量：把 <code>gateway.trace.sampleRate</code> 设为 <code>1</code>。设为 <code>0</code> 时只记慢请求。</span>
+                        </div>
+                        <div v-if="!group.items.length" class="empty slim">暂无配置项</div>
+                        <div v-for="c in group.items" :key="c.component + c.key" class="config-row" :class="{ dirty: isDirty(c), 'row-error': c.error }">
+                            <div class="config-meta">
+                                <div class="config-key"><code>{{ c.key }}</code>
+                                    <span class="badge" :class="c.hotReloadable ? 'ok' : 'restart'">
+                                        {{ c.hotReloadable ? '可热更新' : '需重启' }}</span>
+                                </div>
+                                <div class="muted">{{ c.description }}</div>
+                                <small class="muted">默认 {{ c.defaultValue }}</small>
+                            </div>
+                            <div class="config-control" v-if="!c.error">
+                                <label v-if="isBoolConfig(c)" class="switch">
+                                    <input type="checkbox" :checked="c.value === 'true'"
+                                           @change="c.value = $event.target.checked ? 'true' : 'false'">
+                                    <span class="slider"></span>
+                                    <em>{{ c.value === 'true' ? '开' : '关' }}</em>
+                                </label>
+                                <select v-else-if="isEnumConfig(c)" v-model="c.value" class="nice-select">
+                                    <option v-for="opt in c.options" :key="opt" :value="opt">{{ opt }}</option>
+                                </select>
+                                <div v-else-if="isNumberConfig(c)" class="num-wrap">
+                                    <input type="number" v-model="c.value" :step="numberStep(c)" :min="numberMin(c)" :max="numberMax(c)">
+                                    <span class="unit">{{ numberUnit(c) }}</span>
+                                    <div class="chips" v-if="c.options && c.options.length">
+                                        <button type="button" v-for="opt in c.options" :key="opt"
+                                                class="chip-btn" :class="{ on: String(c.value) === String(opt) }"
+                                                @click="c.value = opt">{{ opt }}</button>
                                     </div>
-                                    <button class="btn mini" @click="updateConfig(c)" :disabled="configBusyKey === c.key">
+                                </div>
+                                <input v-else v-model="c.value" class="text-input">
+                                <div class="config-actions" v-if="isDirty(c)">
+                                    <button class="btn mini primary" @click="updateConfig(c)" :disabled="configBusyKey === c.key">
                                         {{ configBusyKey === c.key ? '保存中' : '保存' }}
                                     </button>
+                                    <button class="btn mini" @click="revertConfig(c)">撤销</button>
                                 </div>
-                                <span v-else class="bad">{{ c.description }}</span>
-                            </td>
-                        </tr>
-                        </tbody>
-                    </table>
+                            </div>
+                            <span v-else class="bad">{{ c.description }}</span>
+                        </div>
+                    </div>
                 </div>
             </section>
         </main>
     </div>
 
-    <!-- Toast -->
+    <div v-if="routeDrawerOpen" class="drawer-mask" @click="closeRouteDrawer"></div>
+    <aside v-if="routeDrawerOpen" class="drawer">
+        <div class="drawer-head">
+            <h2>{{ editingPrefix ? '编辑路由' : '新增路由' }}</h2>
+            <button class="btn ghost" @click="closeRouteDrawer">关闭</button>
+        </div>
+        <div class="form-grid stacked">
+            <div class="field">
+                <label>ID</label>
+                <input v-model="routeForm.id" placeholder="demo-api">
+            </div>
+            <div class="field">
+                <label>businessPrefix *</label>
+                <input v-model="routeForm.businessPrefix" placeholder="/api/demo">
+            </div>
+            <div class="field">
+                <label>stripPrefix</label>
+                <input v-model="routeForm.stripPrefix" placeholder="/api/demo">
+            </div>
+            <div class="field" v-if="discoveryType === 'NAMESERVER'">
+                <label>serviceName *</label>
+                <input v-model="routeForm.serviceName" placeholder="demo-service">
+            </div>
+            <div class="field" v-if="discoveryType !== 'NAMESERVER'">
+                <label>targetUrl</label>
+                <input v-model="routeForm.targetUrl" placeholder="http://127.0.0.1:8081">
+            </div>
+            <div class="field" v-if="discoveryType !== 'NAMESERVER'">
+                <label>targetUrls（多机，可带|权重）</label>
+                <input v-model="routeForm.targetUrls" placeholder="http://127.0.0.1:8081,http://127.0.0.1:8082|200">
+            </div>
+            <div class="field">
+                <label>group</label>
+                <input v-model="routeForm.group" placeholder="可选">
+            </div>
+        </div>
+        <div class="form-actions">
+            <button class="btn primary" @click="saveRoute" :disabled="savingRoute">保存并热更新</button>
+            <button class="btn ghost" @click="closeRouteDrawer">取消</button>
+        </div>
+    </aside>
+
     <div class="toast-wrap">
         <div v-for="t in toasts" :key="t.id" class="toast" :class="t.type">{{ t.message }}</div>
     </div>

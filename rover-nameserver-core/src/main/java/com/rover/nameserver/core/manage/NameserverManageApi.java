@@ -12,6 +12,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
+import io.netty.handler.codec.http.QueryStringDecoder;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -54,6 +55,13 @@ public class NameserverManageApi extends AbstractManageApi {
         }
         if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.INSTANCES.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, instancesJson());
+            return true;
+        }
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.METRICS_LIVE.equals(path)) {
+            QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
+            int range = ManageApiPaths.clampLiveRange(firstQuery(decoder, ManageApiPaths.PARAM_RANGE));
+            writeJson(ctx, HttpResponseStatus.OK,
+                    runtime.getMetrics().liveJson(runtime.getRegistry(), range));
             return true;
         }
         if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.METRICS.equals(path)) {
@@ -103,5 +111,13 @@ public class NameserverManageApi extends AbstractManageApi {
             rows.add(row);
         }
         return JsonCodec.toJson(rows);
+    }
+
+    private static String firstQuery(QueryStringDecoder decoder, String name) {
+        List<String> values = decoder.parameters().get(name);
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        return values.get(0);
     }
 }

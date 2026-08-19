@@ -1,5 +1,6 @@
 package com.rover.gateway.core.metrics;
 
+import com.rover.common.constants.ManageApiPaths;
 import com.rover.common.json.JsonCodec;
 import com.rover.common.jvm.JvmMetricsCollector;
 import com.rover.common.constants.RoverComponent;
@@ -14,7 +15,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.IntSupplier;
 
@@ -133,14 +133,14 @@ public class MetricsRegistry {
             errRouteUnmatched.increment();
         }
 
-        globalRing.record(epochSecond, cost, gatewayError);
+        globalRing.record(epochSecond, cost, gatewayError, statusCode);
         RouteMetrics routeMetrics = routes.computeIfAbsent(routeKey, key -> new RouteMetrics());
         routeMetrics.record(statusCode, epochSecond, cost);
 
         // 上游维度 + 路由实例分布：只有真实转发到上游才统计
         if (upstreamHostPort != null && !upstreamHostPort.isBlank()) {
             upstreams.computeIfAbsent(upstreamHostPort, key -> new UpstreamMetrics())
-                    .record(upstreamCostMillis, connectFail, timeout);
+                    .record(epochSecond, upstreamCostMillis, connectFail, timeout);
             routeMetrics.recordInstance(upstreamHostPort);
         }
     }
@@ -208,7 +208,13 @@ public class MetricsRegistry {
         // 过期量为派生值，保证 windowRequests + expiredRequests == requests 恒成立
         total.put("expiredRequests", Math.max(0, totalCount - view.requestCount));
         total.put("qps", round2(view.requestCount / (double) view.actualSeconds));
+        total.put("instantQps", globalRing.countAt(nowSecond - 1));
+        total.put("qps5s", qpsOver(nowSecond, 5));
+        total.put("qps60s", qpsOver(nowSecond, 60));
         total.put("avgMillis", view.requestCount == 0 ? 0 : round2(view.sumMillis / (double) view.requestCount));
+        TimeRing.WindowView lastSecond = globalRing.view(nowSecond - 1, 1);
+        total.put("instantAvgMillis", lastSecond.requestCount == 0
+                ? 0 : round2(lastSecond.sumMillis / (double) lastSecond.requestCount));
         total.put("p95Millis", percentile(view.samples, 0.95));
         total.put("p99Millis", percentile(view.samples, 0.99));
         total.put("maxMillis", view.maxMillis);
@@ -220,6 +226,7 @@ public class MetricsRegistry {
         status.put("4xx", status4xx.sum());
         status.put("5xx", status5xx.sum());
         total.put("status", status);
+        total.put("windowStatus", statusMap(view));
 
         Map<String, Object> errors = new LinkedHashMap<>();
         errors.put("routeUnmatched", errRouteUnmatched.sum());
@@ -243,10 +250,111 @@ public class MetricsRegistry {
         List<Map.Entry<String, UpstreamMetrics>> upstreamEntries = new ArrayList<>(upstreams.entrySet());
         upstreamEntries.sort(Comparator.comparingLong(e -> -e.getValue().requests.sum()));
         for (Map.Entry<String, UpstreamMetrics> entry : upstreamEntries) {
-            upstreamRows.add(entry.getValue().snapshot(entry.getKey()));
+            upstreamRows.add(entry.getValue().snapshot(entry.getKey(), nowSecond, window));
         }
         root.put("upstreams", upstreamRows);
         return JsonCodec.toJson(root);
+    }
+
+    /**
+     * 轻量实时快照：给 Admin 1 秒轮询用。
+     * 不带自洽校验、不带全量 300 点（由 range 决定）、路由/上游只取 Top。
+     */
+    public String liveJson(int rangeSeconds) {
+        long nowSecond = System.currentTimeMillis() / 1000;
+        int range = clampRange(rangeSeconds);
+        TimeRing.WindowView window = globalRing.view(nowSecond, range);
+        TimeRing.WindowView lastSecond = globalRing.view(nowSecond - 1, 1);
+
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("component", RoverComponent.GATEWAY.id());
+        root.put("serverTimeMillis", System.currentTimeMillis());
+        root.put("rangeSeconds", range);
+        root.put("jvm", JvmMetricsCollector.collect());
+
+        Map<String, Object> resources = new LinkedHashMap<>();
+        resources.put("activeConnections", activeConnections.get());
+        resources.put("inflightRequests", inflightRequests.get());
+        resources.put("upstreamInFlight", upstreamInFlightSupplier.getAsInt());
+        root.put("resources", resources);
+
+        Map<String, Object> traffic = new LinkedHashMap<>();
+        long instantQps = globalRing.countAt(nowSecond - 1);
+        long currentSecond = globalRing.countAt(nowSecond);
+        traffic.put("instantQps", instantQps);
+        traffic.put("currentSecondRequests", currentSecond);
+        traffic.put("qps5s", qpsOver(nowSecond, 5));
+        traffic.put("qps60s", qpsOver(nowSecond, 60));
+        traffic.put("qps300s", qpsOver(nowSecond, RING_SECONDS));
+        traffic.put("instantAvgMillis", lastSecond.requestCount == 0
+                ? 0 : round2(lastSecond.sumMillis / (double) lastSecond.requestCount));
+        traffic.put("windowRequests", window.requestCount);
+        traffic.put("avgMillis", window.requestCount == 0
+                ? 0 : round2(window.sumMillis / (double) window.requestCount));
+        traffic.put("p95Millis", percentile(window.samples, 0.95));
+        traffic.put("p99Millis", percentile(window.samples, 0.99));
+        traffic.put("maxMillis", window.maxMillis);
+        traffic.put("errorRequests", window.errorCount);
+        traffic.put("status", statusMap(window));
+        traffic.put("idle", instantQps == 0 && currentSecond == 0);
+        root.put("traffic", traffic);
+
+        Map<String, Object> errors = new LinkedHashMap<>();
+        errors.put("routeUnmatched", errRouteUnmatched.sum());
+        errors.put("proxyTimeout", errProxyTimeout.sum());
+        errors.put("upstreamConnectFail", errUpstreamConnect.sum());
+        root.put("gatewayErrors", errors);
+
+        root.put("qpsSeries", qpsSeries(nowSecond, range));
+        root.put("routes", topRoutes(nowSecond, range, 8));
+        root.put("upstreams", topUpstreams(nowSecond, range, 8));
+        return JsonCodec.toJson(root);
+    }
+
+    /** 近 N 秒的平均 QPS，分母固定为窗口长度，空闲就是 0。 */
+    private double qpsOver(long nowSecond, int seconds) {
+        TimeRing.WindowView view = globalRing.view(nowSecond, seconds);
+        return round2(view.requestCount / (double) Math.max(1, seconds));
+    }
+
+    private static Map<String, Object> statusMap(TimeRing.WindowView view) {
+        Map<String, Object> status = new LinkedHashMap<>();
+        status.put("2xx", view.status2xx);
+        status.put("3xx", view.status3xx);
+        status.put("4xx", view.status4xx);
+        status.put("5xx", view.status5xx);
+        return status;
+    }
+
+    private List<Map<String, Object>> topRoutes(long nowSecond, int window, int limit) {
+        List<Map.Entry<String, RouteMetrics>> entries = new ArrayList<>(routes.entrySet());
+        entries.sort(Comparator.comparingLong(e -> -e.getValue().windowRequestCount(nowSecond, window)));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        int size = Math.min(limit, entries.size());
+        for (int i = 0; i < size; i++) {
+            Map.Entry<String, RouteMetrics> entry = entries.get(i);
+            rows.add(entry.getValue().liveSnapshot(entry.getKey(), nowSecond, window));
+        }
+        return rows;
+    }
+
+    private List<Map<String, Object>> topUpstreams(long nowSecond, int window, int limit) {
+        List<Map.Entry<String, UpstreamMetrics>> entries = new ArrayList<>(upstreams.entrySet());
+        entries.sort(Comparator.comparingLong(e -> -e.getValue().windowRequestCount(nowSecond, window)));
+        List<Map<String, Object>> rows = new ArrayList<>();
+        int size = Math.min(limit, entries.size());
+        for (int i = 0; i < size; i++) {
+            Map.Entry<String, UpstreamMetrics> entry = entries.get(i);
+            rows.add(entry.getValue().snapshot(entry.getKey(), nowSecond, window));
+        }
+        return rows;
+    }
+
+    static int clampRange(int rangeSeconds) {
+        if (rangeSeconds <= ManageApiPaths.LIVE_RANGE_1M) {
+            return ManageApiPaths.LIVE_RANGE_1M;
+        }
+        return ManageApiPaths.LIVE_RANGE_5M;
     }
 
     /** QPS 曲线数据：窗口内每秒请求数（缺失秒补 0，前端可直接画线）。 */
@@ -483,6 +591,11 @@ public class MetricsRegistry {
 
         /** 记录一个样本到对应秒槽位。 */
         void record(long epochSecond, long costMillis, boolean error) {
+            record(epochSecond, costMillis, error, 200);
+        }
+
+        /** 记录一个样本，并按状态码归进近窗四桶。 */
+        void record(long epochSecond, long costMillis, boolean error, int statusCode) {
             Slot slot = slots[(int) Math.floorMod(epochSecond, slots.length)];
             if (slot.stamp != epochSecond) {
                 synchronized (slot) {
@@ -491,6 +604,10 @@ public class MetricsRegistry {
                         slot.baseCount = slot.count.sum();
                         slot.baseSum = slot.sumMillis.sum();
                         slot.baseErrors = slot.errors.sum();
+                        slot.base2xx = slot.s2.sum();
+                        slot.base3xx = slot.s3.sum();
+                        slot.base4xx = slot.s4.sum();
+                        slot.base5xx = slot.s5.sum();
                         slot.maxMillis.set(0);
                         slot.sampleSize.set(0);
                         slot.sampleCount.set(0);
@@ -503,6 +620,7 @@ public class MetricsRegistry {
             if (error) {
                 slot.errors.increment();
             }
+            addStatusBucket(slot, statusCode);
             long currentMax = slot.maxMillis.get();
             while (costMillis > currentMax) {
                 if (slot.maxMillis.compareAndSet(currentMax, costMillis)) {
@@ -511,6 +629,18 @@ public class MetricsRegistry {
                 currentMax = slot.maxMillis.get();
             }
             reservoirAdd(slot, costMillis);
+        }
+
+        private static void addStatusBucket(Slot slot, int statusCode) {
+            if (statusCode >= 200 && statusCode < 300) {
+                slot.s2.increment();
+            } else if (statusCode >= 300 && statusCode < 400) {
+                slot.s3.increment();
+            } else if (statusCode >= 400 && statusCode < 500) {
+                slot.s4.increment();
+            } else {
+                slot.s5.increment();
+            }
         }
 
         /** 蓄水池采样（Algorithm R），固定内存保留代表性耗时样本。 */
@@ -546,6 +676,10 @@ public class MetricsRegistry {
                 long count = slot.count.sum() - slot.baseCount;
                 long sum = slot.sumMillis.sum() - slot.baseSum;
                 long errs = slot.errors.sum() - slot.baseErrors;
+                long s2 = slot.s2.sum() - slot.base2xx;
+                long s3 = slot.s3.sum() - slot.base3xx;
+                long s4 = slot.s4.sum() - slot.base4xx;
+                long s5 = slot.s5.sum() - slot.base5xx;
                 // 秒切换瞬间的极小并发误差可能导致 delta 为负，夹到 0 保证展示自洽
                 count = Math.max(0, count);
                 sum = Math.max(0, sum);
@@ -553,6 +687,10 @@ public class MetricsRegistry {
                 view.requestCount += count;
                 view.sumMillis += sum;
                 view.errorCount += errs;
+                view.status2xx += Math.max(0, s2);
+                view.status3xx += Math.max(0, s3);
+                view.status4xx += Math.max(0, s4);
+                view.status5xx += Math.max(0, s5);
                 view.maxMillis = Math.max(view.maxMillis, slot.maxMillis.get());
                 actualSeconds++;
                 int size = Math.min(slot.sampleSize.get(), RESERVOIR_SIZE);
@@ -579,9 +717,17 @@ public class MetricsRegistry {
             volatile long baseCount;
             volatile long baseSum;
             volatile long baseErrors;
+            volatile long base2xx;
+            volatile long base3xx;
+            volatile long base4xx;
+            volatile long base5xx;
             final LongAdder count = new LongAdder();
             final LongAdder sumMillis = new LongAdder();
             final LongAdder errors = new LongAdder();
+            final LongAdder s2 = new LongAdder();
+            final LongAdder s3 = new LongAdder();
+            final LongAdder s4 = new LongAdder();
+            final LongAdder s5 = new LongAdder();
             final AtomicLong maxMillis = new AtomicLong();
             final long[] samples = new long[RESERVOIR_SIZE];
             final AtomicInteger sampleSize = new AtomicInteger();
@@ -595,6 +741,10 @@ public class MetricsRegistry {
             long errorCount;
             long maxMillis;
             long actualSeconds;
+            long status2xx;
+            long status3xx;
+            long status4xx;
+            long status5xx;
             long[] samples = new long[0];
         }
     }
@@ -621,7 +771,7 @@ public class MetricsRegistry {
             } else {
                 s5.increment();
             }
-            ring.record(epochSecond, costMillis, statusCode >= 500);
+            ring.record(epochSecond, costMillis, statusCode >= 500, statusCode);
         }
 
         void recordInstance(String hostPort) {
@@ -644,6 +794,7 @@ public class MetricsRegistry {
             row.put("requests", total.sum());
             row.put("windowRequests", view.requestCount);
             row.put("qps", round2(view.requestCount / (double) view.actualSeconds));
+            row.put("lastSecondRequests", ring.countAt(nowSecond - 1));
             // 错误率口径：仅 5xx 计为服务错误，分母为窗口请求数
             row.put("errorRate", view.requestCount == 0
                     ? 0 : round2(view.errorCount / (double) view.requestCount));
@@ -663,6 +814,26 @@ public class MetricsRegistry {
             row.put("instances", instances);
             return row;
         }
+
+        /** live 用：窗口 + 上一秒，不带累计状态码大表。 */
+        Map<String, Object> liveSnapshot(String routeId, long nowSecond, int windowSeconds) {
+            TimeRing.WindowView view = ring.view(nowSecond, windowSeconds);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("routeId", routeId);
+            row.put("lastSecondRequests", ring.countAt(nowSecond - 1));
+            row.put("windowRequests", view.requestCount);
+            row.put("errorRate", view.requestCount == 0
+                    ? 0 : round2(view.errorCount / (double) view.requestCount));
+            row.put("avgMillis", view.requestCount == 0
+                    ? 0 : round2(view.sumMillis / (double) view.requestCount));
+            row.put("p95Millis", percentile(view.samples, 0.95));
+            Map<String, Long> instances = new LinkedHashMap<>();
+            for (Map.Entry<String, LongAdder> entry : instanceCounts.entrySet()) {
+                instances.put(entry.getKey(), entry.getValue().sum());
+            }
+            row.put("instances", instances);
+            return row;
+        }
     }
 
     /** 上游维度统计：按 host:port 记录响应时间、连接失败、超时。 */
@@ -671,8 +842,9 @@ public class MetricsRegistry {
         final LongAdder sumMillis = new LongAdder();
         final LongAdder connectFail = new LongAdder();
         final LongAdder timeout = new LongAdder();
+        final TimeRing ring = new TimeRing(RING_SECONDS);
 
-        void record(long costMillis, boolean connectFailFlag, boolean timeoutFlag) {
+        void record(long epochSecond, long costMillis, boolean connectFailFlag, boolean timeoutFlag) {
             requests.increment();
             sumMillis.add(Math.max(0, costMillis));
             if (connectFailFlag) {
@@ -681,14 +853,24 @@ public class MetricsRegistry {
             if (timeoutFlag) {
                 timeout.increment();
             }
+            int status = connectFailFlag || timeoutFlag ? 502 : 200;
+            ring.record(epochSecond, Math.max(0, costMillis), connectFailFlag || timeoutFlag, status);
         }
 
-        Map<String, Object> snapshot(String hostPort) {
+        long windowRequestCount(long nowSecond, int windowSeconds) {
+            return ring.view(nowSecond, windowSeconds).requestCount;
+        }
+
+        Map<String, Object> snapshot(String hostPort, long nowSecond, int windowSeconds) {
+            TimeRing.WindowView view = ring.view(nowSecond, windowSeconds);
             Map<String, Object> row = new LinkedHashMap<>();
             long count = requests.sum();
             row.put("hostPort", hostPort);
             row.put("requests", count);
-            row.put("avgMillis", count == 0 ? 0 : round2(sumMillis.sum() / (double) count));
+            row.put("lastSecondRequests", ring.countAt(nowSecond - 1));
+            row.put("windowRequests", view.requestCount);
+            row.put("avgMillis", view.requestCount == 0
+                    ? 0 : round2(view.sumMillis / (double) view.requestCount));
             row.put("connectFail", connectFail.sum());
             row.put("timeout", timeout.sum());
             return row;

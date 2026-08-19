@@ -166,11 +166,11 @@ Bearer 协议 token 不能代替管理请求头，管理请求头也不能访问
 | Gateway | `GET /_manage/status` | 监听端口、发现类型、路由与运行时状态 |
 | Gateway | `GET/PUT/POST/DELETE /_manage/routes` | 查看、整表替换、新增/更新或删除路由 |
 | Gateway | `GET/POST /_manage/configs` | 查看或更新已登记的运行时配置 |
-| Gateway | `GET /_manage/metrics`、`/metrics/selfcheck`、`/prometheus` | JSON 指标、自检与 Prometheus 文本 |
+| Gateway | `GET /_manage/metrics`、`/metrics/live`、`/metrics/selfcheck`、`/prometheus` | JSON 指标、1 秒轻量实时快照（`range=60|300`）、自检与 Prometheus 文本 |
 | Gateway | `GET /_manage/traces` | 有界请求时间线；支持 `traceId`、`path`、`slow` 查询参数 |
 | Nameserver | `GET /_manage/status`、`/instances` | 运行状态与当前内存实例 |
 | Nameserver | `GET/POST /_manage/configs` | 查看或更新已登记的运行时配置 |
-| Nameserver | `GET /_manage/metrics`、`/events` | 注册指标与近期事件 |
+| Nameserver | `GET /_manage/metrics`、`/metrics/live`、`/events` | 注册指标、轻量实时快照与近期事件 |
 
 Rover-Admin 是可选组件：
 
@@ -178,7 +178,11 @@ Rover-Admin 是可选组件：
 mvn -pl rover-admin spring-boot:run
 ```
 
-如果 Gateway 从内置端口改到 `8080`，也要同步修改 Rover-Admin 的 Gateway URL。
+打开 `http://127.0.0.1:9090`。仪表盘每秒拉 `/api/live` 看瞬时流量与 JVM，约 15 秒刷新组件状态。
+请求追踪遵循 Gateway `gateway.trace.sampleRate`：`0` 只记慢请求（默认）；在 Admin 配置里改成 `1`
+即可采集普通流量，无需重启。
+
+若 Gateway 不在默认端口（仓库常见默认是 `80`），请把 Rover-Admin 的 Gateway 地址改成对应监听口。
 
 ## 8. 可选部署加固
 
