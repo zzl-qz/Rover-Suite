@@ -307,10 +307,10 @@ snapshots, grouped discovery, cold-start recovery, and proxy buffering — are d
 - [x] SPI plugin extension (Filter and load balancer) plus source-level service-discovery contract
 - [x] Runtime config management (YAML + hot-reload)
 - [x] Lightweight in-memory metrics and bounded request trace timeline management APIs
+- [x] Admin live dashboard and Prometheus text export
 
 **Planned:**
 
-- [ ] Observability dashboard and production-grade metrics export
 - [ ] Distributed tracing integration beyond the local Gateway timeline
 - [ ] Traffic governance (rate limiting, auth, circuit breaking)
 - [ ] External registry adapters

@@ -70,8 +70,9 @@ public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
                 List.of("50", "100", "200", "500"));
         String sampleRate = Double.toString(GatewayDefaults.TRACE_SAMPLE_RATE);
         addConfig(GatewayRuntimeConfigKeys.TRACE_SAMPLE_RATE,
-                sampleRate, sampleRate, "时间线采样率 0~1，0 表示只记慢请求，1 表示全量",
-                List.of("0", "0.01", "0.1", "0.5", "1"));
+                sampleRate, sampleRate,
+                "采样率：0=只记慢请求，1=全量记录；也可填 0~1 之间小数做抽样",
+                List.of("0", "1"));
     }
 
     @Override
