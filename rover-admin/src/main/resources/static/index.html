@@ -122,11 +122,12 @@
                         <div class="card">
                             <div class="card-head">
                                 <h2>QPS 曲线</h2>
-                                <span class="card-hint">近 {{ liveRange }} 秒，每格 = 那一秒完成的请求数</span>
+                                <span class="card-hint">纵轴=每秒完成请求数；零星打点时峰值就是 1，不是坏了</span>
                                 <span class="latency-inline ml-auto"
                                       title="瞬时均：上一整秒平均耗时。P95/P99：近窗里分别有 95%/99% 的请求比这个更快。P95 突然飙高通常比平均值更能说明偶发慢请求。">
-                                    瞬时均 {{ num(gwTraffic.instantAvgMillis) }}ms
-                                    · 窗 P95 {{ num(gwTraffic.p95Millis) }}ms
+                                    近窗峰值 {{ num(qpsPeak) }} 请求/秒
+                                    · 瞬时均 {{ num(gwTraffic.instantAvgMillis) }}ms
+                                    · P95 {{ num(gwTraffic.p95Millis) }}ms
                                     · P99 {{ num(gwTraffic.p99Millis) }}ms
                                     <i class="hint-dot">?</i>
                                 </span>
@@ -281,7 +282,7 @@
                         <div class="comp-box">
                             <div class="comp-head">
                                 <strong>Nameserver JVM</strong>
-                                <span class="card-hint">含义同上，只是注册中心进程</span>
+                                <span class="card-hint">已用 / 已提交 / 上限（注册中心进程）</span>
                             </div>
                             <div v-if="nameserverJvm" class="jvm-body">
                                 <div class="jvm-row" title="堆：已用 / 已提交 / 上限">
@@ -447,15 +448,20 @@
                             <tr v-if="selectedTrace && selectedTrace.traceId === t.traceId" class="expand-row">
                                 <td colspan="8">
                                     <div class="trace-expand">
-                                        <div id="chart-waterfall" class="chart"></div>
+                                        <div class="trace-expand-hint">
+                                            按处理顺序从上到下。条越长越占总耗时；很多阶段是 0ms 表示快到不足 1ms。
+                                            总耗时 {{ num(selectedTrace.totalCostMs) }}ms
+                                        </div>
                                         <div class="phase-table">
-                                            <div class="phase-row head"><span>阶段</span><span>耗时</span><span class="phase-bar-col">占比</span></div>
-                                            <div v-for="p in selectedTrace.phases" :key="p.name" class="phase-row">
+                                            <div class="phase-row head"><span>阶段</span><span>耗时</span><span class="phase-bar-col">占总耗时</span></div>
+                                            <div v-for="p in selectedTrace.phases" :key="p.name" class="phase-row"
+                                                 :title="phaseTip(p.name)">
                                                 <span>{{ phaseLabel(p.name) }}</span>
                                                 <span>{{ num(p.costMs) }}ms</span>
                                                 <span class="phase-bar-col">
                                                     <div class="phase-bar"><div class="phase-bar-fill"
                                                          :style="{ width: phasePercent(p.costMs) + '%' }"></div></div>
+                                                    <em class="phase-pct">{{ phasePercent(p.costMs).toFixed(0) }}%</em>
                                                 </span>
                                             </div>
                                         </div>
@@ -473,16 +479,27 @@
                 <div class="card">
                     <div class="card-head">
                         <h2>最近事件</h2>
-                        <span class="card-hint">Nameserver 注册/注销/剔除/标不健康/推送，内存保留最近 200 条</span>
+                        <span class="card-hint">环形缓冲最多 200 条，超出覆盖最旧的，不会无限涨内存</span>
+                    </div>
+                    <div class="filter-bar">
+                        <select v-model="eventFilter.type" class="nice-select" @change="resetEventPage">
+                            <option value="">全部类型</option>
+                            <option v-for="t in eventTypeOptions" :key="t" :value="t">{{ eventLabel(t) }}</option>
+                        </select>
+                        <input v-model="eventFilter.service" class="filter-input" placeholder="服务名过滤"
+                               @input="resetEventPage">
+                        <span class="card-hint">匹配 {{ filteredEvents.length }} / 缓冲 {{ events.length }}</span>
                     </div>
                     <div v-if="eventsError" class="banner warn">{{ eventsError }}</div>
-                    <div v-else-if="!events.length" class="empty">暂无事件，客户端注册/注销后此处会实时展示。</div>
+                    <div v-else-if="!filteredEvents.length" class="empty">
+                        {{ events.length ? '没有符合筛选条件的事件。' : '暂无事件，客户端注册/注销后此处会实时展示。' }}
+                    </div>
                     <table v-else class="table">
                         <thead><tr>
                             <th>时间</th><th>类型</th><th>服务</th><th>实例</th><th>详情</th>
                         </tr></thead>
                         <tbody>
-                        <tr v-for="e in events" :key="eventKey(e)" :class="{ flash: e._fresh }">
+                        <tr v-for="e in pagedEvents" :key="eventKey(e)" :class="{ flash: e._fresh }">
                             <td>{{ fmtFullTime(e.timestampMillis) }}</td>
                             <td><span class="badge" :class="eventBadge(e.type)">{{ eventLabel(e.type) }}</span></td>
                             <td><code>{{ e.serviceName }}</code></td>
@@ -491,6 +508,11 @@
                         </tr>
                         </tbody>
                     </table>
+                    <div class="pager" v-if="filteredEvents.length">
+                        <button class="btn mini" :disabled="eventPage <= 1" @click="eventPage--">上一页</button>
+                        <span>第 {{ Math.min(eventPage, eventTotalPages) }} / {{ eventTotalPages }} 页 · 每页 {{ eventPageSize }} 条</span>
+                        <button class="btn mini" :disabled="eventPage >= eventTotalPages" @click="eventPage++">下一页</button>
+                    </div>
                 </div>
             </section>
 
@@ -529,10 +551,10 @@
                                 <div v-else-if="isNumberConfig(c)" class="num-wrap">
                                     <input type="number" v-model="c.value" :step="numberStep(c)" :min="numberMin(c)" :max="numberMax(c)">
                                     <span class="unit">{{ numberUnit(c) }}</span>
-                                    <div class="chips" v-if="c.options && c.options.length">
-                                        <button type="button" v-for="opt in c.options" :key="opt"
+                                    <div class="chips" v-if="configQuickOptions(c).length">
+                                        <button type="button" v-for="opt in configQuickOptions(c)" :key="opt"
                                                 class="chip-btn" :class="{ on: String(c.value) === String(opt) }"
-                                                @click="c.value = opt">{{ opt }}</button>
+                                                @click="c.value = opt">{{ configChipLabel(c, opt) }}</button>
                                     </div>
                                 </div>
                                 <input v-else v-model="c.value" class="text-input">

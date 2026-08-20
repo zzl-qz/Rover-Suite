@@ -51,7 +51,7 @@ createApp({
             liveFailCount: 0,
             liveInFlight: false,
             updatedAt: 0,
-            envOpen: false,
+            envOpen: true,
             selectedRouteId: null,
             jvmHistory: { gateway: [], nameserver: [] },
 
@@ -74,11 +74,13 @@ createApp({
             tracesError: null,
             traceFilter: { traceId: '', path: '', slow: false },
             selectedTrace: null,
-            waterfallChart: null,
 
             events: [],
             eventsError: null,
             knownEventKeys: new Set(),
+            eventFilter: { type: '', service: '' },
+            eventPage: 1,
+            eventPageSize: 20,
 
             configs: [],
             configsError: null,
@@ -104,7 +106,7 @@ createApp({
                 traces: '点一行在表内展开阶段耗时',
                 routes: '路由规则热更新与落盘',
                 instances: 'Nameserver 注册实例',
-                events: '注册 / 注销 / 剔除等生命周期',
+                events: '可按类型/服务筛选，分页看；最多缓存 200 条',
                 configs: '按组件改运行时配置，脏了才保存',
             }[this.page] || '';
         },
@@ -202,6 +204,38 @@ createApp({
                 items: this.configs.filter(c => c.component === component),
             }));
         },
+        qpsPeak() {
+            const series = (this.gw && this.gw.qpsSeries) ? this.gw.qpsSeries : [];
+            let peak = 0;
+            for (const p of series) {
+                if ((p.count || 0) > peak) peak = p.count;
+            }
+            return peak;
+        },
+        filteredEvents() {
+            const type = (this.eventFilter.type || '').trim();
+            const service = (this.eventFilter.service || '').trim().toLowerCase();
+            return (this.events || []).filter(e => {
+                if (type && e.type !== type) return false;
+                if (service && String(e.serviceName || '').toLowerCase().indexOf(service) < 0) return false;
+                return true;
+            });
+        },
+        eventTotalPages() {
+            return Math.max(1, Math.ceil(this.filteredEvents.length / this.eventPageSize));
+        },
+        pagedEvents() {
+            const page = Math.min(this.eventPage, this.eventTotalPages);
+            const start = (page - 1) * this.eventPageSize;
+            return this.filteredEvents.slice(start, start + this.eventPageSize);
+        },
+        eventTypeOptions() {
+            const set = new Set();
+            for (const e of this.events || []) {
+                if (e.type) set.add(e.type);
+            }
+            return Array.from(set).sort();
+        },
     },
 
     mounted() {
@@ -284,18 +318,11 @@ createApp({
                 this.$nextTick(() => this.initCharts());
             } else if (page !== 'traces') {
                 this.selectedTrace = null;
-                this.disposeWaterfall();
             }
         },
         disposeCharts() {
             Object.values(this.charts).forEach(c => c && c.dispose());
             this.charts = { qps: null, status: null };
-        },
-        disposeWaterfall() {
-            if (this.waterfallChart) {
-                this.waterfallChart.dispose();
-                this.waterfallChart = null;
-            }
         },
         async refreshAll() {
             this.loading = true;
@@ -406,7 +433,6 @@ createApp({
         },
         resizeCharts() {
             Object.values(this.charts).forEach(c => c && c.resize());
-            if (this.waterfallChart) this.waterfallChart.resize();
         },
         updateCharts() {
             this.updateQpsChart();
@@ -416,9 +442,16 @@ createApp({
             const chart = this.charts.qps;
             if (!chart || !this.gw) return;
             const series = this.gw.qpsSeries || [];
+            const peak = this.qpsPeak;
             chart.setOption({
-                grid: { left: 42, right: 16, top: 16, bottom: 28 },
-                tooltip: { trigger: 'axis' },
+                grid: { left: 52, right: 16, top: 16, bottom: 28 },
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: (params) => {
+                        const p = params[0];
+                        return `${p.axisValue}<br/>该秒完成 <b>${p.data}</b> 个请求`;
+                    },
+                },
                 xAxis: {
                     type: 'category',
                     data: series.map(p => this.fmtSecond(p.second)),
@@ -427,12 +460,16 @@ createApp({
                 },
                 yAxis: {
                     type: 'value',
+                    name: '请求/秒',
+                    nameTextStyle: { color: '#6b7a72', fontSize: 11, padding: [0, 0, 0, 8] },
                     minInterval: 1,
+                    // 零星流量时别把纵轴压成只剩 0/1，至少留到 5 方便读
+                    max: Math.max(5, peak),
                     splitLine: { lineStyle: { color: '#eef2ef' } },
                     axisLabel: { color: '#6b7a72', fontSize: 11 },
                 },
                 series: [{
-                    name: 'QPS',
+                    name: '请求/秒',
                     type: 'line',
                     smooth: true,
                     showSymbol: false,
@@ -504,9 +541,6 @@ createApp({
                 if (this.selectedTrace
                     && !this.traces.some(t => t.traceId === this.selectedTrace.traceId)) {
                     this.selectedTrace = null;
-                    this.disposeWaterfall();
-                } else if (this.selectedTrace) {
-                    this.$nextTick(() => this.updateWaterfallChart());
                 }
             } catch (e) {
                 this.tracesError = e.message;
@@ -515,82 +549,9 @@ createApp({
         selectTrace(trace) {
             if (this.selectedTrace && this.selectedTrace.traceId === trace.traceId) {
                 this.selectedTrace = null;
-                this.disposeWaterfall();
                 return;
             }
-            this.disposeWaterfall();
             this.selectedTrace = trace;
-            this.$nextTick(() => this.updateWaterfallChart());
-        },
-        updateWaterfallChart() {
-            if (!this.selectedTrace) return;
-            const el = document.getElementById('chart-waterfall');
-            if (!el) return;
-            if (!this.waterfallChart) {
-                this.waterfallChart = echarts.init(el);
-            }
-            const phases = this.selectedTrace.phases || [];
-            let offset = 0;
-            const base = [];
-            const costs = [];
-            const labels = [];
-            for (const p of phases) {
-                labels.push(this.phaseLabel(p.name));
-                base.push(offset);
-                costs.push(p.costMs);
-                offset += p.costMs;
-            }
-            this.waterfallChart.setOption({
-                grid: { left: 8, right: 40, top: 12, bottom: 8, containLabel: true },
-                tooltip: {
-                    trigger: 'axis',
-                    axisPointer: { type: 'shadow' },
-                    formatter: (params) => {
-                        const idx = params[0].dataIndex;
-                        return `${labels[idx]}：${costs[idx]}ms<br/>开始于 ${base[idx]}ms`;
-                    },
-                },
-                xAxis: {
-                    type: 'value',
-                    name: 'ms',
-                    splitLine: { lineStyle: { color: '#eef2ef' } },
-                    axisLabel: { color: '#6b7a72', fontSize: 11 },
-                },
-                yAxis: {
-                    type: 'category',
-                    data: labels,
-                    axisLine: { show: false },
-                    axisTick: { show: false },
-                    axisLabel: { color: '#1c2b25', fontSize: 12 },
-                },
-                series: [
-                    {
-                        name: '基座',
-                        type: 'bar',
-                        stack: 'wf',
-                        itemStyle: { color: 'transparent' },
-                        barWidth: 14,
-                        data: base,
-                        emphasis: { itemStyle: { color: 'transparent' } },
-                        tooltip: { show: false },
-                    },
-                    {
-                        name: '耗时',
-                        type: 'bar',
-                        stack: 'wf',
-                        barWidth: 14,
-                        itemStyle: { color: '#1f6f5b', borderRadius: [0, 6, 6, 0] },
-                        data: costs,
-                        label: {
-                            show: true,
-                            position: 'right',
-                            color: '#6b7a72',
-                            fontSize: 11,
-                            formatter: p => p.value + 'ms',
-                        },
-                    },
-                ],
-            });
         },
         phaseLabel(name) {
             const map = {
@@ -604,6 +565,19 @@ createApp({
                 write: '响应写回',
             };
             return map[name] || name;
+        },
+        phaseTip(name) {
+            const map = {
+                receive: '网关收到请求并解码',
+                filter: '插件/过滤器链处理',
+                route: '按路径匹配路由规则',
+                discovery: '查该服务有哪些实例',
+                loadbalance: '从实例里挑一个上游',
+                connect: '连上游（新建连接时才有耗时）',
+                proxy: '等上游算完并回包，通常最占时间',
+                write: '把响应写回客户端',
+            };
+            return map[name] || '';
         },
         phasePercent(costMs) {
             const total = this.selectedTrace ? this.selectedTrace.totalCostMs : 0;
@@ -628,9 +602,15 @@ createApp({
                     return e;
                 });
                 this.knownEventKeys = nextKeys;
+                if (this.eventPage > this.eventTotalPages) {
+                    this.eventPage = this.eventTotalPages;
+                }
             } catch (e) {
                 this.eventsError = e.message;
             }
+        },
+        resetEventPage() {
+            this.eventPage = 1;
         },
         eventKey(e) {
             return [e.timestampMillis, e.type, e.serviceName, e.instanceId, e.detail].join('|');
@@ -775,6 +755,19 @@ createApp({
         },
         numberMax(c) {
             return /rate/i.test(c.key || '') ? '1' : undefined;
+        },
+        /** 采样率快捷按钮用白话，别只扔 0/1。 */
+        configChipLabel(c, opt) {
+            if ((c.key || '').endsWith('sampleRate')) {
+                if (String(opt) === '0') return '只记慢请求';
+                if (String(opt) === '1') return '全量记录';
+            }
+            return opt;
+        },
+        /** 采样率只给两个常用档；中间值可手输。 */
+        configQuickOptions(c) {
+            if ((c.key || '').endsWith('sampleRate')) return ['0', '1'];
+            return c.options || [];
         },
         revertConfig(c) {
             c.value = c._saved;
