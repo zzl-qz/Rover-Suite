@@ -164,7 +164,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         }
         try {
             client.subscribe(serviceName, group);
-            client.query(serviceName, group, false);
+            client.query(serviceName, group, false); // 兜底拉取一次
             log.info("已订阅服务: serviceName={}, group={}", serviceName, nullToEmpty(group));
         } catch (Exception ex) {
             log.warn("订阅服务失败，将依赖重连恢复/对账: serviceName={}", serviceName, ex);

@@ -179,10 +179,12 @@ public class InstanceCache {
         cache.clear();
     }
 
+    // 拒绝次数+1  最多就是拒绝3次
     private boolean incrementReject(CacheEntry current) {
         return current.rejectCount.incrementAndGet() == FORCE_QUERY_AFTER_REJECTS;
     }
 
+    // 唤醒注册的强制对账监听器
     private void notifyForceQuery(CacheEntry current) {
         for (BiConsumer<String, String> listener : forceQueryListeners) {
             listener.accept(current.serviceName, current.group);
