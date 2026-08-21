@@ -27,7 +27,9 @@ public class GatewayFilterAssembler {
     /** 负责从 plugins 目录和 classpath 加载用户扩展 Filter。 */
     private final PluginFilterLoader pluginFilterLoader = new PluginFilterLoader();
 
-    /** 静态模式组装过滤器链。 */
+    /**
+     * @DL 扩展 API：供静态模式独立组装过滤器链；Gateway 运行时使用全参数重载。
+     */
     public List<Filter> assemble(
             FilterSettings settings,
             RouteMatcher routeMatcher,

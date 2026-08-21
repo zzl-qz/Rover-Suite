@@ -119,7 +119,10 @@ public class InstanceCache {
         });
     }
 
-    /** @deprecated 兼容旧调用，等价于对账覆盖 */
+    /**
+     * @deprecated 兼容旧调用，等价于对账覆盖。
+     * @DL 兼容 API：旧客户端迁移期间可继续使用，新代码请调用带 epoch 的方法。
+     */
     @Deprecated
     public void putSnapshot(String serviceName, String group, long revision, List<ServiceInstance> instances) {
         putSnapshotFromQuery(serviceName, group, null, revision, instances);
@@ -162,6 +165,9 @@ public class InstanceCache {
         return true;
     }
 
+    /**
+     * @DL 扩展 API：供 NameserverClient 暴露推送回调；Gateway 内部不直接消费。
+     */
     public void addListener(Consumer<ServicePushBody> listener) {
         if (listener != null) {
             listeners.add(listener);

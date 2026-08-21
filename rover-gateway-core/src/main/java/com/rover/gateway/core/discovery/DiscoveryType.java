@@ -13,9 +13,11 @@ public enum DiscoveryType {
     /** 组件自带注册中心 */
     NAMESERVER,
 
-    NACOS, // nacos（后续支持）
+    /** @DL 预留：接入 Nacos 适配器后启用。 */
+    NACOS,
 
-    REDIS; // redis（后续支持）
+    /** @DL 预留：接入 Redis 发现实现后启用。 */
+    REDIS;
 
     /** 从配置字符串解析发现模式，空值默认 STATIC。 */
     public static DiscoveryType from(String raw) {
