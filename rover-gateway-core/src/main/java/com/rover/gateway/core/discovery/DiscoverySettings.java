@@ -9,7 +9,7 @@ import lombok.Data;
 /**
  * Author: Daylight
  * Created: 2026-08-10 16:20:00
- * Description: Gateway 发现运行时配置
+ * Description: Gateway 服务发现配置
  */
 @Data
 public class DiscoverySettings {

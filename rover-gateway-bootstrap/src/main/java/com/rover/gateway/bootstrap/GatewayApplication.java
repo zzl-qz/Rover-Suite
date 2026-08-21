@@ -24,9 +24,12 @@ public class GatewayApplication {
 
     public static void main(String[] args) {
         log.info("Rover Gateway starting...");
-        GatewayConfig config = new GatewayConfigLoader().load();
 
+        // 加载gateway配置文件
+        GatewayConfig config = new GatewayConfigLoader().load();
         List<RouteConfig> routes = config.toRouteConfigs();
+
+        // 加载覆盖文件
         RouteOverlayStore overlayStore = new RouteOverlayStore();
         if (overlayStore.exists()) {
             routes = overlayStore.loadOrEmpty();
@@ -36,13 +39,14 @@ public class GatewayApplication {
             log.info("使用 YAML 路由, routeCount={}", routes.size());
         }
 
+        // 加载注册中心
         // todo 这里后续改成工厂模式，然后支持多种注册中心比较好
         DiscoverySettings discoverySettings = config.toDiscoverySettings();
         if (discoverySettings.getType() == DiscoveryType.NAMESERVER) {
             discoverySettings.setSubscribeServices(subscribeSpecsFrom(routes));
         }
-
         log.info("discovery.type={}, routeCount={}", discoverySettings.getType(), routes.size());
+
 
         GatewayHttpServer server = new GatewayHttpServer(
                 config.getPortOrDefault(),
