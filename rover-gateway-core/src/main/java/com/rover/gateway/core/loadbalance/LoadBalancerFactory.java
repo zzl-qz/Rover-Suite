@@ -30,6 +30,9 @@ public final class LoadBalancerFactory {
     private LoadBalancerFactory() {
     }
 
+    /**
+     * @DL 扩展 API：供独立调用方按默认 plugins 目录创建策略；Gateway 运行时使用带目录的重载。
+     */
     public static LoadBalancer create(String strategy) {
         return create(strategy, PluginSpiLoader.DEFAULT_DIR);
     }
@@ -90,6 +93,9 @@ public final class LoadBalancerFactory {
                         + "，或 plugins SPI name，或自定义类全名");
     }
 
+    /**
+     * @DL 扩展 API：供管理端或配置校验枚举可用策略；当前 Gateway 启动链路未调用。
+     */
     public static List<String> supportedNames(String pluginDir) {
         List<String> names = new ArrayList<>(builtins().keySet());
         // 仅枚举名字，实例不长期持有，扫完立刻 close ClassLoader

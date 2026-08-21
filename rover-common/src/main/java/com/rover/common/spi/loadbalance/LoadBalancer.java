@@ -26,11 +26,15 @@ public interface LoadBalancer {
      */
     ServiceInstance choose(LoadBalanceContext context);
 
-    /** 请求开始占用实例（最少连接用）；默认空实现 */
+    /**
+     * @DL 扩展钩子：需要维护实例并发状态的算法可在请求开始时记账；默认空实现。
+     */
     default void onStart(ServiceInstance instance) {
     }
 
-    /** 请求结束释放实例（最少连接用）；默认空实现 */
+    /**
+     * @DL 扩展钩子：需要维护实例并发状态的算法可在请求结束时释放记账；默认空实现。
+     */
     default void onComplete(ServiceInstance instance) {
     }
 }

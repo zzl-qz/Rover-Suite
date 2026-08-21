@@ -25,6 +25,7 @@ public interface ServiceDiscovery extends AutoCloseable {
     /**
      * 路由热更新后补订新服务；静态发现默认空操作。
      *
+     * @DL 扩展钩子：动态发现实现可在此补充订阅或监听；静态实现无需处理。
      * @param serviceName 服务名
      * @param group       分组，可为 null
      */
