@@ -283,6 +283,7 @@ public class NameserverClient implements AutoCloseable {
     /**
      * 注册服务端推送监听器，订阅变更（含服务端主动推送）会回调该监听器。
      *
+     * @DL 扩展 API：Gateway 内部直接读取缓存；外部客户端可用它接收已应用的推送。
      * @param listener 推送回调；为 null 时忽略
      */
     public void addPushListener(Consumer<ServicePushBody> listener) {
