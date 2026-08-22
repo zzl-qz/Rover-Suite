@@ -30,6 +30,10 @@ class MetricsRegistryLiveTest {
         assertEquals(1L, ((Number) status.get("2xx")).longValue());
         assertEquals(1L, ((Number) status.get("5xx")).longValue());
         assertEquals(2L, ((Number) traffic.get("windowRequests")).longValue());
+        assertTrue(traffic.containsKey("p95Millis"));
+        assertTrue(!traffic.containsKey("p99Millis"), "live 不应再算 p99");
+        assertTrue(!live.containsKey("upstreams"), "live 不应再带上游 Top");
+        assertTrue(live.containsKey("routes"));
     }
 
     @Test

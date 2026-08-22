@@ -176,7 +176,7 @@ Built-in management endpoints:
 | Gateway | `GET /_manage/status` | Listener, discovery, route, and runtime status |
 | Gateway | `GET/PUT/POST/DELETE /_manage/routes` | List, replace, add/update, or delete routes |
 | Gateway | `GET/POST /_manage/configs` | List or update registered runtime settings |
-| Gateway | `GET /_manage/metrics`, `/metrics/live`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, lightweight live snapshot (`range=60|300`), self-check, and Prometheus text |
+| Gateway | `GET /_manage/metrics`, `/metrics/live`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, slim live snapshot (`range=60|300`; no p99/upstream Top; route Top short-cached), self-check, and Prometheus text |
 | Gateway | `GET /_manage/traces` | Bounded request timeline with `traceId`, `path`, and `slow` filters |
 | Nameserver | `GET /_manage/status`, `/instances` | Runtime status and current in-memory instances |
 | Nameserver | `GET/POST /_manage/configs` | List or update registered runtime settings |
@@ -188,8 +188,7 @@ Rover-Admin is optional:
 mvn -pl rover-admin spring-boot:run
 ```
 
-Open `http://127.0.0.1:9090`. The dashboard polls `/api/live` every second for instant traffic and JVM,
-and refreshes component status about every 15 seconds. Request traces honor Gateway
+Open `http://127.0.0.1:9090`. `/api/live` polls about once per second **only while the dashboard tab is visible**; leaving the page or hiding the browser tab stops live polling so idle Admin tabs do not tax Gateway/Nameserver. Component status refreshes about every 15 seconds via `/api/overview`. Gateway live snapshots are slimmed further (no p99 / upstream Top; route Top cached ~5s). Request traces honor Gateway
 `gateway.trace.sampleRate`: `0` records only slow requests (default); set it to `1` in Admin config to
 capture ordinary traffic without restart.
 
