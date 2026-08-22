@@ -122,13 +122,12 @@
                         <div class="card">
                             <div class="card-head">
                                 <h2>QPS 曲线</h2>
-                                <span class="card-hint">纵轴=每秒完成请求数；零星打点时峰值就是 1，不是坏了</span>
+                                <span class="card-hint">纵轴按近窗峰值留约 15% 余量，不是网关容量上限；无流量显示空态</span>
                                 <span class="latency-inline ml-auto"
-                                      title="瞬时均：上一整秒平均耗时。P95/P99：近窗里分别有 95%/99% 的请求比这个更快。P95 突然飙高通常比平均值更能说明偶发慢请求。">
+                                      title="瞬时均：上一整秒平均耗时。P95：近窗里 95% 的请求比这个更快。P95 突然飙高通常比平均值更能说明偶发慢请求。">
                                     近窗峰值 {{ num(qpsPeak) }} 请求/秒
                                     · 瞬时均 {{ num(gwTraffic.instantAvgMillis) }}ms
                                     · P95 {{ num(gwTraffic.p95Millis) }}ms
-                                    · P99 {{ num(gwTraffic.p99Millis) }}ms
                                     <i class="hint-dot">?</i>
                                 </span>
                             </div>
@@ -147,7 +146,7 @@
                                     <th title="上一整秒该路由完成的请求数">上一秒</th>
                                     <th :title="'近窗（' + liveRange + ' 秒）内该路由完成的请求总数'">近窗</th>
                                     <th title="近窗内 5xx（或记为错误）占比。高了先看后端和超时配置">错误率</th>
-                                    <th title="近窗平均耗时 / P95 耗时（毫秒）">均 / P95</th>
+                                    <th title="近窗平均耗时（毫秒）；live 为减负不再每秒算路由 P95">均耗时</th>
                                 </tr></thead>
                                 <tbody>
                                 <tr v-for="r in liveRoutes" :key="r.routeId"
@@ -158,7 +157,7 @@
                                     <td>{{ num(r.lastSecondRequests) }}</td>
                                     <td>{{ num(r.windowRequests) }}</td>
                                     <td>{{ ((r.errorRate || 0) * 100).toFixed(1) }}%</td>
-                                    <td>{{ num(r.avgMillis) }} / {{ num(r.p95Millis) }}ms</td>
+                                    <td>{{ num(r.avgMillis) }}ms</td>
                                 </tr>
                                 <tr v-if="selectedRoute && selectedRoute.instances">
                                     <td colspan="5" class="expand-cell">

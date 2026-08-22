@@ -33,7 +33,7 @@ Rover-Gateway
 | Gateway | 路由、本地发现缓存、负载均衡、反向代理与 Filter |
 | Java Client / Starter | TCP 注册、心跳、重连、状态重放与 Spring Boot 生命周期集成 |
 | HTTP Registrar | 最小化的跨语言注册、心跳、重试与尽力注销 |
-| Admin | 可选管理台：1 秒拉 live 快照看瞬时流量，不进转发热路径 |
+| Admin | 可选管理台：仪表盘可见时 1 秒拉 live 快照，切走/后台停轮询；不进转发热路径 |
 
 Nameserver 有意保留两种服务提供方传输方式，但只维护一套注册模型：
 

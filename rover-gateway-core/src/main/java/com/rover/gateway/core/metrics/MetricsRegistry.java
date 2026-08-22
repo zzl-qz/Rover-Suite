@@ -35,6 +35,9 @@ public class MetricsRegistry {
     /** 路由维度中"未匹配任何路由"的归类键。 */
     public static final String UNMATCHED_ROUTE = "__unmatched__";
 
+    /** live Top 路由缓存多久刷新一次，避免每秒全表排序。 */
+    private static final long LIVE_TOP_CACHE_MILLIS = 5000L;
+
     /** 采集配置，支持热更新。 */
     private final MetricsSettings settings;
 
@@ -72,6 +75,10 @@ public class MetricsRegistry {
 
     /** 在途上游请求数来源，由 HttpProxyClient 提供（近似连接池使用情况）。 */
     private volatile IntSupplier upstreamInFlightSupplier = () -> 0;
+
+    /** live 路由 Top 缓存：降低每秒排序成本。 */
+    private volatile List<Map<String, Object>> liveTopRoutesCache = List.of();
+    private final AtomicLong liveTopRoutesCachedAtMillis = new AtomicLong(0);
 
     public MetricsRegistry(MetricsSettings settings) {
         this.settings = settings == null ? new MetricsSettings() : settings;
@@ -258,7 +265,7 @@ public class MetricsRegistry {
 
     /**
      * 轻量实时快照：给 Admin 1 秒轮询用。
-     * 不带自洽校验、不带全量 300 点（由 range 决定）、路由/上游只取 Top。
+     * 相对全量 metrics：不算 p99、不带上游 Top、路由 Top 5 秒缓存且不算路由 p95。
      */
     public String liveJson(int rangeSeconds) {
         long nowSecond = System.currentTimeMillis() / 1000;
@@ -291,8 +298,8 @@ public class MetricsRegistry {
         traffic.put("windowRequests", window.requestCount);
         traffic.put("avgMillis", window.requestCount == 0
                 ? 0 : round2(window.sumMillis / (double) window.requestCount));
+        // live 只保留 p95；p99 留给全量 metrics / Prometheus，避免每秒双次排序样本
         traffic.put("p95Millis", percentile(window.samples, 0.95));
-        traffic.put("p99Millis", percentile(window.samples, 0.99));
         traffic.put("maxMillis", window.maxMillis);
         traffic.put("errorRequests", window.errorCount);
         traffic.put("status", statusMap(window));
@@ -306,8 +313,7 @@ public class MetricsRegistry {
         root.put("gatewayErrors", errors);
 
         root.put("qpsSeries", qpsSeries(nowSecond, range));
-        root.put("routes", topRoutes(nowSecond, range, 8));
-        root.put("upstreams", topUpstreams(nowSecond, range, 8));
+        root.put("routes", topRoutesForLive(nowSecond, range, 8));
         return JsonCodec.toJson(root);
     }
 
@@ -335,6 +341,19 @@ public class MetricsRegistry {
             Map.Entry<String, RouteMetrics> entry = entries.get(i);
             rows.add(entry.getValue().liveSnapshot(entry.getKey(), nowSecond, window));
         }
+        return rows;
+    }
+
+    /** live 专用：Top 列表最多 5 秒算一次，减轻每秒排序。 */
+    private List<Map<String, Object>> topRoutesForLive(long nowSecond, int window, int limit) {
+        long nowMillis = System.currentTimeMillis();
+        long cachedAt = liveTopRoutesCachedAtMillis.get();
+        if (nowMillis - cachedAt < LIVE_TOP_CACHE_MILLIS && cachedAt > 0) {
+            return liveTopRoutesCache;
+        }
+        List<Map<String, Object>> rows = topRoutes(nowSecond, window, limit);
+        liveTopRoutesCache = rows;
+        liveTopRoutesCachedAtMillis.set(nowMillis);
         return rows;
     }
 
@@ -815,7 +834,7 @@ public class MetricsRegistry {
             return row;
         }
 
-        /** live 用：窗口 + 上一秒，不带累计状态码大表。 */
+        /** live 用：窗口 + 上一秒；不算 p95，避免每秒对每条 Top 路由排序样本。 */
         Map<String, Object> liveSnapshot(String routeId, long nowSecond, int windowSeconds) {
             TimeRing.WindowView view = ring.view(nowSecond, windowSeconds);
             Map<String, Object> row = new LinkedHashMap<>();
@@ -826,7 +845,6 @@ public class MetricsRegistry {
                     ? 0 : round2(view.errorCount / (double) view.requestCount));
             row.put("avgMillis", view.requestCount == 0
                     ? 0 : round2(view.sumMillis / (double) view.requestCount));
-            row.put("p95Millis", percentile(view.samples, 0.95));
             Map<String, Long> instances = new LinkedHashMap<>();
             for (Map.Entry<String, LongAdder> entry : instanceCounts.entrySet()) {
                 instances.put(entry.getKey(), entry.getValue().sum());
