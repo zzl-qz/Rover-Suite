@@ -1,6 +1,7 @@
 /**
  * Rover Admin：Vue 3 + ECharts。
- * 仪表盘 1 秒拉 /api/live，15 秒拉 overview；轮询绝不打整页 loading。
+ * 仪表盘可视时 1 秒拉 /api/live，15 秒拉 overview；非仪表盘/后台标签页不拉 live。
+ * 轮询绝不打整页 loading。
  */
 const { createApp } = Vue;
 
@@ -159,9 +160,9 @@ createApp({
         },
         livePillTitle() {
             if (this.page === 'dashboard') {
-                return '仪表盘每秒拉 live；绿=正常，黄=偶发失败，红=连续失败';
+                return '仪表盘可视时每秒拉 live；切走页面或后台标签会停。绿=正常，黄=偶发失败，红=连续失败';
             }
-            return '后台仍在拉 live 探测组件可达；本页数据按各自刷新节奏更新';
+            return '非仪表盘只靠 overview 探活（约 15s）；不打 live 以免空转观察税';
         },
         updatedAtText() {
             if (!this.updatedAt) return '';
@@ -240,15 +241,18 @@ createApp({
 
     mounted() {
         this.$nextTick(() => this.initCharts());
-        this.fetchLive();
         this.fetchOverview();
+        this.fetchLive();
+        // live 只服务仪表盘可视时；其它页靠 overview 探活，避免观察税随页面/标签页空转
         this.liveTimer = setInterval(() => this.fetchLive(), 1000);
-        this.overviewTimer = setInterval(() => {
-            if (this.page === 'dashboard') this.fetchOverview();
-        }, 15000);
+        this.overviewTimer = setInterval(() => this.fetchOverview(), 15000);
         this.pageTimer = setInterval(() => this.pollCurrentPage(), 3000);
         this._resizeHandler = () => this.resizeCharts();
+        this._visibilityHandler = () => {
+            if (!document.hidden && this.page === 'dashboard') this.fetchLive();
+        };
         window.addEventListener('resize', this._resizeHandler);
+        document.addEventListener('visibilitychange', this._visibilityHandler);
     },
 
     beforeUnmount() {
@@ -256,6 +260,7 @@ createApp({
         clearInterval(this.overviewTimer);
         clearInterval(this.pageTimer);
         window.removeEventListener('resize', this._resizeHandler);
+        document.removeEventListener('visibilitychange', this._visibilityHandler);
     },
 
     methods: {
@@ -341,6 +346,7 @@ createApp({
             }
         },
         pollCurrentPage() {
+            if (document.hidden) return;
             if (this.page === 'traces') this.fetchTraces();
             if (this.page === 'instances') this.fetchInstances();
             if (this.page === 'events') this.fetchEvents();
@@ -350,7 +356,22 @@ createApp({
             this.fetchLive();
         },
 
+        /** 纵轴好看的上限：峰值 * 1.15 再取 1/2/5×10^n，避免贴顶和假「上限 5」。 */
+        niceCeil(value) {
+            if (!value || value <= 0) return 1;
+            const target = value * 1.15;
+            const exp = Math.floor(Math.log10(target));
+            const f = Math.pow(10, exp);
+            const n = target / f;
+            let nice = 10;
+            if (n <= 1) nice = 1;
+            else if (n <= 2) nice = 2;
+            else if (n <= 5) nice = 5;
+            return Math.ceil(nice * f);
+        },
         async fetchLive() {
+            // 非仪表盘或后台标签页：不打 Gateway/NS live，砍掉无观察者时的下游成本
+            if (this.page !== 'dashboard' || document.hidden) return;
             if (this.liveInFlight) return;
             this.liveInFlight = true;
             try {
@@ -443,9 +464,18 @@ createApp({
             if (!chart || !this.gw) return;
             const series = this.gw.qpsSeries || [];
             const peak = this.qpsPeak;
+            const idle = peak <= 0;
             chart.setOption({
                 grid: { left: 52, right: 16, top: 16, bottom: 28 },
+                // 无流量：明确空态，别留 0～5 大网格让人以为上限只有 5
+                title: idle ? {
+                    text: `近 ${this.liveRange} 秒无请求`,
+                    left: 'center',
+                    top: 'middle',
+                    textStyle: { color: '#8a9a90', fontSize: 14, fontWeight: 500 },
+                } : { text: '' },
                 tooltip: {
+                    show: !idle,
                     trigger: 'axis',
                     formatter: (params) => {
                         const p = params[0];
@@ -453,25 +483,29 @@ createApp({
                     },
                 },
                 xAxis: {
+                    show: !idle,
                     type: 'category',
                     data: series.map(p => this.fmtSecond(p.second)),
                     axisLine: { lineStyle: { color: '#d8e0db' } },
                     axisLabel: { color: '#6b7a72', fontSize: 11 },
                 },
                 yAxis: {
+                    show: !idle,
                     type: 'value',
                     name: '请求/秒',
                     nameTextStyle: { color: '#6b7a72', fontSize: 11, padding: [0, 0, 0, 8] },
                     minInterval: 1,
-                    // 零星流量时别把纵轴压成只剩 0/1，至少留到 5 方便读
-                    max: Math.max(5, peak),
-                    splitLine: { lineStyle: { color: '#eef2ef' } },
+                    // 峰值×1.15 再取整档；纵轴不是容量上限
+                    max: idle ? 1 : this.niceCeil(peak),
+                    splitLine: { show: !idle, lineStyle: { color: '#eef2ef' } },
                     axisLabel: { color: '#6b7a72', fontSize: 11 },
                 },
-                series: [{
+                series: idle ? [] : [{
                     name: '请求/秒',
                     type: 'line',
-                    smooth: true,
+                    // 非平滑：每秒一个台阶，不编造中间趋势
+                    smooth: false,
+                    step: 'end',
                     showSymbol: false,
                     data: series.map(p => p.count),
                     lineStyle: { color: '#1f6f5b', width: 2 },
@@ -482,15 +516,32 @@ createApp({
                         ]),
                     },
                 }],
-            });
+            }, true);
         },
         updateStatusChart() {
             const chart = this.charts.status;
             if (!chart) return;
             const s = this.windowStatus;
+            const total = (s['2xx'] || 0) + (s['3xx'] || 0) + (s['4xx'] || 0) + (s['5xx'] || 0);
+            // 全 0 时别画四等分假饼图
+            if (total <= 0) {
+                chart.setOption({
+                    title: {
+                        text: `近 ${this.liveRange} 秒无状态码样本`,
+                        left: 'center',
+                        top: 'middle',
+                        textStyle: { color: '#8a9a90', fontSize: 14, fontWeight: 500 },
+                    },
+                    series: [],
+                    legend: { show: false },
+                    tooltip: { show: false },
+                }, true);
+                return;
+            }
             chart.setOption({
-                tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-                legend: { bottom: 0, textStyle: { color: '#6b7a72', fontSize: 12 } },
+                title: { text: '' },
+                tooltip: { show: true, trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                legend: { show: true, bottom: 0, textStyle: { color: '#6b7a72', fontSize: 12 } },
                 series: [{
                     type: 'pie',
                     radius: ['46%', '70%'],
@@ -507,7 +558,7 @@ createApp({
                         { name: '5xx', value: s['5xx'] || 0 },
                     ],
                 }],
-            });
+            }, true);
         },
         toggleRoute(routeId) {
             this.selectedRouteId = this.selectedRouteId === routeId ? null : routeId;
