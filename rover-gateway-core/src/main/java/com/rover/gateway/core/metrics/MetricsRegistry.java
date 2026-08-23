@@ -357,18 +357,6 @@ public class MetricsRegistry {
         return rows;
     }
 
-    private List<Map<String, Object>> topUpstreams(long nowSecond, int window, int limit) {
-        List<Map.Entry<String, UpstreamMetrics>> entries = new ArrayList<>(upstreams.entrySet());
-        entries.sort(Comparator.comparingLong(e -> -e.getValue().windowRequestCount(nowSecond, window)));
-        List<Map<String, Object>> rows = new ArrayList<>();
-        int size = Math.min(limit, entries.size());
-        for (int i = 0; i < size; i++) {
-            Map.Entry<String, UpstreamMetrics> entry = entries.get(i);
-            rows.add(entry.getValue().snapshot(entry.getKey(), nowSecond, window));
-        }
-        return rows;
-    }
-
     static int clampRange(int rangeSeconds) {
         if (rangeSeconds <= ManageApiPaths.LIVE_RANGE_1M) {
             return ManageApiPaths.LIVE_RANGE_1M;

@@ -231,11 +231,8 @@ createApp({
             return this.filteredEvents.slice(start, start + this.eventPageSize);
         },
         eventTypeOptions() {
-            const set = new Set();
-            for (const e of this.events || []) {
-                if (e.type) set.add(e.type);
-            }
-            return Array.from(set).sort();
+            // 固定展示完整事件目录；没有发生过的类型仍可筛选出 0 条。
+            return ['EXPIRE_EVICT', 'MARK_UNHEALTHY', 'PUSH', 'REGISTER', 'UNREGISTER'];
         },
     },
 
@@ -787,7 +784,8 @@ createApp({
         },
         isNumberConfig(c) {
             const key = c.key || '';
-            if (/millis|seconds|rate|timeout|interval|expire/i.test(key)) return true;
+            // 只按末尾配置名判断；否则 loadbalance.strategy 中的 "rate" 会被误判为数字配置。
+            if (/(millis|seconds|rate|timeout|interval|expire)$/i.test(key)) return true;
             return c.options && c.options.length && c.options.every(v => !Number.isNaN(Number(v)));
         },
         isEnumConfig(c) {

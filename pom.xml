@@ -22,7 +22,7 @@
         <module>rover-gateway-bootstrap</module>
         <module>rover-gateway-adapter-nacos</module>
         <module>rover-admin</module>
-        <module>rover-gateway-test/demo/backend</module>
+        <module>rover-gateway-test/backend</module>
     </modules>
 
     <properties>

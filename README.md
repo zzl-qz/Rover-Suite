@@ -12,7 +12,7 @@
 ![Netty](https://img.shields.io/badge/Netty-4.1-blue?style=flat-square)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square)
 ![Maven](https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square)
-![License](https://img.shields.io/badge/License-Non--Commercial-e95f6d?style=flat-square)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square)
 
 <br/>
 
@@ -22,7 +22,7 @@
 
 > **作者 Author：Daylight**
 >
-> **⚠️ 非商用声明 Non-Commercial Notice：本软件仅供个人免费使用，禁止任何形式的商业售卖、转卖、套壳换皮重新发布（详见 [LICENSE](LICENSE)）。发现闲鱼/淘宝等渠道倒卖请告知作者，感谢！**
+> **开源许可 Open Source：Rover-Suite 采用 Apache License 2.0。Rover 名称、Logo 等品牌标识不随 Apache-2.0 授权，详见 [NOTICE](NOTICE)。**
 
 ---
 
@@ -40,6 +40,9 @@ Rover-Suite provides an **all-in-one lightweight solution with a built-in regist
 | **Rover-Gateway** | Netty HTTP gateway (routing, discovery, load balancing, reverse proxy) |
 | **Rover-Starter** | Spring Boot integration for auto-registration and graceful shutdown |
 | **Rover-Admin** | Optional console for runtime configuration management |
+
+The public documentation includes an [Admin guide](docs-public/admin-guide.zh-CN.md), a [production deployment
+example](docs-public/production-deployment.zh-CN.md), and a [Docker Compose quick start](deploy/docker/README.md).
 
 ---
 
@@ -166,7 +169,7 @@ java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
 cd rover-gateway-test/demo/frontend && npm install && npm run dev
 ```
 
-See **[rover-gateway-test/demo/README.md](./rover-gateway-test/demo/README.md)** for full test suite details.
+See **[rover-gateway-test/README.md](./rover-gateway-test/README.md)** for full test suite details.
 
 ### 5. Optional: Admin
 
@@ -324,31 +327,29 @@ snapshots, grouped discovery, cold-start recovery, and proxy buffering — are d
 - [Quick Start](./docs-public/quick-start.md)
 - [User Guide](./docs-public/user-guide.md)
 - [Service Registration](./docs-public/service-registration.md)
+- [Admin User Guide](./docs-public/admin-guide.md) · [Admin API](./docs-public/admin-api.md)
+- [Configuration Reference](./docs-public/configuration-reference.md)
+- [Production Deployment](./docs-public/production-deployment.md) · [Troubleshooting and Performance](./docs-public/troubleshooting-performance.md)
 - [Architecture](./docs-public/architecture.md)
 - [Development Guide](./docs-public/development-guide.md)
-- [Gateway test suite](./rover-gateway-test/demo/README.md) - **Test project only**
+- [Plugin Development and Integration](./docs-public/plugin-development.md)
+- [Release Checklist](./docs-public/release-checklist.md)
+- [Gateway test suite](./rover-gateway-test/README.md) - **Test project only**
 
 ---
 
 ## 💬 Issues and feedback
 
-The project accepts Issues only and does not accept external pull requests or merge requests. Read the
-[Issue Guide](./CONTRIBUTING.md) before reporting a bug or proposing a feature. Teams maintaining a private fork
-can use the [Development Guide](./docs-public/development-guide.md).
+Issues, discussions, and focused pull requests are welcome. Read the
+[Contribution Guide](./CONTRIBUTING.md) before reporting a bug or proposing a feature. Teams maintaining a private
+fork can use the [Development Guide](./docs-public/development-guide.md).
 
 ---
 
 ## 📄 License
 
-**非商用许可 Non-Commercial License** — 作者：Daylight。
-
-- 允许个人免费使用与传播（须保留作者署名与本协议）。
-- **禁止商业用途**：禁止销售、转卖、收费提供服务、在电商平台（闲鱼/淘宝/拼多多等）倒卖。
-- **禁止套壳换皮**：禁止对本软件改名、换肤、重新打包后冒充自有产品发布。
-- 二次开发公开发布须显著标注原作者，并遵守同样的非商用限制。
-- 内置第三方组件遵循各自许可证。
-
-完整条款见 [LICENSE](LICENSE)。发现任何渠道倒卖本软件，欢迎通过 GitHub Issues 联系作者举报。
+Rover-Suite is licensed under the [Apache License 2.0](LICENSE). Rover names, logos, and other brand identifiers are
+not granted as trademarks; third-party dependencies remain under their respective licenses (see [NOTICE](NOTICE)).
 
 ---
 

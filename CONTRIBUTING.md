@@ -1,11 +1,11 @@
 # Issue Guide / Issue 反馈指南
 
-Rover-Suite is open source under Apache License 2.0 and is maintained with a small-team workflow. Public
-collaboration happens through **Issues only**. The repository does not accept external pull requests or merge
-requests; maintainers evaluate Issues and implement accepted changes in the main repository.
+Rover-Suite is open source under Apache License 2.0. Issues, discussions, and pull requests are welcome. Small,
+focused changes with tests and documentation are easiest to review; maintainers may still ask for an issue first for
+large design changes.
 
-Rover-Suite 按 Apache License 2.0 开源，并采用小团队维护方式。公开协作入口**仅开放 Issue**，不接收外部
-Pull Request 或 Merge Request。维护者会评估 Issue，并在主仓库中实现采纳的修改。
+Rover-Suite 按 Apache License 2.0 开源，欢迎提交 Issue、讨论和 Pull Request。带测试、文档和清晰复现步骤的
+小范围改动最容易审查；大型设计变更建议先提交 Issue 对齐方案。
 
 [Open an Issue / 提交 Issue](https://gitee.com/zzl-java/roverSuite/issues)
 

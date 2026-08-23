@@ -4,7 +4,10 @@
 
 This guide is for project maintainers and teams maintaining a private fork. Rover-Suite favors explicit Java
 extension points and a small deployment surface; choose the narrowest extension that solves the problem. The public
-repository accepts feedback through Issues only and does not accept external pull requests.
+The repository welcomes Issues, discussions, and focused pull requests; large
+design changes should start with an Issue.
+
+For an end-user, step-by-step plugin workflow, see [Plugin Development and Integration](./plugin-development.md).
 
 ## 1. Local development
 
@@ -49,7 +52,7 @@ See [Quick Start](./quick-start.md) for the runnable end-to-end path.
 | [`rover-gateway-bootstrap`](../rover-gateway-bootstrap/) | Gateway YAML mapping and executable assembly |
 | [`rover-admin`](../rover-admin/) | Optional UI/server that calls management APIs over HTTP; it does not depend on either core module |
 | [`rover-gateway-adapter-nacos`](../rover-gateway-adapter-nacos/) | Reserved module skeleton; it is not a working Nacos adapter yet |
-| [`rover-gateway-test/demo/backend`](../rover-gateway-test/demo/backend/) | Spring Boot Starter integration example |
+| [`rover-gateway-test/backend`](../rover-gateway-test/backend/) | Spring Boot Starter integration example |
 
 The [Architecture](./architecture.md) describes runtime flows and dependency direction.
 
