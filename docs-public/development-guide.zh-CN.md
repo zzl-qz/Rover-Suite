@@ -2,7 +2,9 @@
 
 [English](./development-guide.md) · [文档索引](./README.md)
 
-本文面向项目维护者和维护私有分支的团队。Rover-Suite 倾向使用显式的 Java 扩展点和尽可能小的部署面，请优先选择能解决问题的最小扩展方式。公开仓库仅通过 Issue 收集反馈，不接收外部 Pull Request。
+本文面向项目维护者和维护私有分支的团队。Rover-Suite 倾向使用显式的 Java 扩展点和尽可能小的部署面，请优先选择能解决问题的最小扩展方式。公开仓库欢迎 Issue、讨论和聚焦明确的 Pull Request；大型设计变更建议先提交 Issue 对齐方案。
+
+面向普通使用者的插件创建、打包、配置和验证流程，请看[插件开发与接入](./plugin-development.zh-CN.md)。
 
 ## 1. 本地开发
 
@@ -47,7 +49,7 @@ mvn clean install -DskipTests
 | [`rover-gateway-bootstrap`](../rover-gateway-bootstrap/) | Gateway YAML 映射与可执行进程装配 |
 | [`rover-admin`](../rover-admin/) | 可选 UI/Server，通过 HTTP 调用管理 API，不依赖两个 core 模块 |
 | [`rover-gateway-adapter-nacos`](../rover-gateway-adapter-nacos/) | 预留模块骨架，尚不是可用 Nacos 适配器 |
-| [`rover-gateway-test/demo/backend`](../rover-gateway-test/demo/backend/) | Spring Boot Starter 接入示例 |
+| [`rover-gateway-test/backend`](../rover-gateway-test/backend/) | Spring Boot Starter 接入示例 |
 
 运行时链路与依赖方向见[架构说明](./architecture.zh-CN.md)。
 
@@ -305,4 +307,4 @@ cmake --build build/rover-http
 - 契约变更时同步更新 OpenAPI、示例、两份根 README 与公开指南。
 - 在变更记录中说明行为变化、兼容影响、验证命令与已知运行限制。
 
-公开反馈请提交 Issue。项目不接收外部 Pull Request；维护私有分支时仍建议保持变更聚焦，便于小团队审阅、回滚和维护。
+公开反馈可提交 Issue、讨论或 Pull Request；维护私有分支时仍建议保持变更聚焦，便于小团队审阅、回滚和维护。
