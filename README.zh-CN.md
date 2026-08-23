@@ -12,7 +12,7 @@
 ![Netty](https://img.shields.io/badge/Netty-4.1-blue?style=flat-square)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square)
 ![Maven](https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square)
-![License](https://img.shields.io/badge/License-Non--Commercial-e95f6d?style=flat-square)
+![License](https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square)
 
 <br/>
 
@@ -22,7 +22,7 @@
 
 > **作者 Author：Daylight**
 >
-> **⚠️ 非商用声明 Non-Commercial Notice：本软件仅供个人免费使用，禁止任何形式的商业售卖、转卖、套壳换皮重新发布（详见 [LICENSE](LICENSE)）。发现闲鱼/淘宝等渠道倒卖请告知作者，感谢！**
+> **开源许可：Rover-Suite 采用 Apache License 2.0。Rover 名称、Logo 等品牌标识不随 Apache-2.0 授权，详见 [NOTICE](NOTICE)。**
 
 ---
 
@@ -164,7 +164,7 @@ java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
 cd rover-gateway-test/demo/frontend && npm install && npm run dev
 ```
 
-完整测试套件见 **[rover-gateway-test/demo/README.md](./rover-gateway-test/demo/README.md)**。
+完整测试套件见 **[rover-gateway-test/README.md](./rover-gateway-test/README.md)**。
 
 ### 5. 可选：Admin
 
@@ -317,30 +317,29 @@ HTTPS 代理承担。Gateway `/_manage/**` 与业务流量共用监听端口，�
 - [快速上手](./docs-public/quick-start.zh-CN.md)
 - [使用指南](./docs-public/user-guide.zh-CN.md)
 - [服务注册指南](./docs-public/service-registration.zh-CN.md)
+- [Admin 使用手册](./docs-public/admin-guide.zh-CN.md) · [Admin API](./docs-public/admin-api.zh-CN.md)
+- [配置项参考](./docs-public/configuration-reference.zh-CN.md)
+- [生产部署](./docs-public/production-deployment.zh-CN.md) · [故障与性能](./docs-public/troubleshooting-performance.zh-CN.md)
 - [架构说明](./docs-public/architecture.zh-CN.md)
 - [二次开发指南](./docs-public/development-guide.zh-CN.md)
-- [网关测试套件](./rover-gateway-test/demo/README.md) - **仅用于测试**
+- [插件开发与接入](./docs-public/plugin-development.zh-CN.md)
+- [插件挂载操作手册](./docs-public/plugin-mounting-guide.zh-CN.md)
+- [发布前检查清单](./docs-public/release-checklist.zh-CN.md)
+- [网关测试套件](./rover-gateway-test/README.md) - **仅用于测试**
 
 ---
 
 ## 💬 Issue 反馈
 
-项目仅开放 Issue，不接收外部 Pull Request 或 Merge Request。提交缺陷或功能建议前请阅读
-[Issue 反馈指南](./CONTRIBUTING.md)；维护私有分支或进行二开可参考[二次开发指南](./docs-public/development-guide.zh-CN.md)。
+欢迎提交 Issue、讨论和 Pull Request。提交缺陷或功能建议前请阅读
+[贡献指南](./CONTRIBUTING.md)；维护私有分支或进行二开可参考[二次开发指南](./docs-public/development-guide.zh-CN.md)。
 
 ---
 
 ## 📄 许可证
 
-**非商用许可 Non-Commercial License** — 作者：Daylight。
-
-- 允许个人免费使用与传播（须保留作者署名与本协议）。
-- **禁止商业用途**：禁止销售、转卖、收费提供服务、在电商平台（闲鱼/淘宝/拼多多等）倒卖。
-- **禁止套壳换皮**：禁止对本软件改名、换肤、重新打包后冒充自有产品发布。
-- 二次开发公开发布须显著标注原作者，并遵守同样的非商用限制。
-- 内置第三方组件遵循各自许可证。
-
-完整条款见 [LICENSE](LICENSE)。发现任何渠道倒卖本软件，欢迎通过 GitHub Issues 联系作者举报。
+Rover-Suite 采用 [Apache License 2.0](LICENSE)。Rover 名称、Logo 和其他品牌标识不作为商标授权；第三方依赖
+继续遵循各自许可证，汇总说明见 [NOTICE](NOTICE)。
 
 ---
 

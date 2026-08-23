@@ -12,6 +12,9 @@ choose the guide that matches your task.
 | Run the first end-to-end request | [Quick Start](./quick-start.md) | [快速上手](./quick-start.zh-CN.md) |
 | Configure and operate Rover-Suite | [User Guide](./user-guide.md) | [使用指南](./user-guide.zh-CN.md) |
 | Register Java and non-Java providers | [Service Registration](./service-registration.md) | [服务注册指南](./service-registration.zh-CN.md) |
+| Admin console and API | [Admin User Guide](./admin-guide.md) · [Admin API](./admin-api.md) | [Admin 使用手册](./admin-guide.zh-CN.md) · [Admin API](./admin-api.zh-CN.md) |
+| Configuration reference | [Configuration Reference](./configuration-reference.md) | [配置项参考](./configuration-reference.zh-CN.md) |
+| Production and operations | [Production Deployment](./production-deployment.md) · [Troubleshooting and Performance](./troubleshooting-performance.md) | [生产部署](./production-deployment.zh-CN.md) · [故障与性能](./troubleshooting-performance.zh-CN.md) |
 
 ## Understand and extend / 理解与二开
 
@@ -19,17 +22,24 @@ choose the guide that matches your task.
 | :--- | :--- | :--- |
 | Architecture and trade-offs | [Architecture](./architecture.md) | [架构与权衡](./architecture.zh-CN.md) |
 | Local development and extension points | [Development Guide](./development-guide.md) | [二次开发指南](./development-guide.zh-CN.md) |
+| Plugin development and integration | [Plugin Development](./plugin-development.md) | [插件开发与接入](./plugin-development.zh-CN.md) |
+| Plugin mounting walkthrough | — | [插件挂载操作手册](./plugin-mounting-guide.zh-CN.md) |
 | Cross-language Registrar source examples | [Node.js / Python / Go / PHP / C++](../examples/http-registration/README.md) | 示例目录内文档以中文为主 |
 | HTTP Registration API contract | [OpenAPI v1](../rover-nameserver-core/src/main/resources/openapi/rover-registration-v1.yaml) | 同一份可机读契约 |
+| Compatibility and extensions | [Compatibility and Extensions](./compatibility-and-extensions.md) | [升级与扩展](./compatibility-and-extensions.zh-CN.md) |
+| Release and publishing checklist | [Release Checklist](./release-checklist.md) | [发布前检查清单](./release-checklist.zh-CN.md) |
 
 ## Project entry points / 项目入口
 
 - [English README](../README.md)
 - [中文 README](../README.zh-CN.md)
-- [Gateway demo and test suite](../rover-gateway-test/demo/README.md)
+- [Gateway demo and test suite](../rover-gateway-test/README.md)
 - [Issue feedback policy](../CONTRIBUTING.md)
 - [Open an Issue / 提交 Issue](https://gitee.com/zzl-java/roverSuite/issues)
 - [Apache 2.0 License](../LICENSE)
+- [Third-party notices](../NOTICE)
+- [Security policy](../SECURITY.md)
+- [Docker Compose demo](../deploy/docker/README.md)
 
 Current source status: JDK 17+, Maven build, version `1.0.0-SNAPSHOT`. Snapshot artifacts are built from source
 and are not documented as published to a public Maven repository yet.

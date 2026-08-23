@@ -7,6 +7,7 @@ dependency-reduced-pom.xml
 *.war.original
 
 # ===== 本地启动配置与运行时覆盖（可含密钥，不入库）=====
+deploy/
 config/rover-gateway.yml
 config/rover-nameserver.yml
 config/routes.overlay.json
@@ -90,3 +91,4 @@ replay_pid*
 # ===== Gateway 用户扩展插件 =====
 plugins/*.jar
 !plugins/.gitkeep
+rover-gateway-test/plugin-demo/demo-config/plugins/*.jar
