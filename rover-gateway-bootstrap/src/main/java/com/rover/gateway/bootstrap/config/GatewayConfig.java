@@ -10,6 +10,7 @@ import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
+import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.server.CorsSettings;
 import java.net.URI;
@@ -18,6 +19,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import lombok.Data;
@@ -45,6 +47,11 @@ public class GatewayConfig {
 
     public String getAdminTokenOrDefault() {
         return gatewayProperties().getAdminToken();
+    }
+
+    /** 是否启用 Admin 管理面；关闭时只使用 YAML 启动配置。 */
+    public boolean isAdminEnabled() {
+        return gatewayProperties().isAdminEnabled();
     }
 
     public int getMaxContentLengthBytesOrDefault() {
@@ -105,6 +112,17 @@ public class GatewayConfig {
         settings.setClasses(filterProperties.getClasses() == null
                 ? List.of()
                 : List.copyOf(filterProperties.getClasses()));
+        RateLimitProperties rate = gatewayProperties().getRateLimit();
+        if (rate != null) {
+            RateLimitSettings target = settings.getRateLimit();
+            target.setEnabled(rate.isEnabled());
+            target.setAlgorithm(rate.getAlgorithm());
+            target.setKey(rate.getKey());
+            target.setPermitsPerSecond(rate.getPermitsPerSecond());
+            target.setBurst(rate.getBurst());
+            target.setLimit(rate.getLimit());
+            target.setWindowSeconds(rate.getWindowSeconds());
+        }
         return settings;
     }
 
@@ -115,6 +133,7 @@ public class GatewayConfig {
         validatePositive("proxy.connectTimeoutMillis", getConnectTimeoutMillisOrDefault());
         validatePositive("proxy.requestTimeoutMillis", getRequestTimeoutMillisOrDefault());
         validateFilterSettings(gateway.getFilters());
+        validateRateLimit(gateway.getRateLimit());
 
         DiscoveryType discoveryType = getDiscoveryType();
         if (discoveryType == DiscoveryType.NAMESERVER) {
@@ -225,6 +244,9 @@ public class GatewayConfig {
         if (gateway.getFilters() == null) {
             gateway.setFilters(new FilterProperties());
         }
+        if (gateway.getRateLimit() == null) {
+            gateway.setRateLimit(new RateLimitProperties());
+        }
         if (gateway.getDiscovery() == null) {
             gateway.setDiscovery(new DiscoveryProperties());
         }
@@ -262,6 +284,32 @@ public class GatewayConfig {
         }
         if (filters.getPluginDir() == null || filters.getPluginDir().isBlank()) {
             throw new IllegalStateException("Gateway 配置 filters.pluginDir 不能为空");
+        }
+    }
+
+    private void validateRateLimit(RateLimitProperties rate) {
+        if (rate == null) {
+            return;
+        }
+        String algorithm = rate.getAlgorithm() == null
+                ? RateLimitSettings.TOKEN_BUCKET
+                : rate.getAlgorithm().trim().toLowerCase(Locale.ROOT);
+        if (!RateLimitSettings.TOKEN_BUCKET.equals(algorithm)
+                && !RateLimitSettings.SLIDING_WINDOW.equals(algorithm)) {
+            throw new IllegalArgumentException(
+                    "rateLimit.algorithm 仅支持 token_bucket/sliding_window");
+        }
+        String key = rate.getKey() == null
+                ? RateLimitSettings.PATH
+                : rate.getKey().trim().toLowerCase(Locale.ROOT);
+        if (!RateLimitSettings.GLOBAL.equals(key) && !RateLimitSettings.PATH.equals(key)) {
+            throw new IllegalArgumentException("rateLimit.key 仅支持 global/path");
+        }
+        if (rate.getPermitsPerSecond() <= 0 || rate.getBurst() <= 0 || rate.getLimit() <= 0) {
+            throw new IllegalArgumentException("rateLimit 限流值必须大于 0");
+        }
+        if (rate.getWindowSeconds() <= 0 || rate.getWindowSeconds() > 3600) {
+            throw new IllegalArgumentException("rateLimit.windowSeconds 必须在 1~3600 之间");
         }
     }
 
@@ -348,11 +396,14 @@ public class GatewayConfig {
     @Data
     public static class GatewayProperties {
         private int port = GatewayDefaults.HTTP_PORT;
+        /** 是否开放 Admin 管理面及其运行时覆盖，默认开启以保持兼容。 */
+        private boolean adminEnabled = true;
         /** 管理口鉴权 token（/_manage/** 校验）；空表示不鉴权 */
         private String adminToken;
         private ServerProperties server = new ServerProperties();
         private ProxyProperties proxy = new ProxyProperties();
         private FilterProperties filters = new FilterProperties();
+        private RateLimitProperties rateLimit = new RateLimitProperties();
         private LoadBalanceProperties loadbalance = new LoadBalanceProperties();
         private RewriteProperties rewrite = new RewriteProperties();
         private CorsProperties cors = new CorsProperties();
@@ -386,6 +437,17 @@ public class GatewayConfig {
         private boolean enabled = true;
         private String pluginDir = PluginSpiLoader.DEFAULT_DIR;
         private List<String> classes = new ArrayList<>();
+    }
+
+    @Data
+    public static class RateLimitProperties {
+        private boolean enabled = false;
+        private String algorithm = RateLimitSettings.TOKEN_BUCKET;
+        private String key = RateLimitSettings.PATH;
+        private long permitsPerSecond = 1000;
+        private long burst = 2000;
+        private long limit = 1000;
+        private int windowSeconds = 1;
     }
 
     @Data

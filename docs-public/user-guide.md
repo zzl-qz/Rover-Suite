@@ -47,6 +47,10 @@ If `routes.overlay.json` exists, it replaces the YAML route list. Delete or upda
 change in YAML appears to have no effect. Listener ports, bind hosts, tokens, discovery type, HTTP Registration API
 enablement, plugin paths, and CORS are startup settings and require a restart.
 
+When Admin is not deployed, set `rover.gateway.adminEnabled: false`. Gateway then skips its route/runtime overlays
+and makes `/_manage/**` unavailable, without changing Nameserver discovery or business proxying. The flag does not
+delete existing overlays; they apply again if Admin is re-enabled.
+
 ## 3. Configure Nameserver
 
 A production-oriented baseline is:
@@ -250,6 +254,7 @@ for strict removal consistency, group isolation, streaming protocols, or an inte
 | HTTP Registrar receives `409 STALE_SESSION` | Another process registered the same `serviceName + instanceId`. Give replicas unique IDs and one owner per endpoint. |
 | Provider is visible but unreachable | The registered host/port is not reachable from Gateway. |
 | YAML route is ignored | `config/routes.overlay.json` is replacing the YAML route list. |
+| A custom LB is missing from Admin | Normal. `gateway.loadbalance.strategy` is a startup/plugin-mounting setting. Put the built-in strategy, SPI `name()`, or implementation FQCN in `rover-gateway.yml` and restart Gateway; Admin no longer edits it. |
 
 Further reading: [Service Registration](./service-registration.md), [Architecture](./architecture.md), and
 [Development Guide](./development-guide.md).

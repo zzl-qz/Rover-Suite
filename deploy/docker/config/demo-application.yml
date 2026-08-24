@@ -1,0 +1,14 @@
+server:
+  port: 8082
+spring:
+  application:
+    name: demo-service
+rover:
+  nameserver:
+    enabled: true
+    address: nameserver:8888
+    host: demo
+    port: 8082
+    token: rover-compose-protocol-token
+    ephemeral: true
+    heartbeat-interval-ms: 5000

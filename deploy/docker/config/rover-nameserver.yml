@@ -1,0 +1,10 @@
+rover:
+  nameserver:
+    port: 8888
+    bindHost: 0.0.0.0
+    managePort: 8889
+    manageBindHost: 0.0.0.0
+    token: rover-compose-protocol-token
+    adminToken: rover-compose-gateway-admin-token
+    clientApiEnabled: true
+    pushEnabled: true

@@ -32,6 +32,16 @@ public interface RequestContext {
      */
     String getRequestPath();
 
+    /** 读取请求头；未找到时返回 null。 */
+    default String requestHeader(String name) {
+        return null;
+    }
+
+    /** 直接拒绝请求并写回文本响应。 */
+    default void reject(int status, String body) {
+        throw new UnsupportedOperationException("request rejection is not supported");
+    }
+
     /**
      * 响应是否已经由某个过滤器写回客户端。
      * 为 true 时，过滤器链应停止继续转发。

@@ -1,6 +1,8 @@
 rover:
   gateway:
     port: 80
+    # Admin 管理面：false 时不开放 /_manage/**，也不读取 config/*-overlay.json；只使用本 YAML。
+    adminEnabled: true
     # 管理口鉴权 token：非空时，访问 /_manage/** 必须带 X-Rover-Admin-Token 请求头
     # 留空 = 关闭管理口鉴权（向后兼容）
     adminToken: ""
@@ -14,12 +16,27 @@ rover:
     filters:
       enabled: true
       pluginDir: plugins
+      # 显式加载外部 Filter：无需 META-INF/services SPI 声明。
       classes: []
+    # 本地限流：按 Gateway 实例执行，不访问注册中心或外部存储，默认关闭
+    rateLimit:
+      enabled: false
+      # token_bucket 支持突发流量；sliding_window 边界更平滑
+      algorithm: token_bucket
+      # global=全实例；path=按请求路径
+      key: path
+      permitsPerSecond: 1000
+      burst: 2000
+      limit: 1000
+      windowSeconds: 1
     # 负载均衡（静态多 IP / Nameserver 动态实例共用）
     # round_robin | random | weighted_round_robin | ip_hash | least_connections
     # 也可填自定义类全名，或 plugins 里 SPI 的 name()
     loadbalance:
-      strategy: round_robin
+       strategy: round_robin
+      # SPI name 方式：demo_highest_port
+      # 类路径方式：不需要 META-INF/services，直接填实现类全限定名
+      # strategy: org.example.rover.DemoHighestPortLoadBalancer
     # static: 静态多 IP，不连 Nameserver；nameserver: 读下面配置订阅动态实例
     # 两种模式共用同一套 LB 策略，测试时二选一（注释/取消注释即可切换）
     discovery:
