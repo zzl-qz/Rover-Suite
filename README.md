@@ -55,6 +55,7 @@ Most users only need one of these paths first:
 | Write and mount a custom Filter or LoadBalancer plugin | [Plugin Development](docs-public/plugin-development.md) |
 | Deploy with Docker Compose or production-like settings | [Docker Compose](deploy/docker/README.md) · [Production Deployment](docs-public/production-deployment.md) · [Small-team go-live](docs-public/small-team-go-live.md) |
 | Diagnose 404/502/registration issues | [Troubleshooting](docs-public/troubleshooting.md) |
+| Design a reproducible benchmark and locate Gateway bottlenecks | [Benchmark Guide](docs-public/benchmark-guide.md) |
 | Review benchmark method and reference numbers | [Performance Report](docs-public/performance-report.md) |
 
 The full documentation index is here: **[docs-public/README.md](docs-public/README.md)**.
@@ -346,7 +347,7 @@ snapshots, grouped discovery, cold-start recovery, and proxy buffering — are d
 - [Service Registration](./docs-public/service-registration.md)
 - [Admin User Guide](./docs-public/admin-guide.md) · [Admin API](./docs-public/admin-api.md)
 - [Configuration Reference](./docs-public/configuration-reference.md)
-- [Production Deployment](./docs-public/production-deployment.md) · [Troubleshooting](./docs-public/troubleshooting.md) · [Performance Report](./docs-public/performance-report.md)
+- [Production Deployment](./docs-public/production-deployment.md) · [Troubleshooting](./docs-public/troubleshooting.md) · [Benchmark Guide](./docs-public/benchmark-guide.md) · [Performance Report](./docs-public/performance-report.md)
 - [Architecture](./docs-public/architecture.md)
 - [Development Guide](./docs-public/development-guide.md)
 - [Plugin Development and Integration](./docs-public/plugin-development.md)
