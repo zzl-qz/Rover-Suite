@@ -10,8 +10,8 @@
 ## 兼容边界
 
 - Nameserver TCP 注册/订阅协议和 HTTP Registration API 是跨版本重点兼容面。
-- Admin API 属于同版本控制面，客户端不应依赖未文档化字段。
-- 配置键新增通常兼容；删除、改类型或改变默认值必须记录在 Changelog。
+- Admin API 属于同版本控制面，客户端不建议依赖未文档化字段。
+- 配置键新增通常兼容；删除、改类型或改变默认值需要记录在 Changelog。
 
 ## 插件开发
 
@@ -25,10 +25,9 @@ public final class ExampleLoadBalancer implements LoadBalancer {
 }
 ```
 
-插件运行在 Gateway 进程内，必须避免阻塞 Netty 事件循环、泄漏线程/连接或记录敏感请求数据。
+插件运行在 Gateway 进程内，需要避免阻塞 Netty 事件循环、泄漏线程/连接或记录敏感请求数据。
 
 ## Nacos 适配器状态
 
-`rover-gateway-adapter-nacos` 当前是保留的适配器骨架，尚未实现可用的 Nacos 服务发现运行时集成，不应宣传为“支持
-Nacos”。当前可用发现模式是内置 Nameserver 和静态上游；适配器完成前请使用外部适配层或自行实现
+`rover-gateway-adapter-nacos` 当前是保留的适配器骨架，尚未实现可用的 Nacos 服务发现运行时集成。当前可用发现模式是内置 Nameserver 和静态上游；适配器完成前请使用外部适配层或自行实现
 `ServiceDiscovery` 扩展。

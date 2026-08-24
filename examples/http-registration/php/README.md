@@ -12,7 +12,7 @@
 - Laravel Octane；
 - 其他有明确启动、定时调度和关闭生命周期的常驻运行时。
 
-**普通 PHP-FPM 请求生命周期不支持。** 不要在 Controller、Middleware 或每次请求的 bootstrap 中创建 Registrar。请求结束后定时器随即消失，多 worker 还会争用同一个实例。若系统只能使用 PHP-FPM，应让容器级长驻进程或部署生命周期承担注册，但这已经超出本参考实现的范围。
+**普通 PHP-FPM 请求生命周期不支持。** 避免在 Controller、Middleware 或每次请求的 bootstrap 中创建 Registrar。请求结束后定时器随即消失，多 worker 还会争用同一个实例。若系统只能使用 PHP-FPM，应让容器级长驻进程或部署生命周期承担注册，但这已经超出本参考实现的范围。
 
 RoadRunner、Octane 等多 worker 环境也只能启动一个 Registrar owner。注册单位是一个对外监听端点/Pod，不是每个 PHP worker。
 

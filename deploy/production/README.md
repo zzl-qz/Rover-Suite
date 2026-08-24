@@ -7,7 +7,7 @@
 
 ## 用法
 
-1. 复制样例到运行目录（不要提交真实 token）：
+1. 复制样例到运行目录（避免提交真实 token）：
 
 ```bash
 mkdir -p config
@@ -18,7 +18,7 @@ cp deploy/production/admin-application.example.yml /path/to/admin/config/applica
 ```
 
 2. 把所有 `REPLACE_*` 换成足够长的随机串；Gateway / Nameserver 的 **adminToken 建议不同**；
-   Gateway 连 Nameserver 的 `discovery.nameserver.token` 必须与 Nameserver `token` 一致。
+   Gateway 连 Nameserver 的 `discovery.nameserver.token` 需要与 Nameserver `token` 一致。
 
 3. 把 `bindHost` / `manageBindHost` 改成内网 IP（示例里是 `10.0.10.x`）。
 

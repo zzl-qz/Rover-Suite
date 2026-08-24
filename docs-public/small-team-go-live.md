@@ -24,4 +24,4 @@ Shortest checklist for **single-node / small private-network** deploys. Details:
 9. **Keep logs sane.** Access log is debug + `filters.accessLog`; raise DEBUG only while debugging.
 10. **Own the memory boundary.** If Nameserver dies, the registry is gone until apps re-register — not silent HA.
 
-Still stuck on 404/502/registration: [Troubleshooting](./troubleshooting-performance.md). Before a public release: [Release checklist](./release-checklist.md).
+Still stuck on 404/502/registration: [Troubleshooting](./troubleshooting.md). Before a public release: [Release checklist](./release-checklist.md).

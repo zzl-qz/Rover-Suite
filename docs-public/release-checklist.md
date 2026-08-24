@@ -47,4 +47,4 @@ Before publishing, also verify that the bilingual README, Admin/API,
 configuration, deployment, troubleshooting, plugin, and compatibility guides
 are synchronized. Confirm that Admin screenshots contain only local demo data,
 and use [`deploy/production/`](../deploy/production/) for non-demo hosts. Fill
-real benchmark numbers in the troubleshooting performance doc when ready.
+real benchmark numbers in the performance report when ready.

@@ -73,7 +73,7 @@ rover:
         stripPrefix: ""
 ```
 
-Rover 会优先加载 `./config/rover-*.yml`。应把外部 YAML 视为对应进程的完整启动配置，不要假设它会与内置文件按文本逐项合并。
+Rover 会优先加载 `./config/rover-*.yml`。应把外部 YAML 视为对应进程的完整启动配置，避免假设它会与内置文件按文本逐项合并。
 
 ## 4. 启动三个进程
 
@@ -102,7 +102,7 @@ java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.
 
 ## 5. 验证请求链路
 
-Nameserver 内置配置为了本地兼容默认留空 `adminToken`，因此下面两个只读验收请求无需请求头：
+Nameserver 内置配置为了本地兼容默认留空 `adminToken`，所以下面两个只读验收请求无需请求头：
 
 ```bash
 curl -sS http://127.0.0.1:8889/_manage/status
@@ -136,8 +136,8 @@ Nameserver 会立即删除已注销实例；当前 Gateway 对最后一个实例
 | Gateway 端口绑定失败 | 确认外部 Gateway 配置使用 `8080`，而不是内置默认值 `80`。 |
 | Gateway 提示无可用实例 | 先启动 Nameserver，再确认 demo 与 Gateway 都使用 `127.0.0.1:8888`。Java 服务每 5 秒固定重试；如果 Gateway 先于 Nameserver 启动，当前版本最迟在下一次 30 秒对账时补齐发现，也可以直接重启 Gateway。 |
 | 匹配不到路由 | 检查 `businessPrefix: /api`、`serviceName: demo-service`，并确认没有遗留的 `config/routes.overlay.json` 覆盖 YAML 路由。 |
-| Gateway 连接业务服务被拒绝 | `rover.nameserver.host` 必须是 Gateway 可达地址。只有三个进程都在同一台机器上时才能使用 `127.0.0.1`。 |
-| 鉴权失败 | Nameserver、Starter 与 Gateway 发现必须使用同一个协议 token。参见[使用指南](./user-guide.zh-CN.md)。 |
+| Gateway 连接业务服务被拒绝 | `rover.nameserver.host` 需要是 Gateway 可达地址。只有三个进程都在同一台机器上时才能使用 `127.0.0.1`。 |
+| 鉴权失败 | Nameserver、Starter 与 Gateway 发现需要使用同一个协议 token。参见[使用指南](./user-guide.zh-CN.md)。 |
 
 后续可阅读：
 

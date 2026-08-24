@@ -26,4 +26,4 @@ sent as `X-Rover-Admin-Token`.
 {"component":"gateway","key":"gateway.trace.sampleRate","value":"1"}
 ```
 
-成功响应包含 `component`、`key`、`message`；错误响应按 HTTP 状态码和 `message` 处理。`gateway.loadbalance.strategy` 属于启动/插件装配配置，不通过 Admin API 修改。不要把 token 写入日志。
+成功响应包含 `component`、`key`、`message`；错误响应按 HTTP 状态码和 `message` 处理。`gateway.loadbalance.strategy` 属于启动/插件装配配置，不通过 Admin API 修改。避免把 token 写入日志。
