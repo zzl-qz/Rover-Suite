@@ -46,8 +46,13 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
 
     /** 构造：绑定网关运行时并初始化同口管理 API。 */
     public GatewayHttpServerHandler(GatewayRuntime runtime) {
+        this(runtime, true);
+    }
+
+    /** 构造：Admin 关闭时不创建管理 API，业务请求不受影响。 */
+    public GatewayHttpServerHandler(GatewayRuntime runtime, boolean adminEnabled) {
         this.runtime = runtime;
-        this.manageApi = new GatewayManageApi(runtime);
+        this.manageApi = adminEnabled ? new GatewayManageApi(runtime) : null;
     }
 
     /** 收到完整 HTTP 请求的入口：管理口短路，业务请求走过滤器链。 */
@@ -56,8 +61,12 @@ public class GatewayHttpServerHandler extends SimpleChannelInboundHandler<FullHt
         // 业务路由和上游拼接必须保留原始转义，避免 %20/%2F/中文被提前解码后生成非法 URI。
         String requestPath = new QueryStringDecoder(request.uri()).rawPath();
         // 管理口不进业务过滤器链
-        if (manageApi.supports(requestPath)) {
-            manageApi.handle(ctx, request, requestPath);
+        if (requestPath.startsWith(GatewayManageApi.PREFIX)) {
+            if (manageApi != null) {
+                manageApi.handle(ctx, request, requestPath);
+            } else {
+                writeText(ctx, HttpResponseStatus.NOT_FOUND, "Gateway Admin API is disabled");
+            }
             return;
         }
         // 准入控制：超过在途上限时快速 503，避免内存/上游连接被无限堆积

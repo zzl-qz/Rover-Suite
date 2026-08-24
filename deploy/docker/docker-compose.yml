@@ -1,0 +1,46 @@
+services:
+  nameserver:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.nameserver
+    ports:
+      - "127.0.0.1:8888:8888"
+      - "127.0.0.1:8889:8889"
+    volumes:
+      - ./config:/app/config:ro
+
+  demo:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.demo
+    depends_on:
+      - nameserver
+    expose:
+      - "8082"
+    volumes:
+      - ./config:/app/config:ro
+
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.gateway
+    depends_on:
+      - nameserver
+      - demo
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./config:/app/config:ro
+      - ./plugins:/app/plugins:ro
+
+  admin:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.admin
+    depends_on:
+      - gateway
+      - nameserver
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./config:/app/config:ro

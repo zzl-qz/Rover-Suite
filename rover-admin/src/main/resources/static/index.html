@@ -545,7 +545,7 @@
                                     <em>{{ c.value === 'true' ? '开' : '关' }}</em>
                                 </label>
                                 <select v-else-if="isEnumConfig(c)" v-model="c.value" class="nice-select">
-                                    <option v-for="opt in c.options" :key="opt" :value="opt">{{ opt }}</option>
+                                    <option v-for="opt in selectOptions(c)" :key="opt" :value="opt">{{ opt }}</option>
                                 </select>
                                 <div v-else-if="isNumberConfig(c)" class="num-wrap">
                                     <input type="number" v-model="c.value" :step="numberStep(c)" :min="numberMin(c)" :max="numberMax(c)">
@@ -556,7 +556,8 @@
                                                 @click="c.value = opt">{{ configChipLabel(c, opt) }}</button>
                                     </div>
                                 </div>
-                                <input v-else v-model="c.value" class="text-input">
+                                <input v-else v-model="c.value" class="text-input"
+                                       :type="c.sensitive ? 'password' : 'text'">
                                 <div class="config-actions" v-if="isDirty(c)">
                                     <button class="btn mini primary" @click="updateConfig(c)" :disabled="configBusyKey === c.key">
                                         {{ configBusyKey === c.key ? '保存中' : '保存' }}

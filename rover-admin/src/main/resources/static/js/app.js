@@ -198,12 +198,12 @@ createApp({
         healthyCount() { return this.instances.filter(i => i.healthy).length; },
         unhealthyCount() { return this.instances.filter(i => !i.healthy).length; },
         configGroups() {
-            const titles = { gateway: 'Gateway', nameserver: 'Nameserver' };
-            return ['gateway', 'nameserver'].map(component => ({
-                component,
-                title: titles[component],
-                items: this.configs.filter(c => c.component === component),
-            }));
+            const gateway = this.configs.filter(c => c.component === 'gateway');
+            const nameserver = this.configs.filter(c => c.component === 'nameserver');
+            return [
+                { component: 'gateway', title: 'Gateway', items: gateway },
+                { component: 'nameserver', title: 'Nameserver', items: nameserver },
+            ];
         },
         qpsPeak() {
             const series = (this.gw && this.gw.qpsSeries) ? this.gw.qpsSeries : [];
@@ -789,9 +789,21 @@ createApp({
             return c.options && c.options.length && c.options.every(v => !Number.isNaN(Number(v)));
         },
         isEnumConfig(c) {
-            return c.options && c.options.length && !this.isBoolConfig(c) && !this.isNumberConfig(c);
+            return c.options && c.options.length
+                && !this.isBoolConfig(c)
+                && !this.isNumberConfig(c);
+        },
+        selectOptions(c) {
+            const options = (c.options || []).map(v => String(v));
+            const value = String(c.value || '');
+            if (value && !options.includes(value)) {
+                return [value, ...options];
+            }
+            return options;
         },
         numberUnit(c) {
+            if (/rateLimit\.permitsPerSecond$/i.test(c.key || '')) return '请求/秒';
+            if (/rateLimit\.(burst|limit)$/i.test(c.key || '')) return '请求';
             if (/rate/i.test(c.key || '')) return '';
             if (/seconds/i.test(c.key || '')) return '秒';
             return 'ms';

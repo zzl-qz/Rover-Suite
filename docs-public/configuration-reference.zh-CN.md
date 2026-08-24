@@ -21,6 +21,7 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | 配置 | 默认值 | 说明 | 生效方式 |
 | --- | --- | --- | --- |
 | `rover.gateway.port` | `80` | 业务 HTTP 端口 | 重启 |
+| `rover.gateway.adminEnabled` | `true` | 是否启用 `/_manage/**`、Admin 路由 overlay 与运行时配置 overlay | 重启 |
 | `rover.gateway.adminToken` | 空 | `/_manage/**` 管理口 token | 重启 |
 | `rover.gateway.server.bindHost` | `0.0.0.0` | 业务监听地址 | 重启 |
 | `rover.gateway.server.maxContentLengthBytes` | `1048576` | 请求体上限 | 重启 |
@@ -33,6 +34,13 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.filters.enabled` | `true` | Filter 启动总开关 | 重启；运行时另见下表 |
 | `rover.gateway.filters.pluginDir` | `plugins` | Filter/LoadBalancer JAR 目录 | 重启 |
 | `rover.gateway.filters.classes` | `[]` | 显式加载的 Filter 全限定类名 | 重启 |
+| `rover.gateway.rateLimit.enabled` | `false` | Gateway 本地限流开关；按实例生效 | 重启 |
+| `rover.gateway.rateLimit.algorithm` | `token_bucket` | `token_bucket` 或 `sliding_window` | 重启 |
+| `rover.gateway.rateLimit.key` | `path` | `global` 全实例或 `path` 按请求路径 | 重启 |
+| `rover.gateway.rateLimit.permitsPerSecond` | `1000` | 令牌桶补充速率 | 重启 |
+| `rover.gateway.rateLimit.burst` | `2000` | 令牌桶容量/突发上限 | 重启 |
+| `rover.gateway.rateLimit.limit` | `1000` | 滑动窗口最大请求数 | 重启 |
+| `rover.gateway.rateLimit.windowSeconds` | `1` | 滑动窗口长度，范围 1~3600 秒 | 重启 |
 | `rover.gateway.rewrite.stripPrefix` | 空 | 全局重写前缀 | 重启 |
 | `rover.gateway.cors.enabled` | `false`（代码默认）/ 示例为 `true` | CORS 开关 | 重启 |
 | `rover.gateway.cors.allowedOrigins` | `[]` | 允许的来源；`*` 仅建议开发环境 | 重启 |
@@ -41,6 +49,12 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.cors.credentials` | `false` | 是否允许凭证 | 重启 |
 | `rover.gateway.cors.maxAgeSeconds` | `1800` | CORS 预检缓存秒数 | 重启 |
 
+本地限流只维护 Gateway 进程内状态，不访问 Nameserver 或外部存储；多实例部署时每个 Gateway 独立计数。复杂的用户、租户或全局分布式限流，请关闭该开关并使用自定义 Filter 插件。
+
+`rover.gateway.adminEnabled: false` 适合不部署 Rover-Admin、只把 YAML 当作配置事实来源的环境。它会跳过
+`config/routes.overlay.json` 和 `config/gateway-runtime.overlay.json`，并使 `/_manage/**` 返回 `404`；不会影响 Gateway
+连接 Nameserver、订阅服务或转发业务请求。已有 overlay 文件不会被删除，重新设为 `true` 后仍会继续生效。
+
 ### 路由字段
 
 `rover.gateway.routes` 是路由数组，不是单值配置。每项支持：`id`、`businessPrefix`、`serviceName`、`group`、
@@ -48,21 +62,45 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 `targetUrl` 或 `targetUrls`。`targetUrls` 的元素可使用 `http://host:port|weight` 指定权重。Admin 保存的路由会写入
 `config/routes.overlay.json`，并整体替换启动 YAML 中的路由列表。
 
-## Gateway 运行时配置（Admin 可热更新）
+## Gateway 运行时配置
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `gateway.loadbalance.strategy` | `round_robin` | 内置策略、SPI `name()` 或实现类全名 |
+| `gateway.loadbalance.strategy` | `round_robin` | 启动/插件装配配置；内置策略、SPI `name()` 或实现类全名；不在 Admin 中修改 |
 | `gateway.request.timeoutMillis` | `30000` | 网关请求超时（毫秒） |
 | `gateway.filter.enabled` | `true` | Filter 链开关；注意这里是 `filter` 单数 |
+| `gateway.rateLimit.enabled` | `false` | 开启 Gateway 内置本地限流 |
+| `gateway.rateLimit.algorithm` | `token_bucket` | `token_bucket` 或 `sliding_window` |
+| `gateway.rateLimit.key` | `path` | `global` 整台 Gateway 共用配额；`path` 按请求路径分别计数 |
+| `gateway.rateLimit.permitsPerSecond` | `1000` | 令牌桶每秒补充令牌数（请求/秒） |
+| `gateway.rateLimit.burst` | `2000` | 令牌桶最大容量（请求数） |
+| `gateway.rateLimit.limit` | `1000` | 一个滑动窗口内允许的最大请求数 |
+| `gateway.rateLimit.windowSeconds` | `1` | 滑动窗口时长（秒） |
 | `gateway.metrics.enabled` | `true` | 指标采集总开关 |
 | `gateway.metrics.windowSeconds` | `300` | 指标滑动窗口，最大 300 秒 |
 | `gateway.trace.enabled` | `true` | 请求链路时间线开关 |
 | `gateway.trace.slowThresholdMillis` | `100` | 超过该值记录慢请求时间线 |
 | `gateway.trace.sampleRate` | `0.0` | `0` 只记录慢请求，`1` 全量记录，支持 `0~1` 小数 |
 
-这些键会落盘到 `config/gateway-runtime.overlay.json`。新增或替换插件 JAR、修改端口、监听地址、token、发现类型、
+实现 `ConfigurablePlugin` 的插件会额外声明 `gateway.plugin.<namespace>.<key>` 形式的可热更新配置。具体字段、默认值、
+候选项和校验规则由插件自己声明，只有插件已装配时才显示在 Admin；其值与 Gateway 配置共用同一个 overlay 落盘。这里的热更新
+不包含插件 JAR 的新增、替换或删除。
+
+内置限流任一字段变更都会原子重建过滤器链：在途请求继续使用原 Filter，后续请求立即使用新限流器。限流只在每个
+Gateway 进程内独立计数，不是分布式全局配额。
+
+除 `gateway.loadbalance.strategy` 外，这些可热更新键会落盘到 `config/gateway-runtime.overlay.json`。新增或替换插件 JAR、修改端口、监听地址、token、发现类型、
 插件目录和 CORS 等启动配置不能只依赖热更新，应重启 Gateway。
+
+### 覆盖优先级与易踩坑点
+
+`adminEnabled: true` 时，启动顺序为 **YAML 基线 → Gateway overlay**。只要曾在 Admin 保存过配置，overlay 中同名值就会
+在下次启动时覆盖 YAML；Admin 不会因“仅打开页面”而写入该文件。当前 overlay 是全量快照，因此一次保存可能同时保留其他
+键当时的旧值。修改 YAML 后未生效时，先检查 `config/gateway-runtime.overlay.json`；路由问题则检查
+`config/routes.overlay.json`（它会整体替代 YAML 路由）。
+
+`gateway.loadbalance.strategy` 不通过 Admin 修改，也不会写入 `config/gateway-runtime.overlay.json`。自定义 LoadBalancer 请在
+`rover-gateway.yml` 中配置 SPI `name()` / 实现类全名并重启 Gateway，避免 Admin 覆盖插件装配策略。
 
 ## Nameserver 启动配置
 
@@ -92,3 +130,6 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `nameserver.push.enabled` | `true` | 服务变更推送开关 |
 
 这些键会落盘到 `config/nameserver-runtime.overlay.json`。运行时修改仍受组件校验和实例状态影响。
+
+Nameserver 的 `managePort: 0` 仅关闭 HTTP 管理监听；当前不会自动忽略已有的
+`config/nameserver-runtime.overlay.json`。若希望 YAML 重新成为配置来源，请先确认或移除相应的 overlay 值。

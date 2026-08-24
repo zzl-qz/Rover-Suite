@@ -6,9 +6,7 @@ import com.rover.common.plugin.PluginSpiLoader.PluginLoadResult;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.common.spi.loadbalance.BuiltinLoadBalanceStrategy;
 import java.net.URLClassLoader;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
@@ -50,24 +48,7 @@ public final class LoadBalancerFactory {
             return builtins.get(key);
         }
 
-        // plugins SPI：META-INF/services/com.rover.common.spi.loadbalance.LoadBalancer
-        PluginLoadResult<LoadBalancer> result = PluginSpiLoader.load(LoadBalancer.class, pluginDir);
-        try {
-            for (LoadBalancer plugin : result.instances()) {
-                if (plugin.name() != null && plugin.name().equalsIgnoreCase(normalized)) {
-                    log.info("使用插件负载均衡: name={}, class={}", plugin.name(), plugin.getClass().getName());
-                    retainPluginClassLoader(result.classLoader());
-                    // loader 已移交 retain，避免 finally 再关
-                    result = new PluginLoadResult<>(
-                            result.instances(), null, result.jarCount(), result.directory());
-                    return plugin;
-                }
-            }
-        } finally {
-            result.close();
-        }
-
-        // 全限定类名：实例可能在首次 choose 时才加载同 jar 的辅助类，loader 必须随实例保留。
+        // 全限定类名：不依赖 SPI 声明，也不应该被 plugins 里的 SPI 状态影响。
         if (normalized.contains(".")) {
             ClassLoader loader = PluginSpiLoader.classLoaderFor(pluginDir);
             try {
@@ -87,27 +68,56 @@ public final class LoadBalancerFactory {
             }
         }
 
+        // plugins SPI：META-INF/services/com.rover.common.spi.loadbalance.LoadBalancer
+        PluginLoadResult<LoadBalancer> result = PluginSpiLoader.load(LoadBalancer.class, pluginDir);
+        try {
+            Map<String, String> owners = strategyOwners(builtins);
+            LoadBalancer selected = null;
+            for (LoadBalancer plugin : result.instances()) {
+                registerPluginName(owners, plugin);
+                if (plugin.name() != null && plugin.name().equalsIgnoreCase(normalized)) {
+                    selected = plugin;
+                }
+            }
+            if (selected != null) {
+                log.info("使用插件负载均衡: name={}, class={}", selected.name(), selected.getClass().getName());
+                retainPluginClassLoader(result.classLoader());
+                // loader 已移交 retain，避免 finally 再关
+                result = new PluginLoadResult<>(
+                        result.instances(), null, result.jarCount(), result.directory());
+                return selected;
+            }
+        } finally {
+            result.close();
+        }
+
         throw new IllegalArgumentException(
                 "不支持的负载均衡策略: " + strategy
                         + "，内置可选: " + String.join("/", BuiltinLoadBalanceStrategy.configNames())
                         + "，或 plugins SPI name，或自定义类全名");
     }
 
-    /**
-     * @DL 扩展 API：供管理端或配置校验枚举可用策略；当前 Gateway 启动链路未调用。
-     */
-    public static List<String> supportedNames(String pluginDir) {
-        List<String> names = new ArrayList<>(builtins().keySet());
-        // 仅枚举名字，实例不长期持有，扫完立刻 close ClassLoader
-        try (PluginLoadResult<LoadBalancer> result =
-                PluginSpiLoader.load(LoadBalancer.class, pluginDir)) {
-            for (LoadBalancer plugin : result.instances()) {
-                if (plugin.name() != null && !plugin.name().isBlank()) {
-                    names.add(plugin.name());
-                }
-            }
+    /** 策略名称在整个 Gateway 内大小写不敏感，重复时不能依赖 JAR 扫描顺序。 */
+    private static void registerPluginName(Map<String, String> owners, LoadBalancer plugin) {
+        String name = plugin.name();
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("负载均衡插件名称不能为空: " + plugin.getClass().getName());
         }
-        return names;
+        String normalized = name.trim().toLowerCase(Locale.ROOT);
+        String owner = plugin.getClass().getName();
+        String existing = owners.putIfAbsent(normalized, owner);
+        if (existing != null) {
+            throw new IllegalArgumentException(
+                    "负载均衡策略名称重复: " + name + "，冲突实现: " + existing + " / " + owner);
+        }
+    }
+
+    private static Map<String, String> strategyOwners(Map<String, LoadBalancer> builtins) {
+        Map<String, String> owners = new LinkedHashMap<>();
+        for (Map.Entry<String, LoadBalancer> entry : builtins.entrySet()) {
+            owners.put(entry.getKey(), "内置策略 " + entry.getValue().getClass().getName());
+        }
+        return owners;
     }
 
     private static void retainPluginClassLoader(URLClassLoader next) {

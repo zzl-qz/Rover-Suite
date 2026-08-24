@@ -21,6 +21,8 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
 
     /** 配置项注册表：key -> ConfigItem */
     private final Map<String, ConfigItem> configs = new ConcurrentHashMap<>();
+    /** 当前版本尚未识别的 overlay 项，等可选插件注册后再接管。 */
+    private final Map<String, String> deferredOverlayValues = new ConcurrentHashMap<>();
     /** overlay 持久化存储，供 status 接口展示路径 */
     @Getter
     private final RuntimeConfigOverlayStore overlayStore;
@@ -62,6 +64,48 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
                         options == null ? List.of() : List.copyOf(options)));
     }
 
+    /**
+     * 注册可选扩展的配置项；已有值不被默认值覆盖。
+     * 插件在启动配置读取之后才加载时，会在这里接管之前暂存的 overlay 值。
+     */
+    protected final void addConfigIfAbsent(
+            String key,
+            String defaultValue,
+            String description,
+            List<String> options,
+            boolean sensitive) {
+        configs.putIfAbsent(
+                key,
+                new ConfigItem(
+                        key,
+                        defaultValue,
+                        defaultValue,
+                        description,
+                        ConfigApplyMode.HOT_RELOAD,
+                        sensitive,
+                        options == null ? List.of() : List.copyOf(options)));
+        String deferredValue = deferredOverlayValues.remove(key);
+        if (deferredValue != null) {
+            seed(key, deferredValue);
+        }
+    }
+
+    /** 读取已注册配置的当前值，供可选扩展在装配时应用。 */
+    protected final String currentValue(String key) {
+        ConfigItem item = configs.get(key);
+        return item == null ? null : item.getValue();
+    }
+
+    /**
+     * 刷新已注册配置的候选值。候选值只影响管理端展示，不限制自由输入的配置项。
+     */
+    protected final void replaceConfigOptions(String key, List<String> options) {
+        ConfigItem item = configs.get(key);
+        if (item != null) {
+            item.setOptions(options == null ? List.of() : List.copyOf(options));
+        }
+    }
+
     /** 把一条配置变更事件应用到具体运行时，由子类桥接到自己的 Applier。 */
     protected abstract void applyChange(ConfigChangeEvent event);
 
@@ -71,6 +115,11 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
     /** 值归一化钩子：默认原样返回，子类可覆盖（如布尔统一为 true/false）。 */
     protected String normalize(String key, String value) {
         return value;
+    }
+
+    /** 是否允许该 key 从运行时 overlay 读取并落盘；启动级配置可由子类排除。 */
+    protected boolean runtimeOverlayKey(String key) {
+        return true;
     }
 
     /** 启动时灌入初始值，仅覆盖已注册且值非 null 的配置项，不触发 apply。 */
@@ -90,13 +139,19 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
         }
         Map<String, String> overlay = overlayStore.load();
         for (Map.Entry<String, String> entry : overlay.entrySet()) {
+            if (!runtimeOverlayKey(entry.getKey())) {
+                continue;
+            }
             if (supports(entry.getKey())) {
                 try {
                     seed(entry.getKey(), entry.getValue());
                 } catch (IllegalArgumentException ex) {
                     throw new IllegalStateException(
-                            componentName + " 配置覆盖非法: key=" + entry.getKey(), ex);
+                        componentName + " 配置覆盖非法: key=" + entry.getKey(), ex);
                 }
+            } else {
+                // 插件可能在启动配置读取之后才被加载，先保留其值，避免下次保存时丢失。
+                deferredOverlayValues.put(entry.getKey(), entry.getValue());
             }
         }
         log.info("已加载 {} 配置覆盖: path={}, size={}",
@@ -180,8 +235,15 @@ public abstract class AbstractRuntimeConfigManager implements RuntimeConfigManag
     /** 把当前全量配置按键序写入 overlay 文件。 */
     private void persistOverlay() {
         Map<String, String> snapshot = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : deferredOverlayValues.entrySet()) {
+            if (runtimeOverlayKey(entry.getKey())) {
+                snapshot.put(entry.getKey(), entry.getValue());
+            }
+        }
         for (ConfigItem item : rawConfigCopies()) {
-            snapshot.put(item.getKey(), item.getValue());
+            if (runtimeOverlayKey(item.getKey())) {
+                snapshot.put(item.getKey(), item.getValue());
+            }
         }
         overlayStore.save(snapshot);
     }

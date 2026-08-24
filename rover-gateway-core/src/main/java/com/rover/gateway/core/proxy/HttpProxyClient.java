@@ -395,6 +395,7 @@ public class HttpProxyClient {
                     null,
                     null).toString();
         } catch (Exception ignored) {
+            // 非法 URL 仍不能把 query 或 userInfo 原样写入日志，退化为去掉 query 的原字符串。
             int query = targetUrl.indexOf('?');
             return query < 0 ? targetUrl : targetUrl.substring(0, query);
         }

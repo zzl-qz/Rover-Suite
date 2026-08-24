@@ -1,0 +1,7 @@
+server:
+  port: 9090
+rover:
+  admin:
+    gateway-url: http://gateway:80
+    nameserver-manage-url: http://nameserver:8889
+    admin-token: rover-compose-gateway-admin-token

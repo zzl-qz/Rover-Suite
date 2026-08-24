@@ -44,6 +44,9 @@ YAML 加载后，已支持的运行时配置可能被以下文件覆盖：
 `routes.overlay.json` 一旦存在，会整体替代 YAML 路由列表。YAML 路由修改不生效时，请优先检查此文件。
 监听端口、绑定地址、token、发现类型、HTTP Registration API 开关、插件目录与 CORS 都属于启动配置，修改后需重启。
 
+若不部署 Admin，Gateway 可配置 `rover.gateway.adminEnabled: false`：Gateway 会跳过自己的 runtime/route overlay，
+`/_manage/**` 也不可用，业务转发和 Nameserver 发现不受影响。该开关不会删除历史 overlay；以后重新开启 Admin 时它们仍会恢复覆盖。
+
 ## 3. 配置 Nameserver
 
 一份面向生产的基础配置如下：
@@ -229,6 +232,7 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
 | HTTP Registrar 收到 `409 STALE_SESSION` | 另一个进程注册了相同 `serviceName + instanceId`。每副本应使用唯一 ID，每端点只有一个 owner。 |
 | 实例可见但不可达 | 注册的 host/port 对 Gateway 不可达。 |
 | YAML 路由被忽略 | `config/routes.overlay.json` 正在整体覆盖 YAML 路由。 |
+| 自定义 LB 在 Admin 看不到 | 正常。`gateway.loadbalance.strategy` 是启动/插件装配配置，请在 `rover-gateway.yml` 中填写内置策略、SPI `name()` 或实现类全名并重启 Gateway；Admin 不再提供修改入口，避免覆盖自定义插件。 |
 
 延伸阅读：[服务注册指南](./service-registration.zh-CN.md)、[架构说明](./architecture.zh-CN.md)、
 [二次开发指南](./development-guide.zh-CN.md)。

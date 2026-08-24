@@ -1,33 +1,51 @@
 # Rover-Suite Documentation / Rover-Suite 公开文档
 
-This directory contains the documentation shipped with the source repository. Start with the quick start, then
-choose the guide that matches your task.
+This is the public documentation shipped with the source repository.
 
-本目录中的文档会随源码仓库一起发布。建议先跑通快速上手，再根据实际任务选择使用或二开文档。
+本目录是随源码一起发布的公开文档。若你是第一次打开项目，先看“最快路线”，不要从配置参考开始硬啃。
 
-## Start here / 开始使用
+## Fast path / 最快路线
 
-| Topic | English | 简体中文 |
+| Step | English | 简体中文 | Goal / 目标 |
+| :--- | :--- | :--- | :--- |
+| 1 | [Quick Start](./quick-start.md) | [快速上手](./quick-start.zh-CN.md) | Build, start Nameserver/Gateway/Admin, and send one real request |
+| 2 | [User Guide](./user-guide.md) | [使用指南](./user-guide.zh-CN.md) | Understand routes, discovery, Admin, and current runtime boundaries |
+| 3 | [Troubleshooting and Performance](./troubleshooting-performance.md) | [故障与性能](./troubleshooting-performance.zh-CN.md) | Fix common 404/502/registration/config/performance issues |
+
+## Choose by task / 按任务找文档
+
+| I want to... / 我想做什么 | English | 简体中文 |
 | :--- | :--- | :--- |
-| Run the first end-to-end request | [Quick Start](./quick-start.md) | [快速上手](./quick-start.zh-CN.md) |
-| Configure and operate Rover-Suite | [User Guide](./user-guide.md) | [使用指南](./user-guide.zh-CN.md) |
-| Register Java and non-Java providers | [Service Registration](./service-registration.md) | [服务注册指南](./service-registration.zh-CN.md) |
-| Admin console and API | [Admin User Guide](./admin-guide.md) · [Admin API](./admin-api.md) | [Admin 使用手册](./admin-guide.zh-CN.md) · [Admin API](./admin-api.zh-CN.md) |
-| Configuration reference | [Configuration Reference](./configuration-reference.md) | [配置项参考](./configuration-reference.zh-CN.md) |
-| Production and operations | [Production Deployment](./production-deployment.md) · [Troubleshooting and Performance](./troubleshooting-performance.md) | [生产部署](./production-deployment.zh-CN.md) · [故障与性能](./troubleshooting-performance.zh-CN.md) |
+| Run the first end-to-end request / 本地跑通一次完整链路 | [Quick Start](./quick-start.md) | [快速上手](./quick-start.zh-CN.md) |
+| Use Gateway routes and runtime config / 使用路由与运行时配置 | [User Guide](./user-guide.md) | [使用指南](./user-guide.zh-CN.md) |
+| Open and understand Admin / 使用 Admin 控制台 | [Admin User Guide](./admin-guide.md) | [Admin 使用手册](./admin-guide.zh-CN.md) |
+| Call Admin APIs directly / 直接调用 Admin API | [Admin API](./admin-api.md) | [Admin API](./admin-api.zh-CN.md) |
+| Register Java or non-Java services / 接入 Java 或非 Java 服务 | [Service Registration](./service-registration.md) | [服务注册指南](./service-registration.zh-CN.md) |
+| Check every YAML/Admin key / 查询全部配置项 | [Configuration Reference](./configuration-reference.md) | [配置项参考](./configuration-reference.zh-CN.md) |
+| Deploy outside local development / 生产或类生产部署 | [Production Deployment](./production-deployment.md) · [Docker Compose](../deploy/docker/README.md) | [生产部署](./production-deployment.zh-CN.md) · [Docker Compose](../deploy/docker/README.md) |
+| Understand architecture and trade-offs / 理解架构与取舍 | [Architecture](./architecture.md) | [架构与权衡](./architecture.zh-CN.md) |
+| Modify source code / 修改源码二开 | [Development Guide](./development-guide.md) | [二次开发指南](./development-guide.zh-CN.md) |
+| Write and mount plugins / 开发并挂载插件 | [Plugin Development](./plugin-development.md) | [插件开发与接入](./plugin-development.zh-CN.md) · [插件挂载操作手册](./plugin-mounting-guide.zh-CN.md) |
+| Confirm compatibility before upgrade / 升级前确认兼容性 | [Compatibility and Extensions](./compatibility-and-extensions.md) | [升级与扩展](./compatibility-and-extensions.zh-CN.md) |
+| Prepare an open-source release / 开源发布前检查 | [Release Checklist](./release-checklist.md) | [发布前检查清单](./release-checklist.zh-CN.md) |
 
-## Understand and extend / 理解与二开
+## Extension boundaries / 扩展边界速查
 
-| Topic | English | 简体中文 |
-| :--- | :--- | :--- |
-| Architecture and trade-offs | [Architecture](./architecture.md) | [架构与权衡](./architecture.zh-CN.md) |
-| Local development and extension points | [Development Guide](./development-guide.md) | [二次开发指南](./development-guide.zh-CN.md) |
-| Plugin development and integration | [Plugin Development](./plugin-development.md) | [插件开发与接入](./plugin-development.zh-CN.md) |
-| Plugin mounting walkthrough | — | [插件挂载操作手册](./plugin-mounting-guide.zh-CN.md) |
-| Cross-language Registrar source examples | [Node.js / Python / Go / PHP / C++](../examples/http-registration/README.md) | 示例目录内文档以中文为主 |
-| HTTP Registration API contract | [OpenAPI v1](../rover-nameserver-core/src/main/resources/openapi/rover-registration-v1.yaml) | 同一份可机读契约 |
-| Compatibility and extensions | [Compatibility and Extensions](./compatibility-and-extensions.md) | [升级与扩展](./compatibility-and-extensions.zh-CN.md) |
-| Release and publishing checklist | [Release Checklist](./release-checklist.md) | [发布前检查清单](./release-checklist.zh-CN.md) |
+| Extension need / 扩展需求 | Supported path / 当前方式 |
+| :--- | :--- |
+| Request auth, audit, tenant labels, custom rate limiting / 鉴权、审计、租户标记、自定义限流 | User `Filter` plugin JAR / 用户 Filter 插件 |
+| Custom upstream selection / 自定义负载均衡 | `LoadBalancer` strategy plugin JAR; used by the fixed proxy stage / 负载均衡策略插件，由固定转发环节调用 |
+| Plugin runtime settings visible in Admin / 插件自己的动态配置 | Implement `ConfigurablePlugin` |
+| Nacos or other registry integration / Nacos 或其他注册中心 | Source-level adapter; Nacos runtime adapter is not implemented yet |
+| Built-in local rate limiting / 内置本地限流 | `rover.gateway.rateLimit.*`, local to each Gateway instance |
+
+## References / 参考入口
+
+| Topic | Link |
+| :--- | :--- |
+| Cross-language Registrar examples / 多语言注册示例 | [Node.js / Python / Go / PHP / C++](../examples/http-registration/README.md) |
+| HTTP Registration API contract / HTTP 注册 API 契约 | [OpenAPI v1](../rover-nameserver-core/src/main/resources/openapi/rover-registration-v1.yaml) |
+| Gateway demo and test suite / 网关测试套件 | [rover-gateway-test](../rover-gateway-test/README.md) |
 
 ## Project entry points / 项目入口
 

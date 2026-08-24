@@ -29,14 +29,18 @@ public class GatewayApplication {
         GatewayConfig config = new GatewayConfigLoader().load();
         List<RouteConfig> routes = config.toRouteConfigs();
 
-        // 加载覆盖文件
-        RouteOverlayStore overlayStore = new RouteOverlayStore();
-        if (overlayStore.exists()) {
-            routes = overlayStore.loadOrEmpty();
-            log.info("使用路由覆盖文件: path={}, routeCount={}",
-                    overlayStore.getPath().toAbsolutePath(), routes.size());
+        // Admin 关闭时只认 YAML，避免历史管理面覆盖干扰部署配置。
+        if (config.isAdminEnabled()) {
+            RouteOverlayStore overlayStore = new RouteOverlayStore();
+            if (overlayStore.exists()) {
+                routes = overlayStore.loadOrEmpty();
+                log.info("使用路由覆盖文件: path={}, routeCount={}",
+                        overlayStore.getPath().toAbsolutePath(), routes.size());
+            } else {
+                log.info("使用 YAML 路由, routeCount={}", routes.size());
+            }
         } else {
-            log.info("使用 YAML 路由, routeCount={}", routes.size());
+            log.info("Admin 管理面已关闭，使用 YAML 路由, routeCount={}", routes.size());
         }
 
         // 加载注册中心
@@ -59,7 +63,8 @@ public class GatewayApplication {
                 config.getLoadBalanceStrategyOrDefault(),
                 config.toCorsSettings(),
                 config.getBindHostOrDefault(),
-                config.getAdminTokenOrDefault());
+                config.getAdminTokenOrDefault(),
+                config.isAdminEnabled());
 
         Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown, "gateway-shutdown"));
         server.start();
