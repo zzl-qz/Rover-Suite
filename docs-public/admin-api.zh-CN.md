@@ -2,7 +2,7 @@
 
 Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有接口前缀为 `/api`。Admin 本身是静态控制台加聚合层，默认不保存业务数据；它会调用 Gateway 和 Nameserver 的管理接口。
 
-`rover.admin.admin-token` 用于 Admin 调用下游组件时发送 `X-Rover-Admin-Token`。它不会自动为 Admin 的 `/api/*` 接口增加登录认证，因此生产环境仍需通过绑定地址、防火墙、反向代理或 VPN 限制 9090 的访问来源。
+`rover.admin.admin-token` 用于 Admin 调用下游组件时发送 `X-Rover-Admin-Token`。它不会自动为 Admin 的 `/api/*` 接口增加登录认证，所以生产环境仍需通过绑定地址、防火墙、反向代理或 VPN 限制 9090 的访问来源。
 
 ## 接口目录
 
@@ -51,13 +51,13 @@ curl -X POST "http://127.0.0.1:9090/api/configs" \
 - 成功响应为 JSON。配置更新至少返回 `component`、`key` 和 `message`，部分配置会附带 `payload`。
 - 下游不可达、鉴权失败或参数校验失败时，Admin 返回对应的 HTTP 错误状态；同时页面会显示失败提示。
 - 指标聚合接口在旧版本组件缺少指标端点时，会返回包含 `error` 的结构化 JSON，而不是让整个仪表盘崩溃。
-- 不要把 `X-Rover-Admin-Token`、协议 token、Cookie 或完整请求体写入日志。
+- 避免把 `X-Rover-Admin-Token`、协议 token、Cookie 或完整请求体写入日志。
 
 ## 轻量调用建议
 
 - `/api/live` 只在仪表盘可见时按约 1 秒轮询；后台标签页和其他页面不持续拉取全量数据。
-- `/api/overview` 适合低频探活，不要把它当作高频监控采集接口。
-- `/api/traces` 的数据量受 Gateway 采样率和环形缓冲限制；排查慢请求时优先使用 `slow=1`，不要长期打开全量采样。
+- `/api/overview` 适合低频探活，避免把它当作高频监控采集接口。
+- `/api/traces` 的数据量受 Gateway 采样率和环形缓冲限制；排查慢请求时优先使用 `slow=1`，避免长期打开全量采样。
 - 写接口成功后再刷新列表，避免重复提交同一个配置或路由变更。
 
-Admin API 是同版本控制面接口。客户端只应依赖本文列出的路径、参数和字段，不要依赖未文档化的聚合内部字段；升级 Gateway、Nameserver 和 Admin 时应保持同一版本。
+Admin API 是同版本控制面接口。客户端只应依赖本文列出的路径、参数和字段，避免依赖未文档化的聚合内部字段；升级 Gateway、Nameserver 和 Admin 时应保持同一版本。

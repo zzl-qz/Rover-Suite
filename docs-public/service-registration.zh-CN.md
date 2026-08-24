@@ -80,7 +80,7 @@ rover:
 
 `service-name` 未填时使用 `spring.application.name`，`port` 未填时使用实际 Web Server 端口。
 `instance-id` 默认是解析后的 `host:port`，但在地址会被重用的环境中，Pod UID 或部署实例 ID 更安全。
-`host` 必须对 Gateway 可达；跨主机或 Pod 时不能使用回环地址。
+`host` 需要对 Gateway 可达；跨主机或 Pod 时不能使用回环地址。
 
 常用配置：
 
@@ -105,8 +105,8 @@ Starter 在 `ApplicationReadyEvent` 后注册，Nameserver 不可用时持续固
 ### 2.3 当前分组边界
 
 注册表身份始终是 `serviceName + instanceId`，`group` 只是查询、订阅和路由过滤字段，不参与实例唯一键。
-当前版本的多组快照推送隔离仍在收口：同一 `serviceName` 下同时使用多个非空 group 时，推送缓存可能暂时混入其他组，
-随后由周期查询对账修复。正式依赖分组隔离前应先完成对应修复；当前单机使用建议保持 `group` 为空。
+当前版本的多组快照推送隔离仍在完善：同一 `serviceName` 下同时使用多个非空 group 时，推送缓存可能短时间包含其他组，
+随后由周期查询对账修复。如果业务依赖严格分组隔离，建议先完成对应验证；当前单机使用建议保持 `group` 为空。
 
 ## 3. HTTP+JSON 注册
 
@@ -142,7 +142,7 @@ Nameserver 在内存中保存租约，异常退出的实例由过期扫描摘除
 - `sessionId`：每次业务进程启动时生成一次的 UUID，三个操作全程复用。
 
 注册表键是 `serviceName + instanceId`。新 session 注册相同键时接管所有权（last-register-wins），旧 session 心跳或注销会收到
-`409 STALE_SESSION`。sessionId 不能判断两个并发启动的进程谁更新，所以每个在线副本必须使用唯一 `instanceId`。
+`409 STALE_SESSION`。sessionId 不能判断两个并发启动的进程谁更新，所以每个在线副本需要使用唯一 `instanceId`。
 
 ### 3.3 生命周期行为
 
@@ -162,7 +162,7 @@ Nameserver 在内存中保存租约，异常退出的实例由过期扫描摘除
 ### 3.4 手工协议验收
 
 下面的命令假设 `rover.nameserver.token` 已设为 `rover-dev-token`。整个流程要使用同一个 UUID。
-`18080` 仅用于协议验收；真实注册前必须先启动业务监听器。
+`18080` 仅用于协议验收；真实注册前需要先启动业务监听器。
 
 ```bash
 export ROVER_NAMESERVER_TOKEN='rover-dev-token'
@@ -210,7 +210,7 @@ curl -i -X POST http://127.0.0.1:8889/v1/client/instances/unregister \
 | 结果 | 处理方式 |
 | :--- | :--- |
 | `401 UNAUTHORIZED` | 确保 Bearer token 与 Nameserver `rover.nameserver.token` 一致。 |
-| `404 NOT_FOUND` | 开启 `clientApiEnabled`、检查端口/路径并重启 Nameserver；不要无限重试错误端点。 |
+| `404 NOT_FOUND` | 开启 `clientApiEnabled`、检查端口/路径并重启 Nameserver；避免无限重试错误端点。 |
 | 心跳 `404 INSTANCE_NOT_FOUND` | 立即使用同一 session 和完整实例信息重新注册。 |
 | `409 STALE_SESSION` | 停止旧 owner，修正重复 `instanceId`。 |
 | 实例反复过期 | 保持 5 秒默认心跳，检查超时/网络，避免重叠调度器。 |
