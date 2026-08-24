@@ -55,6 +55,7 @@ Rover-Suite 提供**自带 Nameserver 的一体化轻量方案**：后端服务�
 | 写并挂载自定义 Filter / LoadBalancer 插件 | [插件开发与接入](docs-public/plugin-development.zh-CN.md) · [插件挂载操作手册](docs-public/plugin-mounting-guide.zh-CN.md) |
 | 用 Docker Compose 或生产化方式部署 | [Docker Compose](deploy/docker/README.md) · [生产部署](docs-public/production-deployment.zh-CN.md) · [小团队上线 10 条](docs-public/small-team-go-live.zh-CN.md) |
 | 排查 404 / 502 / 注册失败 | [故障排查](docs-public/troubleshooting.zh-CN.md) |
+| 设计可复现压测、定位 Gateway 瓶颈 | [性能测试指南](docs-public/benchmark-guide.zh-CN.md) |
 | 查看压测方法和参考数据 | [性能报告](docs-public/performance-report.zh-CN.md) |
 
 完整文档索引见：**[docs-public/README.md](docs-public/README.md)**。
@@ -339,7 +340,7 @@ HTTPS 代理承担。Gateway `/_manage/**` 与业务流量共用监听端口，�
 - [服务注册指南](./docs-public/service-registration.zh-CN.md)
 - [Admin 使用手册](./docs-public/admin-guide.zh-CN.md) · [Admin API](./docs-public/admin-api.zh-CN.md)
 - [配置项参考](./docs-public/configuration-reference.zh-CN.md)
-- [生产部署](./docs-public/production-deployment.zh-CN.md) · [故障排查](./docs-public/troubleshooting.zh-CN.md) · [性能报告](./docs-public/performance-report.zh-CN.md)
+- [生产部署](./docs-public/production-deployment.zh-CN.md) · [故障排查](./docs-public/troubleshooting.zh-CN.md) · [性能测试指南](./docs-public/benchmark-guide.zh-CN.md) · [性能报告](./docs-public/performance-report.zh-CN.md)
 - [架构说明](./docs-public/architecture.zh-CN.md)
 - [二次开发指南](./docs-public/development-guide.zh-CN.md)
 - [插件开发与接入](./docs-public/plugin-development.zh-CN.md)

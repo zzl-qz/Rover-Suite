@@ -1,6 +1,6 @@
 # Performance Report and Benchmark Method
 
-This document explains how Rover-Suite was benchmarked and how to interpret the current reference numbers.
+This document explains the current local reference numbers. If you want to benchmark Rover-Suite in your own environment, read the [Benchmark Guide](./benchmark-guide.md) first and then use this report as a result format reference.
 
 ## 1. Read this first
 

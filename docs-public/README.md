@@ -23,6 +23,7 @@ This is the public documentation shipped with the source repository.
 | Register Java or non-Java services / 接入 Java 或非 Java 服务 | [Service Registration](./service-registration.md) | [服务注册指南](./service-registration.zh-CN.md) |
 | Check every YAML/Admin key / 查询全部配置项 | [Configuration Reference](./configuration-reference.md) | [配置项参考](./configuration-reference.zh-CN.md) |
 | Troubleshoot runtime issues / 排查运行问题 | [Troubleshooting](./troubleshooting.md) | [故障排查](./troubleshooting.zh-CN.md) |
+| Design a reproducible benchmark / 设计可复现压测 | [Benchmark Guide](./benchmark-guide.md) | [性能测试指南](./benchmark-guide.zh-CN.md) |
 | Review benchmark method and reference data / 查看压测方法和参考数据 | [Performance Report](./performance-report.md) | [性能报告](./performance-report.zh-CN.md) |
 | Deploy outside local development / 生产或类生产部署 | [Production Deployment](./production-deployment.md) · [Small-team go-live](./small-team-go-live.md) · [Production templates](../deploy/production/README.md) · [Docker Compose](../deploy/docker/README.md) | [生产部署](./production-deployment.zh-CN.md) · [小团队上线 10 条](./small-team-go-live.zh-CN.md) · [生产样例](../deploy/production/README.md) · [Docker Compose](../deploy/docker/README.md) |
 | Understand architecture and trade-offs / 理解架构与取舍 | [Architecture](./architecture.md) | [架构与权衡](./architecture.zh-CN.md) |
