@@ -31,6 +31,18 @@ public class GatewayRuntimeConfigApplier implements ConfigApplier {
         String value = event.getNewValue();
         switch (key) {
             case GatewayRuntimeConfigKeys.FILTER_ENABLED -> current.applyFilterEnabled(Boolean.parseBoolean(value));
+            case GatewayRuntimeConfigKeys.RATE_LIMIT_ENABLED ->
+                    current.applyRateLimitEnabled(Boolean.parseBoolean(value));
+            case GatewayRuntimeConfigKeys.RATE_LIMIT_ALGORITHM -> current.applyRateLimitAlgorithm(value);
+            case GatewayRuntimeConfigKeys.RATE_LIMIT_KEY -> current.applyRateLimitKey(value);
+            case GatewayRuntimeConfigKeys.RATE_LIMIT_PERMITS_PER_SECOND ->
+                    current.applyRateLimitPermitsPerSecond(parsePositiveLong(value, key));
+            case GatewayRuntimeConfigKeys.RATE_LIMIT_BURST ->
+                    current.applyRateLimitBurst(parsePositiveLong(value, key));
+            case GatewayRuntimeConfigKeys.RATE_LIMIT_LIMIT ->
+                    current.applyRateLimitLimit(parsePositiveLong(value, key));
+            case GatewayRuntimeConfigKeys.RATE_LIMIT_WINDOW_SECONDS ->
+                    current.applyRateLimitWindowSeconds(parsePositiveInt(value, key));
             case GatewayRuntimeConfigKeys.REQUEST_TIMEOUT_MILLIS ->
                     current.applyRequestTimeoutMillis(parsePositiveLong(value, key));
             case GatewayRuntimeConfigKeys.LOAD_BALANCE_STRATEGY -> current.applyLoadBalanceStrategy(value);

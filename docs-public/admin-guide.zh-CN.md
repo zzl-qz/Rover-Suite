@@ -92,14 +92,18 @@ Gateway 的记录和内存开销也越大。
 
 ![配置管理概览](images/admin/09-configs-overview.png)
 
-配置按 Gateway 和 Nameserver 分组。绿色“可热更新”表示保存后可以立即应用；修改后才会出现保存按钮，撤销可以恢复本次读取
-到的值。
+配置页按 Gateway 和 Nameserver 展示。绿色“可热更新”表示保存后可以立即应用；修改后才会出现保存按钮，撤销可以恢复本次读取
+到的值。Gateway 区域还包含默认关闭的本地限流：可选择令牌桶或滑动窗口、配额维度和阈值；它按单个 Gateway 实例计数，不能替代
+需要跨实例一致性的业务限流。
+
+主动实现 `ConfigurablePlugin` 的插件会显示在 Gateway 配置中，和内置配置一样支持保存、撤销、校验与热更新；
+只有当前已装配且主动声明配置项的插件会出现。没有实现该可选接口时，不出现插件配置项是正常状态，不代表插件未加载。
 
 ![配置管理详情](images/admin/10-configs-detail.png)
 
 几个容易混淆的配置：
 
-- `gateway.loadbalance.strategy` 是策略名称，应选择 `round_robin` 等枚举值。
+- `gateway.loadbalance.strategy` 属于启动/插件装配配置，不在 Admin 配置管理中修改；请在 `rover-gateway.yml` 中配置内置策略、SPI `name()` 或实现类全名，然后重启 Gateway。
 - `gateway.trace.sampleRate` 才接受 `0~1` 的小数，`0` 表示只记录慢请求，`1` 表示全量记录。
 - 指标窗口单位是秒，超时和健康检查配置通常是毫秒。
 
@@ -115,7 +119,7 @@ Nameserver 完成。
 
 ## 常见操作
 
-负载均衡策略请选择 `round_robin`、`random`、`weighted_round_robin`、`ip_hash` 或 `least_connections`。
-`gateway.trace.sampleRate` 才是 0~1 的小数采样率。
+负载均衡策略请在 Gateway 配置文件里选择 `round_robin`、`random`、`weighted_round_robin`、`ip_hash`、`least_connections`，或填写插件 SPI `name()` / 实现类全名。
+`gateway.trace.sampleRate` 才是可在 Admin 中热更新的 0~1 小数采样率。
 
 保存失败时先查看具体字段错误，不要重复提交同一脏值；失败不会代表组件已经应用了新配置。

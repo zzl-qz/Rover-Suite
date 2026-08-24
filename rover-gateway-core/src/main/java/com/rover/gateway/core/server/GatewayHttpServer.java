@@ -12,6 +12,7 @@ import com.rover.gateway.core.discovery.NoopServiceDiscovery;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.filter.FilterSettings;
+import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.runtime.GatewayRuntime;
@@ -63,6 +64,9 @@ public class GatewayHttpServer {
 
     /** 管理口鉴权 token（/_manage/**）；空表示不鉴权。 */
     private final String adminToken;
+
+    /** 是否启用 Admin 管理面与运行时配置 overlay。 */
+    private final boolean adminEnabled;
 
     /** 单请求最大 body 字节数，超过 TooLongFrameException。 */
     private final int maxContentLengthBytes;
@@ -150,7 +154,7 @@ public class GatewayHttpServer {
             CorsSettings corsSettings) {
         this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
                 filterSettings, discoverySettings, loadBalanceStrategy, corsSettings,
-                GatewayDefaults.BIND_HOST, null);
+                GatewayDefaults.BIND_HOST, null, true);
     }
 
     /** 全参数构造（含绑定地址与管理口 token）。 */
@@ -166,9 +170,29 @@ public class GatewayHttpServer {
             CorsSettings corsSettings,
             String bindHost,
             String adminToken) {
+        this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
+                filterSettings, discoverySettings, loadBalanceStrategy, corsSettings,
+                bindHost, adminToken, true);
+    }
+
+    /** 全参数构造（可显式关闭 Admin 管理面）。 */
+    public GatewayHttpServer(
+            int port,
+            List<RouteConfig> routes,
+            int maxContentLengthBytes,
+            int connectTimeoutMillis,
+            int requestTimeoutMillis,
+            FilterSettings filterSettings,
+            DiscoverySettings discoverySettings,
+            String loadBalanceStrategy,
+            CorsSettings corsSettings,
+            String bindHost,
+            String adminToken,
+            boolean adminEnabled) {
         this.port = port;
         this.bindHost = bindHost == null || bindHost.isBlank() ? GatewayDefaults.BIND_HOST : bindHost.trim();
         this.adminToken = adminToken;
+        this.adminEnabled = adminEnabled;
         this.maxContentLengthBytes = maxContentLengthBytes;
         this.corsSettings = corsSettings == null ? new CorsSettings() : corsSettings;
         DiscoverySettings settings = discoverySettings == null ? defaultStaticDiscovery() : discoverySettings;
@@ -182,9 +206,16 @@ public class GatewayHttpServer {
                 filterSettings == null || filterSettings.isEnabled()));
         configManager.seed(GatewayRuntimeConfigKeys.REQUEST_TIMEOUT_MILLIS, String.valueOf(requestTimeoutMillis));
         configManager.seed(GatewayRuntimeConfigKeys.LOAD_BALANCE_STRATEGY, lbStrategy);
-        // YAML 之后叠 Admin 落盘的配置
-        configManager.loadOverlayIfPresent();
-
+        RateLimitSettings rateLimit = filterSettings == null ? new RateLimitSettings() : filterSettings.getRateLimit();
+        configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_ENABLED, String.valueOf(rateLimit.isEnabled()));
+        configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_ALGORITHM, rateLimit.getAlgorithm());
+        configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_KEY, rateLimit.getKey());
+        configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_PERMITS_PER_SECOND,
+                String.valueOf(rateLimit.getPermitsPerSecond()));
+        configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_BURST, String.valueOf(rateLimit.getBurst()));
+        configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_LIMIT, String.valueOf(rateLimit.getLimit()));
+        configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_WINDOW_SECONDS,
+                String.valueOf(rateLimit.getWindowSeconds()));
         this.runtime = new GatewayRuntime(
                 port,
                 routes,
@@ -195,8 +226,14 @@ public class GatewayHttpServer {
                 serviceDiscovery,
                 configManager,
                 adminToken);
+        // 插件在 Runtime 构造期间注册自己的配置，随后再读取 overlay 才能恢复插件已保存的值。
+        if (adminEnabled) {
+            configManager.loadOverlayIfPresent();
+        } else {
+            log.info("Admin 管理面已关闭，跳过 Gateway 运行时配置覆盖文件");
+        }
         configManager.getApplier().bind(runtime);
-        // 把 overlay/当前值真正打进运行时（超时、过滤器、LB）
+        // 把 overlay/当前值真正打进运行时（超时、过滤器、LB 与已装配插件）。
         configManager.reapplyAll();
     }
 
@@ -222,13 +259,14 @@ public class GatewayHttpServer {
                                     .addLast(new HttpObjectAggregator(maxContentLengthBytes))
                                     .addLast(new HttpServerKeepAliveHandler())
                                     .addLast(new CorsHandler(corsSettings))
-                                    .addLast(bizGroup, new GatewayHttpServerHandler(runtime));
+                                    .addLast(bizGroup, new GatewayHttpServerHandler(runtime, adminEnabled));
                         }
                     });
 
             serverChannel = bootstrap.bind(bindHost, port).sync().channel();
-            log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, managePrefix={}",
-                    bindHost, port, runtime.getDiscoveryType(), ManageApiPaths.PREFIX);
+            log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, adminEnabled={}, managePrefix={}",
+                    bindHost, port, runtime.getDiscoveryType(), adminEnabled,
+                    adminEnabled ? ManageApiPaths.PREFIX : "disabled");
         } catch (InterruptedException err) {
             Thread.currentThread().interrupt();
             shutdown();

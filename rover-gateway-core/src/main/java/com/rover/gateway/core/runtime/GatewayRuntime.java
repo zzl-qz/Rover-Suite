@@ -8,7 +8,9 @@ import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.GatewayFilterAssembler;
+import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.common.spi.loadbalance.LoadBalancer;
+import com.rover.common.spi.plugin.ConfigurablePlugin;
 import com.rover.gateway.core.loadbalance.LoadBalancerFactory;
 import com.rover.gateway.core.metrics.MetricsRegistry;
 import com.rover.gateway.core.metrics.MetricsSettings;
@@ -181,6 +183,41 @@ public class GatewayRuntime {
         rebuildFilters();
     }
 
+    /** 热更新内置本地限流开关，重建过滤器链让新 Filter 立刻接管。 */
+    public void applyRateLimitEnabled(boolean enabled) {
+        updateRateLimit(() -> filterSettings.getRateLimit().setEnabled(enabled));
+    }
+
+    /** 热更新内置限流算法。 */
+    public void applyRateLimitAlgorithm(String algorithm) {
+        updateRateLimit(() -> filterSettings.getRateLimit().setAlgorithm(algorithm));
+    }
+
+    /** 热更新配额维度：整台 Gateway 或按路径。 */
+    public void applyRateLimitKey(String key) {
+        updateRateLimit(() -> filterSettings.getRateLimit().setKey(key));
+    }
+
+    /** 热更新令牌桶每秒补充量。 */
+    public void applyRateLimitPermitsPerSecond(long permitsPerSecond) {
+        updateRateLimit(() -> filterSettings.getRateLimit().setPermitsPerSecond(permitsPerSecond));
+    }
+
+    /** 热更新令牌桶最大突发量。 */
+    public void applyRateLimitBurst(long burst) {
+        updateRateLimit(() -> filterSettings.getRateLimit().setBurst(burst));
+    }
+
+    /** 热更新滑动窗口最大请求数。 */
+    public void applyRateLimitLimit(long limit) {
+        updateRateLimit(() -> filterSettings.getRateLimit().setLimit(limit));
+    }
+
+    /** 热更新滑动窗口时长。 */
+    public void applyRateLimitWindowSeconds(int windowSeconds) {
+        updateRateLimit(() -> filterSettings.getRateLimit().setWindowSeconds(windowSeconds));
+    }
+
     /** 热更新代理请求超时（毫秒），必须大于 0。 */
     public void applyRequestTimeoutMillis(long timeoutMillis) {
         proxyClient.setRequestTimeoutMillis(timeoutMillis);
@@ -294,6 +331,15 @@ public class GatewayRuntime {
         }
     }
 
+    /** 限流配置是一个整体，任一字段变化都替换对应 Filter，避免运行中混用旧算法和新参数。 */
+    private synchronized void updateRateLimit(Runnable update) {
+        update.run();
+        rebuildFilters();
+        RateLimitSettings settings = filterSettings.getRateLimit();
+        log.info("内置限流已热更新: enabled={}, algorithm={}, key={}",
+                settings.isEnabled(), settings.getAlgorithm(), settings.getKey());
+    }
+
     /** 按当前路由、发现、LB、Filter 配置重新组装过滤器链并原子替换。 */
     private void rebuildFilters() {
         List<Filter> assembled = assembler.assemble(
@@ -304,7 +350,23 @@ public class GatewayRuntime {
                 serviceDiscovery,
                 loadBalancer.get(),
                 metricsRegistry);
+        configManager.replacePluginConfigs(configurablePlugins(assembled));
         filters.set(assembled);
+    }
+
+    /** 收集当前真正参与请求链路的可配置插件；未启用的插件不会暴露给 Admin。 */
+    private List<ConfigurablePlugin> configurablePlugins(List<Filter> assembled) {
+        List<ConfigurablePlugin> plugins = new ArrayList<>();
+        for (Filter filter : assembled) {
+            if (filter instanceof ConfigurablePlugin configurable) {
+                plugins.add(configurable);
+            }
+        }
+        LoadBalancer current = loadBalancer.get();
+        if (current instanceof ConfigurablePlugin configurable) {
+            plugins.add(configurable);
+        }
+        return plugins;
     }
 
     /** 释放运行时持有的插件资源。 */

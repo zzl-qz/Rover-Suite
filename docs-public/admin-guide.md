@@ -98,14 +98,24 @@ individual events so they do not hide lifecycle changes.
 ![Configuration overview](images/admin/09-configs-overview.png)
 
 Green “hot reload” badges identify settings that can be applied immediately.
-Save controls appear only after a value changes.
+Save controls appear only after a value changes. Gateway also exposes the
+default-off local rate limiter: choose token bucket or sliding window, a quota
+key, and thresholds. It counts per Gateway instance and is not a replacement
+for a business limit shared across instances.
+
+Plugins that explicitly implement `ConfigurablePlugin` are shown with the
+Gateway settings. Their fields use the same save and rollback flow as built-in
+settings; only mounted plugins that declare properties appear. If no plugin
+setting appears, the plugin may still be mounted.
 
 ![Configuration details](images/admin/10-configs-detail.png)
 
-`gateway.loadbalance.strategy` expects a strategy name such as `round_robin`.
-`gateway.trace.sampleRate` accepts a decimal from 0 to 1; `0` records only slow
-requests and `1` records all requests. Window values use seconds, while most
-timeouts and health settings use milliseconds.
+`gateway.loadbalance.strategy` is a startup/plugin-mounting setting and is not
+edited from Admin. Configure a built-in strategy, SPI `name()`, or implementation
+FQCN in `rover-gateway.yml`, then restart Gateway. `gateway.trace.sampleRate`
+accepts a decimal from 0 to 1; `0` records only slow requests and `1` records
+all requests. Window values use seconds, while most timeouts and health settings
+use milliseconds.
 
 ## Lightweight usage
 

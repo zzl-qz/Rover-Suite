@@ -41,10 +41,10 @@ curl -X POST "http://127.0.0.1:9090/api/routes" \
 ```bash
 curl -X POST "http://127.0.0.1:9090/api/configs" \
   -H "Content-Type: application/json" \
-  -d '{"component":"gateway","key":"gateway.loadbalance.strategy","value":"round_robin"}'
+  -d '{"component":"gateway","key":"gateway.trace.sampleRate","value":"1"}'
 ```
 
-路由请求体字段应与 Gateway 的路由模型一致；配置更新的 `component` 只能是 `gateway` 或 `nameserver`，`key` 和 `value` 会由下游组件再次校验。
+路由请求体字段应与 Gateway 的路由模型一致；配置更新的 `component` 只能是 `gateway` 或 `nameserver`，`key` 和 `value` 会由下游组件再次校验。`gateway.loadbalance.strategy` 属于启动/插件装配配置，不通过 Admin API 修改。
 
 ## 响应与错误
 
@@ -61,4 +61,3 @@ curl -X POST "http://127.0.0.1:9090/api/configs" \
 - 写接口成功后再刷新列表，避免重复提交同一个配置或路由变更。
 
 Admin API 是同版本控制面接口。客户端只应依赖本文列出的路径、参数和字段，不要依赖未文档化的聚合内部字段；升级 Gateway、Nameserver 和 Admin 时应保持同一版本。
-

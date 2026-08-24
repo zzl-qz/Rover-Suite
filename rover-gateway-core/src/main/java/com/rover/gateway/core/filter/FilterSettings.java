@@ -1,6 +1,7 @@
 package com.rover.gateway.core.filter;
 
 import com.rover.common.plugin.PluginSpiLoader;
+import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import java.util.List;
 
 /**
@@ -21,6 +22,9 @@ public class FilterSettings {
      * 例如：com.example.MyAuthFilter
      */
     private volatile List<String> classes = List.of();
+
+    /** 内置本地限流配置，默认关闭。 */
+    private final RateLimitSettings rateLimit = new RateLimitSettings();
 
     public boolean isEnabled() {
         return enabled;
@@ -46,5 +50,9 @@ public class FilterSettings {
 
     public void setClasses(List<String> classes) {
         this.classes = classes == null ? List.of() : List.copyOf(classes);
+    }
+
+    public RateLimitSettings getRateLimit() {
+        return rateLimit;
     }
 }

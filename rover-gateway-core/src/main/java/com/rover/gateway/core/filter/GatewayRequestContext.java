@@ -136,6 +136,12 @@ public class GatewayRequestContext implements RequestContext {
         return attributes.get(key);
     }
 
+    /** 读取请求头，Netty Headers 已经提供大小写不敏感匹配。 */
+    @Override
+    public String requestHeader(String name) {
+        return name == null ? null : request.headers().get(name);
+    }
+
     /** 写入过滤器共享属性。 */
     @Override
     public void setAttribute(String key, Object value) {
@@ -152,6 +158,12 @@ public class GatewayRequestContext implements RequestContext {
     @Override
     public void markCompleted() {
         this.completed = true;
+    }
+
+    /** 供内置和外挂 Filter 统一短路请求。 */
+    @Override
+    public void reject(int status, String body) {
+        writeText(HttpResponseStatus.valueOf(status), body == null ? "" : body);
     }
 
     /**

@@ -1,0 +1,25 @@
+rover:
+  gateway:
+    port: 80
+    adminToken: rover-compose-gateway-admin-token
+    server:
+      bindHost: 0.0.0.0
+    discovery:
+      type: nameserver
+      nameserver:
+        address: nameserver:8888
+        token: rover-compose-protocol-token
+        reconcileIntervalMs: 30000
+    cors:
+      enabled: true
+      allowedOrigins:
+        - http://127.0.0.1:9090
+        - http://localhost:9090
+      allowedMethods: [GET, POST, PUT, DELETE, PATCH, OPTIONS]
+      allowedHeaders: ["*"]
+      credentials: false
+    routes:
+      - id: demo-api
+        businessPrefix: /api
+        serviceName: demo-service
+        stripPrefix: ""

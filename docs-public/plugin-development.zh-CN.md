@@ -1,29 +1,37 @@
 # 插件开发与接入
 
-Rover Gateway 的插件运行在 Gateway 进程内，用于补充请求过滤器（Filter）或负载均衡策略（LoadBalancer）。插件不是独立服务，也不是 Admin 插件：它会直接参与网关请求链路，必须和当前 Rover-Suite 版本保持兼容。
+Rover Gateway 的插件运行在 Gateway 进程内，目前对外暴露两个可插拔扩展点：用户 Filter 插件和负载均衡策略插件。插件不是独立服务，也不是 Admin 插件：它会直接参与网关请求链路，必须和当前 Rover-Suite 版本保持兼容。
 
 本指南覆盖从创建 JAR、声明 SPI、放入 Gateway，到配置和验证的完整流程。真正可编译的完整 Demo 可在此基础上单独维护；发布插件前请先在与目标环境一致的 JDK 和 Rover-Suite 版本上验证。
 
-## 挂载方式总览
+## 扩展点与加载路径总览
 
-当前可直接把 JAR 放入 Gateway `plugins` 目录的插件类型有 **2 种**，对应 **4 条挂载路径**：
+当前可直接把 JAR 放入 Gateway `plugins` 目录的扩展点有 **2 个**。每个扩展点支持 SPI 和显式配置两种装配方式，组合后最多形成 **4 条操作路径**；这不是 4 类插件。
 
-| 插件类型 | SPI 自动发现 | 显式类名加载 |
+| 扩展点 | SPI 自动发现 | 显式类名加载 |
 | --- | --- | --- |
-| `Filter` | `META-INF/services/com.rover.common.spi.filter.Filter`，加载后按 `getOrder()` 组装过滤器链 | `rover.gateway.filters.classes` 填 Filter 全限定类名 |
-| `LoadBalancer` | `META-INF/services/com.rover.common.spi.loadbalance.LoadBalancer`，通过 `name()` 配置选择 | `rover.gateway.loadbalance.strategy` 直接填写实现类全限定名 |
+| 用户 Filter 插件 | `META-INF/services/com.rover.common.spi.filter.Filter`，加载后按 `getOrder()` 组装过滤器链 | `rover.gateway.filters.classes` 填 Filter 全限定类名 |
+| 负载均衡策略插件 | `META-INF/services/com.rover.common.spi.loadbalance.LoadBalancer`，通过 `name()` 配置选择 | `rover.gateway.loadbalance.strategy` 直接填写实现类全限定名 |
 
-这 4 条路径共用同一个 `pluginDir` 和 `URLClassLoader`。`ServiceDiscovery`、注册传输适配器和 Nacos 当前属于源码级扩展，
-不会通过 `plugins` 目录直接挂载；EventBus 的 `ServiceLoader` 也不是本目录插件机制。
+这两个扩展点共用同一个 `pluginDir` 和 `URLClassLoader`。负载均衡策略不作为独立 `Filter` 节点出现，而是固定终端环节 `RouteAndProxyFilter` 中的策略插槽。`ServiceDiscovery`、注册传输适配器和 Nacos 当前属于源码级扩展，不会通过 `plugins` 目录直接挂载；EventBus 的 `ServiceLoader` 也不是本目录插件机制。
+
+### Filter 的两种方式如何选择
+
+| 方式 | 使用体验 | 适用场景 |
+| --- | --- | --- |
+| **SPI 自动发现** | 在 JAR 的 SPI 文件登记实现类即可；Gateway 会加载全部已登记的 Filter，YAML 不必逐个维护类名 | 希望“放入即启用”的独立能力，或该 JAR 内所有 Filter 都应随环境一并加载 |
+| **显式类名** | 不需要 SPI 文件；JAR 放入 `pluginDir` 后，再用 `filters.classes` 列出要启用的完整类名 | 一个 JAR 中有多个可选 Filter，或运维希望由部署配置精确决定哪些类生效 |
+
+SPI 更省事，但登记的 Filter 都会被加载；显式类名更灵活，但每次新增、删除或改类名都要同步维护配置并重启 Gateway。
 
 ## 1. 选择扩展点
 
 | 扩展点 | 用途 | 接入方式 |
 | --- | --- | --- |
-| `com.rover.common.spi.filter.Filter` | 在请求转发前后做鉴权、灰度标记、审计等轻量处理 | SPI 自动发现，或在 `filters.classes` 中填写全限定类名 |
-| `com.rover.common.spi.loadbalance.LoadBalancer` | 从健康实例列表中选择一个上游实例 | SPI `name()` 选择，或直接填写实现类全限定名 |
+| `com.rover.common.spi.filter.Filter` | 在请求转发前后做鉴权、灰度标记、审计、业务限流等轻量处理 | SPI 自动发现，或在 `filters.classes` 中填写全限定类名 |
+| `com.rover.common.spi.loadbalance.LoadBalancer` | 固定转发环节中的上游选择策略，从健康实例列表中选择一个上游实例 | SPI `name()` 选择，或直接填写实现类全限定名 |
 
-Filter 的 `getOrder()` 越小越早执行。过滤器继续执行后续链路时必须调用 `chain.doFilter(context)`；如果自己已经写回响应，则调用 `context.markCompleted()` 并返回已完成的 Future。
+Filter 的 `getOrder()` 越小越早执行。过滤器继续执行后续链路时必须调用 `chain.doFilter(context)`；需要读取鉴权头时使用 `context.requestHeader(name)`，需要拒绝请求时使用 `context.reject(status, body)`，然后返回已完成的 Future。Gateway 自带的本地限流可通过 `rover.gateway.rateLimit` 开启；按用户、租户或共享全局维度限流时，关闭内置限流并实现自己的 Filter。
 
 ## 2. 创建最小 Maven 插件项目
 
@@ -98,6 +106,74 @@ public final class FirstHealthyLoadBalancer implements LoadBalancer {
 
 实现类必须是 `public`、可实例化，并提供无参构造函数。LoadBalancer 只会收到调用方已经筛选出的候选实例；没有实例时应返回 `null`，不要在插件中自行查询注册中心。
 
+### 可选：让 Admin 动态配置插件
+
+`Filter` 和 `LoadBalancer` 都可以选择实现 `ConfigurablePlugin`。Gateway 会把每个声明字段注册为
+`gateway.plugin.<namespace>.<key>`，在 Admin 的“插件配置”分组中展示；保存时会先校验、立即调用插件回调，并写入
+Gateway runtime overlay。
+
+```java
+import com.rover.common.spi.plugin.ConfigurablePlugin;
+import com.rover.common.spi.plugin.PluginConfigProperty;
+import com.rover.common.spi.filter.Filter;
+import com.rover.common.spi.filter.FilterChain;
+import com.rover.common.spi.filter.RequestContext;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+
+public final class RequestTagFilter implements Filter, ConfigurablePlugin {
+    private volatile boolean enabled = true;
+    private volatile String tag = "request-tag";
+
+    @Override public String configNamespace() { return "request-tag"; }
+
+    @Override
+    public List<PluginConfigProperty> configProperties() {
+        return List.of(
+                new PluginConfigProperty("enabled", "true", "是否写入请求标签",
+                        List.of("true", "false"), false),
+                new PluginConfigProperty("tag", "request-tag", "写入的标签值"));
+    }
+
+    @Override
+    public void validateConfig(String key, String value) {
+        if ("enabled".equals(key) && !"true".equalsIgnoreCase(value)
+                && !"false".equalsIgnoreCase(value)) {
+            throw new IllegalArgumentException("enabled 仅支持 true/false");
+        }
+        if ("tag".equals(key) && (value == null || value.isBlank())) {
+            throw new IllegalArgumentException("tag 不能为空");
+        }
+    }
+
+    @Override
+    public void applyConfig(String key, String value) {
+        switch (key) {
+            case "enabled" -> enabled = Boolean.parseBoolean(value);
+            case "tag" -> tag = value;
+            default -> throw new IllegalArgumentException("未知插件配置：" + key);
+        }
+    }
+
+    @Override
+    public CompletableFuture<Void> doFilter(RequestContext context, FilterChain chain) {
+        if (enabled) {
+            context.setAttribute("plugin", tag);
+        }
+        return chain.doFilter(context);
+    }
+}
+```
+
+下面是一个真实的最小 Filter 插件：`DemoBlockFilter` 实现 `Filter`，以 `getOrder()` 决定顺序；示例中的
+`System.out.println` 仅用于首次接入验证，正式插件应使用项目统一日志，并避免逐请求输出大量日志。
+
+![最小 Filter 插件示例](./images/plugin/filter-plugin-filter-code.png)
+
+插件字段的初始值应与 `configProperties()` 中的默认值保持一致。`configNamespace()` 和字段 key 仅支持字母、数字、
+点、下划线和连字符，完整键在当前已装配插件中必须唯一。回调运行在 Gateway 管理请求中，只应替换本地状态；不要做阻塞 I/O、
+远程调用或不可逆操作。只有当前已装配插件才会显示；新增、替换或删除插件 JAR 仍需要重启 Gateway。
+
 ## 4. 声明 SPI
 
 在插件项目中创建以下文件之一（或同时创建两个）：
@@ -119,6 +195,20 @@ com.example.rover.FirstHealthyLoadBalancer
 
 文件名、包名和大小写必须完全匹配。也可以不使用 SPI，而在 `filters.classes` 中显式配置 Filter 的全限定类名；LoadBalancer 则可把 `gateway.loadbalance.strategy` 直接设为实现类全限定名。
 
+若选择显式类名方式，SPI 文件应不存在，配置示例如下：
+
+```yaml
+rover:
+  gateway:
+    filters:
+      enabled: true
+      pluginDir: plugins
+      classes:
+        - org.example.rover.DemoBlockFilter
+```
+
+这个配置仍会扫描 `plugins/` 中的 JAR，只是不再通过 SPI 清单选类，而是按配置反射创建指定类。
+
 ## 5. 打包并放入 Gateway
 
 ```bash
@@ -126,6 +216,12 @@ mvn -DskipTests package
 mkdir -p <gateway-working-dir>/plugins
 cp target/my-rover-plugin-1.0.0.jar <gateway-working-dir>/plugins/
 ```
+
+在 IntelliJ 的 Maven 面板执行 `package` 后，JAR 位于插件项目的 `target/` 下。将该 JAR 复制到 Gateway
+的 `pluginDir`；默认值 `plugins` 表示 **Gateway 进程工作目录** 下的 `plugins/`，不是 Java 源码包，也不是
+Admin 的目录。下图展示了已声明 SPI、执行 `package` 并生成 JAR 的完整对应关系。
+
+![声明 SPI 并打包 Filter 插件](./images/plugin/filter-plugin-package-spi.png)
 
 默认插件目录是 Gateway 进程工作目录下的 `plugins`。也可以使用绝对路径或自定义相对路径：
 
@@ -146,9 +242,81 @@ rover:
 ## 6. 验证是否接入成功
 
 1. 启动 Gateway，检查日志中的 `Loaded ... plugin jar(s)`、`Discovered plugin filter via SPI` 或 `Gateway filter chain ready`。
-2. 在 Admin 的配置管理中确认 `gateway.filters.enabled`、`gateway.filters.pluginDir` 和 `gateway.loadbalance.strategy` 的实际值。
+2. 在 `rover-gateway.yml` 中配置 `gateway.loadbalance.strategy`：可填写内置策略、LoadBalancer SPI `name()` 或实现类全限定名。该项属于启动/插件装配配置，不在 Admin 中修改；Admin 仪表盘只展示当前运行状态。多个策略可以共存，但一次只能选中一个全局策略；SPI 名称重复（含内置同名）会使 Gateway 启动失败。实现 `ConfigurablePlugin` 的插件配置会显示在 Gateway 配置中。
 3. 对匹配路由发起一次请求，在请求追踪或业务日志中确认 Filter 已执行；对 LoadBalancer 观察请求是否按自定义策略选择实例。
 4. 修改插件 JAR、SPI 文件或类路径后重启 Gateway。仅修改可热更新配置时，是否立即生效取决于对应配置项；新增或替换 JAR 不应依赖热更新。
+
+### 已走通的 Filter SPI 示例
+
+以下本地演示完整验证了 Filter SPI 的两层结果：
+
+1. Gateway 从 `E:\\roverSuite\\plugins` 发现一个 JAR，读取 SPI 声明，识别到
+   `org.example.rover.DemoBlockFilter`，并将 `demo-block` 加入过滤器链，顺序为 `100`。
+2. 真实请求到达后，日志输出“执行自定义Filter”，说明它不仅被扫描到，而且确实参与了请求处理。
+
+![Gateway 发现 JAR 并装配 Filter 链](./images/plugin/filter-plugin-gateway-loaded.png)
+
+![真实请求执行自定义 Filter](./images/plugin/filter-plugin-request-executed.png)
+
+对于 `DemoBlockFilter` 这种按请求头拒绝请求的插件，可进一步执行：
+
+```powershell
+curl.exe -i -H "X-Demo-Plugin: block" http://127.0.0.1:80/any-matched-route
+```
+
+预期返回 `418` 和 `blocked by demo plugin`。未携带该请求头时，插件应调用 `chain.doFilter(context)`，请求继续交给后续路由与代理处理。
+
+### 已走通的显式类名示例（无 SPI）
+
+在移除 SPI 文件、先执行 Maven `clean` 再 `package` 以清除 `target/` 中的旧资源后，将无 SPI JAR 放回 `plugins/`。
+配置 `filters.classes` 为 `org.example.rover.DemoBlockFilter` 并重启 Gateway，真实请求同样进入自定义 Filter。下图同时展示了
+配置的完整类名和运行日志中的“执行自定义Filter”。
+
+![无 SPI 时由 filters.classes 显式加载 Filter](./images/plugin/filter-plugin-class-config-executed.png)
+
+### 已走通的用户自定义限流 Filter 示例
+
+Rover 的内置限流是 `RateLimitFilter`，支持 `token_bucket` 和 `sliding_window` 两个内置算法；如果用户要做 IP、用户、
+租户、灰度分组或 Redis 分布式限流，不需要扩展内部 `RateLimiter`，直接写一个普通 `Filter` 插件即可。
+
+本地演示中的 `DemoRateLimitFilter` 使用显式类名方式挂载：
+
+```yaml
+rover:
+  gateway:
+    filters:
+      enabled: true
+      pluginDir: plugins
+      classes:
+        - org.example.rover.DemoRateLimitFilter
+```
+
+启动日志中可以看到 `demo-rate-limit` 被装进过滤器链，真实连续请求超过阈值后返回 `429`。这证明用户自定义限流和普通
+Filter 插件是同一条扩展路径。
+
+![用户自定义限流 Filter 装配成功](./images/plugin/filter-plugin-rate-limit-loaded.png)
+
+![用户自定义限流 Filter 返回 429](./images/plugin/filter-plugin-rate-limit-rejected.png)
+
+### 已走通的 LoadBalancer 全限定类名示例
+
+LoadBalancer 也可以不依赖 SPI 文件，直接把 `gateway.loadbalance.strategy` 写成实现类全限定名。下图使用
+`org.example.rover.DemoHighestPortLoadBalancer` 验证：Gateway 从 `plugins/` 中加载 JAR，按类名创建自定义负载均衡器，并在真实请求中执行该策略。
+
+![LoadBalancer 按全限定类名加载并参与请求](./images/plugin/loadbalancer-class-config-executed.png)
+
+注意：`gateway.loadbalance.strategy` 属于启动/插件装配配置，不在 Admin 中修改；如需切换自定义 LoadBalancer，请改
+`rover-gateway.yml` 并重启 Gateway。Admin 侧不要覆盖这类配置，否则容易出现“YAML 写了自定义策略，但运行时被管理台改回内置策略”的误判。
+
+对于上例的 `request-tag` 可配置插件，直接调用 Gateway 管理接口修改字段，效果与在 Admin 中保存一致：
+
+```bash
+curl -X POST http://127.0.0.1:8080/_manage/configs \
+  -H 'Content-Type: application/json' \
+  -d '{"key":"gateway.plugin.request-tag.enabled","value":"false"}'
+```
+
+下一次请求即可使用新值。`GET /_manage/configs` 会列出当前已装配插件实际声明的全部配置键。
 
 ## 7. 常见问题
 
@@ -157,7 +325,7 @@ rover:
 - **显式类名加载失败**：确认类是 `public`、有无参构造函数，并且实现了对应接口；不要只填写简单类名。
 - **`strategy` 不支持**：SPI 模式下使用实现类的 `name()`，并确保配置值大小写与名称一致（匹配本身不区分大小写）；也可以直接填写包含 `.` 的全限定类名。
 - **`NoSuchMethod` 或 `ClassCastException`**：插件编译时使用的 `rover-common` 与 Gateway 版本不一致，或把 `rover-common` 重复打进了插件 JAR。
-- **启动后请求变慢或不稳定**：插件在网关 JVM 内执行，禁止在 Netty 事件循环上做阻塞 I/O、远程调用、无限重试或大对象日志；外部调用应设置超时、限流和故障降级。
+- **插件是否会拖慢 Gateway**：简单判断请求头、写请求属性、内存计数或选择上游这类插件通常开销很小；真正的风险来自插件代码在请求链路里做阻塞 I/O、无超时远程调用、无限重试或大对象日志。如果确实要访问外部系统，请设置超时、限流和故障降级。
 
 ## 8. 安全与兼容性边界
 

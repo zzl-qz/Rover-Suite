@@ -41,6 +41,23 @@ Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务�
 | **Rover-Starter** | Spring Boot 接入，业务侧自动注册与优雅下线 |
 | **Rover-Admin** | 可选管理控制台，支持运行时配置查看与更新 |
 
+## 🧭 我应该先看哪篇文档？
+
+大多数用户先按目标选一篇就够了：
+
+| 我想做什么 | 先看这里 |
+| :--- | :--- |
+| 本地跑通一次完整请求链路 | [快速上手](docs-public/quick-start.zh-CN.md) |
+| 理解日常配置、路由、Admin 和运行边界 | [使用指南](docs-public/user-guide.zh-CN.md) |
+| 打开 Admin 并理解每个页面 | [Admin 使用手册](docs-public/admin-guide.zh-CN.md) |
+| 接入 Java 或非 Java 服务注册 | [服务注册指南](docs-public/service-registration.zh-CN.md) |
+| 查询全部 YAML/Admin 配置项 | [配置项参考](docs-public/configuration-reference.zh-CN.md) |
+| 写并挂载自定义 Filter / LoadBalancer 插件 | [插件开发与接入](docs-public/plugin-development.zh-CN.md) · [插件挂载操作手册](docs-public/plugin-mounting-guide.zh-CN.md) |
+| 用 Docker Compose 或生产化方式部署 | [Docker Compose](deploy/docker/README.md) · [生产部署](docs-public/production-deployment.zh-CN.md) |
+| 排查 404 / 502 / 注册失败 / 性能问题 | [故障与性能](docs-public/troubleshooting-performance.zh-CN.md) |
+
+完整文档索引见：**[docs-public/README.md](docs-public/README.md)**。
+
 ---
 
 ## ✨ 核心特性
@@ -55,6 +72,7 @@ Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务�
 | **静态 / 动态路由** | 支持固定上游与注册中心动态发现，共用负载均衡能力 |
 | **多种负载均衡** | 轮询、加权轮询、随机、IP Hash、最少连接数 |
 | **聚焦的扩展面** | Filter/负载均衡插件 JAR，以及源码级服务发现与注册适配层 |
+| **基础流量保护** | 内置本地限流，复杂业务限流可通过 Filter 插件二开 |
 | **运行时管理** | Admin 可查看并更新网关 / 注册中心运行时配置，路由热更新 |
 | **管理面安全** | 监听地址可配置 + 管理口与注册/订阅协议 token 鉴权 |
 | **Java 原生** | 定制开发用 Java SPI，对 Java 团队零学习成本，可直接改源码二开 |
@@ -282,7 +300,7 @@ HTTPS 代理承担。Gateway `/_manage/**` 与业务流量共用监听端口，�
 
 ### Rover-Suite 不适合你，如果
 
-- 需要完整的流量治理能力（限流、熔断、鉴权等，规划中）
+- 需要开箱即用的完整流量治理能力，例如分布式限流、熔断、WAF、鉴权策略等
 - 需要大规模集群高可用（当前为单点部署，集群在规划中）
 - 需要极致的网关性能（APISIX 等基于 Nginx 的方案性能上限更高）
 
@@ -298,6 +316,7 @@ HTTPS 代理承担。Gateway `/_manage/**` 与业务流量共用监听端口，�
 - [x] HTTP+JSON Registration API（Node/Python/Go/PHP/C++ 服务提供方）
 - [x] Admin 运行时管理（配置热更新、路由热更新）
 - [x] Filter/负载均衡 SPI 插件，以及源码级服务发现契约
+- [x] 内置本地限流，以及基于 Filter 插件的自定义业务限流
 - [x] 运行时配置管理（YAML 配置 + 热更新）
 - [x] 轻量内存指标与有界请求时间线管理 API
 - [x] Admin 实时仪表盘与 Prometheus 文本导出
@@ -305,7 +324,7 @@ HTTPS 代理承担。Gateway `/_manage/**` 与业务流量共用监听端口，�
 **规划中：**
 
 - [ ] 本地 Gateway 时间线之外的分布式追踪集成
-- [ ] 流量治理能力（限流、鉴权、熔断）
+- [ ] 进阶流量治理能力（鉴权策略、熔断、分布式限流）
 - [ ] 外部注册中心适配完善
 - [ ] Nameserver 集群高可用（在线实例继续保持租约软状态，不持久化恢复）
 

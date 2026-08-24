@@ -7,6 +7,7 @@ import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.metrics.MetricsFilter;
 import com.rover.gateway.core.metrics.MetricsRegistry;
+import com.rover.gateway.core.filter.ratelimit.RateLimitFilter;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteMatcher;
 import java.util.ArrayList;
@@ -57,6 +58,12 @@ public class GatewayFilterAssembler {
         if (metricsRegistry != null) {
             MetricsFilter metricsFilter = new MetricsFilter(metricsRegistry);
             filters.put(metricsFilter.getClass().getName(), metricsFilter);
+        }
+
+        // 本地限流默认关闭，开启后放在外部插件之前，超额请求尽早短路。
+        if (settings != null && settings.getRateLimit().isEnabled()) {
+            RateLimitFilter rateLimitFilter = new RateLimitFilter(settings.getRateLimit());
+            filters.put(rateLimitFilter.getClass().getName(), rateLimitFilter);
         }
 
         if (settings == null || settings.isEnabled()) {
