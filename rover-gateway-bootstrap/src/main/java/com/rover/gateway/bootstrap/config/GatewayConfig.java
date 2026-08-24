@@ -1,11 +1,8 @@
 package com.rover.gateway.bootstrap.config;
 
 import com.rover.common.constants.NameserverConstants;
-import com.rover.common.constants.HttpConstants;
 import com.rover.common.plugin.PluginSpiLoader;
 import com.rover.common.spi.loadbalance.LoadBalancer;
-import com.rover.common.util.HostPort;
-import com.rover.common.util.ServiceKeys;
 import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
@@ -13,15 +10,8 @@ import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.server.CorsSettings;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.Map;
-import java.util.Set;
 import lombok.Data;
 
 /**
@@ -32,7 +22,6 @@ import lombok.Data;
 @Data
 public class GatewayConfig {
 
-    private static final String NAMESERVER_ADDRESS_CONFIG = "discovery.nameserver.address";
 
     private RoverProperties rover = new RoverProperties();
 
@@ -80,154 +69,27 @@ public class GatewayConfig {
 
     /** 把 yml 的 cors 配置转成 core 的 CorsSettings。 */
     public CorsSettings toCorsSettings() {
-        CorsProperties cors = gatewayProperties().getCors();
-        CorsSettings settings = new CorsSettings();
-        if (cors == null) {
-            return settings;
-        }
-        settings.setEnabled(cors.isEnabled());
-        settings.setCredentials(cors.isCredentials());
-        settings.setAllowedOrigins(cors.getAllowedOrigins() == null
-                ? new ArrayList<>() : new ArrayList<>(cors.getAllowedOrigins()));
-        if (cors.getAllowedMethods() != null && !cors.getAllowedMethods().isEmpty()) {
-            settings.setAllowedMethods(new ArrayList<>(cors.getAllowedMethods()));
-        }
-        if (cors.getAllowedHeaders() != null && !cors.getAllowedHeaders().isEmpty()) {
-            settings.setAllowedHeaders(new ArrayList<>(cors.getAllowedHeaders()));
-        }
-        if (cors.getMaxAgeSeconds() > 0) {
-            settings.setMaxAgeSeconds(cors.getMaxAgeSeconds());
-        }
-        return settings;
+        return GatewayConfigMapper.toCorsSettings(this);
     }
 
     public FilterSettings toFilterSettings() {
-        FilterProperties filterProperties = gatewayProperties().getFilters();
-        FilterSettings settings = new FilterSettings();
-        if (filterProperties == null) {
-            return settings;
-        }
-        settings.setEnabled(filterProperties.isEnabled());
-        settings.setPluginDir(filterProperties.getPluginDir());
-        settings.setClasses(filterProperties.getClasses() == null
-                ? List.of()
-                : List.copyOf(filterProperties.getClasses()));
-        RateLimitProperties rate = gatewayProperties().getRateLimit();
-        if (rate != null) {
-            RateLimitSettings target = settings.getRateLimit();
-            target.setEnabled(rate.isEnabled());
-            target.setAlgorithm(rate.getAlgorithm());
-            target.setKey(rate.getKey());
-            target.setPermitsPerSecond(rate.getPermitsPerSecond());
-            target.setBurst(rate.getBurst());
-            target.setLimit(rate.getLimit());
-            target.setWindowSeconds(rate.getWindowSeconds());
-        }
-        return settings;
+        return GatewayConfigMapper.toFilterSettings(this);
     }
 
     public void validate() {
-        GatewayProperties gateway = gatewayProperties();
-        validatePort(gateway.getPort());
-        validatePositive("server.maxContentLengthBytes", getMaxContentLengthBytesOrDefault());
-        validatePositive("proxy.connectTimeoutMillis", getConnectTimeoutMillisOrDefault());
-        validatePositive("proxy.requestTimeoutMillis", getRequestTimeoutMillisOrDefault());
-        validateFilterSettings(gateway.getFilters());
-        validateRateLimit(gateway.getRateLimit());
-
-        DiscoveryType discoveryType = getDiscoveryType();
-        if (discoveryType == DiscoveryType.NAMESERVER) {
-            validateNameserverAddress(gateway.getDiscovery().getNameserver());
-        }
-
-        List<RouteProperties> routes = gateway.getRoutes();
-        if (routes == null || routes.isEmpty()) {
-            return;
-        }
-
-        Set<String> businessPrefixes = new HashSet<>();
-        for (RouteProperties route : routes) {
-            validateRoute(route, businessPrefixes, discoveryType);
-        }
+        GatewayConfigValidator.validate(this);
     }
 
     /** 把配置的路由封装成 RouteConfig 集合。 */
     public List<RouteConfig> toRouteConfigs() {
-        List<RouteProperties> routes = gatewayProperties().getRoutes();
-        if (routes == null || routes.isEmpty()) {
-            return List.of();
-        }
-
-        DiscoveryType discoveryType = getDiscoveryType();
-        List<RouteConfig> routeConfigs = new ArrayList<>(routes.size());
-        for (RouteProperties route : routes) {
-            if (route.getBusinessPrefix() == null || route.getBusinessPrefix().isBlank()) {
-                continue;
-            }
-            if (discoveryType == DiscoveryType.STATIC && !hasStaticUpstream(route)) {
-                continue;
-            }
-            if (discoveryType == DiscoveryType.NAMESERVER
-                    && (route.getServiceName() == null || route.getServiceName().isBlank())) {
-                continue;
-            }
-
-            RouteConfig routeConfig = new RouteConfig();
-            routeConfig.setId(route.getId());
-            routeConfig.setBusinessPrefix(route.getBusinessPrefix());
-            routeConfig.setTargetUrl(route.getTargetUrl());
-            routeConfig.setTargetUrls(copyTargetUrls(route.getTargetUrls()));
-            routeConfig.setServiceName(route.getServiceName());
-            routeConfig.setGroup(route.getGroup());
-            routeConfig.setStripPrefix(resolveStripPrefix(route));
-            routeConfigs.add(routeConfig);
-        }
-        return routeConfigs;
+        return GatewayConfigMapper.toRouteConfigs(this);
     }
 
     public DiscoverySettings toDiscoverySettings() {
-        DiscoverySettings settings = new DiscoverySettings();
-        DiscoveryType type = getDiscoveryType();
-        settings.setType(type);
-
-        NameserverProperties nameserver = gatewayProperties().getDiscovery().getNameserver();
-        if (nameserver != null) {
-            HostPort address = type == DiscoveryType.NAMESERVER
-                    ? HostPort.require(nameserver.getAddress(), NAMESERVER_ADDRESS_CONFIG)
-                    : HostPort.parseOrNull(nameserver.getAddress(), NAMESERVER_ADDRESS_CONFIG);
-            if (address != null) {
-                settings.setNameserverHost(address.host());
-                settings.setNameserverPort(address.port());
-            }
-            settings.setNameserverToken(nameserver.getToken());
-            long reconcile = nameserver.getReconcileIntervalMs() <= 0
-                    ? GatewayDefaults.RECONCILE_INTERVAL_MILLIS
-                    : nameserver.getReconcileIntervalMs();
-            settings.setReconcileIntervalMs(reconcile);
-        }
-
-        if (type == DiscoveryType.NAMESERVER) {
-            settings.setSubscribeServices(collectSubscribeServices());
-        }
-        return settings;
+        return GatewayConfigMapper.toDiscoverySettings(this);
     }
 
-    private List<DiscoverySettings.ServiceSubscribeSpec> collectSubscribeServices() {
-        Map<String, DiscoverySettings.ServiceSubscribeSpec> unique = new LinkedHashMap<>();
-        for (RouteConfig route : toRouteConfigs()) {
-            if (route.getServiceName() == null || route.getServiceName().isBlank()) {
-                continue;
-            }
-            String key = ServiceKeys.serviceGroup(route.getServiceName(), route.getGroup());
-            DiscoverySettings.ServiceSubscribeSpec spec = new DiscoverySettings.ServiceSubscribeSpec();
-            spec.setServiceName(route.getServiceName());
-            spec.setGroup(route.getGroup());
-            unique.putIfAbsent(key, spec);
-        }
-        return new ArrayList<>(unique.values());
-    }
-
-    private GatewayProperties gatewayProperties() {
+    GatewayProperties gatewayProperties() {
         if (rover == null) {
             rover = new RoverProperties();
         }
@@ -256,7 +118,7 @@ public class GatewayConfig {
         return gateway;
     }
 
-    private String resolveStripPrefix(RouteProperties route) {
+    String resolveStripPrefix(RouteProperties route) {
         if (route.getStripPrefix() != null) {
             return route.getStripPrefix();
         }
@@ -264,128 +126,6 @@ public class GatewayConfig {
             return null;
         }
         return gatewayProperties().getRewrite().getStripPrefix();
-    }
-
-    private void validatePort(int port) {
-        if (port <= 0 || port > 65535) {
-            throw new IllegalStateException("Gateway 端口配置非法：" + port);
-        }
-    }
-
-    private void validatePositive(String configName, int value) {
-        if (value <= 0) {
-            throw new IllegalStateException("Gateway 配置必须大于 0：" + configName + "=" + value);
-        }
-    }
-
-    private void validateFilterSettings(FilterProperties filters) {
-        if (filters == null) {
-            return;
-        }
-        if (filters.getPluginDir() == null || filters.getPluginDir().isBlank()) {
-            throw new IllegalStateException("Gateway 配置 filters.pluginDir 不能为空");
-        }
-    }
-
-    private void validateRateLimit(RateLimitProperties rate) {
-        if (rate == null) {
-            return;
-        }
-        String algorithm = rate.getAlgorithm() == null
-                ? RateLimitSettings.TOKEN_BUCKET
-                : rate.getAlgorithm().trim().toLowerCase(Locale.ROOT);
-        if (!RateLimitSettings.TOKEN_BUCKET.equals(algorithm)
-                && !RateLimitSettings.SLIDING_WINDOW.equals(algorithm)) {
-            throw new IllegalArgumentException(
-                    "rateLimit.algorithm 仅支持 token_bucket/sliding_window");
-        }
-        String key = rate.getKey() == null
-                ? RateLimitSettings.PATH
-                : rate.getKey().trim().toLowerCase(Locale.ROOT);
-        if (!RateLimitSettings.GLOBAL.equals(key) && !RateLimitSettings.PATH.equals(key)) {
-            throw new IllegalArgumentException("rateLimit.key 仅支持 global/path");
-        }
-        if (rate.getPermitsPerSecond() <= 0 || rate.getBurst() <= 0 || rate.getLimit() <= 0) {
-            throw new IllegalArgumentException("rateLimit 限流值必须大于 0");
-        }
-        if (rate.getWindowSeconds() <= 0 || rate.getWindowSeconds() > 3600) {
-            throw new IllegalArgumentException("rateLimit.windowSeconds 必须在 1~3600 之间");
-        }
-    }
-
-    private void validateNameserverAddress(NameserverProperties nameserver) {
-        if (nameserver == null || nameserver.getAddress() == null || nameserver.getAddress().isBlank()) {
-            throw new IllegalStateException("discovery.type=nameserver 时必须配置 discovery.nameserver.address");
-        }
-        HostPort.require(nameserver.getAddress(), NAMESERVER_ADDRESS_CONFIG);
-    }
-
-    private void validateRoute(RouteProperties route, Set<String> businessPrefixes, DiscoveryType discoveryType) {
-        if (route.getBusinessPrefix() == null || route.getBusinessPrefix().isBlank()) {
-            throw new IllegalStateException("Gateway 路由 businessPrefix 不能为空，routeId=" + route.getId());
-        }
-        if (!route.getBusinessPrefix().startsWith("/")) {
-            throw new IllegalStateException("Gateway 路由 businessPrefix 必须以 / 开头："
-                    + route.getBusinessPrefix());
-        }
-        if (!businessPrefixes.add(route.getBusinessPrefix())) {
-            throw new IllegalStateException("Gateway 路由 businessPrefix 重复："
-                    + route.getBusinessPrefix());
-        }
-
-        if (discoveryType == DiscoveryType.STATIC) {
-            if (!hasStaticUpstream(route)) {
-                throw new IllegalStateException(
-                        "static 模式下需要 targetUrl 或 targetUrls，businessPrefix="
-                                + route.getBusinessPrefix());
-            }
-            if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
-                validateTargetUrl(stripWeightSuffix(route.getTargetUrl()));
-            }
-            if (route.getTargetUrls() != null) {
-                for (String raw : route.getTargetUrls()) {
-                    if (raw != null && !raw.isBlank()) {
-                        validateTargetUrl(stripWeightSuffix(raw.trim()));
-                    }
-                }
-            }
-        } else {
-            if (route.getServiceName() == null || route.getServiceName().isBlank()) {
-                throw new IllegalStateException("nameserver 模式下 serviceName 不能为空，businessPrefix="
-                        + route.getBusinessPrefix());
-            }
-        }
-
-        validateStripPrefix(resolveStripPrefix(route), route.getBusinessPrefix());
-    }
-
-    private void validateTargetUrl(String targetUrl) {
-        try {
-            URI uri = new URI(targetUrl);
-            String scheme = uri.getScheme();
-            if (!HttpConstants.SCHEME_HTTP.equalsIgnoreCase(scheme)
-                    && !HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(scheme)) {
-                throw new IllegalStateException("Gateway 路由 targetUrl 只支持 http/https：" + targetUrl);
-            }
-            if (uri.getHost() == null || uri.getHost().isBlank()) {
-                throw new IllegalStateException("Gateway 路由 targetUrl 必须包含主机地址：" + targetUrl);
-            }
-        } catch (URISyntaxException err) {
-            throw new IllegalStateException("Gateway 路由 targetUrl 格式非法：" + targetUrl, err);
-        }
-    }
-
-    private void validateStripPrefix(String stripPrefix, String businessPrefix) {
-        if (stripPrefix == null || stripPrefix.isBlank()) {
-            return;
-        }
-        if (!stripPrefix.startsWith("/")) {
-            throw new IllegalStateException("Gateway 路由 stripPrefix 必须以 / 开头：" + stripPrefix);
-        }
-        if (!businessPrefix.equals(stripPrefix) && !businessPrefix.startsWith(stripPrefix + "/")) {
-            throw new IllegalStateException("Gateway 路由 stripPrefix 必须是 businessPrefix 的前缀："
-                    + stripPrefix + " -> " + businessPrefix);
-        }
     }
 
     @Data
@@ -437,6 +177,8 @@ public class GatewayConfig {
         private boolean enabled = true;
         private String pluginDir = PluginSpiLoader.DEFAULT_DIR;
         private List<String> classes = new ArrayList<>();
+        /** 是否装配访问日志过滤器；true 时打 debug，false 时不装 */
+        private boolean accessLog = true;
     }
 
     @Data
@@ -488,43 +230,5 @@ public class GatewayConfig {
         private String serviceName;
         private String group;
         private String stripPrefix;
-    }
-
-    private static boolean hasStaticUpstream(RouteProperties route) {
-        if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
-            return true;
-        }
-        if (route.getTargetUrls() != null) {
-            for (String raw : route.getTargetUrls()) {
-                if (raw != null && !raw.isBlank()) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private static List<String> copyTargetUrls(List<String> source) {
-        if (source == null || source.isEmpty()) {
-            return new ArrayList<>();
-        }
-        List<String> copy = new ArrayList<>();
-        for (String raw : source) {
-            if (raw != null && !raw.isBlank()) {
-                copy.add(raw.trim());
-            }
-        }
-        return copy;
-    }
-
-    private static String stripWeightSuffix(String raw) {
-        int bar = raw.lastIndexOf('|');
-        if (bar > 0 && bar < raw.length() - 1) {
-            String maybeWeight = raw.substring(bar + 1).trim();
-            if (maybeWeight.chars().allMatch(Character::isDigit)) {
-                return raw.substring(0, bar).trim();
-            }
-        }
-        return raw;
     }
 }

@@ -1,0 +1,29 @@
+# 小团队常配（约 4C8G 单机叙事）：只限 Gateway + Nameserver + demo
+# 不启动 Admin。用法见 deploy/scripts/bench-small-team.sh
+#
+# 合计约：CPU 3.5 / 内存 ~3.75G（留给 Docker/OS 余量，对应「不太够」的 4C8G）
+# MaxRAMPercentage：容器有 mem_limit 时让堆吃到大部分限额，避免默认 25% 太抠导致 OOM
+services:
+  nameserver:
+    cpus: "1.0"
+    mem_limit: 1g
+    mem_reservation: 512m
+    environment:
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+
+  gateway:
+    cpus: "2.0"
+    mem_limit: 2g
+    mem_reservation: 1g
+    environment:
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+
+  demo:
+    cpus: "0.5"
+    mem_limit: 768m
+    mem_reservation: 384m
+    # 压测对照：直连上游 baseline（不经 Gateway），仅本机
+    ports:
+      - "127.0.0.1:8082:8082"
+    environment:
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"

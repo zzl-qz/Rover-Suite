@@ -2,6 +2,8 @@ package com.rover.nameserver.core.server;
 
 import com.rover.common.codec.RoverMessageDecoder;
 import com.rover.common.codec.RoverMessageEncoder;
+import com.rover.common.security.StrictSecurity;
+import com.rover.common.security.TokenAuth;
 import com.rover.nameserver.core.cluster.NameserverGeneration;
 import com.rover.nameserver.core.config.NameserverRuntimeConfigManager;
 import com.rover.nameserver.core.config.NameserverRuntimeConfigKeys;
@@ -174,6 +176,7 @@ public class NameserverTcpServer {
             serverChannel = bootstrap.bind(options.getBindHost(), options.getPort()).sync().channel();
             healthChecker.start();
             manageServer.start();
+            warnIfTokensBlank();
             log.info("Rover Nameserver 已启动, bind={}:{}, manageBind={}:{}, writeAckMode={}, cluster={}, epoch={}",
                     options.getBindHost(),
                     options.getPort(),
@@ -186,6 +189,33 @@ public class NameserverTcpServer {
             shutdown();
             throw new IllegalStateException("Nameserver 启动失败, port=" + options.getPort(), ex);
         }
+    }
+
+    /**
+     * 协议 / 管理口 token 为空：默认 WARN；严格安全模式启动失败。
+     * 开启：ROVER_STRICT_SECURITY=true 或 -Drover.strictSecurity=true
+     */
+    private void warnIfTokensBlank() {
+        if (TokenAuth.isBlank(options.getToken())) {
+            failOrWarn(
+                    "协议层 token 为空，注册/订阅不鉴权；当前 bindHost=" + options.getBindHost()
+                            + "。生产请设置 token，或收紧 bindHost / 网络 ACL。"
+                            + "正式环境可设 ROVER_STRICT_SECURITY=true 强制拒绝空 token 启动。");
+        }
+        if (TokenAuth.isBlank(options.getAdminToken())) {
+            failOrWarn(
+                    "管理口 adminToken 为空，/_manage/** 不鉴权；当前 manageBindHost="
+                            + options.getManageBindHost()
+                            + "。生产请设置 adminToken，或收紧 manageBindHost。"
+                            + "正式环境可设 ROVER_STRICT_SECURITY=true 强制拒绝空 token 启动。");
+        }
+    }
+
+    private static void failOrWarn(String message) {
+        if (StrictSecurity.enabled()) {
+            throw new IllegalStateException(message);
+        }
+        log.warn(message);
     }
 
     /** 优雅关闭：按依赖逆序关闭管理口 → 健康检查 → 服务端 channel → 各线程组，可安全重复调用。 */

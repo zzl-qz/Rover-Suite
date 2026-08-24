@@ -1,0 +1,27 @@
+# 穷机档（约 2C4G）：只限 Gateway + Nameserver + demo，不启 Admin
+# BENCH_PROFILE=tiny ./deploy/scripts/bench-small-team.sh
+#
+# 合计约：CPU 1.75 / 内存 ~2.75G
+services:
+  nameserver:
+    cpus: "0.5"
+    mem_limit: 768m
+    mem_reservation: 384m
+    environment:
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+
+  gateway:
+    cpus: "1.0"
+    mem_limit: 1536m
+    mem_reservation: 768m
+    environment:
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+
+  demo:
+    cpus: "0.25"
+    mem_limit: 512m
+    mem_reservation: 256m
+    ports:
+      - "127.0.0.1:8082:8082"
+    environment:
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"

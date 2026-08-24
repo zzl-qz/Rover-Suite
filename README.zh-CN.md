@@ -53,7 +53,7 @@ Rover-Suite 提供**自带注册中心的一体化轻量方案**：后端服务�
 | 接入 Java 或非 Java 服务注册 | [服务注册指南](docs-public/service-registration.zh-CN.md) |
 | 查询全部 YAML/Admin 配置项 | [配置项参考](docs-public/configuration-reference.zh-CN.md) |
 | 写并挂载自定义 Filter / LoadBalancer 插件 | [插件开发与接入](docs-public/plugin-development.zh-CN.md) · [插件挂载操作手册](docs-public/plugin-mounting-guide.zh-CN.md) |
-| 用 Docker Compose 或生产化方式部署 | [Docker Compose](deploy/docker/README.md) · [生产部署](docs-public/production-deployment.zh-CN.md) |
+| 用 Docker Compose 或生产化方式部署 | [Docker Compose](deploy/docker/README.md) · [生产部署](docs-public/production-deployment.zh-CN.md) · [小团队上线 10 条](docs-public/small-team-go-live.zh-CN.md) |
 | 排查 404 / 502 / 注册失败 / 性能问题 | [故障与性能](docs-public/troubleshooting-performance.zh-CN.md) |
 
 完整文档索引见：**[docs-public/README.md](docs-public/README.md)**。

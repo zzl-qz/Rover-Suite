@@ -53,7 +53,7 @@ Most users only need one of these paths first:
 | Register Java or non-Java services | [Service Registration](docs-public/service-registration.md) |
 | Check every YAML/Admin configuration key | [Configuration Reference](docs-public/configuration-reference.md) |
 | Write and mount a custom Filter or LoadBalancer plugin | [Plugin Development](docs-public/plugin-development.md) |
-| Deploy with Docker Compose or production-like settings | [Docker Compose](deploy/docker/README.md) · [Production Deployment](docs-public/production-deployment.md) |
+| Deploy with Docker Compose or production-like settings | [Docker Compose](deploy/docker/README.md) · [Production Deployment](docs-public/production-deployment.md) · [Small-team go-live](docs-public/small-team-go-live.md) |
 | Diagnose 404/502/registration/performance issues | [Troubleshooting and Performance](docs-public/troubleshooting-performance.md) |
 
 The full documentation index is here: **[docs-public/README.md](docs-public/README.md)**.

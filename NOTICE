@@ -17,8 +17,8 @@ Bundled / referenced third-party software
 * SLF4J 2.0.9: MIT.
 * JUnit Jupiter 5.10.1: EPL-2.0.
 * Alibaba Nacos Client 2.3.0 (optional adapter): Apache-2.0.
-* Vue 3.4.21 in the Admin CDN entry: MIT.
-* Apache ECharts 5.5.0 in the Admin CDN entry: Apache-2.0.
+* Vue 3.4.21 bundled under rover-admin/.../static/vendor/: MIT.
+* Apache ECharts 5.5.0 bundled under rover-admin/.../static/vendor/: Apache-2.0.
 
 Documentation media
 -------------------

@@ -33,7 +33,7 @@ public class NameserverServerHandler extends SimpleChannelInboundHandler<RoverMe
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
         metrics.connectionOpened();
-        log.info("客户端已连接: {}", ctx.channel().remoteAddress());
+        log.debug("客户端已连接: {}", ctx.channel().remoteAddress());
     }
 
     /** 解码完成的消息到达：转交分发器按类型处理 */
@@ -46,7 +46,7 @@ public class NameserverServerHandler extends SimpleChannelInboundHandler<RoverMe
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         metrics.connectionClosed();
-        log.info("客户端断开: {}", ctx.channel().remoteAddress());
+        log.debug("客户端断开: {}", ctx.channel().remoteAddress());
         dispatcher.onChannelInactive(ctx.channel());
     }
 

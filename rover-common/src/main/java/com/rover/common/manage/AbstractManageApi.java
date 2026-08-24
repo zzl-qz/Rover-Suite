@@ -8,6 +8,7 @@ import com.rover.common.config.RuntimeConfigManager;
 import com.rover.common.constants.HttpConstants;
 import com.rover.common.constants.ManageApiPaths;
 import com.rover.common.json.JsonCodec;
+import com.rover.common.security.TokenAuth;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
@@ -45,6 +46,14 @@ public abstract class AbstractManageApi {
                     JsonCodec.toJson(Map.of("message", "管理口鉴权失败：token 不匹配")));
             return;
         }
+        // 轻量探活：鉴权通过后只回 UP，不碰注册表/指标
+        if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.HEALTH.equals(path)) {
+            Map<String, Object> health = new LinkedHashMap<>();
+            health.put("status", "UP");
+            health.put("component", componentName());
+            writeJson(ctx, HttpResponseStatus.OK, JsonCodec.toJson(health));
+            return;
+        }
         try {
             if (!dispatch(ctx, request, path)) {
                 writeJson(ctx, HttpResponseStatus.NOT_FOUND,
@@ -63,11 +72,11 @@ public abstract class AbstractManageApi {
     /** 校验管理口 token；未配置时放行，配置后必须匹配 X-Rover-Admin-Token 请求头。 */
     private boolean authorized(FullHttpRequest request) {
         String expected = adminToken();
-        if (expected == null || expected.isBlank()) {
+        if (TokenAuth.isBlank(expected)) {
             return true;
         }
         String provided = request.headers().get(HttpConstants.ADMIN_TOKEN_HEADER);
-        return expected.equals(provided);
+        return TokenAuth.matches(expected, provided);
     }
 
     /**

@@ -13,10 +13,11 @@ rover:
     # HTTP 监听地址：远程 Registrar 需要可达；生产建议绑定内网 IP，并用防火墙限制来源
     manageBindHost: 0.0.0.0
     # 集群协议鉴权 token：非空时，客户端注册/注销/订阅必须携带相同 token，否则回 401
-    # 留空 = 关闭协议层鉴权（向后兼容）
+    # 留空 = 关闭协议层鉴权（本地方便；启动会 WARN。生产请设非空或收紧 bindHost）
     token: ""
     # 管理口鉴权 token：非空时，访问 /_manage/** 必须带 X-Rover-Admin-Token 请求头
-    # 留空 = 关闭管理口鉴权（向后兼容）
+    # 留空 = 关闭管理口鉴权（本地方便；manageBindHost=0.0.0.0 时等同裸奔，启动会 WARN）
+    # 生产务必设置非空 adminToken，或收紧 manageBindHost
     adminToken: ""
     # 是否启用 /v1/client/** HTTP+JSON 注册/心跳/注销接口（默认关闭，按需显式开启）
     # 默认允许空 token 零配置接入；有访问控制要求时配置 token，并按需限制 managePort 来源
