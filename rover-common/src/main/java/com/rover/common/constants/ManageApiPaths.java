@@ -7,6 +7,7 @@ public final class ManageApiPaths {
     }
 
     public static final String PREFIX = "/_manage";
+    public static final String HEALTH = PREFIX + "/health";
     public static final String STATUS = PREFIX + "/status";
     public static final String CONFIGS = PREFIX + "/configs";
     public static final String ROUTES = PREFIX + "/routes";

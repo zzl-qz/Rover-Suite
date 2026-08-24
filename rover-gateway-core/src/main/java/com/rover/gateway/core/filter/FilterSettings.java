@@ -26,6 +26,12 @@ public class FilterSettings {
     /** 内置本地限流配置，默认关闭。 */
     private final RateLimitSettings rateLimit = new RateLimitSettings();
 
+    /**
+     * 是否装配访问日志过滤器。默认 true：打 debug（默认 INFO 级别下不刷屏）；
+     * 设为 false 时不装 AccessLogFilter，连 debug 也不走。
+     */
+    private volatile boolean accessLog = true;
+
     public boolean isEnabled() {
         return enabled;
     }
@@ -54,5 +60,13 @@ public class FilterSettings {
 
     public RateLimitSettings getRateLimit() {
         return rateLimit;
+    }
+
+    public boolean isAccessLog() {
+        return accessLog;
+    }
+
+    public void setAccessLog(boolean accessLog) {
+        this.accessLog = accessLog;
     }
 }

@@ -3,6 +3,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.nameserver
+    restart: unless-stopped
     ports:
       - "127.0.0.1:8888:8888"
       - "127.0.0.1:8889:8889"
@@ -13,17 +14,20 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.demo
+    restart: unless-stopped
     depends_on:
       - nameserver
     expose:
       - "8082"
+    # 只挂 demo 配置；整目录挂载会把 Admin 的 application.yml 盖进来，导致连 127.0.0.1:8888
     volumes:
-      - ./config:/app/config:ro
+      - ./config/demo-application.yml:/app/config/application.yml:ro
 
   gateway:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.gateway
+    restart: unless-stopped
     depends_on:
       - nameserver
       - demo
@@ -37,6 +41,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile.admin
+    restart: unless-stopped
     depends_on:
       - gateway
       - nameserver

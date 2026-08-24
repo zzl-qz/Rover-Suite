@@ -1,11 +1,12 @@
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /src
 COPY . .
-RUN mvn -pl rover-gateway-test/demo/backend -am -DskipTests package
+# 正式模块在 rover-gateway-test/backend（不是 demo/backend）
+RUN mvn -pl rover-gateway-test/backend -am -DskipTests package
 
 FROM eclipse-temurin:17-jre
 WORKDIR /app
-COPY --from=build /src/rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar app.jar
+COPY --from=build /src/rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar app.jar
 COPY deploy/docker/config/demo-application.yml config/application.yml
 EXPOSE 8082
 ENTRYPOINT ["java", "-jar", "app.jar"]

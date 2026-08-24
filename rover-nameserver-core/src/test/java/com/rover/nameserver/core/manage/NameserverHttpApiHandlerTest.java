@@ -79,6 +79,14 @@ class NameserverHttpApiHandlerTest {
                     headers -> headers.set("X-Rover-Admin-Token", ADMIN_TOKEN));
             assertEquals(HttpResponseStatus.OK, manageWithAdminToken.status());
             assertTrue(manageWithAdminToken.body().contains("\"component\":\"nameserver\""));
+
+            RoutedResult health = fixture.exchange(
+                    HttpMethod.GET,
+                    "/_manage/health",
+                    "",
+                    headers -> headers.set("X-Rover-Admin-Token", ADMIN_TOKEN));
+            assertEquals(HttpResponseStatus.OK, health.status());
+            assertTrue(health.body().contains("\"status\":\"UP\""));
         }
     }
 

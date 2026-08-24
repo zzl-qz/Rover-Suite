@@ -1,0 +1,27 @@
+# Rover Nameserver —— 小团队内网生产样例
+# 复制为运行目录 config/rover-nameserver.yml 后，替换全部 REPLACE_* 与内网 IP。
+# 正式机建议：export ROVER_STRICT_SECURITY=true
+rover:
+  nameserver:
+    port: 8888
+    # 只监听内网网卡，不要用 0.0.0.0 对不可信网络裸奔
+    bindHost: 10.0.10.11
+    managePort: 8889
+    manageBindHost: 10.0.10.11
+    # 协议鉴权：Java TCP / HTTP Registrar 共用；必须非空
+    token: "REPLACE_WITH_LONG_PROTOCOL_TOKEN"
+    # 管理口鉴权：与 Gateway adminToken 建议使用不同值
+    adminToken: "REPLACE_WITH_LONG_NAMESERVER_ADMIN_TOKEN"
+    # 无多语言 HTTP 注册需求时保持关闭
+    clientApiEnabled: false
+    pushEnabled: true
+    heartbeatTimeoutMillis: 15000
+    healthCheckIntervalMillis: 5000
+    instanceExpireMillis: 30000
+    writeAckMode: SINGLE
+    allowClientAckOverride: false
+    cluster:
+      enabled: false
+      nodeId: ""
+      nodes: []
+      replicationFactor: 1

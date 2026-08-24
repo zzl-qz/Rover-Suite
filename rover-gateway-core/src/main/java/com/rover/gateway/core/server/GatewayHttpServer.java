@@ -5,6 +5,8 @@ import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.config.GatewayRuntimeConfigKeys;
 import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.common.constants.ManageApiPaths;
+import com.rover.common.security.StrictSecurity;
+import com.rover.common.security.TokenAuth;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
@@ -264,6 +266,7 @@ public class GatewayHttpServer {
                     });
 
             serverChannel = bootstrap.bind(bindHost, port).sync().channel();
+            warnIfAdminTokenBlank();
             log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, adminEnabled={}, managePrefix={}",
                     bindHost, port, runtime.getDiscoveryType(), adminEnabled,
                     adminEnabled ? ManageApiPaths.PREFIX : "disabled");
@@ -275,6 +278,23 @@ public class GatewayHttpServer {
             shutdown();
             throw err;
         }
+    }
+
+    /**
+     * 管理面开启且 token 为空：默认 WARN；严格安全模式直接启动失败。
+     * 开启：环境变量 ROVER_STRICT_SECURITY=true 或 -Drover.strictSecurity=true
+     */
+    private void warnIfAdminTokenBlank() {
+        if (!adminEnabled || !TokenAuth.isBlank(adminToken)) {
+            return;
+        }
+        String message = "管理口 adminToken 为空，/_manage/** 不鉴权；当前 bindHost=" + bindHost
+                + "。若对公网或局域网暴露，等同可改路由/配置。生产请设置 adminToken，或收紧 bindHost。"
+                + "正式环境可设 ROVER_STRICT_SECURITY=true 强制拒绝空 token 启动。";
+        if (StrictSecurity.enabled()) {
+            throw new IllegalStateException(message);
+        }
+        log.warn(message);
     }
 
     /** 关闭 Netty 通道、线程池和服务发现客户端。 */

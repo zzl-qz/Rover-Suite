@@ -11,7 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-08 15:36:00
- * Description: 内置访问日志过滤器，记录完整请求链路耗时
+ * Description: 内置访问日志过滤器；默认 debug，避免热路径 info 刷盘。可由 filters.accessLog 关掉整条装配。
  */
 @Slf4j
 public class AccessLogFilter implements Filter {
@@ -32,26 +32,20 @@ public class AccessLogFilter implements Filter {
     }
 
     /**
-     * 先记录请求开始，再放行后续过滤器；
-     * 无论下游成功或异常，都在完成回调里打印完整链路日志。
-     *
-     * @param context 网关请求上下文
-     * @param chain     过滤器链，用于继续执行
-     * @return 后续过滤器链的异步结果
+     * 请求结束后打一条完成日志（debug）。
+     * 排障时把 logger 调到 DEBUG，或保持默认 INFO 则热路径静默。
      */
     @Override
     public CompletableFuture<Void> doFilter(RequestContext context, FilterChain chain) {
         GatewayRequestContext gatewayContext = (GatewayRequestContext) context;
-        log.info(
-                "Gateway received request: {} {}",
-                gatewayContext.getRequest().method(),
-                gatewayContext.getRequestPath());
         return chain.doFilter(context).whenComplete((ignored, err) -> {
-            // 无论下游抛异常还是正常结束，都补一条完成日志。
+            if (!log.isDebugEnabled()) {
+                return;
+            }
             long costMillis = (System.nanoTime() - gatewayContext.getStartNanos()) / 1_000_000;
             RouteConfig route = gatewayContext.getRoute();
             Integer statusCode = gatewayContext.getStatusCode();
-            log.info(
+            log.debug(
                     "Gateway request completed: method={}, requestPath={}, routeId={}, businessPrefix={}, "
                             + "targetUrl={}, statusCode={}, costMillis={}",
                     gatewayContext.getRequest().method(),

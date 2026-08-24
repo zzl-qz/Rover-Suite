@@ -4,6 +4,17 @@
 `*-runtime.overlay.json`，并由组件决定是否立即应用。最终支持项、当前值、默认值和 `hotReloadable` 标记以
 `GET /api/configs` 返回为准。
 
+## 进程级安全开关（非 YAML）
+
+| 开关 | 说明 |
+| --- | --- |
+| 环境变量 `ROVER_STRICT_SECURITY=true` | 空 `adminToken` / Nameserver 协议 `token` 时**拒绝启动**（本地默认不设，仅 WARN） |
+| JVM `-Drover.strictSecurity=true` | 同上 |
+
+探活：`GET /_manage/health` → `{"status":"UP","component":"..."}`（鉴权规则与其它管理口相同）。
+
+生产样例见 [`deploy/production/`](../deploy/production/)。
+
 ## Admin 启动配置
 
 | 配置 | 默认值 | 说明 | 生效方式 |
@@ -22,7 +33,7 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | --- | --- | --- | --- |
 | `rover.gateway.port` | `80` | 业务 HTTP 端口 | 重启 |
 | `rover.gateway.adminEnabled` | `true` | 是否启用 `/_manage/**`、Admin 路由 overlay 与运行时配置 overlay | 重启 |
-| `rover.gateway.adminToken` | 空 | `/_manage/**` 管理口 token | 重启 |
+| `rover.gateway.adminToken` | 空 | `/_manage/**` 管理口 token；空=不鉴权（启动 WARN）。正式机建议非空，或设 `ROVER_STRICT_SECURITY=true` | 重启 |
 | `rover.gateway.server.bindHost` | `0.0.0.0` | 业务监听地址 | 重启 |
 | `rover.gateway.server.maxContentLengthBytes` | `1048576` | 请求体上限 | 重启 |
 | `rover.gateway.proxy.connectTimeoutMillis` | `3000` | 上游连接超时 | 重启 |
@@ -33,6 +44,7 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.discovery.nameserver.token` | 空 | Gateway 访问 Nameserver 的协议 token | 重启 |
 | `rover.gateway.filters.enabled` | `true` | Filter 启动总开关 | 重启；运行时另见下表 |
 | `rover.gateway.filters.pluginDir` | `plugins` | Filter/LoadBalancer JAR 目录 | 重启 |
+| `rover.gateway.filters.accessLog` | `true` | 是否装配访问日志过滤器；内容为 debug（默认 INFO 不刷屏） | 重启 |
 | `rover.gateway.filters.classes` | `[]` | 显式加载的 Filter 全限定类名 | 重启 |
 | `rover.gateway.rateLimit.enabled` | `false` | Gateway 本地限流开关；按实例生效 | 重启 |
 | `rover.gateway.rateLimit.algorithm` | `token_bucket` | `token_bucket` 或 `sliding_window` | 重启 |
@@ -110,8 +122,8 @@ Gateway 进程内独立计数，不是分布式全局配额。
 | `rover.nameserver.bindHost` | `0.0.0.0` | TCP 监听地址 | 重启 |
 | `rover.nameserver.managePort` | `8889` | HTTP 管理与客户端 API 端口 | 重启 |
 | `rover.nameserver.manageBindHost` | `0.0.0.0` | HTTP 监听地址 | 重启 |
-| `rover.nameserver.token` | 空 | 注册/订阅协议 token | 重启 |
-| `rover.nameserver.adminToken` | 空 | `/_manage/**` 管理 token | 重启 |
+| `rover.nameserver.token` | 空 | 注册/订阅协议 token；空=不鉴权（启动 WARN）。正式机建议非空或开严格安全 | 重启 |
+| `rover.nameserver.adminToken` | 空 | `/_manage/**` 管理 token；同上 | 重启 |
 | `rover.nameserver.clientApiEnabled` | `false` | 是否启用 `/v1/client/**` HTTP+JSON 注册 API | 重启 |
 | `rover.nameserver.writeAckMode` | `SINGLE` | `SINGLE`/`HALF`/`ALL`；当前单机主要用于协议语义 | 重启 |
 | `rover.nameserver.allowClientAckOverride` | `false` | 是否允许客户端覆盖 ACK 强度 | 重启 |

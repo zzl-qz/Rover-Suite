@@ -22,7 +22,7 @@ This is the public documentation shipped with the source repository.
 | Call Admin APIs directly / 直接调用 Admin API | [Admin API](./admin-api.md) | [Admin API](./admin-api.zh-CN.md) |
 | Register Java or non-Java services / 接入 Java 或非 Java 服务 | [Service Registration](./service-registration.md) | [服务注册指南](./service-registration.zh-CN.md) |
 | Check every YAML/Admin key / 查询全部配置项 | [Configuration Reference](./configuration-reference.md) | [配置项参考](./configuration-reference.zh-CN.md) |
-| Deploy outside local development / 生产或类生产部署 | [Production Deployment](./production-deployment.md) · [Docker Compose](../deploy/docker/README.md) | [生产部署](./production-deployment.zh-CN.md) · [Docker Compose](../deploy/docker/README.md) |
+| Deploy outside local development / 生产或类生产部署 | [Production Deployment](./production-deployment.md) · [Small-team go-live](./small-team-go-live.md) · [Production templates](../deploy/production/README.md) · [Docker Compose](../deploy/docker/README.md) | [生产部署](./production-deployment.zh-CN.md) · [小团队上线 10 条](./small-team-go-live.zh-CN.md) · [生产样例](../deploy/production/README.md) · [Docker Compose](../deploy/docker/README.md) |
 | Understand architecture and trade-offs / 理解架构与取舍 | [Architecture](./architecture.md) | [架构与权衡](./architecture.zh-CN.md) |
 | Modify source code / 修改源码二开 | [Development Guide](./development-guide.md) | [二次开发指南](./development-guide.zh-CN.md) |
 | Write and mount plugins / 开发并挂载插件 | [Plugin Development](./plugin-development.md) | [插件开发与接入](./plugin-development.zh-CN.md) · [插件挂载操作手册](./plugin-mounting-guide.zh-CN.md) |

@@ -6,6 +6,18 @@ the corresponding `*-runtime.overlay.json`; the component decides whether they
 can be applied immediately. The authoritative list of current values, defaults,
 and `hotReloadable` flags is returned by `GET /api/configs`.
 
+## Process-level security (not YAML)
+
+| Switch | Meaning |
+| --- | --- |
+| Env `ROVER_STRICT_SECURITY=true` | Blank `adminToken` / Nameserver protocol `token` **refuse to start** |
+| JVM `-Drover.strictSecurity=true` | Same |
+
+See [`deploy/production/`](../deploy/production/) for copy-ready templates.
+
+Health probe: `GET /_manage/health` → `{"status":"UP","component":"..."}`
+(same admin-token rules as other manage APIs).
+
 ## Admin startup configuration
 
 | Key | Default | Description | Apply |
@@ -25,7 +37,7 @@ a VPN in production.
 | --- | --- | --- | --- |
 | `rover.gateway.port` | `80` | Business HTTP port | Restart |
 | `rover.gateway.adminEnabled` | `true` | Enables `/_manage/**`, Admin route overlays, and runtime config overlays | Restart |
-| `rover.gateway.adminToken` | empty | Token for `/_manage/**` | Restart |
+| `rover.gateway.adminToken` | empty | `/_manage/**` token; blank = no auth (startup WARN). Prefer non-empty or `ROVER_STRICT_SECURITY=true` | Restart |
 | `rover.gateway.server.bindHost` | `0.0.0.0` | Business listener address | Restart |
 | `rover.gateway.server.maxContentLengthBytes` | `1048576` | Request body limit | Restart |
 | `rover.gateway.proxy.connectTimeoutMillis` | `3000` | Upstream connection timeout | Restart |
@@ -36,6 +48,7 @@ a VPN in production.
 | `rover.gateway.discovery.nameserver.token` | empty | Gateway-to-Nameserver protocol token | Restart |
 | `rover.gateway.filters.enabled` | `true` | Startup filter switch | Restart; runtime key below |
 | `rover.gateway.filters.pluginDir` | `plugins` | Filter/LoadBalancer JAR directory | Restart |
+| `rover.gateway.filters.accessLog` | `true` | Assemble access-log filter; logs at debug | Restart |
 | `rover.gateway.filters.classes` | `[]` | Explicit filter implementation FQCNs | Restart |
 | `rover.gateway.rateLimit.enabled` | `false` | Per-Gateway local rate-limit switch | Restart |
 | `rover.gateway.rateLimit.algorithm` | `token_bucket` | `token_bucket` or `sliding_window` | Restart |
@@ -118,8 +131,8 @@ so Admin cannot overwrite the plugin-mounting decision.
 | `rover.nameserver.bindHost` | `0.0.0.0` | TCP bind address | Restart |
 | `rover.nameserver.managePort` | `8889` | HTTP management and client API port | Restart |
 | `rover.nameserver.manageBindHost` | `0.0.0.0` | HTTP bind address | Restart |
-| `rover.nameserver.token` | empty | Registration/subscription protocol token | Restart |
-| `rover.nameserver.adminToken` | empty | `/_manage/**` management token | Restart |
+| `rover.nameserver.token` | empty | Protocol token; blank = no auth (startup WARN). Prefer non-empty or strict security | Restart |
+| `rover.nameserver.adminToken` | empty | `/_manage/**` management token; same as above | Restart |
 | `rover.nameserver.clientApiEnabled` | `false` | Enable `/v1/client/**` HTTP+JSON registration API | Restart |
 | `rover.nameserver.writeAckMode` | `SINGLE` | `SINGLE`/`HALF`/`ALL`; single-node semantics today | Restart |
 | `rover.nameserver.allowClientAckOverride` | `false` | Allow clients to override ACK strength | Restart |

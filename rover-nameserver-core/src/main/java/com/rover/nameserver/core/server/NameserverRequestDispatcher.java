@@ -4,6 +4,7 @@ import com.rover.common.constants.ProtocolConstants;
 import com.rover.common.constants.ProtocolTypeNames;
 import com.rover.common.constants.StatusConstants;
 import com.rover.common.event.EventBus;
+import com.rover.common.security.TokenAuth;
 import com.rover.common.protocol.CommonResponseBody;
 import com.rover.common.protocol.HeartbeatRequest;
 import com.rover.common.protocol.QueryRequest;
@@ -170,10 +171,10 @@ public class NameserverRequestDispatcher {
      */
     private boolean authorized(Channel channel, RoverMessage message, String providedToken) {
         String expected = services.getOptions().getToken();
-        if (expected == null || expected.isBlank()) {
+        if (TokenAuth.isBlank(expected)) {
             return true;
         }
-        if (expected.equals(providedToken)) {
+        if (TokenAuth.matches(expected, providedToken)) {
             return true;
         }
         log.warn("{}", NameserverTrace.of(

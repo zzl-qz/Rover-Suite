@@ -1,0 +1,21 @@
+# Rover Gateway（单机）systemd 示例
+# 务必在 Nameserver 就绪后再启本服务（见 After=/Requires=）
+
+[Unit]
+Description=Rover Gateway
+After=network-online.target rover-nameserver.service
+Wants=network-online.target
+Requires=rover-nameserver.service
+
+[Service]
+Type=simple
+User=rover
+WorkingDirectory=/opt/rover
+Environment=ROVER_STRICT_SECURITY=true
+ExecStart=/usr/bin/java -Xms256m -Xmx512m -jar /opt/rover/rover-gateway-bootstrap.jar
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=143
+
+[Install]
+WantedBy=multi-user.target

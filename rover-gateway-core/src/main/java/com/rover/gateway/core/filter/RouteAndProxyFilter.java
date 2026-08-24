@@ -99,7 +99,7 @@ public class RouteAndProxyFilter implements Filter {
                 route.getStripPrefix());
         gatewayContext.setRoute(route);
         gatewayContext.setTargetUrl(targetUrl);
-        log.info(
+        log.debug(
                 "Gateway route matched: routeId={}, businessPrefix={}, serviceName={}, targetUrl={}, lb={}",
                 route.getId(),
                 route.getBusinessPrefix(),
