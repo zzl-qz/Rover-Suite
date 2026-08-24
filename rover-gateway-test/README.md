@@ -2,7 +2,7 @@
 
 > 本目录只用于验证 Rover Gateway 与 Nameserver，不是生产业务模板。
 
-首次使用建议先按公开[快速上手](../../docs-public/quick-start.zh-CN.md)跑通单实例链路，再使用本页验证多实例与网关行为。
+首次使用建议先按公开[快速上手](../../docs-public/quick-start.zh-CN.md)跑通单实例链路，再使用本页验证多实例与 Gateway 行为。
 如果要验证外部插件 JAR 的真实挂载，请看同级的[插件真实进程验收 Demo](../plugin-demo/README.md)。
 
 ## 目录

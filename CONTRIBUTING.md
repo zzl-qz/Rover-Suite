@@ -58,7 +58,7 @@ Do not publish real credentials, exploitable private endpoints, or personal data
 not currently provide a private vulnerability-reporting channel; submit only sanitized information that is safe to
 disclose publicly. Tokens authenticate requests but do not encrypt traffic.
 
-不要在 Issue 中公开真实凭据、可直接利用的私有地址或个人信息。仓库目前不提供私密漏洞报告通道，请仅提交可公开的
+避免在 Issue 中公开真实凭据、可直接利用的私有地址或个人信息。仓库目前不提供私密漏洞报告通道，请仅提交可公开的
 脱敏信息。Token 只提供鉴权，不负责链路加密。
 
 ## Maintainers and private forks / 维护者与私有分支

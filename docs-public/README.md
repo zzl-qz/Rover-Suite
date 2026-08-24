@@ -2,7 +2,7 @@
 
 This is the public documentation shipped with the source repository.
 
-本目录是随源码一起发布的公开文档。若你是第一次打开项目，先看“最快路线”，不要从配置参考开始硬啃。
+本目录是随源码一起发布的公开文档。若你是第一次打开项目，建议先看“最快路线”，再按具体任务查阅参考文档。
 
 ## Fast path / 最快路线
 
@@ -10,7 +10,7 @@ This is the public documentation shipped with the source repository.
 | :--- | :--- | :--- | :--- |
 | 1 | [Quick Start](./quick-start.md) | [快速上手](./quick-start.zh-CN.md) | Build, start Nameserver/Gateway/Admin, and send one real request |
 | 2 | [User Guide](./user-guide.md) | [使用指南](./user-guide.zh-CN.md) | Understand routes, discovery, Admin, and current runtime boundaries |
-| 3 | [Troubleshooting and Performance](./troubleshooting-performance.md) | [故障与性能](./troubleshooting-performance.zh-CN.md) | Fix common 404/502/registration/config/performance issues |
+| 3 | [Troubleshooting](./troubleshooting.md) | [故障排查](./troubleshooting.zh-CN.md) | Fix common 404/502/registration/config issues |
 
 ## Choose by task / 按任务找文档
 
@@ -22,6 +22,8 @@ This is the public documentation shipped with the source repository.
 | Call Admin APIs directly / 直接调用 Admin API | [Admin API](./admin-api.md) | [Admin API](./admin-api.zh-CN.md) |
 | Register Java or non-Java services / 接入 Java 或非 Java 服务 | [Service Registration](./service-registration.md) | [服务注册指南](./service-registration.zh-CN.md) |
 | Check every YAML/Admin key / 查询全部配置项 | [Configuration Reference](./configuration-reference.md) | [配置项参考](./configuration-reference.zh-CN.md) |
+| Troubleshoot runtime issues / 排查运行问题 | [Troubleshooting](./troubleshooting.md) | [故障排查](./troubleshooting.zh-CN.md) |
+| Review benchmark method and reference data / 查看压测方法和参考数据 | [Performance Report](./performance-report.md) | [性能报告](./performance-report.zh-CN.md) |
 | Deploy outside local development / 生产或类生产部署 | [Production Deployment](./production-deployment.md) · [Small-team go-live](./small-team-go-live.md) · [Production templates](../deploy/production/README.md) · [Docker Compose](../deploy/docker/README.md) | [生产部署](./production-deployment.zh-CN.md) · [小团队上线 10 条](./small-team-go-live.zh-CN.md) · [生产样例](../deploy/production/README.md) · [Docker Compose](../deploy/docker/README.md) |
 | Understand architecture and trade-offs / 理解架构与取舍 | [Architecture](./architecture.md) | [架构与权衡](./architecture.zh-CN.md) |
 | Modify source code / 修改源码二开 | [Development Guide](./development-guide.md) | [二次开发指南](./development-guide.zh-CN.md) |
@@ -36,7 +38,7 @@ This is the public documentation shipped with the source repository.
 | Request auth, audit, tenant labels, custom rate limiting / 鉴权、审计、租户标记、自定义限流 | User `Filter` plugin JAR / 用户 Filter 插件 |
 | Custom upstream selection / 自定义负载均衡 | `LoadBalancer` strategy plugin JAR; used by the fixed proxy stage / 负载均衡策略插件，由固定转发环节调用 |
 | Plugin runtime settings visible in Admin / 插件自己的动态配置 | Implement `ConfigurablePlugin` |
-| Nacos or other registry integration / Nacos 或其他注册中心 | Source-level adapter; Nacos runtime adapter is not implemented yet |
+| Nacos or other registry integration / Nacos 或其他发现源 | Source-level adapter; Nacos runtime adapter is not implemented yet |
 | Built-in local rate limiting / 内置本地限流 | `rover.gateway.rateLimit.*`, local to each Gateway instance |
 
 ## References / 参考入口
@@ -45,7 +47,7 @@ This is the public documentation shipped with the source repository.
 | :--- | :--- |
 | Cross-language Registrar examples / 多语言注册示例 | [Node.js / Python / Go / PHP / C++](../examples/http-registration/README.md) |
 | HTTP Registration API contract / HTTP 注册 API 契约 | [OpenAPI v1](../rover-nameserver-core/src/main/resources/openapi/rover-registration-v1.yaml) |
-| Gateway demo and test suite / 网关测试套件 | [rover-gateway-test](../rover-gateway-test/README.md) |
+| Gateway demo and test suite / Gateway 测试套件 | [rover-gateway-test](../rover-gateway-test/README.md) |
 
 ## Project entry points / 项目入口
 

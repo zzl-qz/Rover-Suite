@@ -16,7 +16,7 @@ Nameserver 的 HTTP Registration API（内部配置名称为 Client API）默认
 
 ## 共同语义
 
-- 必须在业务端口已经 `listen/ready` 后调用 `start()`。
+- 需要在业务端口已经 `listen/ready` 后调用 `start()`。
 - 构造 Registrar 时自动生成本次进程生命周期唯一的 UUID `sessionId`。
 - 启动后立即完整注册；失败后固定等待 5 秒重试，不做指数退避。
 - 注册成功后使用 fixed-delay 每 5 秒心跳；单请求超时配置默认为 3 秒。
@@ -162,7 +162,7 @@ if (function_exists('pcntl_async_signals') && function_exists('pcntl_signal')) {
 $registrar->run(static function () use (&$stop): bool { return $stop; });
 ```
 
-PHP 只支持 CLI、Swoole、RoadRunner、Octane 等长驻进程，**不支持普通 PHP-FPM 请求生命周期**；多 worker 环境必须安排一个唯一 owner。详细说明与 CLI 示例见 [php/README.md](php/README.md)。
+PHP 只支持 CLI、Swoole、RoadRunner、Octane 等长驻进程，**不支持普通 PHP-FPM 请求生命周期**；多 worker 环境需要安排一个唯一 owner。详细说明与 CLI 示例见 [php/README.md](php/README.md)。
 
 有 PHP 环境时可检查语法：
 
@@ -201,7 +201,7 @@ c++ -std=c++20 examples/http-registration/cpp/example.cpp \
 
 注册 owner 表示一个对外监听端点或 Pod，而不是框架内部的每个 worker。对于 Node cluster、
 Gunicorn、uWSGI、RoadRunner、Octane 等共享同一监听端口的多 worker 模式，只能由 master、容器生命周期或其他
-唯一协调者启动一个 Registrar。不要让多个 worker 使用相同 `serviceName + instanceId` 分别注册：
+唯一协调者启动一个 Registrar。避免让多个 worker 使用相同 `serviceName + instanceId` 分别注册：
 后启动的 session 会接管实例，旧 worker 随后的心跳会收到 `STALE_SESSION`，旧 worker 注销也会被拒绝。
 
 只有当每个 worker 确实拥有独立、可直接访问的端口和唯一 `instanceId` 时，才应分别启动 Registrar。

@@ -109,7 +109,7 @@ Spring Boot 应用 ready
 ```
 
 Java Client 保持 TCP 长连接，周期发送心跳，按固定间隔重连，并在重连后重放本地记忆的注册信息。
-临时实例注册与所属 TCP Channel 绑定，因此在确认连接断开时可以立即摘除；租约过期扫描仍作为兜底。
+临时实例注册与所属 TCP Channel 绑定，所以在确认连接断开时可以立即摘除；租约过期扫描仍作为兜底。
 
 相关实现：
 
@@ -135,13 +135,13 @@ Rover 当前的 Java 传输是基于 Netty 与 Protostuff 序列化的自定义 
 
 HTTP API 只覆盖服务提供方注册生命周期，不会把查询、订阅、本地缓存、负载均衡或 Gateway 路由包装成跨语言 SDK。
 
-短 HTTP 请求没有持久 Channel 身份，因此 HTTP 注册使用进程级 UUID `sessionId` 作为逻辑所有权围栏。
+短 HTTP 请求没有持久 Channel 身份，所以 HTTP 注册使用进程级 UUID `sessionId` 作为逻辑所有权围栏。
 注册表键仍是 `serviceName + instanceId`：
 
 - 同一 owner 使用相同公开字段重复注册时，只续约租约。
 - 新 owner 注册相同实例键时，按 **last-register-wins** 语义接管，并产生新的服务 revision。
 - 旧 owner 的心跳与注销会被拒绝并返回 `STALE_SESSION`。
-- 新 `sessionId` 无法判断两个并发进程在业务语义上谁更新，因此并发副本必须使用不同的 `instanceId`。
+- 新 `sessionId` 无法判断两个并发进程在业务语义上谁更新，所以并发副本需要使用不同的 `instanceId`。
 
 默认参考生命周期有意保持可预测：启动后立即注册，暂态失败后固定等待 5 秒重试，每 5 秒心跳一次，
 单次请求超时 3 秒，不使用指数退避。HTTP 实例没有长连接断开事件，通常依赖优雅注销或租约过期完成摘除。
@@ -196,7 +196,7 @@ flowchart TB
 
 在同一个 Nameserver `epoch` 内，每个服务分别拥有单调递增的 `revision`。新增实例、注销、owner 接管、
 公开实例字段更新、过期或健康状态变化都会增加对应服务的 revision；同 owner 对已经健康且其他字段未变化的记录重试注册则不会。
-Nameserver 重启会产生新 epoch，revision 也会重新开始，因此消费方必须先比较 `epoch`，再比较 `revision`。
+Nameserver 重启会产生新 epoch，revision 也会重新开始，所以消费方需要先比较 `epoch`，再比较 `revision`。
 
 ---
 
@@ -248,13 +248,13 @@ Gateway 启动
 | Nameserver → Gateway | TCP 实例快照通知 | 服务端 push |
 | Gateway → Nameserver | 首次查询与周期对账 | 客户端 pull |
 
-因此，HTTP Registration 并不是严格意义上的“拉模式”：服务提供方主动周期上报自身租约。
+所以，HTTP Registration 并不是严格意义上的“拉模式”：服务提供方主动周期上报自身租约。
 真正的 pull 链路是 Gateway 查询与对账。Push 是低延迟通知路径；query 是修复路径，用于启动、重连、
 推送丢失或被拒绝，以及 `epoch` / `revision` 对账。
 
 这不是强实时一致性承诺。当前实现有两个明确边界：最后一个实例产生的空快照会先被 Gateway 的推空保护拒绝，
 最迟到下一次周期对账才清空；Gateway 启动时如果 Nameserver 不可用，首次订阅失败也可能到下一次对账才恢复。
-默认 `reconcileIntervalMs=30000`，因此两类窗口最长约 30 秒。
+默认 `reconcileIntervalMs=30000`，所以两类窗口最长约 30 秒。
 
 `group` 是查询与订阅过滤条件，不属于实例唯一键。当前多组快照推送隔离仍在收口，默认空 group 是推荐使用方式。
 
@@ -281,7 +281,7 @@ HTTP 链路面向这样的场景优化：小团队需要支持多种服务提供
 | 默认全网卡监听、空 token | 本地或可信网络零配置启动 | 安全边界由部署方按需通过 bind、token、ACL、VPN/TLS 建立 |
 | 固定重试间隔 | 恢复行为可预测，状态机简单 | 超大规模实例同时恢复时可能产生尖峰；当前参考有意保持固定策略 |
 | HTTP 租约过期 | 无需主动探活配置，也没有服务端探测扇出 | HTTP 异常退出的摘除速度慢于确认 TCP 断连 |
-| 纯内存在线状态 | 不恢复陈旧端点，也不依赖存储组件 | Nameserver 重启后客户端必须重新注册 |
+| 纯内存在线状态 | 不恢复陈旧端点，也不依赖存储组件 | Nameserver 重启后客户端需要重新注册 |
 
 这里的“轻量”指部署依赖、维护面、修改难度与整体复杂度，并不表示 HTTP 比长连接二进制协议传输字节更少或故障发现更快。
 如果经过实际测量后，规模或延迟要求足以覆盖持续的跨语言维护成本，未来仍可以增加 gRPC 或自定义流式传输适配层。
@@ -374,7 +374,7 @@ flowchart TB
 | :--- | :--- |
 | Filter 插件 JAR | 自定义请求流水线；组装 FilterChain 时加载 |
 | LoadBalancer 插件 JAR | 自定义上游选择策略；创建或切换策略时加载 |
-| ServiceDiscovery 源码适配层 | 接入外部注册中心；当前不是即插即用插件 |
+| ServiceDiscovery 源码适配层 | 接入外部发现源；当前不是即插即用插件 |
 | Registration 传输源码适配层 | 增加新的线协议，同时保留 `RegistrationService` 语义 |
 
 当前没有持续监听插件目录的 watcher。要让替换后的 JAR 可预测地生效，需要重建相关运行时对象或重启 Gateway。

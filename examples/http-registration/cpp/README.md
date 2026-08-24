@@ -70,4 +70,4 @@ ROVER_SERVICE_PORT=8080 \
 
 Registrar 不提供查询、订阅、本地缓存或负载均衡。若进程使用多 worker/thread，共享一个对外监听端点时也只创建一个 Registrar owner。
 
-响应解析器只读取 Rover 自己返回的顶层 `code` 和 `message`，并要求所有 2xx 响应的 `code` 必须为 `OK`。它不是通用 JSON 库；若业务项目已经依赖 JSON 库，可在二开时替换这几个窄解析函数，不影响状态机和 HTTP 契约。
+响应解析器只读取 Rover 自己返回的顶层 `code` 和 `message`，并要求所有 2xx 响应的 `code` 需要为 `OK`。它不是通用 JSON 库；若业务项目已经依赖 JSON 库，可在二开时替换这几个窄解析函数，不影响状态机和 HTTP 契约。

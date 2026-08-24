@@ -2,7 +2,7 @@
 
 [English](./user-guide.md) · [文档索引](./README.md)
 
-本文说明 Rover-Suite 的日常配置与运行。如果还没有跑过 demo，请先阅读[快速上手](./quick-start.zh-CN.md)。
+这份指南说明 Rover-Suite 的日常配置与运行。如果还没有跑过 demo，请先阅读[快速上手](./quick-start.zh-CN.md)。
 服务提供方的完整生命周期见[服务注册指南](./service-registration.zh-CN.md)。
 
 ## 1. 进程与端口
@@ -33,7 +33,7 @@ Nameserver HTTP 不是独立组件。将 `managePort` 设为 `0` 会同时关闭
 - [`rover-gateway.yml`](../rover-gateway-bootstrap/src/main/resources/rover-gateway.yml)
 
 修改配置前，建议将完整内置文件复制到 `./config/`。外部文件会成为启动配置源，不会与 classpath
-文件按文本逐项合并。当前独立 YAML loader 不展开 `${ENV_VAR}`；请通过受保护的挂载文件或部署流程生成配置，不要提交真实 token。
+文件按文本逐项合并。当前独立 YAML loader 不展开 `${ENV_VAR}`；请通过受保护的挂载文件或部署流程生成配置，避免提交真实 token。
 
 YAML 加载后，已支持的运行时配置可能被以下文件覆盖：
 
@@ -110,7 +110,7 @@ rover:
 
 `|200` 后缀是可选权重。静态上游与 Nameserver 发现共用
 `round_robin`、`random`、`weighted_round_robin`、`ip_hash`、`least_connections` 五种负载均衡策略。
-当前静态上游只使用 URL 的 scheme、host 与 port；不要在 `targetUrl` / `targetUrls` 中配置基路径，路径变换统一使用路由的 `stripPrefix`。
+当前静态上游只使用 URL 的 scheme、host 与 port；避免在 `targetUrl` / `targetUrls` 中配置基路径，路径变换统一使用路由的 `stripPrefix`。
 
 ## 5. 定义路由
 
@@ -129,7 +129,7 @@ routes:
 | `id` | 唯一路由标识 |
 | `businessPrefix` | 匹配入站请求的路径前缀 |
 | `serviceName` | 动态发现时的 Nameserver 服务名 |
-| `group` | 可选分组过滤；当前版本多组推送隔离仍在收口，建议留空 |
+| `group` | 可选分组过滤；当前版本多组推送隔离仍在完善，建议留空 |
 | `targetUrls` | 静态路由的固定上游列表 |
 | `stripPrefix` | 转发前移除的前缀；设为 `""` 保留完整路径 |
 
@@ -142,12 +142,12 @@ routes:
 - Node.js、Python、Go、长驻 PHP 或 C++：使用小型 HTTP Registrar。参见
   [HTTP 注册](./service-registration.zh-CN.md#3-httpjson-注册)。
 
-当前 Maven 坐标使用 `1.0.0-SNAPSHOT`，不应视为已发布到公共仓库。独立本地项目引用 Starter 前，
+当前 Maven 坐标使用 `1.0.0-SNAPSHOT`，不建议视为已发布到公共仓库。独立本地项目引用 Starter 前，
 请先在本源码仓库执行 `mvn clean install -DskipTests`；正式发布后再替换为对应版本。
 
 ## 7. 管理接口与 Admin
 
-Nameserver 本地内置配置的 `adminToken` 为空，因此以下请求无需请求头：
+Nameserver 本地内置配置的 `adminToken` 为空，所以以下请求无需请求头：
 
 ```bash
 curl http://127.0.0.1:8889/_manage/status
@@ -196,10 +196,10 @@ Rover 默认采用全网卡监听与空 token，目的是本地或可信网络�
 - 将 `8888` 和 `8889` 绑定到内网地址，并通过网络策略或防火墙限制来源。
 - 为协议面和管理面配置非空、不同的 token。
 - 未使用 HTTP 注册时保持 `/v1/client/**` 关闭。
-- Gateway `/_manage/**` 与业务流量共用 Gateway 监听端口。要配置非空 Gateway `adminToken`，并在外层代理/ACL 中阻断不应远程访问的管理路径。
+- Gateway `/_manage/**` 与业务流量共用 Gateway 监听端口。要配置非空 Gateway `adminToken`，并在外层代理/ACL 中只允许可信来源访问管理路径。
 - TCP `8888`、Nameserver HTTP 和 Gateway HTTP 都没有内置 TLS。token 只做鉴权，不提供加密：TCP 放在私网/VPN/TLS 隧道，HTTP 在可信代理上终止 HTTPS。
-- 注册 Gateway 真正可达的地址；跨主机或 Pod 不要使用 `127.0.0.1`。
-- 每个可并发访问的副本必须使用唯一 `instanceId`。
+- 注册 Gateway 真正可达的地址；跨主机或 Pod 避免使用 `127.0.0.1`。
+- 每个可并发访问的副本需要使用唯一 `instanceId`。
 - 业务端口 ready 后再注册，优雅退出时关闭 Registrar。
 - 监控注册失败、过期摘除、可用实例数和 Gateway 上游失败。
 
@@ -212,7 +212,7 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
 - 发现链路是“推送优先、周期查询对账兜底”，不是强实时一致。最后一个实例注销或过期时，空推送当前会被 Gateway 保护，
   本地缓存最迟在下一次对账时清空，默认最长约 30 秒；窗口内请求可能命中刚退出的地址。
 - 如果 Gateway 启动时 Nameserver 不可用，初始订阅失败后可能等到下一次对账才补齐，默认最长约 30 秒。
-- 同一服务多组推送隔离仍在收口，当前建议 `group` 留空。具体说明见[服务注册指南](./service-registration.zh-CN.md#23-当前分组边界)。
+- 同一服务多组推送隔离仍在完善，当前建议 `group` 留空。具体说明见[服务注册指南](./service-registration.zh-CN.md#23-当前分组边界)。
 - 持久实例全部被标记为不健康时，Gateway 当前会退回全部缓存实例继续尝试，属于 fail-open 行为。
 - Gateway 聚合完整请求与响应，不支持 WebSocket、SSE 或流式代理；默认请求体上限 1 MiB，响应体硬上限 16 MiB。
 - 静态上游 URL 只保留 scheme、host 与 port，不保留 URL 基路径。

@@ -262,7 +262,7 @@ rover:
 The local `demo-block` walkthrough verifies both required stages: Gateway finds
 one JAR in `E:\\roverSuite\\plugins`, discovers
 `org.example.rover.DemoBlockFilter` from SPI, and assembles it into the filter
-chain at order `100`; a subsequent real request prints `执行自定义Filter`, proving
+chain at order `100`; a subsequent real request prints `执行自定义 Filter`, proving
 that the plugin executed rather than merely being scanned.
 
 ![Gateway discovers and assembles demo-block](./images/plugin/filter-plugin-gateway-loaded.png)
@@ -283,7 +283,7 @@ plugin calls `chain.doFilter(context)` and the request continues to routing and 
 After removing the SPI file, run Maven `clean` before `package` so stale resources under `target/` are not packaged.
 Place the resulting JAR back in `plugins/`, set `filters.classes` to
 `org.example.rover.DemoBlockFilter`, and restart Gateway. The screenshot shows
-both the configured FQCN and the `执行自定义Filter` log from a real request.
+both the configured FQCN and the `执行自定义 Filter` log from a real request.
 
 ![Explicit class loading without SPI](./images/plugin/filter-plugin-class-config-executed.png)
 

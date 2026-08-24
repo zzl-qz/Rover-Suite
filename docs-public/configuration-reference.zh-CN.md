@@ -79,7 +79,7 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
 | `gateway.loadbalance.strategy` | `round_robin` | 启动/插件装配配置；内置策略、SPI `name()` 或实现类全名；不在 Admin 中修改 |
-| `gateway.request.timeoutMillis` | `30000` | 网关请求超时（毫秒） |
+| `gateway.request.timeoutMillis` | `30000` | Gateway 请求超时（毫秒） |
 | `gateway.filter.enabled` | `true` | Filter 链开关；注意这里是 `filter` 单数 |
 | `gateway.rateLimit.enabled` | `false` | 开启 Gateway 内置本地限流 |
 | `gateway.rateLimit.algorithm` | `token_bucket` | `token_bucket` 或 `sliding_window` |
@@ -104,11 +104,11 @@ Gateway 进程内独立计数，不是分布式全局配额。
 除 `gateway.loadbalance.strategy` 外，这些可热更新键会落盘到 `config/gateway-runtime.overlay.json`。新增或替换插件 JAR、修改端口、监听地址、token、发现类型、
 插件目录和 CORS 等启动配置不能只依赖热更新，应重启 Gateway。
 
-### 覆盖优先级与易踩坑点
+### 覆盖优先级与注意事项
 
-`adminEnabled: true` 时，启动顺序为 **YAML 基线 → Gateway overlay**。只要曾在 Admin 保存过配置，overlay 中同名值就会
-在下次启动时覆盖 YAML；Admin 不会因“仅打开页面”而写入该文件。当前 overlay 是全量快照，因此一次保存可能同时保留其他
-键当时的旧值。修改 YAML 后未生效时，先检查 `config/gateway-runtime.overlay.json`；路由问题则检查
+`adminEnabled: true` 时，启动顺序为 **YAML 基线 → Gateway overlay**。如果曾在 Admin 保存过配置，overlay 中同名值会
+在下次启动时覆盖 YAML；Admin 不会因“仅打开页面”而写入该文件。当前 overlay 是全量快照，所以一次保存可能同时保留其他
+键当时的旧值。修改 YAML 后未生效时，优先检查 `config/gateway-runtime.overlay.json`；路由问题则检查
 `config/routes.overlay.json`（它会整体替代 YAML 路由）。
 
 `gateway.loadbalance.strategy` 不通过 Admin 修改，也不会写入 `config/gateway-runtime.overlay.json`。自定义 LoadBalancer 请在
