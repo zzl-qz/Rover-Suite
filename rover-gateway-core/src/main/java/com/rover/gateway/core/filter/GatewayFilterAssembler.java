@@ -50,9 +50,13 @@ public class GatewayFilterAssembler {
         // key 用类名，避免同名过滤器被重复加入。
         Map<String, Filter> filters = new LinkedHashMap<>();
 
-        // 内置访问日志始终开启，保证主链路可观测。
-        AccessLogFilter accessLogFilter = new AccessLogFilter();
-        filters.put(accessLogFilter.getClass().getName(), accessLogFilter);
+        // 访问日志可关：默认装配，内容走 debug，避免热路径 info 刷盘。
+        if (settings == null || settings.isAccessLog()) {
+            AccessLogFilter accessLogFilter = new AccessLogFilter();
+            filters.put(accessLogFilter.getClass().getName(), accessLogFilter);
+        } else {
+            log.info("访问日志过滤器已关闭 (filters.accessLog=false)");
+        }
 
         // 指标采集始终装配，内部受 metrics.enabled 总开关控制，可一键降级。
         if (metricsRegistry != null) {

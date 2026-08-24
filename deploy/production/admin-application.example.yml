@@ -1,0 +1,18 @@
+# Rover Admin —— 小团队内网生产样例（Spring Boot application.yml）
+# 复制到 Admin 使用的配置位置后替换 URL 与 token。
+# Admin 只放运维网段，不要映射公网。
+server:
+  port: 9090
+
+spring:
+  application:
+    name: rover-admin
+
+rover:
+  admin:
+    gateway-url: http://10.0.10.12:80
+    nameserver-manage-url: http://10.0.10.11:8889
+    # 若 Gateway / Nameserver 的 adminToken 不同，当前 Admin 只支持配一个；
+    # 生产建议先统一管理 token，或只管理一侧并分两个 Admin 进程（按需）。
+    # 与 Gateway adminToken 保持一致（调用管理口用 X-Rover-Admin-Token）
+    admin-token: "REPLACE_WITH_LONG_GATEWAY_ADMIN_TOKEN"

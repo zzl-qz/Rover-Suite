@@ -1,0 +1,46 @@
+# Rover Gateway —— 小团队内网生产样例
+# 复制为运行目录 config/rover-gateway.yml 后，替换全部 REPLACE_*、内网 IP 与路由。
+# 正式机建议：export ROVER_STRICT_SECURITY=true
+rover:
+  gateway:
+    port: 80
+    adminEnabled: true
+    # 管理口鉴权；与 Nameserver adminToken 建议不同
+    adminToken: "REPLACE_WITH_LONG_GATEWAY_ADMIN_TOKEN"
+    server:
+      maxContentLengthBytes: 1048576
+      bindHost: 10.0.10.12
+    proxy:
+      connectTimeoutMillis: 3000
+      requestTimeoutMillis: 30000
+    filters:
+      enabled: true
+      pluginDir: plugins
+      # 访问日志打 debug；默认 INFO 不刷屏。完全不要访问日志过滤器可设 false
+      accessLog: true
+      classes: []
+    rateLimit:
+      enabled: true
+      algorithm: token_bucket
+      key: path
+      permitsPerSecond: 1000
+      burst: 2000
+      limit: 1000
+      windowSeconds: 1
+    loadbalance:
+      strategy: round_robin
+    cors:
+      enabled: false
+    discovery:
+      type: nameserver
+      nameserver:
+        # 必须能访问 Nameserver TCP；token 与 Nameserver.token 一致
+        address: 10.0.10.11:8888
+        token: "REPLACE_WITH_LONG_PROTOCOL_TOKEN"
+        reconcileIntervalMs: 30000
+    # 按业务改路由；下列仅为占位
+    routes:
+      - id: demo-api
+        businessPrefix: /api
+        serviceName: demo-service
+        stripPrefix: ""

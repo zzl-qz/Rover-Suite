@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.rover.common.constants.HttpConstants;
 import com.rover.common.constants.NameserverConstants;
 import com.rover.common.json.JsonCodec;
+import com.rover.common.security.TokenAuth;
 import com.rover.common.protocol.RegisterRequest;
 import com.rover.nameserver.core.registration.RegistrationOwner;
 import com.rover.nameserver.core.registration.RegistrationResult;
@@ -18,7 +19,6 @@ import io.netty.handler.codec.http.HttpMethod;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -204,17 +204,14 @@ public final class NameserverClientApi {
 
     private boolean authorized(FullHttpRequest request) {
         String expected = options.getToken();
-        if (expected == null || expected.isBlank()) {
+        if (TokenAuth.isBlank(expected)) {
             return true;
         }
         String header = request.headers().get(HttpHeaderNames.AUTHORIZATION);
         if (header == null || !header.regionMatches(true, 0, "Bearer ", 0, 7)) {
             return false;
         }
-        String provided = header.substring(7).trim();
-        return MessageDigest.isEqual(
-                expected.getBytes(StandardCharsets.UTF_8),
-                provided.getBytes(StandardCharsets.UTF_8));
+        return TokenAuth.matches(expected, header.substring(7).trim());
     }
 
     private String safeEpoch() {

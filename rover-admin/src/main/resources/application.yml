@@ -11,5 +11,5 @@ rover:
     gateway-url: http://127.0.0.1:80
     nameserver-manage-url: http://127.0.0.1:8889
     # 管理口鉴权 token：非空时，Admin 调用 Gateway/Nameserver 管理口会带上 X-Rover-Admin-Token
-    # 需与 Gateway 的 admin-token、Nameserver 的 admin-token 保持一致；留空=不鉴权
+    # 需与 Gateway / Nameserver 的 adminToken 一致；留空=对端也不鉴权（仅本机调试）
     admin-token: ""

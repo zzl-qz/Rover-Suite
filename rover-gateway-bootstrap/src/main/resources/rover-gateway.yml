@@ -4,7 +4,8 @@ rover:
     # Admin 管理面：false 时不开放 /_manage/**，也不读取 config/*-overlay.json；只使用本 YAML。
     adminEnabled: true
     # 管理口鉴权 token：非空时，访问 /_manage/** 必须带 X-Rover-Admin-Token 请求头
-    # 留空 = 关闭管理口鉴权（向后兼容）
+    # 留空 = 关闭管理口鉴权（本地方便；bindHost=0.0.0.0 时等同裸奔，启动会 WARN）
+    # 生产务必设置非空 token，或把 bindHost 收紧到 127.0.0.1 / 内网
     adminToken: ""
     server:
       maxContentLengthBytes: 1048576
@@ -16,6 +17,8 @@ rover:
     filters:
       enabled: true
       pluginDir: plugins
+      # 访问日志：true=装配过滤器并打 debug（默认 INFO 不刷屏）；false=不装配
+      accessLog: true
       # 显式加载外部 Filter：无需 META-INF/services SPI 声明。
       classes: []
     # 本地限流：按 Gateway 实例执行，不访问注册中心或外部存储，默认关闭
