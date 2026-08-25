@@ -1,0 +1,4 @@
+services:
+  gateway:
+    volumes:
+      - /Users/smt/Desktop/rover-suite/deploy/docker/config/rover-gateway-static-jdk-payload.yml:/app/config/rover-gateway.yml:ro

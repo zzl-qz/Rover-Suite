@@ -34,8 +34,10 @@ final class GatewayConfigValidator {
         validatePositive("server.maxContentLengthBytes", config.getMaxContentLengthBytesOrDefault());
         validatePositive("proxy.connectTimeoutMillis", config.getConnectTimeoutMillisOrDefault());
         validatePositive("proxy.requestTimeoutMillis", config.getRequestTimeoutMillisOrDefault());
+        validateProxyOutbound(config.getProxyOutboundOrDefault());
         validateFilterSettings(gateway.getFilters());
         validateRateLimit(gateway.getRateLimit());
+        validateObservability(config);
 
         DiscoveryType discoveryType = config.getDiscoveryType();
         if (discoveryType == DiscoveryType.NAMESERVER) {
@@ -56,6 +58,13 @@ final class GatewayConfigValidator {
     private static void validatePort(int port) {
         if (port <= 0 || port > 65535) {
             throw new IllegalStateException("Gateway 端口配置非法：" + port);
+        }
+    }
+
+    private static void validateProxyOutbound(String outbound) {
+        String normalized = outbound.trim().toLowerCase(Locale.ROOT);
+        if (!"netty".equals(normalized) && !"jdk".equals(normalized)) {
+            throw new IllegalArgumentException("proxy.outbound 仅支持 netty/jdk");
         }
     }
 
@@ -97,6 +106,19 @@ final class GatewayConfigValidator {
         }
         if (rate.getWindowSeconds() <= 0 || rate.getWindowSeconds() > 3600) {
             throw new IllegalArgumentException("rateLimit.windowSeconds 必须在 1~3600 之间");
+        }
+    }
+
+    private static void validateObservability(GatewayConfig config) {
+        if (config.getMetricsWindowSecondsOrDefault() <= 0) {
+            throw new IllegalArgumentException("metrics.windowSeconds 必须大于 0");
+        }
+        if (config.getTraceSlowThresholdMillisOrDefault() <= 0) {
+            throw new IllegalArgumentException("trace.slowThresholdMillis 必须大于 0");
+        }
+        double sampleRate = config.getTraceSampleRateOrDefault();
+        if (sampleRate < 0 || sampleRate > 1) {
+            throw new IllegalArgumentException("trace.sampleRate 必须在 0~1 之间");
         }
     }
 

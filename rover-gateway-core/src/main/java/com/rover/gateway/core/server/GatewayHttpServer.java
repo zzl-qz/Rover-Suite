@@ -25,7 +25,6 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
@@ -75,6 +74,9 @@ public class GatewayHttpServer {
 
     /** CORS 跨域配置，未启用时为默认关闭对象。 */
     private final CorsSettings corsSettings;
+
+    /** true：业务 Handler 挂 EventLoop；false：挂 biz 池。有阻塞插件必须 false。 */
+    private final boolean dispatchOnEventLoop;
 
     /** 服务发现客户端，STATIC 时为 NoopServiceDiscovery。 */
     private final ServiceDiscovery serviceDiscovery;
@@ -174,7 +176,10 @@ public class GatewayHttpServer {
             String adminToken) {
         this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
                 filterSettings, discoverySettings, loadBalanceStrategy, corsSettings,
-                bindHost, adminToken, true);
+                bindHost, adminToken, true,
+                true, GatewayDefaults.METRICS_WINDOW_SECONDS,
+                true, GatewayDefaults.TRACE_SLOW_THRESHOLD_MILLIS, GatewayDefaults.TRACE_SAMPLE_RATE,
+                GatewayDispatch.onEventLoop());
     }
 
     /** 全参数构造（可显式关闭 Admin 管理面）。 */
@@ -191,12 +196,41 @@ public class GatewayHttpServer {
             String bindHost,
             String adminToken,
             boolean adminEnabled) {
+        this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
+                filterSettings, discoverySettings, loadBalanceStrategy, corsSettings,
+                bindHost, adminToken, adminEnabled,
+                true, GatewayDefaults.METRICS_WINDOW_SECONDS,
+                true, GatewayDefaults.TRACE_SLOW_THRESHOLD_MILLIS, GatewayDefaults.TRACE_SAMPLE_RATE,
+                GatewayDispatch.onEventLoop());
+    }
+
+    /** 全参数构造（含 YAML 观测开关与 EventLoop 分发）。 */
+    public GatewayHttpServer(
+            int port,
+            List<RouteConfig> routes,
+            int maxContentLengthBytes,
+            int connectTimeoutMillis,
+            int requestTimeoutMillis,
+            FilterSettings filterSettings,
+            DiscoverySettings discoverySettings,
+            String loadBalanceStrategy,
+            CorsSettings corsSettings,
+            String bindHost,
+            String adminToken,
+            boolean adminEnabled,
+            boolean metricsEnabled,
+            int metricsWindowSeconds,
+            boolean traceEnabled,
+            long traceSlowThresholdMillis,
+            double traceSampleRate,
+            boolean dispatchOnEventLoop) {
         this.port = port;
         this.bindHost = bindHost == null || bindHost.isBlank() ? GatewayDefaults.BIND_HOST : bindHost.trim();
         this.adminToken = adminToken;
         this.adminEnabled = adminEnabled;
         this.maxContentLengthBytes = maxContentLengthBytes;
         this.corsSettings = corsSettings == null ? new CorsSettings() : corsSettings;
+        this.dispatchOnEventLoop = dispatchOnEventLoop;
         DiscoverySettings settings = discoverySettings == null ? defaultStaticDiscovery() : discoverySettings;
         this.serviceDiscovery = createServiceDiscovery(settings);
 
@@ -218,6 +252,12 @@ public class GatewayHttpServer {
         configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_LIMIT, String.valueOf(rateLimit.getLimit()));
         configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_WINDOW_SECONDS,
                 String.valueOf(rateLimit.getWindowSeconds()));
+        configManager.seed(GatewayRuntimeConfigKeys.METRICS_ENABLED, String.valueOf(metricsEnabled));
+        configManager.seed(GatewayRuntimeConfigKeys.METRICS_WINDOW_SECONDS, String.valueOf(metricsWindowSeconds));
+        configManager.seed(GatewayRuntimeConfigKeys.TRACE_ENABLED, String.valueOf(traceEnabled));
+        configManager.seed(GatewayRuntimeConfigKeys.TRACE_SLOW_THRESHOLD_MILLIS,
+                String.valueOf(traceSlowThresholdMillis));
+        configManager.seed(GatewayRuntimeConfigKeys.TRACE_SAMPLE_RATE, String.valueOf(traceSampleRate));
         this.runtime = new GatewayRuntime(
                 port,
                 routes,
@@ -247,7 +287,9 @@ public class GatewayHttpServer {
 
         bossGroup = new NioEventLoopGroup(1);
         workerGroup = new NioEventLoopGroup();
-        bizGroup = new DefaultEventExecutorGroup(BIZ_THREADS);
+        if (!dispatchOnEventLoop) {
+            bizGroup = new DefaultEventExecutorGroup(BIZ_THREADS);
+        }
 
         try {
             ServerBootstrap bootstrap = new ServerBootstrap();
@@ -256,19 +298,25 @@ public class GatewayHttpServer {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            ch.pipeline()
+                            var pipeline = ch.pipeline()
                                     .addLast(new HttpServerCodec())
-                                    .addLast(new HttpObjectAggregator(maxContentLengthBytes))
                                     .addLast(new HttpServerKeepAliveHandler())
-                                    .addLast(new CorsHandler(corsSettings))
-                                    .addLast(bizGroup, new GatewayHttpServerHandler(runtime, adminEnabled));
+                                    .addLast(new CorsHandler(corsSettings));
+                            GatewayHttpServerHandler handler = new GatewayHttpServerHandler(
+                                    runtime, adminEnabled, maxContentLengthBytes);
+                            if (dispatchOnEventLoop) {
+                                // 轻路径：别再 hop 到 biz 池。插件禁止阻塞 EventLoop。
+                                pipeline.addLast(handler);
+                            } else {
+                                pipeline.addLast(bizGroup, handler);
+                            }
                         }
                     });
 
             serverChannel = bootstrap.bind(bindHost, port).sync().channel();
             warnIfAdminTokenBlank();
-            log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, adminEnabled={}, managePrefix={}",
-                    bindHost, port, runtime.getDiscoveryType(), adminEnabled,
+            log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, adminEnabled={}, dispatchOnEventLoop={}, managePrefix={}",
+                    bindHost, port, runtime.getDiscoveryType(), adminEnabled, dispatchOnEventLoop,
                     adminEnabled ? ManageApiPaths.PREFIX : "disabled");
         } catch (InterruptedException err) {
             Thread.currentThread().interrupt();

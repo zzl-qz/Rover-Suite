@@ -35,7 +35,14 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.adminEnabled` | `true` | 是否启用 `/_manage/**`、Admin 路由 overlay 与运行时配置 overlay | 重启 |
 | `rover.gateway.adminToken` | 空 | `/_manage/**` 管理口 token；空=不鉴权（启动 WARN）。正式机建议非空，或设 `ROVER_STRICT_SECURITY=true` | 重启 |
 | `rover.gateway.server.bindHost` | `0.0.0.0` | 业务监听地址 | 重启 |
-| `rover.gateway.server.maxContentLengthBytes` | `1048576` | 请求体上限 | 重启 |
+| `rover.gateway.server.maxContentLengthBytes` | `1048576` | 请求体上限（入站管道计数，超限 413）。不再经过 `HttpObjectAggregator` | 重启 |
+| `rover.gateway.server.dispatchOnEventLoop` | `false` | 业务 Handler 是否留在 EventLoop。默认走业务线程池，和收发包分开。确认无阻塞才改 `true` | 重启；也可用 `-Drover.gateway.dispatchOnEventLoop` |
+| `rover.gateway.metrics.enabled` | `true` | 启动时指标总开关；`false` 热路径不记 inflight/record。503 拒绝计数仍记 | 重启；Admin 关闭时只认 YAML |
+| `rover.gateway.metrics.windowSeconds` | `300` | 指标滑动窗口（秒） | 重启 / 运行时 |
+| `rover.gateway.trace.enabled` | `true` | 启动时时间线开关；`false` 不 `markPhase`、不造 traceId | 重启；Admin 关闭时只认 YAML |
+| `rover.gateway.trace.slowThresholdMillis` | `100` | 慢请求阈值 | 重启 / 运行时 |
+| `rover.gateway.trace.sampleRate` | `0.0` | 采样率 0~1 | 重启 / 运行时 |
+| `rover.gateway.proxy.outbound` | `netty` | 出站客户端：`netty`（默认）或 `jdk`（第一版 JDK `HttpClient` HTTP/1.1，留给回滚和对照）。也可用 `-Drover.gateway.proxy.outbound` | 重启 |
 | `rover.gateway.proxy.connectTimeoutMillis` | `3000` | 上游连接超时 | 重启 |
 | `rover.gateway.proxy.requestTimeoutMillis` | `30000` | 上游请求超时的启动默认值 | 重启 |
 | `rover.gateway.discovery.type` | `STATIC`（代码默认）/ 示例为 `nameserver` | `static` 或 `nameserver` | 重启 |
@@ -67,6 +74,11 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 `config/routes.overlay.json` 和 `config/gateway-runtime.overlay.json`，并使 `/_manage/**` 返回 `404`；不会影响 Gateway
 连接 Nameserver、订阅服务或转发业务请求。已有 overlay 文件不会被删除，重新设为 `true` 后仍会继续生效。
 
+Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（在途闸门满，默认 `max(64, CPU×8)`，可用
+`-Drover.gateway.maxInflight` 覆盖）或 `NO_UPSTREAM`（没有可用上游）。日志里会打 `inflight=已用/上限`。
+`/_manage/metrics` 的 `resources.rejects` 和 Prometheus `rover_gateway_rejects_total` 按原因计数。
+这些只发生在拒绝路径，成功请求不加活。
+
 ### 路由字段
 
 `rover.gateway.routes` 是路由数组，不是单值配置。每项支持：`id`、`businessPrefix`、`serviceName`、`group`、
@@ -88,9 +100,9 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `gateway.rateLimit.burst` | `2000` | 令牌桶最大容量（请求数） |
 | `gateway.rateLimit.limit` | `1000` | 一个滑动窗口内允许的最大请求数 |
 | `gateway.rateLimit.windowSeconds` | `1` | 滑动窗口时长（秒） |
-| `gateway.metrics.enabled` | `true` | 指标采集总开关 |
+| `gateway.metrics.enabled` | `true` | 指标采集总开关；`false` 时热路径不记 inflight/record |
 | `gateway.metrics.windowSeconds` | `300` | 指标滑动窗口，最大 300 秒 |
-| `gateway.trace.enabled` | `true` | 请求链路时间线开关 |
+| `gateway.trace.enabled` | `true` | 请求链路时间线开关；`false` 时不 `markPhase`、不造 traceId |
 | `gateway.trace.slowThresholdMillis` | `100` | 超过该值记录慢请求时间线 |
 | `gateway.trace.sampleRate` | `0.0` | `0` 只记录慢请求，`1` 全量记录，支持 `0~1` 小数 |
 

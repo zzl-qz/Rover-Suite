@@ -8,13 +8,17 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelPromise;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
-import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
+import io.netty.handler.codec.http.HttpContent;
 import io.netty.handler.codec.http.HttpHeaderNames;
 import io.netty.handler.codec.http.HttpMethod;
+import io.netty.handler.codec.http.HttpRequest;
+import io.netty.handler.codec.http.HttpResponse;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
+import io.netty.handler.codec.http.LastHttpContent;
 import io.netty.util.AttributeKey;
+import io.netty.util.ReferenceCountUtil;
 import java.nio.charset.StandardCharsets;
 import lombok.extern.slf4j.Slf4j;
 
@@ -30,6 +34,10 @@ public class CorsHandler extends ChannelDuplexHandler {
     private static final AttributeKey<String> ALLOWED_ORIGIN =
             AttributeKey.valueOf("rover.cors.allowedOrigin");
 
+    /** 预检/403 已经回了，后面的 body chunk 直接丢掉。 */
+    private static final AttributeKey<Boolean> DRAIN_BODY =
+            AttributeKey.valueOf("rover.cors.drainBody");
+
     private final CorsSettings settings;
 
     public CorsHandler(CorsSettings settings) {
@@ -38,7 +46,23 @@ public class CorsHandler extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        if (!settings.isEnabled() || !(msg instanceof FullHttpRequest request)) {
+        if (!settings.isEnabled()) {
+            ctx.fireChannelRead(msg);
+            return;
+        }
+        if (msg instanceof HttpContent content) {
+            if (Boolean.TRUE.equals(ctx.channel().attr(DRAIN_BODY).get())) {
+                boolean last = content instanceof LastHttpContent;
+                content.release();
+                if (last) {
+                    ctx.channel().attr(DRAIN_BODY).set(null);
+                }
+                return;
+            }
+            ctx.fireChannelRead(msg);
+            return;
+        }
+        if (!(msg instanceof HttpRequest request)) {
             ctx.fireChannelRead(msg);
             return;
         }
@@ -52,8 +76,8 @@ public class CorsHandler extends ChannelDuplexHandler {
 
         String allowedOrigin = settings.resolveAllowedOrigin(origin);
         if (allowedOrigin == null) {
-            // 带 Origin 但来源不允许：直接 403
-            request.release();
+            ctx.channel().attr(DRAIN_BODY).set(Boolean.TRUE);
+            ReferenceCountUtil.release(msg);
             writeCorsError(ctx, "Origin not allowed: " + origin);
             return;
         }
@@ -67,7 +91,8 @@ public class CorsHandler extends ChannelDuplexHandler {
                 && request.headers().contains(HttpHeaderNames.ACCESS_CONTROL_REQUEST_METHOD)) {
             String requestedHeaders = request.headers()
                     .get(HttpHeaderNames.ACCESS_CONTROL_REQUEST_HEADERS);
-            request.release();
+            ctx.channel().attr(DRAIN_BODY).set(Boolean.TRUE);
+            ReferenceCountUtil.release(msg);
             writePreflightResponse(ctx, allowedOrigin, requestedHeaders);
             return;
         }
@@ -79,8 +104,9 @@ public class CorsHandler extends ChannelDuplexHandler {
 
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
-        if (msg instanceof FullHttpResponse response) {
-            String allowedOrigin = ctx.channel().attr(ALLOWED_ORIGIN).getAndRemove(); // 出站带出
+        // 代理已改为 HttpResponse + HttpContent 流式回写；FullHttpResponse 仍覆盖错误/预检等整包路径。
+        if (msg instanceof HttpResponse response) {
+            String allowedOrigin = ctx.channel().attr(ALLOWED_ORIGIN).getAndRemove(); // 出站带出（只在首帧）
             if (allowedOrigin != null) {
                 response.headers().set(HttpHeaderNames.ACCESS_CONTROL_ALLOW_ORIGIN, allowedOrigin);
                 response.headers().add(HttpHeaderNames.VARY, HttpHeaderNames.ORIGIN);
@@ -94,7 +120,7 @@ public class CorsHandler extends ChannelDuplexHandler {
     }
 
     /** 判断 Origin 是否与当前请求的 Host 同源（协议+主机+端口一致）。 */
-    private boolean isSameOrigin(FullHttpRequest request, String origin) {
+    private boolean isSameOrigin(HttpRequest request, String origin) {
         String host = request.headers().get(HttpHeaderNames.HOST);
         if (host == null || host.isBlank()) {
             return false;
