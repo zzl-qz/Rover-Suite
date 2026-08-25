@@ -24,14 +24,24 @@ Rover-Suite 不提供通用 QPS 承诺。真实吞吐会受到 CPU/JDK、容器�
 | 第四波 | 出站换 Netty（JDK 路径留着） | 约 **2100→6800（约 3.2 倍）**；相对直连 **12%→40%**；全 200 | 成功约 **8830**；503 约 **5.6%** | **唯一拉开小包 QPS 的一刀** |
 | 第五波 | 入站去掉 Aggregator，body 走管道 | 补测约 **6610**，全 200；和 6800 同一档 | 补测成功约 **8300～8400**；503 约 **4%** | **GET hello 不涨**；POST 才能叠连接 |
 
-**大响应：`GET /api/payload?size=N`（只在第一波做过同场 A/B）**
+**大响应：`GET /api/payload?size=N`（c=20）**
 
-| 场景 | 第一波流式 vs 整包 | 第二～五波 |
+| 场景 | 第一波流式 vs 整包 | 当前代码复测（第四+五波后，`184143`） |
 | --- | --- | --- |
-| 256 KB / 1 MB / 4 MB 的 QPS（c=20） | 和整包 **接近（±5%）** | **未复测** |
-| Gateway 内存 | 约 **−55%～−65%**（4 MB：约 1.2 GiB → 约 440 MiB） | **未复测** |
+| 256 KB / 1 MB / 4 MB QPS | 和整包 **接近（±5%）** | 对比第一波流式：约 **918 / 228 / 70**（**−5% / −14% / 持平**），**不涨** |
+| Gateway 内存 | 约 **−55%～−65%**（4 MB：约 1.2 GiB → 约 440 MiB） | 再降一截：约 **170 / 189 / 278 MiB**（4 MB 相对第一波流式约 **−37%**） |
 
-**能对外说的累计（稳态小包）：** JDK 出站时期约 **2100 QPS / 直连 12%** → 现在约 **6800 QPS / 直连 40%**。涨出来的那一截，几乎全是第四波。第一波赢的是高压成功率和大包内存；第二、三、五波不要当 QPS 成绩讲。
+**大请求体：`POST /api/ingest`（第五波该看的场景，c=20，首次）**
+
+| 大小 | Gateway 成功 QPS（中位） | 当轮直连 | 约为直连 | Gateway 内存 |
+| --- | ---: | ---: | ---: | ---: |
+| 256 KB | 约 **808** | 约 1232 | **66%** | 约 267 MiB |
+| 1 MB | 约 **239** | 约 285 | **84%** | 约 267 MiB |
+| 4 MB | 约 **66** | 约 84 | **78%** | 约 302 MiB |
+
+第二、三波仍没有单独大包 A/B（那两刀不碰 body）。第四波 JDK 半场 GET 的 Direct 自己掉了，**不能**拿后半场绝对 QPS 吹大包更快。明细见 §8.3。
+
+**能对外说的累计（稳态小包）：** JDK 出站时期约 **2100 QPS / 直连 12%** → 现在约 **6800 QPS / 直连 40%**。涨出来的那一截，几乎全是第四波。第一波赢的是高压成功率和大包内存；后面几波大包 QPS 仍不涨，内存又低了一截。
 
 ## 2. 为什么这组数据看起来不够直觉
 
@@ -69,7 +79,7 @@ Docker Desktop 与 Linux 生产环境存在差异。macOS 虚拟化层会影响�
 | Gateway | 8080 | 2.0 | 2 GB |
 | demo 上游 | 8082 | 2.0 | 1 GB |
 
-配置：`accessLog=false`、`rateLimit=false`。经 Gateway 访问 `GET /api/hello` 或 `GET /api/payload?size=N`。
+配置：`accessLog=false`、`rateLimit=false`。经 Gateway 访问 `GET /api/hello`、`GET /api/payload?size=N` 或 `POST /api/ingest`。
 
 ## 5. 压测方法
 
@@ -80,10 +90,10 @@ cd /path/to/rover-suite
 # 小响应分层（Direct / Gateway 静态 / Gateway+NS）
 ./deploy/scripts/bench-phase-a.sh
 
-# 大包 A/B（脚本内对比整包缓冲 vs 流式回写）
-chmod +x deploy/scripts/bench-phase-a-payload.sh
+# 当前代码大包 GET + POST 复测（不回退源码）
+chmod +x deploy/scripts/bench-phase-a-payload-remasure.sh
 SIZES="262144 1048576 4194304" CONCURRENCY=20 DURATION=20s ROUNDS=3 \
-  ./deploy/scripts/bench-phase-a-payload.sh
+  ./deploy/scripts/bench-phase-a-payload-remasure.sh
 ```
 
 早期小团队样本仍可用 `./deploy/scripts/bench-small-team.sh` 复现（见 §6）。
@@ -207,6 +217,33 @@ Nameserver 路径 c=50 中位 **7266**（当轮 Direct 的 42.9%），全 200。
 当前 2 核 / 2G 本机口径：**c=50 / 约 6800 QPS / 全 200 / 约为直连的 40%**。
 
 同场 A/B（`2026-08-25-154500-phase-a-outbound-ab`）：同一镜像只改 YAML，启动日志核对过（`JDK HttpClient HTTP/1.1` vs `Netty`）。Direct c=50 漂移 **3.3%**。JDK 半场：GW **1865** / 直连 **12.0%**。Netty 半场：GW **6615** / 直连 **43.8%**。同一 jar 大约 **3.5 倍**。两边 c=50 都是全 200。
+
+## 8.3 大包 / POST 复测（2026-08-25，`184143`）
+
+当前代码（响应流式 + Netty 出站 + 入站管道），`perf-fair`，c=20，20s，3 轮中位。脚本：`bench-phase-a-payload-remasure.sh`。对照第一波流式：`123108`。
+
+**GET `/api/payload`（Netty 出站，全 200）**
+
+| 大小 | 第一波流式 QPS | 本轮 QPS | 变化 | 第一波流式内存 | 本轮内存 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 256 KB | 971 | **918** | **−5%** | 352 MiB | **170 MiB** |
+| 1 MB | 266 | **228** | **−14%** | 355 MiB | **189 MiB** |
+| 4 MB | 69 | **70** | **持平** | 439 MiB | **278 MiB** |
+
+本轮 Direct：1161 / 294 / 81，和第一波流式 Direct（1189 / 288 / 76）同档，对照成立。  
+**大包 QPS 仍不涨**（带宽/上游还是主瓶颈）。内存比第一波流式再低一截，4 MB 约 **440→280 MiB**。
+
+**POST `/api/ingest`（首次，Netty 出站，全 200）**
+
+| 大小 | Gateway QPS | Direct | 约为直连 | Gateway 内存 |
+| --- | ---: | ---: | ---: | ---: |
+| 256 KB | **808** | 1232 | **66%** | 267 MiB |
+| 1 MB | **239** | 285 | **84%** | 267 MiB |
+| 4 MB | **66** | 84 | **78%** | 302 MiB |
+
+没有旧 Aggregator 对照，这是基线，不是「比以前涨了多少」。4 MB POST 同场 JDK 出站 QPS 约 62（Direct 两边都是 84），**QPS 几乎一样**；JDK 出站内存约 **790 MiB**，明显高于 Netty 的约 300 MiB。
+
+JDK 半场 GET 的 Direct 自己掉了（256K 1161→663），那组绝对 QPS **作废**，不要用来讲第四波大包更快。
 
 ## 9. 如何让压测结果更可信
 
