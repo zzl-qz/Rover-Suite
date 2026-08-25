@@ -2,13 +2,15 @@ package com.rover.gateway.core.filter;
 
 import com.rover.common.constants.HttpConstants;
 import com.rover.common.spi.filter.RequestContext;
+import com.rover.gateway.core.config.GatewayDefaults;
+import com.rover.gateway.core.proxy.InboundBodyPipe;
 import com.rover.gateway.core.route.RouteConfig;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
-import io.netty.handler.codec.http.FullHttpRequest;
 import io.netty.handler.codec.http.FullHttpResponse;
 import io.netty.handler.codec.http.HttpHeaderNames;
+import io.netty.handler.codec.http.HttpRequest;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpVersion;
 import java.nio.charset.StandardCharsets;
@@ -16,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -30,8 +33,11 @@ public class GatewayRequestContext implements RequestContext {
     /** Netty 通道上下文，用来把响应写回客户端。 */
     private final ChannelHandlerContext channelContext;
 
-    /** 当前收到的完整 HTTP 请求。 */
-    private final FullHttpRequest request;
+    /** 入站请求行+头。body 走 bodyPipe，不再等 FullHttpRequest。 */
+    private final HttpRequest request;
+
+    /** 入站 body 边到边转；Filter 只看头。 */
+    private final InboundBodyPipe bodyPipe;
 
     /** 请求路径，不含 query 参数。 */
     private final String requestPath;
@@ -45,6 +51,10 @@ public class GatewayRequestContext implements RequestContext {
     /** 链路时间线阶段耗时（纳秒），按标记顺序排列。 */
     private final List<Phase> phases = new ArrayList<>();
 
+    /** false 时 markPhase 空转，热路径不往 phases 里塞。 */
+    @Setter
+    private boolean traceEnabled = true;
+
     /**
      * 记录一个处理阶段耗时。
      *
@@ -52,6 +62,9 @@ public class GatewayRequestContext implements RequestContext {
      * @param costNanos 该阶段耗时（纳秒）
      */
     public void markPhase(String name, long costNanos) {
+        if (!traceEnabled) {
+            return;
+        }
         if (costNanos < 0) {
             costNanos = 0;
         }
@@ -116,17 +129,26 @@ public class GatewayRequestContext implements RequestContext {
     @Setter
     private boolean upstreamTimeout;
 
-    /** 请求是否已经结束（响应已写回或不再继续转发）。 */
-    private boolean completed;
+    /** 请求是否已经结束。跨 EventLoop / 业务线程，必须原子，避免两头各写一份响应。 */
+    private final AtomicBoolean completed = new AtomicBoolean();
 
     /** 构造：记录通道、请求与请求路径，并启动耗时计时。 */
     public GatewayRequestContext(
             ChannelHandlerContext channelContext,
-            FullHttpRequest request,
+            HttpRequest request,
             String requestPath) {
+        this(channelContext, request, requestPath, GatewayDefaults.MAX_REQUEST_BODY_BYTES);
+    }
+
+    public GatewayRequestContext(
+            ChannelHandlerContext channelContext,
+            HttpRequest request,
+            String requestPath,
+            int maxBodyBytes) {
         this.channelContext = channelContext;
         this.request = request;
         this.requestPath = requestPath;
+        this.bodyPipe = new InboundBodyPipe(maxBodyBytes);
         this.startNanos = System.nanoTime();
     }
 
@@ -139,7 +161,7 @@ public class GatewayRequestContext implements RequestContext {
     /** 读取请求头，Netty Headers 已经提供大小写不敏感匹配。 */
     @Override
     public String requestHeader(String name) {
-        return name == null ? null : request.headers().get(name);
+        return name == null || request == null ? null : request.headers().get(name);
     }
 
     /** 写入过滤器共享属性。 */
@@ -151,13 +173,13 @@ public class GatewayRequestContext implements RequestContext {
     /** @return 请求是否已结束（响应已写回或不再继续转发） */
     @Override
     public boolean isCompleted() {
-        return completed;
+        return completed.get();
     }
 
     /** 标记请求已结束，后续过滤器不会再执行。 */
     @Override
     public void markCompleted() {
-        this.completed = true;
+        completed.set(true);
     }
 
     /** 供内置和外挂 Filter 统一短路请求。 */
@@ -174,6 +196,14 @@ public class GatewayRequestContext implements RequestContext {
      * @param responseBody 响应正文（text/plain）
      */
     public void writeText(HttpResponseStatus status, String responseBody) {
+        writeText(status, responseBody, null);
+    }
+
+    /** 短路回写；rejectReason 非空时带上 X-Rover-Reject-Reason。已结束的请求不再写第二份。 */
+    public void writeText(HttpResponseStatus status, String responseBody, String rejectReason) {
+        if (!completed.compareAndSet(false, true)) {
+            return;
+        }
         byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
         FullHttpResponse response = new DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1,
@@ -181,8 +211,10 @@ public class GatewayRequestContext implements RequestContext {
                 Unpooled.wrappedBuffer(body));
         response.headers().set(HttpHeaderNames.CONTENT_TYPE, HttpConstants.MEDIA_TYPE_TEXT_UTF8);
         response.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, body.length);
+        if (rejectReason != null && !rejectReason.isBlank()) {
+            response.headers().set(HttpConstants.REJECT_REASON_HEADER, rejectReason);
+        }
         channelContext.writeAndFlush(response);
         this.statusCode = status.code();
-        markCompleted();
     }
 }

@@ -12,6 +12,7 @@ import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.common.spi.plugin.ConfigurablePlugin;
 import com.rover.gateway.core.loadbalance.LoadBalancerFactory;
+import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 import com.rover.gateway.core.metrics.MetricsRegistry;
 import com.rover.gateway.core.metrics.MetricsSettings;
 import com.rover.gateway.core.proxy.HttpProxyClient;
@@ -99,7 +100,8 @@ public class GatewayRuntime {
      * 异步模型下在途请求不占业务线程，闸门与线程数解耦，仅用于背压保护；
      * 默认 CPU×8（下限 64），可用 -Drover.gateway.maxInflight 覆盖。
      */
-    private volatile Semaphore processingGate = new Semaphore(defaultProcessingPermits());
+    private final int processingPermits = defaultProcessingPermits();
+    private final Semaphore processingGate = new Semaphore(processingPermits);
 
     /** 默认准入上限：CPU 核数 × 8，下限 64，可用 -Drover.gateway.maxInflight 覆盖。 */
     private static int defaultProcessingPermits() {
@@ -150,6 +152,7 @@ public class GatewayRuntime {
         List<RouteConfig> initialRoutes = routeValidator.normalizeAndValidate(
                 routes == null ? List.of() : routes);
         this.routeMatcherRef.set(new RouteMatcher(initialRoutes));
+        StaticUpstreamCluster.rebuild(initialRoutes);
         rebuildFilters();
     }
 
@@ -166,6 +169,16 @@ public class GatewayRuntime {
     /** 释放一个在途处理名额。 */
     public void releaseProcessingPermit() {
         processingGate.release();
+    }
+
+    /** 在途上限（Semaphore 许可数）。 */
+    public int maxInflight() {
+        return processingPermits;
+    }
+
+    /** 当前已占用的在途名额。只给 503 日志 / 管理口用，别放热路径。 */
+    public int inflightUsed() {
+        return Math.max(0, processingPermits - processingGate.availablePermits());
     }
 
     /** @return 当前过滤器链快照，供 Handler 执行 */
@@ -286,6 +299,8 @@ public class GatewayRuntime {
      */
     public synchronized List<RouteConfig> applyRoutes(List<RouteConfig> routes) {
         List<RouteConfig> normalized = routeValidator.normalizeAndValidate(routes);
+        // 先换上游快照再换 matcher，下一请求读到的就是新表
+        StaticUpstreamCluster.rebuild(normalized);
         routeMatcherRef.set(new RouteMatcher(normalized));
         rebuildFilters();
         watchServices(normalized);
@@ -369,9 +384,10 @@ public class GatewayRuntime {
         return plugins;
     }
 
-    /** 释放运行时持有的插件资源。 */
+    /** 释放运行时持有的插件资源和出站连接池。 */
     public void close() {
         assembler.close();
         LoadBalancerFactory.shutdown();
+        proxyClient.close();
     }
 }
