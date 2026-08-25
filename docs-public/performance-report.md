@@ -24,14 +24,24 @@ Same host, Docker Desktop, `perf-fair` (Gateway **2 CPU / 2 GB**). Empty cells w
 | 4 | Netty outbound (JDK path kept) | About **2100→6800 (~3.2×)**; vs direct **12%→40%**; all 200 | Success ~**8830**; 503 ~**5.6%** | **The only small-body QPS jump** |
 | 5 | Inbound no Aggregator; body piped | Remeasure ~**6610**, all 200; same band as 6800 | Remeasure success ~**8300–8400**; 503 ~**4%** | **GET hello did not rise**; POST can overlap connect |
 
-**Large responses: `GET /api/payload?size=N` (A/B only in wave 1)**
+**Large responses: `GET /api/payload?size=N` (c=20)**
 
-| Scenario | Wave 1 streaming vs buffered | Waves 2–5 |
+| Scenario | Wave 1 streaming vs buffered | Current remasure (after waves 4–5, `184143`) |
 | --- | --- | --- |
-| QPS at 256 KB / 1 MB / 4 MB (c=20) | **About the same (±5%)** | **Not re-measured** |
-| Gateway memory | About **−55% to −65%** (4 MB: ~1.2 GiB → ~440 MiB) | **Not re-measured** |
+| QPS at 256 KB / 1 MB / 4 MB | **About the same (±5%)** | vs wave-1 streaming: about **918 / 228 / 70** (**−5% / −14% / flat**). **No QPS lift** |
+| Gateway memory | About **−55% to −65%** (4 MB: ~1.2 GiB → ~440 MiB) | Lower still: about **170 / 189 / 278 MiB** (4 MB about **−37%** vs wave-1 streaming) |
 
-**Cumulative (steady small JSON):** JDK-outbound era ~**2100 QPS / 12% of direct** → now ~**6800 QPS / 40% of direct**. Almost all of that jump is wave 4. Wave 1 bought high-load success and large-body memory. Do not sell waves 2, 3, or 5 as QPS wins.
+**Large request bodies: `POST /api/ingest` (the wave-5 case; first numbers, c=20)**
+
+| Size | Gateway success QPS (median) | Same-run direct | vs direct | Gateway memory |
+| --- | ---: | ---: | ---: | ---: |
+| 256 KB | about **808** | about 1232 | **66%** | about 267 MiB |
+| 1 MB | about **239** | about 285 | **84%** | about 267 MiB |
+| 4 MB | about **66** | about 84 | **78%** | about 302 MiB |
+
+Waves 2–3 still have no isolated large-body A/B (those changes do not touch the body path). The JDK-outbound GET half had Direct collapse; do **not** use that absolute QPS. Details: §8.3.
+
+**Cumulative (steady small JSON):** JDK-outbound era ~**2100 QPS / 12% of direct** → now ~**6800 QPS / 40% of direct**. Almost all of that jump is wave 4. Wave 1 bought high-load success and large-body memory. Later waves did not raise large-body QPS; they cut more memory.
 
 ## 2. Why the sample may look counter-intuitive
 
@@ -66,7 +76,7 @@ Admin was not started.
 | Gateway | 8080 | 2.0 | 2 GB |
 | demo upstream | 8082 | 2.0 | 1 GB |
 
-Config: `accessLog=false`, `rateLimit=false`. Paths: `GET /api/hello` or `GET /api/payload?size=N`.
+Config: `accessLog=false`, `rateLimit=false`. Paths: `GET /api/hello`, `GET /api/payload?size=N`, or `POST /api/ingest`.
 
 ## 5. Method
 
@@ -76,9 +86,9 @@ cd /path/to/rover-suite
 
 ./deploy/scripts/bench-phase-a.sh
 
-chmod +x deploy/scripts/bench-phase-a-payload.sh
+chmod +x deploy/scripts/bench-phase-a-payload-remasure.sh
 SIZES="262144 1048576 4194304" CONCURRENCY=20 DURATION=20s ROUNDS=3 \
-  ./deploy/scripts/bench-phase-a-payload.sh
+  ./deploy/scripts/bench-phase-a-payload-remasure.sh
 ```
 
 Early small-team numbers use `./deploy/scripts/bench-small-team.sh` (see §6).
@@ -192,6 +202,33 @@ Nameserver path c=50 median **7266** (42.9% of same-run Direct), all 200. That i
 Current 2 CPU / 2 GB local capacity: **c=50 / ~6800 QPS / all 200 / ~40% of Direct**.
 
 Same-session A/B (`2026-08-25-154500-phase-a-outbound-ab`): one image, YAML-only switch, startup logs checked (`JDK HttpClient HTTP/1.1` vs `Netty`). Direct c=50 drift **3.3%**. JDK half: GW **1865** / 12.0% of Direct. Netty half: GW **6615** / **43.8%** of Direct. About **3.5×** on the same jar. c=50 all 200 on both sides.
+
+## 8.3 Large-body remasure (2026-08-25, `184143`)
+
+Current stack (streaming responses + Netty outbound + inbound pipe), `perf-fair`, c=20, 20s, 3-round median. Script: `bench-phase-a-payload-remasure.sh`. Baseline: wave-1 streaming run `123108`.
+
+**GET `/api/payload` (Netty outbound, all 200)**
+
+| Size | Wave-1 stream QPS | This run QPS | Change | Wave-1 stream memory | This run memory |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 256 KB | 971 | **918** | **−5%** | 352 MiB | **170 MiB** |
+| 1 MB | 266 | **228** | **−14%** | 355 MiB | **189 MiB** |
+| 4 MB | 69 | **70** | **flat** | 439 MiB | **278 MiB** |
+
+This-run Direct: 1161 / 294 / 81 vs wave-1 stream Direct 1189 / 288 / 76 — same band, comparison stands.  
+**Large-response QPS still does not rise.** Memory dropped again; 4 MB is about **440→280 MiB**.
+
+**POST `/api/ingest` (first numbers, Netty outbound, all 200)**
+
+| Size | Gateway QPS | Direct | vs direct | Gateway memory |
+| --- | ---: | ---: | ---: | ---: |
+| 256 KB | **808** | 1232 | **66%** | 267 MiB |
+| 1 MB | **239** | 285 | **84%** | 267 MiB |
+| 4 MB | **66** | 84 | **78%** | 302 MiB |
+
+There is no old-Aggregator A/B. This is a baseline, not a “how much faster than before”. Same-session 4 MB POST with JDK outbound is about 62 QPS (Direct 84 on both halves) — **QPS is the same**; JDK outbound memory is about **790 MiB** vs Netty **300 MiB**.
+
+The JDK-outbound GET half had Direct collapse (256 KB 1161→663). That absolute QPS is **void**.
 
 ## 9. Making results more credible
 
