@@ -11,7 +11,18 @@ rover:
       maxContentLengthBytes: 1048576
       # 监听地址：默认 0.0.0.0；可收紧到 127.0.0.1 或内网 IP
       bindHost: 0.0.0.0
+      # 默认 false：业务 Handler 走线程池，跟 EventLoop 收发包分开。确认无阻塞才改 true
+      dispatchOnEventLoop: false
+    metrics:
+      enabled: true
+      windowSeconds: 300
+    trace:
+      enabled: true
+      slowThresholdMillis: 100
+      sampleRate: 0.0
     proxy:
+      # netty=出站走 Netty（默认）。jdk=第一版 JDK HttpClient，对照/回滚用，不要删这条能力
+      outbound: netty
       connectTimeoutMillis: 3000
       requestTimeoutMillis: 30000
     filters:

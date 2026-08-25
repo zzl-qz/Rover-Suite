@@ -39,7 +39,14 @@ a VPN in production.
 | `rover.gateway.adminEnabled` | `true` | Enables `/_manage/**`, Admin route overlays, and runtime config overlays | Restart |
 | `rover.gateway.adminToken` | empty | `/_manage/**` token; blank = no auth (startup WARN). Prefer non-empty or `ROVER_STRICT_SECURITY=true` | Restart |
 | `rover.gateway.server.bindHost` | `0.0.0.0` | Business listener address | Restart |
-| `rover.gateway.server.maxContentLengthBytes` | `1048576` | Request body limit | Restart |
+| `rover.gateway.server.maxContentLengthBytes` | `1048576` | Request body limit (inbound pipe; 413 when exceeded). No `HttpObjectAggregator` | Restart |
+| `rover.gateway.server.dispatchOnEventLoop` | `false` | Run the business handler on the EventLoop. Default is the biz pool (I/O and business stay split). Set `true` only when the path is non-blocking | Restart; or `-Drover.gateway.dispatchOnEventLoop` |
+| `rover.gateway.metrics.enabled` | `true` | Startup metrics switch; `false` skips inflight/record on the hot path. 503 reject counters still increment | Restart; YAML-only when Admin is off |
+| `rover.gateway.metrics.windowSeconds` | `300` | Metrics sliding window (seconds) | Restart / runtime |
+| `rover.gateway.trace.enabled` | `true` | Startup timeline switch; `false` skips `markPhase` and minted trace IDs | Restart; YAML-only when Admin is off |
+| `rover.gateway.trace.slowThresholdMillis` | `100` | Slow-request threshold | Restart / runtime |
+| `rover.gateway.trace.sampleRate` | `0.0` | Sample rate `0..1` | Restart / runtime |
+| `rover.gateway.proxy.outbound` | `netty` | Upstream HTTP client: `netty` (default) or `jdk` (first-generation JDK `HttpClient` HTTP/1.1, kept for rollback / A-B). Also `-Drover.gateway.proxy.outbound` | Restart |
 | `rover.gateway.proxy.connectTimeoutMillis` | `3000` | Upstream connection timeout | Restart |
 | `rover.gateway.proxy.requestTimeoutMillis` | `30000` | Startup default for request timeout | Restart |
 | `rover.gateway.discovery.type` | `STATIC` in code / `nameserver` in example | `static` or `nameserver` | Restart |
@@ -69,6 +76,8 @@ The local limiter keeps state inside each Gateway process and does not call Name
 
 Use `rover.gateway.adminEnabled: false` when Rover-Admin is not deployed and YAML must be the sole configuration source. Gateway then skips `config/routes.overlay.json` and `config/gateway-runtime.overlay.json`, and `/_manage/**` returns `404`. This does not affect Nameserver discovery or business proxying. Existing overlay files are retained and take effect again if the flag is re-enabled.
 
+A 503 response includes `X-Rover-Reject-Reason`: `INFLIGHT_LIMIT` (in-flight gate full; default `max(64, CPU×8)`, override with `-Drover.gateway.maxInflight`) or `NO_UPSTREAM`. Logs print `inflight=used/max`. Counts are in `/_manage/metrics` `resources.rejects` and Prometheus `rover_gateway_rejects_total`. This work runs only on the reject path.
+
 ### Route fields
 
 `rover.gateway.routes` is an array. Each item supports `id`, `businessPrefix`,
@@ -92,9 +101,9 @@ discovery uses `serviceName` (and optionally `group`); static routes use
 | `gateway.rateLimit.burst` | `2000` | Token bucket capacity (requests) |
 | `gateway.rateLimit.limit` | `1000` | Maximum requests in one sliding window |
 | `gateway.rateLimit.windowSeconds` | `1` | Sliding window length in seconds |
-| `gateway.metrics.enabled` | `true` | Metrics collection switch |
+| `gateway.metrics.enabled` | `true` | Metrics collection switch; `false` skips inflight/record on the hot path |
 | `gateway.metrics.windowSeconds` | `300` | Metrics sliding window, capped at 300 seconds |
-| `gateway.trace.enabled` | `true` | Request timeline switch |
+| `gateway.trace.enabled` | `true` | Request timeline switch; `false` skips `markPhase` and minted trace IDs |
 | `gateway.trace.slowThresholdMillis` | `100` | Record a timeline when a request exceeds this value |
 | `gateway.trace.sampleRate` | `0.0` | `0` slow requests only, `1` all requests, or a decimal in `0..1` |
 

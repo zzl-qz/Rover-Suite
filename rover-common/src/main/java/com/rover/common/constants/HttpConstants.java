@@ -14,6 +14,10 @@ public final class HttpConstants {
     public static final String ADMIN_TOKEN_HEADER = "X-Rover-Admin-Token";
     public static final String REQUEST_ID_HEADER = "X-Request-Id";
     public static final String TRACE_ID_HEADER = "X-Rover-Trace-Id";
+    public static final String REJECT_REASON_HEADER = "X-Rover-Reject-Reason";
+    public static final String REJECT_INFLIGHT_LIMIT = "INFLIGHT_LIMIT";
+    public static final String REJECT_NO_UPSTREAM = "NO_UPSTREAM";
+    public static final String REJECT_CONNECTION_BUSY = "CONNECTION_BUSY";
     public static final String FORWARDED_FOR_HEADER = "X-Forwarded-For";
     public static final String FORWARDED_HOST_HEADER = "X-Forwarded-Host";
     public static final String FORWARDED_PROTO_HEADER = "X-Forwarded-Proto";

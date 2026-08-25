@@ -69,6 +69,25 @@ hey -z 30s -c 50 http://127.0.0.1:80/api/hello
 
 Run each case at least five times and keep the raw output.
 
+### 4.1 Repository scripts (Phase A)
+
+| Script | Purpose |
+| --- | --- |
+| `deploy/scripts/bench-phase-a.sh` | Direct / Gateway static / Gateway+NS on `GET /api/hello` |
+| `deploy/scripts/bench-phase-a-payload.sh` | Historical wave-1 A/B (checks out HEAD sources; do not run on a dirty tree) |
+| `deploy/scripts/bench-phase-a-payload-remasure.sh` | Current-code remasure: large GET + POST `/api/ingest`, Netty vs JDK outbound |
+| `deploy/scripts/bench-phase-a-static-ab.sh` | Same-session A/B for static upstream snapshot; redo if Direct drifts >10% |
+
+Example:
+
+```bash
+chmod +x deploy/scripts/bench-phase-a-payload-remasure.sh
+SIZES="262144 1048576 4194304" CONCURRENCY=20 DURATION=20s ROUNDS=3 \
+  ./deploy/scripts/bench-phase-a-payload-remasure.sh
+```
+
+See [Performance Report](./performance-report.md) §7 for how to read the results.
+
 ## 5. Layered tests
 
 ### 5.1 Direct demo
@@ -83,7 +102,8 @@ This is the upstream baseline. If the demo service is already slow, do not attri
 
 ### 5.2 Gateway static minimal path
 
-Use a static upstream and disable metrics, trace, rate limit, and request-level logging.
+Use a static upstream and disable metrics, trace, rate limit, and request-level logging.  
+Phase A configs (`rover-gateway-static.yml` / `rover-gateway-ns-min.yml`) already set `metrics.enabled=false`, `trace.enabled=false`, and `dispatchOnEventLoop=false`. When disabled, the hot path no longer calls `markPhase`, records inflight, or mints a trace UUID.
 
 This measures the base proxy cost:
 

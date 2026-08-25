@@ -55,8 +55,39 @@ public class GatewayConfig {
         return gatewayProperties().getProxy().getRequestTimeoutMillis();
     }
 
+    public String getProxyOutboundOrDefault() {
+        String outbound = gatewayProperties().getProxy().getOutbound();
+        return outbound == null || outbound.isBlank() ? "netty" : outbound.trim();
+    }
+
     public DiscoveryType getDiscoveryType() {
         return DiscoveryType.from(gatewayProperties().getDiscovery().getType());
+    }
+
+    public boolean isMetricsEnabled() {
+        return gatewayProperties().getMetrics().isEnabled();
+    }
+
+    public int getMetricsWindowSecondsOrDefault() {
+        int window = gatewayProperties().getMetrics().getWindowSeconds();
+        return window <= 0 ? GatewayDefaults.METRICS_WINDOW_SECONDS : window;
+    }
+
+    public boolean isTraceEnabled() {
+        return gatewayProperties().getTrace().isEnabled();
+    }
+
+    public long getTraceSlowThresholdMillisOrDefault() {
+        long threshold = gatewayProperties().getTrace().getSlowThresholdMillis();
+        return threshold <= 0 ? GatewayDefaults.TRACE_SLOW_THRESHOLD_MILLIS : threshold;
+    }
+
+    public double getTraceSampleRateOrDefault() {
+        return gatewayProperties().getTrace().getSampleRate();
+    }
+
+    public boolean isDispatchOnEventLoop() {
+        return gatewayProperties().getServer().isDispatchOnEventLoop();
     }
 
     public String getLoadBalanceStrategyOrDefault() {
@@ -115,6 +146,12 @@ public class GatewayConfig {
         if (gateway.getDiscovery().getNameserver() == null) {
             gateway.getDiscovery().setNameserver(new NameserverProperties());
         }
+        if (gateway.getMetrics() == null) {
+            gateway.setMetrics(new MetricsProperties());
+        }
+        if (gateway.getTrace() == null) {
+            gateway.setTrace(new TraceProperties());
+        }
         return gateway;
     }
 
@@ -148,7 +185,22 @@ public class GatewayConfig {
         private RewriteProperties rewrite = new RewriteProperties();
         private CorsProperties cors = new CorsProperties();
         private DiscoveryProperties discovery = new DiscoveryProperties();
+        private MetricsProperties metrics = new MetricsProperties();
+        private TraceProperties trace = new TraceProperties();
         private List<RouteProperties> routes = new ArrayList<>();
+    }
+
+    @Data
+    public static class MetricsProperties {
+        private boolean enabled = true;
+        private int windowSeconds = GatewayDefaults.METRICS_WINDOW_SECONDS;
+    }
+
+    @Data
+    public static class TraceProperties {
+        private boolean enabled = true;
+        private long slowThresholdMillis = GatewayDefaults.TRACE_SLOW_THRESHOLD_MILLIS;
+        private double sampleRate = GatewayDefaults.TRACE_SAMPLE_RATE;
     }
 
     @Data
@@ -197,12 +249,19 @@ public class GatewayConfig {
         private int maxContentLengthBytes = GatewayDefaults.MAX_REQUEST_BODY_BYTES;
         /** 监听地址，默认 0.0.0.0；可收紧到本机/内网 */
         private String bindHost = GatewayDefaults.BIND_HOST;
+        /**
+         * 默认 false：Handler 走业务线程池，跟 EventLoop 收发包分开。
+         * true 少一次 hop，但会占 I/O 线程；有阻塞插件必须保持 false。
+         */
+        private boolean dispatchOnEventLoop = false;
     }
 
     @Data
     public static class ProxyProperties {
         private int connectTimeoutMillis = GatewayDefaults.CONNECT_TIMEOUT_MILLIS;
         private int requestTimeoutMillis = GatewayDefaults.REQUEST_TIMEOUT_MILLIS;
+        /** netty=出站走 Netty；jdk=第一版 JDK HttpClient，留给对照和回滚 */
+        private String outbound = "netty";
     }
 
     @Data

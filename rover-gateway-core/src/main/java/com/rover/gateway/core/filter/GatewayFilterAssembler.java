@@ -104,7 +104,7 @@ public class GatewayFilterAssembler {
 
         // 终端过滤器固定放最后，负责路由匹配和真实转发。
         orderedFilters.add(new RouteAndProxyFilter(
-                routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer));
+                routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, metricsRegistry));
 
         log.info("Gateway filter chain ready, size={}", orderedFilters.size());
         for (Filter filter : orderedFilters) {

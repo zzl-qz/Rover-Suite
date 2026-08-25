@@ -1,5 +1,6 @@
 package com.rover.gateway.core.filter;
 
+import com.rover.common.constants.HttpConstants;
 import com.rover.common.model.ServiceInstance;
 import com.rover.common.spi.filter.Filter;
 import com.rover.common.spi.filter.FilterChain;
@@ -9,6 +10,7 @@ import com.rover.common.spi.filter.RequestContext;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
+import com.rover.gateway.core.metrics.MetricsRegistry;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
@@ -35,9 +37,10 @@ public class RouteAndProxyFilter implements Filter {
     private final DiscoveryType discoveryType;
     private final ServiceDiscovery serviceDiscovery;
     private final LoadBalancer loadBalancer;
+    private final MetricsRegistry metricsRegistry;
 
     public RouteAndProxyFilter(RouteMatcher routeMatcher, HttpProxyClient proxyClient) {
-        this(routeMatcher, proxyClient, DiscoveryType.STATIC, null, null);
+        this(routeMatcher, proxyClient, DiscoveryType.STATIC, null, null, null);
     }
 
     public RouteAndProxyFilter(
@@ -46,11 +49,22 @@ public class RouteAndProxyFilter implements Filter {
             DiscoveryType discoveryType,
             ServiceDiscovery serviceDiscovery,
             LoadBalancer loadBalancer) {
+        this(routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, null);
+    }
+
+    public RouteAndProxyFilter(
+            RouteMatcher routeMatcher,
+            HttpProxyClient proxyClient,
+            DiscoveryType discoveryType,
+            ServiceDiscovery serviceDiscovery,
+            LoadBalancer loadBalancer,
+            MetricsRegistry metricsRegistry) {
         this.routeMatcher = routeMatcher;
         this.proxyClient = proxyClient;
         this.discoveryType = discoveryType == null ? DiscoveryType.STATIC : discoveryType;
         this.serviceDiscovery = serviceDiscovery;
         this.loadBalancer = loadBalancer;
+        this.metricsRegistry = metricsRegistry;
     }
 
     @Override
@@ -86,9 +100,15 @@ public class RouteAndProxyFilter implements Filter {
 
         ChosenUpstream chosen = resolveUpstream(route, gatewayContext);
         if (chosen == null || chosen.baseUrl() == null) {
+            if (metricsRegistry != null) {
+                metricsRegistry.recordReject(HttpConstants.REJECT_NO_UPSTREAM);
+            }
+            log.warn("No available upstream, routeId={}, path={}, reason={}",
+                    route.getId(), requestPath, HttpConstants.REJECT_NO_UPSTREAM);
             gatewayContext.writeText(
                     HttpResponseStatus.SERVICE_UNAVAILABLE,
-                    "No available upstream for route: " + route.getId());
+                    "No available upstream for route: " + route.getId(),
+                    HttpConstants.REJECT_NO_UPSTREAM);
             return CompletableFuture.completedFuture(null);
         }
 
@@ -114,7 +134,11 @@ public class RouteAndProxyFilter implements Filter {
         }
         long proxyStartNanos = System.nanoTime();
         return proxyClient
-                .forwardAsync(gatewayContext.getChannelContext(), gatewayContext.getRequest(), targetUrl)
+                .forwardAsync(
+                        gatewayContext.getChannelContext(),
+                        gatewayContext.getRequest(),
+                        targetUrl,
+                        gatewayContext.getBodyPipe())
                 .whenComplete((result, err) -> {
                     // finally 语义：无论上游成功/失败，都释放 LB 对实例的占用。
                     if (loadBalancer != null && instance != null) {
@@ -139,7 +163,7 @@ public class RouteAndProxyFilter implements Filter {
             // 极端兜底：无 LB 时静态只取第一个
             if (discoveryType == DiscoveryType.STATIC) {
                 long discoveryStart = System.nanoTime();
-                List<ServiceInstance> instances = StaticUpstreamCluster.resolve(route);
+                List<ServiceInstance> instances = StaticUpstreamCluster.instancesOf(route);
                 gatewayContext.markPhase(TracePhase.DISCOVERY.phaseName(), System.nanoTime() - discoveryStart);
                 if (instances.isEmpty()) {
                     return null;
@@ -165,7 +189,7 @@ public class RouteAndProxyFilter implements Filter {
             instances = serviceDiscovery.getInstances(serviceName, route.getGroup());
         } else if (discoveryType == DiscoveryType.STATIC) {
             clusterKey = StaticUpstreamCluster.clusterKey(route);
-            instances = StaticUpstreamCluster.resolve(route);
+            instances = StaticUpstreamCluster.instancesOf(route);
         } else {
             log.warn("暂时没有该 discoveryType 类型， discoveryType is {}", discoveryType);
         }

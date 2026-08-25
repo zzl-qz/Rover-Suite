@@ -44,6 +44,7 @@ final class MetricsExporter {
         resources.put("activeConnections", r.activeConnections.get());
         resources.put("inflightRequests", r.inflightRequests.get());
         resources.put("upstreamInFlight", r.upstreamInFlightSupplier.getAsInt());
+        resources.put("rejects", rejectCounts());
         root.put("resources", resources);
 
         long nowSecond = System.currentTimeMillis() / 1000;
@@ -125,6 +126,7 @@ final class MetricsExporter {
         resources.put("activeConnections", r.activeConnections.get());
         resources.put("inflightRequests", r.inflightRequests.get());
         resources.put("upstreamInFlight", r.upstreamInFlightSupplier.getAsInt());
+        resources.put("rejects", rejectCounts());
         root.put("resources", resources);
 
         Map<String, Object> traffic = new LinkedHashMap<>();
@@ -322,6 +324,12 @@ final class MetricsExporter {
         sb.append("# HELP rover_gateway_inflight_requests Requests currently being processed\n");
         sb.append("# TYPE rover_gateway_inflight_requests gauge\n");
         sb.append("rover_gateway_inflight_requests ").append(r.inflightRequests.get()).append('\n');
+        sb.append("# HELP rover_gateway_rejects_total Gateway 503 rejects by reason\n");
+        sb.append("# TYPE rover_gateway_rejects_total counter\n");
+        sb.append("rover_gateway_rejects_total{reason=\"inflight_limit\"} ")
+                .append(r.rejectInflightLimit.sum()).append('\n');
+        sb.append("rover_gateway_rejects_total{reason=\"no_upstream\"} ")
+                .append(r.rejectNoUpstream.sum()).append('\n');
 
         sb.append("# HELP rover_gateway_window_requests Requests in current window\n");
         sb.append("# TYPE rover_gateway_window_requests gauge\n");
@@ -382,6 +390,13 @@ final class MetricsExporter {
         sb.append("# TYPE rover_jvm_gc_time_millis_total counter\n");
         sb.append("rover_jvm_gc_time_millis_total ").append(jvm.getOrDefault("gcTimeMillis", 0)).append('\n');
         return sb.toString();
+    }
+
+    private Map<String, Object> rejectCounts() {
+        Map<String, Object> rejects = new LinkedHashMap<>();
+        rejects.put("inflightLimit", r.rejectInflightLimit.sum());
+        rejects.put("noUpstream", r.rejectNoUpstream.sum());
+        return rejects;
     }
 
     /** Prometheus 标签值转义：反斜杠、双引号、换行。 */

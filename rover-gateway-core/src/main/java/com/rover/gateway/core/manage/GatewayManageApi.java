@@ -196,6 +196,8 @@ public class GatewayManageApi extends AbstractManageApi {
         status.put("loadBalanceStrategy", runtime.getLoadBalanceStrategy().get());
         status.put("requestTimeoutMillis", runtime.getProxyClient().getRequestTimeoutMillis());
         status.put("connectTimeoutMillis", runtime.getConnectTimeoutMillis());
+        status.put("maxInflight", runtime.maxInflight());
+        status.put("inflightUsed", runtime.inflightUsed());
         return JsonCodec.toJson(status);
     }
 

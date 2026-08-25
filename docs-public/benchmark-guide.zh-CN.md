@@ -77,7 +77,27 @@ hey -z 30s -c 50 http://127.0.0.1:80/api/hello
 
 建议每个测试点至少跑 5 次，并保存原始输出。
 
-## 5. 分层测试方法
+### 4.1 仓库一键脚本（Phase A）
+
+仓库提供可复现脚本（需 `hey`、Docker）：
+
+| 脚本 | 用途 |
+| --- | --- |
+| `deploy/scripts/bench-phase-a.sh` | Direct / Gateway 静态 / Gateway+NS，`GET /api/hello` |
+| `deploy/scripts/bench-phase-a-payload.sh` | 历史第一波：定长大包整包 vs 流式 A/B（会回退源码，脏工作区别跑） |
+| `deploy/scripts/bench-phase-a-payload-remasure.sh` | 当前代码复测：大包 GET + POST `/api/ingest`，同场 Netty / JDK 出站 |
+| `deploy/scripts/bench-phase-a-static-ab.sh` | 同场 A/B：无静态快照 vs 有快照；Direct 中位差 >10% 作废重跑 |
+
+当前代码大包 / POST 复测：
+
+```bash
+chmod +x deploy/scripts/bench-phase-a-payload-remasure.sh
+SIZES="262144 1048576 4194304" CONCURRENCY=20 DURATION=20s ROUNDS=3 \
+  ./deploy/scripts/bench-phase-a-payload-remasure.sh
+```
+
+结果整理方式见[性能报告](./performance-report.zh-CN.md) §7。
+
 
 ### 5.1 Direct Demo
 
@@ -91,7 +111,8 @@ hey -z 30s -c 50 http://127.0.0.1:8082/api/hello
 
 ### 5.2 Gateway 静态路由最小链路
 
-使用静态上游地址，不经过 Nameserver。关闭 metrics、trace、rate limit 和请求级日志。
+使用静态上游地址，不经过 Nameserver。关闭 metrics、trace、rate limit 和请求级日志。  
+Phase A 配置（`rover-gateway-static.yml` / `rover-gateway-ns-min.yml`）已写 `metrics.enabled=false`、`trace.enabled=false`、`dispatchOnEventLoop=false`；`enabled=false` 时热路径不再 `markPhase` / 记 inflight / 造 trace UUID。
 
 这一步用于观察 Gateway 的基础代理开销。
 

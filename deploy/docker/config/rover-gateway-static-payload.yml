@@ -1,0 +1,37 @@
+# Phase A 大包 / POST 复测：静态最小代理，入站上限放到 8MiB
+rover:
+  gateway:
+    port: 80
+    adminEnabled: false
+    adminToken: ""
+    server:
+      bindHost: 0.0.0.0
+      dispatchOnEventLoop: false
+      maxContentLengthBytes: 8388608
+    metrics:
+      enabled: false
+    trace:
+      enabled: false
+    proxy:
+      outbound: netty
+      connectTimeoutMillis: 3000
+      requestTimeoutMillis: 30000
+    filters:
+      enabled: true
+      pluginDir: plugins
+      accessLog: false
+      classes: []
+    rateLimit:
+      enabled: false
+    loadbalance:
+      strategy: round_robin
+    discovery:
+      type: static
+    cors:
+      enabled: false
+    routes:
+      - id: demo-api-static
+        businessPrefix: /api
+        targetUrls:
+          - http://demo:8082
+        stripPrefix: ""

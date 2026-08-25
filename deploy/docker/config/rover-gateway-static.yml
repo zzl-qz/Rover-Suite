@@ -1,0 +1,36 @@
+# Phase A：静态最小代理（不连 Nameserver；关 Admin / accessLog / rateLimit）
+rover:
+  gateway:
+    port: 80
+    adminEnabled: false
+    adminToken: ""
+    server:
+      bindHost: 0.0.0.0
+      dispatchOnEventLoop: false
+    metrics:
+      enabled: false
+    trace:
+      enabled: false
+    proxy:
+      outbound: netty
+      connectTimeoutMillis: 3000
+      requestTimeoutMillis: 30000
+    filters:
+      enabled: true
+      pluginDir: plugins
+      accessLog: false
+      classes: []
+    rateLimit:
+      enabled: false
+    loadbalance:
+      strategy: round_robin
+    discovery:
+      type: static
+    cors:
+      enabled: false
+    routes:
+      - id: demo-api-static
+        businessPrefix: /api
+        targetUrls:
+          - http://demo:8082
+        stripPrefix: ""

@@ -5,10 +5,13 @@ import com.rover.common.model.ServiceInstance;
 import com.rover.gateway.core.route.RouteConfig;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Author: Daylight
@@ -21,7 +24,37 @@ public final class StaticUpstreamCluster {
     private static final String METADATA_SCHEME = "scheme";
     private static final String METADATA_BASE_URL = "baseUrl";
 
+    /** 路由加载/热更新时整表替换，热路径只读。 */
+    private static final AtomicReference<Map<String, List<ServiceInstance>>> SNAPSHOTS =
+            new AtomicReference<>(Map.of());
+
     private StaticUpstreamCluster() {
+    }
+
+    /**
+     * 路由表变更时调用：整表重算后一次性换上。
+     * Admin 改路由、overlay、启动都走 GatewayRuntime.applyRoutes，不会漏。
+     */
+    public static void rebuild(List<RouteConfig> routes) {
+        Map<String, List<ServiceInstance>> next = new HashMap<>();
+        if (routes != null) {
+            for (RouteConfig route : routes) {
+                if (route == null) {
+                    continue;
+                }
+                next.put(clusterKey(route), resolve(route));
+            }
+        }
+        SNAPSHOTS.set(Map.copyOf(next));
+    }
+
+    /** 热路径读快照；对不上（换表瞬间）再现场 resolve，避免用到删掉的旧上游。 */
+    public static List<ServiceInstance> instancesOf(RouteConfig route) {
+        if (route == null) {
+            return List.of();
+        }
+        List<ServiceInstance> cached = SNAPSHOTS.get().get(clusterKey(route));
+        return cached != null ? cached : resolve(route);
     }
 
     /** 集群键，给 LB 按路由隔离计数。 */

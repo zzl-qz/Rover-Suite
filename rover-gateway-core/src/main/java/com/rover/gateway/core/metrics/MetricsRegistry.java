@@ -1,5 +1,6 @@
 package com.rover.gateway.core.metrics;
 
+import com.rover.common.constants.HttpConstants;
 import com.rover.common.constants.ManageApiPaths;
 import com.rover.gateway.core.config.GatewayDefaults;
 import java.util.ArrayList;
@@ -50,6 +51,10 @@ public class MetricsRegistry {
     final LongAdder errRouteUnmatched = new LongAdder();
     final LongAdder errProxyTimeout = new LongAdder();
     final LongAdder errUpstreamConnect = new LongAdder();
+
+    /** 拒绝计数：只在 503 路径加，metrics.enabled=false 也记，方便压测对原因。 */
+    final LongAdder rejectInflightLimit = new LongAdder();
+    final LongAdder rejectNoUpstream = new LongAdder();
 
     /** 活跃连接数（Netty 接入连接，只增只减不随窗口过期）。 */
     final AtomicInteger activeConnections = new AtomicInteger();
@@ -114,6 +119,9 @@ public class MetricsRegistry {
             long upstreamCostMillis,
             boolean connectFail,
             boolean timeout) {
+        if (!settings.isEnabled()) {
+            return;
+        }
         long cost = Math.max(0, costMillis);
         long epochSecond = System.currentTimeMillis() / 1000;
 
@@ -161,22 +169,43 @@ public class MetricsRegistry {
 
     /** 记录一次连接建立（Netty channelActive）。 */
     public void connectionOpened() {
+        if (!settings.isEnabled()) {
+            return;
+        }
         activeConnections.incrementAndGet();
     }
 
     /** 记录一次连接关闭（Netty channelInactive），夹到 0 防止并发下负数。 */
     public void connectionClosed() {
+        if (!settings.isEnabled()) {
+            return;
+        }
         activeConnections.updateAndGet(v -> Math.max(0, v - 1));
     }
 
     /** 记录一个请求开始处理（在途 +1）。 */
     public void requestStarted() {
+        if (!settings.isEnabled()) {
+            return;
+        }
         inflightRequests.incrementAndGet();
     }
 
     /** 记录一个请求处理结束（在途 -1），夹到 0。 */
     public void requestFinished() {
+        if (!settings.isEnabled()) {
+            return;
+        }
         inflightRequests.updateAndGet(v -> Math.max(0, v - 1));
+    }
+
+    /** 记一次 503 原因。只在拒绝路径调用，关指标也加。 */
+    public void recordReject(String reason) {
+        if (HttpConstants.REJECT_INFLIGHT_LIMIT.equals(reason)) {
+            rejectInflightLimit.increment();
+        } else if (HttpConstants.REJECT_NO_UPSTREAM.equals(reason)) {
+            rejectNoUpstream.increment();
+        }
     }
 
     private final MetricsExporter exporter = new MetricsExporter(this);

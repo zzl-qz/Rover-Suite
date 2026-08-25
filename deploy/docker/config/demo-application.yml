@@ -1,5 +1,8 @@
 server:
   port: 8082
+  tomcat:
+    max-http-form-post-size: 8MB
+    max-swallow-size: 8MB
 spring:
   application:
     name: demo-service

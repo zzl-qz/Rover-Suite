@@ -8,4 +8,6 @@ public final class GatewaySystemProperties {
 
     public static final String BIZ_THREADS = "rover.gateway.bizThreads";
     public static final String MAX_INFLIGHT = "rover.gateway.maxInflight";
+    public static final String DISPATCH_ON_EVENT_LOOP = "rover.gateway.dispatchOnEventLoop";
+    public static final String PROXY_OUTBOUND = "rover.gateway.proxy.outbound";
 }

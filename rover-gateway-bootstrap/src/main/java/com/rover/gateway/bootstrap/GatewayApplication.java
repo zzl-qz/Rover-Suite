@@ -51,6 +51,12 @@ public class GatewayApplication {
         }
         log.info("discovery.type={}, routeCount={}", discoverySettings.getType(), routes.size());
 
+        // 出站实现：YAML 写到系统属性，HttpProxyClient 构造时读取。jdk 那条是第一版，别删。
+        System.setProperty(
+                com.rover.gateway.core.config.GatewaySystemProperties.PROXY_OUTBOUND,
+                config.getProxyOutboundOrDefault());
+        log.info("proxy.outbound={}", config.getProxyOutboundOrDefault());
+
         // 封装启动服务，内置接收前端HTTP请求+定时拉取NameSever实例信息的功能
         GatewayHttpServer server = new GatewayHttpServer(
                 config.getPortOrDefault(),
@@ -64,7 +70,13 @@ public class GatewayApplication {
                 config.toCorsSettings(),
                 config.getBindHostOrDefault(),
                 config.getAdminTokenOrDefault(),
-                config.isAdminEnabled());
+                config.isAdminEnabled(),
+                config.isMetricsEnabled(),
+                config.getMetricsWindowSecondsOrDefault(),
+                config.isTraceEnabled(),
+                config.getTraceSlowThresholdMillisOrDefault(),
+                config.getTraceSampleRateOrDefault(),
+                config.isDispatchOnEventLoop());
 
         Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown, "gateway-shutdown"));
         server.start();
