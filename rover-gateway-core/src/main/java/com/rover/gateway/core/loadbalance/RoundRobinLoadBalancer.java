@@ -19,6 +19,8 @@ public class RoundRobinLoadBalancer implements LoadBalancer {
     private static final int MAX_COUNTER_KEYS = 4096;
 
     private final Map<String, AtomicInteger> counters = new ConcurrentHashMap<>();
+    /** 键满了共用，别 clear 把已有计数清零。 */
+    private final AtomicInteger overflowCounter = new AtomicInteger();
 
     @Override
     public String name() {
@@ -32,10 +34,12 @@ public class RoundRobinLoadBalancer implements LoadBalancer {
         }
         List<ServiceInstance> instances = context.getInstances();
         String key = context.getClusterKey() == null ? "default" : context.getClusterKey();
-        if (!counters.containsKey(key) && counters.size() >= MAX_COUNTER_KEYS) {
-            counters.clear();
+        AtomicInteger counter = counters.get(key);
+        if (counter == null) {
+            counter = counters.size() >= MAX_COUNTER_KEYS
+                    ? overflowCounter
+                    : counters.computeIfAbsent(key, ignored -> new AtomicInteger());
         }
-        AtomicInteger counter = counters.computeIfAbsent(key, ignored -> new AtomicInteger());
         int index = Math.floorMod(counter.getAndIncrement(), instances.size());
         return instances.get(index);
     }

@@ -12,6 +12,7 @@
 - Nameserver TCP registration/subscription and the HTTP Registration API are the primary cross-version contracts.
 - Admin API is a same-release control-plane API; clients should not depend on undocumented fields.
 - Adding configuration keys is normally compatible. Removing keys, changing types or changing defaults requires a changelog entry.
+- `rover.gateway.proxy.outbound` and `rover.gateway.server.ioTransport` are chosen at startup. Hot reload does not switch the outbound client or I/O implementation. Restart Gateway after changing them. Confirm the current values from `outbound=` / `ioTransport=` in the startup log.
 
 ## Plugin development
 

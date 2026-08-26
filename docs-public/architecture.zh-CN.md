@@ -254,7 +254,7 @@ Gateway 启动
 
 这不是强实时一致性承诺。当前实现有两个明确边界：最后一个实例产生的空快照会先被 Gateway 的推空保护拒绝，
 最迟到下一次周期对账才清空；Gateway 启动时如果 Nameserver 不可用，首次订阅失败也可能到下一次对账才恢复。
-默认 `reconcileIntervalMs=30000`，所以两类窗口最长约 30 秒。
+默认 `reconcileIntervalMs=30000`，所以两类窗口最长约 30 秒。本地 Compose 本场停最后一个实例后立刻 502，约 17 秒后变为 `503 NO_UPSTREAM`。
 
 `group` 是查询与订阅过滤条件，不属于实例唯一键。当前多组快照推送隔离仍在收口，默认空 group 是推荐使用方式。
 
@@ -320,10 +320,21 @@ HTTP 请求
 
 服务发现不在请求热路径上：请求路由读取 Gateway 本地缓存，不会为每个请求同步查询 Nameserver。
 
-当前代理链路聚合完整请求体和响应体，默认请求体上限为 1 MiB，响应体硬上限为 16 MiB；它面向普通 HTTP API，
-不提供 WebSocket、SSE 或通用流式代理。动态发现中，如果持久实例全部被标记为不健康，Gateway 会回退到缓存中的
-全部实例继续尝试，属于可用性优先的 fail-open 策略。静态上游 URL 只使用 scheme、host 与 port，路径改写应通过
-路由的 `stripPrefix` 等配置完成，而不是依赖上游 URL 的基路径。
+当前默认路径：入站头到了就开始转发，请求体走管道；上游响应按块回写（默认 Netty 出站）。空 GET 仍以一帧完整
+请求发往上游。JDK 出站路径会先收齐请求体再转发。默认请求体上限为 1 MiB，响应体硬上限为 16 MiB。面向普通
+HTTP/1.1 API，不提供 WebSocket、SSE。
+
+入站 EventLoop 与出站 Channel 使用同一套 I/O：`server.ioTransport` 默认 `auto`。Linux 选 Epoll，macOS 上直接
+运行进程选 KQueue，原生库不可用时退 NIO。官方参考压测在 Docker Desktop 的 Linux 容器里跑，因此 `auto` 记为
+epoll，不是宿主机的 kqueue。同场对照里 Epoll 相对 NIO 大约高 3.5%，参考容量仍以 Netty 出站那一轮为准。
+
+Gateway 进程不终止客户端 HTTPS，默认出站也不对上游做 TLS。调用方 HTTPS 放在反向代理上终止；Gateway 到业务
+服务走内网 HTTP。上游地址必须是 `https://` 时，把 `proxy.outbound` 设为 `jdk`（第一版 JDK 客户端，用于回滚和
+对照；吞吐会回到那一档）。
+
+动态发现中，如果持久实例全部被标记为不健康，Gateway 会回退到缓存中的全部实例继续尝试，属于可用性优先的
+fail-open 策略。静态上游 URL 只使用 scheme、host 与 port，路径改写应通过路由的 `stripPrefix` 等配置完成，
+而不是依赖上游 URL 的基路径。
 
 ---
 

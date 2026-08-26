@@ -16,6 +16,8 @@
 | 管理接口返回 401 | `X-Rover-Admin-Token` 是否等于目标组件管理 token |
 | 实例频繁下线 | 心跳超时、网络抖动、实例注册的 host/port 是否可达 |
 | 日志量增长过快 | 访问日志是否为 DEBUG，或是否开启 `filters.accessLog` |
+| 启动或热更新提示只支持 http 上游 | 默认 Netty 出站不转发 `https://`，见第 4.1 节 |
+| 想确认当前 I/O 实现 | 启动日志里的 `ioTransport=`。Docker Linux 容器里 `auto` 一般为 epoll |
 
 ## 2. 先确认组件是否在线
 
@@ -54,9 +56,18 @@ curl -H "X-Rover-Admin-Token: <nameserver-admin-token>" \
 | `businessPrefix` | 请求路径是否以该前缀开头 |
 | `stripPrefix` | 转发给上游前是否正确裁剪路径 |
 | `serviceName` | 是否能在 Nameserver 中找到同名服务 |
-| `targetUrl/targetUrls` | 静态上游地址是否可访问 |
+| `targetUrl/targetUrls` | 静态上游地址是否可访问。默认只转发 `http://`；`https://` 见第 4.1 节 |
 
 如果使用 Admin 修改过路由，`config/routes.overlay.json` 会整体覆盖 YAML 路由。YAML 修改不生效时，优先检查这个 overlay 文件。
+
+### 4.1 启动或热更新提示只支持 http 上游
+
+默认出站是 Netty，只转发 `http://`。校验在启动或热更新时拦住不支持的上游协议，避免配置通过、请求才失败。
+
+可以二选一：
+
+- 把上游改成 `http://`。常见做法是调用方 HTTPS 在 Nginx、SLB 或 CDN 上终止，Gateway 到业务服务走内网 HTTP。
+- 将 `rover.gateway.proxy.outbound` 设为 `jdk` 后重启。这是第一版 JDK 客户端，用于回滚和对照；它自带 TLS。吞吐会回到 JDK 出站那一档，数字见[性能报告](./performance-report.zh-CN.md)。
 
 ## 5. 路由返回 502 或 503
 

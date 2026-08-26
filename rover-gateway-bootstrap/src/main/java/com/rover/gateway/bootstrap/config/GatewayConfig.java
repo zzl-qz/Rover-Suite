@@ -90,6 +90,11 @@ public class GatewayConfig {
         return gatewayProperties().getServer().isDispatchOnEventLoop();
     }
 
+    public String getIoTransportOrDefault() {
+        String raw = gatewayProperties().getServer().getIoTransport();
+        return raw == null || raw.isBlank() ? "auto" : raw.trim();
+    }
+
     public String getLoadBalanceStrategyOrDefault() {
         LoadBalanceProperties lb = gatewayProperties().getLoadbalance();
         if (lb == null || lb.getStrategy() == null || lb.getStrategy().isBlank()) {
@@ -254,6 +259,8 @@ public class GatewayConfig {
          * true 少一次 hop，但会占 I/O 线程；有阻塞插件必须保持 false。
          */
         private boolean dispatchOnEventLoop = false;
+        /** auto / nio / epoll / kqueue。auto 有原生库就用。 */
+        private String ioTransport = "auto";
     }
 
     @Data

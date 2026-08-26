@@ -13,6 +13,8 @@ rover:
       bindHost: 0.0.0.0
       # 默认 false：业务 Handler 走线程池，跟 EventLoop 收发包分开。确认无阻塞才改 true
       dispatchOnEventLoop: false
+      # auto=Linux 用 Epoll（Docker Linux 容器里一般是这个）、macOS 上直接跑进程用 KQueue，没有原生库退 NIO。也可写死 nio/epoll/kqueue
+      ioTransport: auto
     metrics:
       enabled: true
       windowSeconds: 300
@@ -21,7 +23,7 @@ rover:
       slowThresholdMillis: 100
       sampleRate: 0.0
     proxy:
-      # netty=出站走 Netty（默认）。jdk=第一版 JDK HttpClient，对照/回滚用，不要删这条能力
+      # netty=出站走 Netty（默认，只转发 http 上游）。jdk=第一版 JDK HttpClient，对照/回滚用；它自带 TLS，上游必须 https 时可以切过去
       outbound: netty
       connectTimeoutMillis: 3000
       requestTimeoutMillis: 30000

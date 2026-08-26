@@ -87,6 +87,8 @@ hey -z 30s -c 50 http://127.0.0.1:80/api/hello
 | `deploy/scripts/bench-phase-a-payload.sh` | 历史第一波：定长大包整包 vs 流式 A/B（会回退源码，脏工作区别跑） |
 | `deploy/scripts/bench-phase-a-payload-remasure.sh` | 当前代码复测：大包 GET + POST `/api/ingest`，同场 Netty / JDK 出站 |
 | `deploy/scripts/bench-phase-a-static-ab.sh` | 同场 A/B：无静态快照 vs 有快照；Direct 中位差 >10% 作废重跑 |
+| `deploy/scripts/bench-phase-a-outbound-ab.sh` | 同场 A/B：只改 `proxy.outbound`（jdk / netty） |
+| `deploy/scripts/bench-phase-a-io-ab.sh` | 同场 A/B：只改 `server.ioTransport`（nio / auto）。Docker Linux 容器里 `auto` 一般为 epoll |
 
 当前代码大包 / POST 复测：
 

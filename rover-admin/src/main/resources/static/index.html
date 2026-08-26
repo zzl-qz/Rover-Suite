@@ -258,7 +258,7 @@
                                     <em>{{ gatewayJvm.heapUsedMb }} / {{ gatewayJvm.heapCommittedMb }} / {{ gatewayJvm.heapMaxMb }} MB（{{ gatewayJvm.heapUsedPercent }}%）</em>
                                 </div>
                                 <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none" title="近段堆占用走势">
-                                    <polyline :points="sparkPoints('gateway')" fill="none" stroke="#1f6f5b" stroke-width="1.5"/>
+                                    <polyline :points="sparkPoints('gateway')" fill="none" stroke="#3f5a38" stroke-width="1.5"/>
                                 </svg>
                                 <div class="jvm-row" title="年轻代短命对象；老年代活得久的对象。老年代持续涨要留意泄漏">
                                     <span>年轻代 / 老年代</span><b>{{ gatewayJvm.youngUsedMb }} / {{ gatewayJvm.oldUsedMb }} MB</b>
@@ -291,7 +291,7 @@
                                     <em>{{ nameserverJvm.heapUsedMb }} / {{ nameserverJvm.heapCommittedMb }} / {{ nameserverJvm.heapMaxMb }} MB（{{ nameserverJvm.heapUsedPercent }}%）</em>
                                 </div>
                                 <svg class="spark" viewBox="0 0 120 28" preserveAspectRatio="none">
-                                    <polyline :points="sparkPoints('nameserver')" fill="none" stroke="#1f6f5b" stroke-width="1.5"/>
+                                    <polyline :points="sparkPoints('nameserver')" fill="none" stroke="#3f5a38" stroke-width="1.5"/>
                                 </svg>
                                 <div class="jvm-row" title="年轻代 / 老年代占用">
                                     <span>年轻代 / 老年代</span><b>{{ nameserverJvm.youngUsedMb }} / {{ nameserverJvm.oldUsedMb }} MB</b>

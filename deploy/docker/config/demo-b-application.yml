@@ -1,0 +1,18 @@
+server:
+  port: 8082
+  tomcat:
+    max-http-form-post-size: 8MB
+    max-swallow-size: 8MB
+spring:
+  application:
+    name: demo-service
+rover:
+  nameserver:
+    enabled: true
+    address: nameserver:8888
+    host: demo-b
+    port: 8082
+    instance-id: demo-b:8082
+    token: rover-compose-protocol-token
+    ephemeral: true
+    heartbeat-interval-ms: 5000
