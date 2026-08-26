@@ -5,12 +5,14 @@ import com.rover.common.util.ServiceKeys;
 import com.rover.gateway.bootstrap.config.GatewayConfig.CorsProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.FilterProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.NameserverProperties;
+import com.rover.gateway.bootstrap.config.GatewayConfig.CircuitBreakerProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RateLimitProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
 import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
+import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.server.CorsSettings;
@@ -74,6 +76,17 @@ final class GatewayConfigMapper {
             target.setBurst(rate.getBurst());
             target.setLimit(rate.getLimit());
             target.setWindowSeconds(rate.getWindowSeconds());
+        }
+        CircuitBreakerProperties circuit = config.gatewayProperties().getCircuitBreaker();
+        if (circuit != null) {
+            CircuitBreakerSettings target = settings.getCircuitBreaker();
+            target.setEnabled(circuit.isEnabled());
+            target.setFailureThreshold(circuit.getFailureThreshold());
+            target.setOpenSeconds(circuit.getOpenSeconds());
+            target.setRecovery(circuit.getRecovery());
+        }
+        if (config.gatewayProperties().getRetry() != null) {
+            settings.getRetry().setEnabled(config.gatewayProperties().getRetry().isEnabled());
         }
         return settings;
     }

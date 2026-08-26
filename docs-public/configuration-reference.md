@@ -65,6 +65,11 @@ a VPN in production.
 | `rover.gateway.rateLimit.burst` | `2000` | Token-bucket capacity/burst limit | Restart |
 | `rover.gateway.rateLimit.limit` | `1000` | Maximum requests in a sliding window | Restart |
 | `rover.gateway.rateLimit.windowSeconds` | `1` | Sliding-window length, 1..3600 seconds | Restart |
+| `rover.gateway.circuitBreaker.enabled` | `false` | Process-local circuit breaker; consecutive failures per upstream `host:port` | Restart |
+| `rover.gateway.circuitBreaker.failureThreshold` | `5` | Consecutive failures before opening | Restart |
+| `rover.gateway.circuitBreaker.openSeconds` | `10` | How long to stay open, 1..3600 seconds | Restart |
+| `rover.gateway.circuitBreaker.recovery` | `all` | `all` = everyone may retry after the rest; `half` = one probe only | Restart |
+| `rover.gateway.retry.enabled` | `false` | Retry the next instance on connect failure before the request is sent | Restart |
 | `rover.gateway.rewrite.stripPrefix` | empty | Global rewrite prefix | Restart |
 | `rover.gateway.cors.enabled` | `false` in code / `true` in example | CORS switch | Restart |
 | `rover.gateway.cors.allowedOrigins` | `[]` | Allowed origins; use `*` only for development | Restart |
@@ -75,9 +80,13 @@ a VPN in production.
 
 The local limiter keeps state inside each Gateway process and does not call Nameserver or an external store. In a multi-instance deployment each Gateway counts independently. For user-, tenant-, or globally coordinated limits, disable this switch and use a custom Filter plugin.
 
+The process-local circuit breaker is also off by default. When enabled it counts consecutive failures per `host:port`: connect failure, timeout, and upstream 5xx increment; 2xx/4xx reset. Open instances are skipped at pick time; if none remain, Gateway returns `503` with `CIRCUIT_OPEN`. It is not a separate Filter. Gateway replicas do not share state.
+
+Connect-fail retry is a separate switch, also off by default. When enabled, Gateway tries one other instance only if the request was never sent. Upstream 5xx, request timeout, a response already started, or a body already flushed to the first instance are not retried. Clients still retry business failures themselves. Counts are in `/_manage/metrics` `resources.retries.connect` and Prometheus `rover_gateway_retries_total{reason="connect"}`.
+
 Use `rover.gateway.adminEnabled: false` when Rover-Admin is not deployed and YAML must be the sole configuration source. Gateway then skips `config/routes.overlay.json` and `config/gateway-runtime.overlay.json`, and `/_manage/**` returns `404`. This does not affect Nameserver discovery or business proxying. Existing overlay files are retained and take effect again if the flag is re-enabled.
 
-A 503 response includes `X-Rover-Reject-Reason`: `INFLIGHT_LIMIT` (in-flight gate full; default `max(64, CPU×8)`, override with `-Drover.gateway.maxInflight`) or `NO_UPSTREAM`. Logs print `inflight=used/max`. Counts are in `/_manage/metrics` `resources.rejects` and Prometheus `rover_gateway_rejects_total`. This work runs only on the reject path.
+A 503 response includes `X-Rover-Reject-Reason`: `INFLIGHT_LIMIT` (in-flight gate full; default `max(64, CPU×8)`, override with `-Drover.gateway.maxInflight`), `NO_UPSTREAM` (no usable upstream), or `CIRCUIT_OPEN` (every candidate is open). Logs print `inflight=used/max`. Counts are in `/_manage/metrics` `resources.rejects` and Prometheus `rover_gateway_rejects_total`. This work runs only on the reject path.
 
 ### Route fields
 
@@ -105,6 +114,11 @@ Admin-saved routes are written to
 | `gateway.rateLimit.burst` | `2000` | Token bucket capacity (requests) |
 | `gateway.rateLimit.limit` | `1000` | Maximum requests in one sliding window |
 | `gateway.rateLimit.windowSeconds` | `1` | Sliding window length in seconds |
+| `gateway.circuitBreaker.enabled` | `false` | Enable the process-local circuit breaker |
+| `gateway.circuitBreaker.failureThreshold` | `5` | Consecutive failures before opening |
+| `gateway.circuitBreaker.openSeconds` | `10` | How long to stay open |
+| `gateway.circuitBreaker.recovery` | `all` | `all` = everyone may retry after the rest; `half` = one probe only |
+| `gateway.retry.enabled` | `false` | Retry the next instance on connect failure |
 | `gateway.metrics.enabled` | `true` | Metrics collection switch; `false` skips inflight/record on the hot path |
 | `gateway.metrics.windowSeconds` | `300` | Metrics sliding window, capped at 300 seconds |
 | `gateway.trace.enabled` | `true` | Request timeline switch; `false` skips `markPhase` and minted trace IDs |
@@ -121,6 +135,10 @@ Changing any built-in rate-limit setting rebuilds the filter chain atomically:
 in-flight requests keep their original filter instance, while subsequent
 requests use the new limiter. The limiter is local to each Gateway process;
 it is not a distributed quota.
+
+Toggling the circuit breaker rebuilds the filter chain so a disabled breaker
+is not held on the pick path. Threshold, open window, and `recovery` mutate
+the live settings object and keep existing open-state.
 
 Except for `gateway.loadbalance.strategy`, these hot-update keys are persisted
 to `config/gateway-runtime.overlay.json`. Adding or

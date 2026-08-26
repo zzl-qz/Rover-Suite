@@ -4,10 +4,12 @@ import com.rover.common.util.HostPort;
 import com.rover.gateway.bootstrap.config.GatewayConfig.FilterProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.GatewayProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.NameserverProperties;
+import com.rover.gateway.bootstrap.config.GatewayConfig.CircuitBreakerProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RateLimitProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
 import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoveryType;
+import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 
 import java.net.URI;
@@ -38,6 +40,7 @@ final class GatewayConfigValidator {
         validateIoTransport(config.getIoTransportOrDefault());
         validateFilterSettings(gateway.getFilters());
         validateRateLimit(gateway.getRateLimit());
+        validateCircuitBreaker(gateway.getCircuitBreaker());
         validateObservability(config);
 
         DiscoveryType discoveryType = config.getDiscoveryType();
@@ -115,6 +118,24 @@ final class GatewayConfigValidator {
         }
         if (rate.getWindowSeconds() <= 0 || rate.getWindowSeconds() > 3600) {
             throw new IllegalArgumentException("rateLimit.windowSeconds 必须在 1~3600 之间");
+        }
+    }
+
+    private static void validateCircuitBreaker(CircuitBreakerProperties circuit) {
+        if (circuit == null) {
+            return;
+        }
+        if (circuit.getFailureThreshold() <= 0) {
+            throw new IllegalArgumentException("circuitBreaker.failureThreshold 必须大于 0");
+        }
+        if (circuit.getOpenSeconds() <= 0 || circuit.getOpenSeconds() > 3600) {
+            throw new IllegalArgumentException("circuitBreaker.openSeconds 必须在 1~3600 之间");
+        }
+        String recovery = circuit.getRecovery() == null
+                ? CircuitBreakerSettings.ALL
+                : circuit.getRecovery().trim().toLowerCase(Locale.ROOT);
+        if (!CircuitBreakerSettings.ALL.equals(recovery) && !CircuitBreakerSettings.HALF.equals(recovery)) {
+            throw new IllegalArgumentException("circuitBreaker.recovery 仅支持 all/half");
         }
     }
 

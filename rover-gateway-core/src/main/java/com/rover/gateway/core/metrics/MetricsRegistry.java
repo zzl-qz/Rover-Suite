@@ -55,6 +55,10 @@ public class MetricsRegistry {
     /** 拒绝计数：只在 503 路径加，metrics.enabled=false 也记，方便压测对原因。 */
     final LongAdder rejectInflightLimit = new LongAdder();
     final LongAdder rejectNoUpstream = new LongAdder();
+    final LongAdder rejectCircuitOpen = new LongAdder();
+
+    /** 因连接失败换台次数。关指标也记。 */
+    final LongAdder retryConnect = new LongAdder();
 
     /** 活跃连接数（Netty 接入连接，只增只减不随窗口过期）。 */
     final AtomicInteger activeConnections = new AtomicInteger();
@@ -205,7 +209,14 @@ public class MetricsRegistry {
             rejectInflightLimit.increment();
         } else if (HttpConstants.REJECT_NO_UPSTREAM.equals(reason)) {
             rejectNoUpstream.increment();
+        } else if (HttpConstants.REJECT_CIRCUIT_OPEN.equals(reason)) {
+            rejectCircuitOpen.increment();
         }
+    }
+
+    /** 记一次「连不上换台」。 */
+    public void recordRetryConnect() {
+        retryConnect.increment();
     }
 
     private final MetricsExporter exporter = new MetricsExporter(this);

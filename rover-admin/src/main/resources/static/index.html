@@ -545,7 +545,7 @@
                                     <em>{{ c.value === 'true' ? '开' : '关' }}</em>
                                 </label>
                                 <select v-else-if="isEnumConfig(c)" v-model="c.value" class="nice-select">
-                                    <option v-for="opt in selectOptions(c)" :key="opt" :value="opt">{{ opt }}</option>
+                                    <option v-for="opt in selectOptions(c)" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
                                 </select>
                                 <div v-else-if="isNumberConfig(c)" class="num-wrap">
                                     <input type="number" v-model="c.value" :step="numberStep(c)" :min="numberMin(c)" :max="numberMax(c)">

@@ -33,7 +33,7 @@
 
 `ServiceDiscovery`、注册传输适配器和 Nacos 当前是源码级扩展，不属于这两个 `plugins` 目录扩展点。
 
-Gateway 还提供一个内置固定阶段 `RateLimitFilter`。它控制 Gateway 本地限流能力。不配置时默认关闭。你可以在 `rover.gateway.rateLimit` 中选择 `token_bucket` 或 `sliding_window`。如果需要按用户、租户或共享存储限流，建议关闭内置限流，并挂载自己的用户 Filter 插件。
+Gateway 还提供一个内置固定阶段 `RateLimitFilter`。它控制 Gateway 本地限流能力。不配置时默认关闭。你可以在 `rover.gateway.rateLimit` 中选择 `token_bucket` 或 `sliding_window`。如果需要按用户、租户或共享存储限流，建议关闭内置限流，并挂载自己的用户 Filter 插件。进程内熔断走 `rover.gateway.circuitBreaker`，挂在选点和转发收尾，不是独立 Filter。连不上换台走 `rover.gateway.retry.enabled`。
 
 对于 Filter，SPI 自动发现适合“JAR 放入后，登记的实现全部加载”。这种方式无需在 YAML 重复维护类名。显式类名适合“JAR 可以存在，但由部署配置决定启用哪些类”。后者更灵活，但增加、删除或改名后，需要改 `filters.classes` 并重启 Gateway。
 

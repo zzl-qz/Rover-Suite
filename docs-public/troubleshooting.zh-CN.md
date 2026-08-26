@@ -11,7 +11,7 @@
 | 配置保存失败 | 字段类型、枚举值、热更新标记和组件日志 |
 | 路由返回 404 | `businessPrefix`、`stripPrefix`、发现模式和实例健康状态 |
 | 路由返回 502 | 上游地址是否可达、连接超时、服务是否已注册 |
-| 路由返回 503 | 服务无健康实例、Gateway 资源不足或限流/插件拒绝 |
+| 路由返回 503 | 看 `X-Rover-Reject-Reason`：`NO_UPSTREAM` 没实例，`INFLIGHT_LIMIT` 在途满，`CIRCUIT_OPEN` 候选都被熔断；限流是 `429` |
 | HTTP 注册返回 401 | `Authorization: Bearer` 是否等于 Nameserver 协议 token |
 | 管理接口返回 401 | `X-Rover-Admin-Token` 是否等于目标组件管理 token |
 | 实例频繁下线 | 心跳超时、网络抖动、实例注册的 host/port 是否可达 |
@@ -79,7 +79,7 @@ curl -H "X-Rover-Admin-Token: <nameserver-admin-token>" \
 - 上游端口是否能从 Gateway 所在机器访问。
 - Nameserver 实例是否健康。
 - 自定义 Filter 是否调用了 `context.reject(...)`。
-- 内置限流或自定义限流是否返回了 `429/503`。
+- 内置限流或自定义限流是否返回了 `429`；熔断全开是 `503 CIRCUIT_OPEN`。
 
 ## 6. 配置修改不生效
 

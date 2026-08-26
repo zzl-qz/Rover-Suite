@@ -9,16 +9,21 @@ import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.common.spi.filter.RequestContext;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.gateway.core.discovery.DiscoveryType;
+import com.rover.gateway.core.filter.circuit.InstanceCircuitBreaker;
+import com.rover.gateway.core.filter.retry.RetrySettings;
 import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 import com.rover.gateway.core.metrics.MetricsRegistry;
 import com.rover.gateway.core.proxy.HttpProxyClient;
+import com.rover.gateway.core.proxy.InboundBodyPipe;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
 import com.rover.gateway.core.trace.TracePhase;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 
@@ -38,9 +43,11 @@ public class RouteAndProxyFilter implements Filter {
     private final ServiceDiscovery serviceDiscovery;
     private final LoadBalancer loadBalancer;
     private final MetricsRegistry metricsRegistry;
+    private final InstanceCircuitBreaker circuitBreaker;
+    private final RetrySettings retry;
 
     public RouteAndProxyFilter(RouteMatcher routeMatcher, HttpProxyClient proxyClient) {
-        this(routeMatcher, proxyClient, DiscoveryType.STATIC, null, null, null);
+        this(routeMatcher, proxyClient, DiscoveryType.STATIC, null, null, null, null);
     }
 
     public RouteAndProxyFilter(
@@ -49,7 +56,7 @@ public class RouteAndProxyFilter implements Filter {
             DiscoveryType discoveryType,
             ServiceDiscovery serviceDiscovery,
             LoadBalancer loadBalancer) {
-        this(routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, null);
+        this(routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, null, null);
     }
 
     public RouteAndProxyFilter(
@@ -59,12 +66,38 @@ public class RouteAndProxyFilter implements Filter {
             ServiceDiscovery serviceDiscovery,
             LoadBalancer loadBalancer,
             MetricsRegistry metricsRegistry) {
+        this(routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, metricsRegistry, null);
+    }
+
+    public RouteAndProxyFilter(
+            RouteMatcher routeMatcher,
+            HttpProxyClient proxyClient,
+            DiscoveryType discoveryType,
+            ServiceDiscovery serviceDiscovery,
+            LoadBalancer loadBalancer,
+            MetricsRegistry metricsRegistry,
+            InstanceCircuitBreaker circuitBreaker) {
+        this(routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, metricsRegistry,
+                circuitBreaker, null);
+    }
+
+    public RouteAndProxyFilter(
+            RouteMatcher routeMatcher,
+            HttpProxyClient proxyClient,
+            DiscoveryType discoveryType,
+            ServiceDiscovery serviceDiscovery,
+            LoadBalancer loadBalancer,
+            MetricsRegistry metricsRegistry,
+            InstanceCircuitBreaker circuitBreaker,
+            RetrySettings retry) {
         this.routeMatcher = routeMatcher;
         this.proxyClient = proxyClient;
         this.discoveryType = discoveryType == null ? DiscoveryType.STATIC : discoveryType;
         this.serviceDiscovery = serviceDiscovery;
         this.loadBalancer = loadBalancer;
         this.metricsRegistry = metricsRegistry;
+        this.circuitBreaker = circuitBreaker;
+        this.retry = retry;
     }
 
     @Override
@@ -99,6 +132,18 @@ public class RouteAndProxyFilter implements Filter {
         }
 
         ChosenUpstream chosen = resolveUpstream(route, gatewayContext);
+        if (chosen != null && chosen.circuitOpen()) {
+            if (metricsRegistry != null) {
+                metricsRegistry.recordReject(HttpConstants.REJECT_CIRCUIT_OPEN);
+            }
+            log.warn("All upstreams circuit-open, routeId={}, path={}, reason={}",
+                    route.getId(), requestPath, HttpConstants.REJECT_CIRCUIT_OPEN);
+            gatewayContext.writeText(
+                    HttpResponseStatus.SERVICE_UNAVAILABLE,
+                    "Circuit open for route: " + route.getId(),
+                    HttpConstants.REJECT_CIRCUIT_OPEN);
+            return CompletableFuture.completedFuture(null);
+        }
         if (chosen == null || chosen.baseUrl() == null) {
             if (metricsRegistry != null) {
                 metricsRegistry.recordReject(HttpConstants.REJECT_NO_UPSTREAM);
@@ -112,12 +157,70 @@ public class RouteAndProxyFilter implements Filter {
             return CompletableFuture.completedFuture(null);
         }
 
+        gatewayContext.setRoute(route);
+        boolean mayRetry = retry != null && retry.isEnabled() && hasSibling(route, chosen.instance());
+        long proxyStartNanos = System.nanoTime();
+        return forwardOnce(gatewayContext, route, requestPath, chosen, !mayRetry)
+                .thenCompose(first -> retryOrFinish(gatewayContext, route, requestPath, chosen, first, mayRetry))
+                .thenApply(attempt -> {
+                    gatewayContext.markPhase(TracePhase.PROXY.phaseName(), System.nanoTime() - proxyStartNanos);
+                    gatewayContext.setStatusCode(attempt.result().statusCode());
+                    gatewayContext.setUpstreamHostPort(hostPortOf(attempt.instance()));
+                    gatewayContext.setUpstreamCostMillis(attempt.result().upstreamCostMillis());
+                    gatewayContext.setUpstreamConnectFail(attempt.result().connectFail());
+                    gatewayContext.setUpstreamTimeout(attempt.result().timeout());
+                    gatewayContext.markCompleted();
+                    return null;
+                });
+    }
+
+    private CompletableFuture<Attempt> retryOrFinish(
+            GatewayRequestContext gatewayContext,
+            RouteConfig route,
+            String requestPath,
+            ChosenUpstream firstChosen,
+            Attempt first,
+            boolean mayRetry) {
+        if (!shouldRetry(mayRetry, first.result(), gatewayContext.getBodyPipe())) {
+            if (mayRetry) {
+                proxyClient.writeDeferredError(gatewayContext.getChannelContext(), first.result());
+                if (gatewayContext.getBodyPipe().canReplay()) {
+                    gatewayContext.getBodyPipe().abort();
+                }
+            }
+            return CompletableFuture.completedFuture(first);
+        }
+        ChosenUpstream next = resolveUpstream(
+                route, gatewayContext, Set.of(hostPortOf(firstChosen.instance())));
+        if (next == null || next.circuitOpen() || next.baseUrl() == null) {
+            proxyClient.writeDeferredError(gatewayContext.getChannelContext(), first.result());
+            if (gatewayContext.getBodyPipe().canReplay()) {
+                gatewayContext.getBodyPipe().abort();
+            }
+            return CompletableFuture.completedFuture(first);
+        }
+        if (metricsRegistry != null) {
+            metricsRegistry.recordRetryConnect();
+        }
+        log.info(
+                "连不上换台: from={}, to={}, routeId={}",
+                hostPortOf(firstChosen.instance()),
+                hostPortOf(next.instance()),
+                route.getId());
+        return forwardOnce(gatewayContext, route, requestPath, next, true);
+    }
+
+    private CompletableFuture<Attempt> forwardOnce(
+            GatewayRequestContext gatewayContext,
+            RouteConfig route,
+            String requestPath,
+            ChosenUpstream chosen,
+            boolean writeClientError) {
         String targetUrl = joinUrl(
                 chosen.baseUrl(),
                 gatewayContext.getRequest().uri(),
                 requestPath,
                 route.getStripPrefix());
-        gatewayContext.setRoute(route);
         gatewayContext.setTargetUrl(targetUrl);
         log.debug(
                 "Gateway route matched: routeId={}, businessPrefix={}, serviceName={}, targetUrl={}, lb={}",
@@ -129,36 +232,40 @@ public class RouteAndProxyFilter implements Filter {
 
         ServiceInstance instance = chosen.instance();
         if (loadBalancer != null && instance != null) {
-            // 告知 LB 实例开始占用（目前仅最少连接算法使用，其余为空实现）。
             loadBalancer.onStart(instance);
         }
-        long proxyStartNanos = System.nanoTime();
         return proxyClient
                 .forwardAsync(
                         gatewayContext.getChannelContext(),
                         gatewayContext.getRequest(),
                         targetUrl,
-                        gatewayContext.getBodyPipe())
+                        gatewayContext.getBodyPipe(),
+                        writeClientError)
                 .whenComplete((result, err) -> {
-                    // finally 语义：无论上游成功/失败，都释放 LB 对实例的占用。
                     if (loadBalancer != null && instance != null) {
                         loadBalancer.onComplete(instance);
                     }
+                    if (circuitBreaker != null && instance != null) {
+                        circuitBreaker.onResult(instance, isUpstreamAlive(result, err));
+                    }
                 })
-                .thenApply(result -> {
-                    gatewayContext.markPhase(TracePhase.PROXY.phaseName(), System.nanoTime() - proxyStartNanos);
-                    gatewayContext.setStatusCode(result.statusCode());
-                    // 回填上游信息，供 MetricsFilter 做上游维度统计
-                    gatewayContext.setUpstreamHostPort(hostPortOf(instance));
-                    gatewayContext.setUpstreamCostMillis(result.upstreamCostMillis());
-                    gatewayContext.setUpstreamConnectFail(result.connectFail());
-                    gatewayContext.setUpstreamTimeout(result.timeout());
-                    gatewayContext.markCompleted();
-                    return null;
-                });
+                .thenApply(result -> new Attempt(result, instance));
+    }
+
+    /** 只救连不上，而且 body 还在。请求超时、5xx、已经发出去的都不换台。 */
+    static boolean shouldRetry(boolean enabled, HttpProxyClient.ProxyResult result, InboundBodyPipe body) {
+        if (!enabled || result == null || !result.connectFail() || result.timeout()) {
+            return false;
+        }
+        return body != null && body.canReplay();
     }
 
     private ChosenUpstream resolveUpstream(RouteConfig route, GatewayRequestContext gatewayContext) {
+        return resolveUpstream(route, gatewayContext, Set.of());
+    }
+
+    private ChosenUpstream resolveUpstream(
+            RouteConfig route, GatewayRequestContext gatewayContext, Set<String> exclude) {
         if (loadBalancer == null) {
             // 极端兜底：无 LB 时静态只取第一个
             if (discoveryType == DiscoveryType.STATIC) {
@@ -168,7 +275,15 @@ public class RouteAndProxyFilter implements Filter {
                 if (instances.isEmpty()) {
                     return null;
                 }
-                return new ChosenUpstream(StaticUpstreamCluster.baseUrlOf(instances.get(0)), instances.get(0));
+                List<ServiceInstance> candidates = applyCircuitAndExclude(instances, exclude);
+                if (candidates == null) {
+                    return exclude.isEmpty() ? ChosenUpstream.allOpen() : null;
+                }
+                if (candidates.isEmpty()) {
+                    return null;
+                }
+                ServiceInstance first = candidates.get(0);
+                return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(first), first);
             }
             return null;
         }
@@ -199,11 +314,19 @@ public class RouteAndProxyFilter implements Filter {
             return null;
         }
 
+        List<ServiceInstance> candidates = applyCircuitAndExclude(instances, exclude);
+        if (candidates == null) {
+            return exclude.isEmpty() ? ChosenUpstream.allOpen() : null;
+        }
+        if (candidates.isEmpty()) {
+            return null;
+        }
+
         // 负载均衡选实例
         long lbStart = System.nanoTime();
         LoadBalanceContext lbContext = LoadBalanceContext.of(
                 clusterKey,
-                instances,
+                candidates,
                 gatewayContext,
                 resolveClientIp(gatewayContext));
         ServiceInstance chosen = loadBalancer.choose(lbContext);
@@ -211,7 +334,59 @@ public class RouteAndProxyFilter implements Filter {
         if (chosen == null) {
             return null;
         }
-        return new ChosenUpstream(StaticUpstreamCluster.baseUrlOf(chosen), chosen);
+        return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(chosen), chosen);
+    }
+
+    /** 还有没有另一台能打。只看列表，不走 LB，避免预检查把轮询指针推走。 */
+    private boolean hasSibling(RouteConfig route, ServiceInstance chosen) {
+        if (chosen == null) {
+            return false;
+        }
+        List<ServiceInstance> instances;
+        if (discoveryType == DiscoveryType.NAMESERVER) {
+            if (serviceDiscovery == null || route.getServiceName() == null || route.getServiceName().isBlank()) {
+                return false;
+            }
+            instances = serviceDiscovery.getInstances(route.getServiceName(), route.getGroup());
+        } else if (discoveryType == DiscoveryType.STATIC) {
+            instances = StaticUpstreamCluster.instancesOf(route);
+        } else {
+            return false;
+        }
+        List<ServiceInstance> candidates = applyCircuitAndExclude(instances, Set.of(hostPortOf(chosen)));
+        return candidates != null && !candidates.isEmpty();
+    }
+
+    /**
+     * 熔断过滤后再去掉已试过的实例。
+     * 返回 null 表示全开（仅首次选点时变成 CIRCUIT_OPEN）。
+     */
+    private List<ServiceInstance> applyCircuitAndExclude(List<ServiceInstance> instances, Set<String> exclude) {
+        List<ServiceInstance> candidates = instances;
+        if (circuitBreaker != null) {
+            candidates = circuitBreaker.filterAvailable(instances);
+            if (candidates == null || candidates.isEmpty()) {
+                return null;
+            }
+        }
+        if (exclude == null || exclude.isEmpty()) {
+            return candidates;
+        }
+        List<ServiceInstance> filtered = new ArrayList<>(candidates.size());
+        for (ServiceInstance instance : candidates) {
+            if (instance != null && !exclude.contains(hostPortOf(instance))) {
+                filtered.add(instance);
+            }
+        }
+        return filtered;
+    }
+
+    /** 2xx/4xx 算活着；连接失败、超时、5xx、异常算失败。给单测用。 */
+    static boolean isUpstreamAlive(HttpProxyClient.ProxyResult result, Throwable err) {
+        if (err != null || result == null) {
+            return false;
+        }
+        return !result.connectFail() && !result.timeout() && result.statusCode() < 500;
     }
 
     private static String hostPortOf(ServiceInstance instance) {
@@ -283,6 +458,16 @@ public class RouteAndProxyFilter implements Filter {
         return "/" + forwardPath;
     }
 
-    private record ChosenUpstream(String baseUrl, ServiceInstance instance) {
+    private record Attempt(HttpProxyClient.ProxyResult result, ServiceInstance instance) {
+    }
+
+    private record ChosenUpstream(String baseUrl, ServiceInstance instance, boolean circuitOpen) {
+        static ChosenUpstream of(String baseUrl, ServiceInstance instance) {
+            return new ChosenUpstream(baseUrl, instance, false);
+        }
+
+        static ChosenUpstream allOpen() {
+            return new ChosenUpstream(null, null, true);
+        }
     }
 }

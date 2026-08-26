@@ -74,7 +74,7 @@ The full documentation index is here: **[docs-public/README.md](docs-public/READ
 | **Static / dynamic routing** | Fixed upstreams and registry-based discovery share load balancing |
 | **Multiple load balancing** | Round-robin, weighted round-robin, random, IP hash, least connections |
 | **Focused extension points** | Filter and load-balancer plugin JARs; source-level service-discovery and registration adapters |
-| **Basic traffic protection** | Built-in local rate limiting, plus custom business limiting through Filter plugins |
+| **Basic traffic protection** | Built-in local rate limiting, a process-local circuit breaker, and connect-fail retry; custom business limiting through Filter plugins |
 | **Runtime management** | Admin console for viewing and updating runtime config, hot route updates |
 | **Management security** | Configurable bind address + token auth for the management API and registration/subscription protocol |
 | **Java native** | Customize with Java SPI, zero learning cost for Java teams, source code fully modifiable |
@@ -309,7 +309,7 @@ snapshots, grouped discovery, cold-start recovery, WebSocket/SSE, and client HTT
 
 ### Rover-Suite is NOT for you if
 
-- You need full traffic governance such as distributed rate limiting, circuit breaking, WAF, or auth policies out of the box
+- You need full traffic governance such as distributed rate limiting, clustered circuit breaking, WAF, or auth policies out of the box
 - You need large-scale cluster high availability (currently single-node, clustering planned)
 - You need extreme gateway performance (Nginx-based solutions like APISIX have a higher ceiling)
 
@@ -326,6 +326,8 @@ snapshots, grouped discovery, cold-start recovery, WebSocket/SSE, and client HTT
 - [x] Admin runtime management (config hot-reload, hot route updates)
 - [x] SPI plugin extension (Filter and load balancer) plus source-level service-discovery contract
 - [x] Built-in local rate limiting and custom rate limiting through Filter plugins
+- [x] Process-local circuit breaker (consecutive failures, `all` / `half` recovery)
+- [x] Connect-fail retry (off by default, one extra attempt, no business 5xx retry)
 - [x] Runtime config management (YAML + hot-reload)
 - [x] Lightweight in-memory metrics and bounded request trace timeline management APIs
 - [x] Admin live dashboard and Prometheus text export
@@ -333,7 +335,7 @@ snapshots, grouped discovery, cold-start recovery, WebSocket/SSE, and client HTT
 **Planned:**
 
 - [ ] Distributed tracing integration beyond the local Gateway timeline
-- [ ] Advanced traffic governance (auth policies, circuit breaking, distributed limiting)
+- [ ] Advanced traffic governance (auth policies, distributed limiting)
 - [ ] External registry adapters
 - [ ] Nameserver cluster high availability (online instances remain lease-based soft state)
 

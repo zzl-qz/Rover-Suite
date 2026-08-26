@@ -37,14 +37,26 @@ window.RoverAdminPages.configs = {
             return String(c.value) !== String(c._saved);
         },
         isBoolConfig(c) {
-            const opts = (c.options || []).map(v => String(v).toLowerCase());
+            const opts = (c.options || []).map(v => this.optionValue(v).toLowerCase());
             return opts.length === 2 && opts.includes('true') && opts.includes('false');
+        },
+        optionValue(opt) {
+            if (opt && typeof opt === 'object' && opt.value !== undefined) {
+                return String(opt.value);
+            }
+            return String(opt);
+        },
+        optionLabel(c, opt) {
+            if (opt && typeof opt === 'object' && opt.label !== undefined) {
+                return String(opt.label);
+            }
+            return this.configChipLabel(c, this.optionValue(opt));
         },
         isNumberConfig(c) {
             const key = c.key || '';
             // 只按末尾配置名判断；否则 loadbalance.strategy 中的 "rate" 会被误判为数字配置。
             if (/(millis|seconds|rate|timeout|interval|expire)$/i.test(key)) return true;
-            return c.options && c.options.length && c.options.every(v => !Number.isNaN(Number(v)));
+            return c.options && c.options.length && c.options.every(v => !Number.isNaN(Number(this.optionValue(v))));
         },
         isEnumConfig(c) {
             return c.options && c.options.length
@@ -52,16 +64,23 @@ window.RoverAdminPages.configs = {
                 && !this.isNumberConfig(c);
         },
         selectOptions(c) {
-            const options = (c.options || []).map(v => String(v));
+            const options = (c.options || []).map(v => {
+                if (v && typeof v === 'object' && v.value !== undefined) {
+                    return { label: v.label != null ? String(v.label) : String(v.value), value: String(v.value) };
+                }
+                const value = String(v);
+                return { label: this.configChipLabel(c, value), value };
+            });
             const value = String(c.value || '');
-            if (value && !options.includes(value)) {
-                return [value, ...options];
+            if (value && !options.some(opt => opt.value === value)) {
+                return [{ label: this.configChipLabel(c, value), value }, ...options];
             }
             return options;
         },
         numberUnit(c) {
             if (/rateLimit\.permitsPerSecond$/i.test(c.key || '')) return '请求/秒';
             if (/rateLimit\.(burst|limit)$/i.test(c.key || '')) return '请求';
+            if (/failureThreshold$/i.test(c.key || '')) return '次';
             if (/rate/i.test(c.key || '')) return '';
             if (/seconds/i.test(c.key || '')) return '秒';
             return 'ms';
@@ -80,6 +99,10 @@ window.RoverAdminPages.configs = {
             if ((c.key || '').endsWith('sampleRate')) {
                 if (String(opt) === '0') return '只记慢请求';
                 if (String(opt) === '1') return '全量记录';
+            }
+            if ((c.key || '').endsWith('circuitBreaker.recovery')) {
+                if (String(opt) === 'all') return '到期全开';
+                if (String(opt) === 'half') return '只发一个探测';
             }
             return opt;
         },

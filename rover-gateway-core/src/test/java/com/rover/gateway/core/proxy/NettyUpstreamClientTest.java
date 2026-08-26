@@ -190,6 +190,50 @@ class NettyUpstreamClientTest {
         assertEquals(0, client.getInFlightCount());
     }
 
+    @Test
+    void silentConnectFailKeepsBodyForNextInstance() throws Exception {
+        AtomicReference<String> seen = new AtomicReference<>();
+        upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        upstream.createContext("/echo", exchange -> {
+            seen.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] ok = "ok".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, ok.length);
+            exchange.getResponseBody().write(ok);
+            exchange.close();
+        });
+        upstream.start();
+
+        CopyOnWriteArrayList<Object> written = new CopyOnWriteArrayList<>();
+        ChannelHandlerContext browserCtx = openBrowserCtx(written);
+        client = new NettyUpstreamClient(200, 2000);
+
+        io.netty.handler.codec.http.HttpRequest headers = new DefaultFullHttpRequest(
+                HttpVersion.HTTP_1_1, HttpMethod.POST, "/echo");
+        headers.headers().set(HttpHeaderNames.HOST, "localhost");
+        headers.headers().setInt(HttpHeaderNames.CONTENT_LENGTH, 9);
+        InboundBodyPipe pipe = new InboundBodyPipe(1024);
+        pipe.offer(new DefaultLastHttpContent(
+                Unpooled.copiedBuffer("payload-c", StandardCharsets.UTF_8)));
+
+        HttpProxyClient.ProxyResult first = client.forwardAsync(
+                        browserCtx, headers, "http://127.0.0.1:1/echo", pipe, false)
+                .get(3, TimeUnit.SECONDS);
+        assertTrue(first.connectFail());
+        assertTrue(pipe.canReplay());
+        assertTrue(written.isEmpty(), "第一枪压错包，客户端不能先看到 502");
+
+        HttpProxyClient.ProxyResult second = client.forwardAsync(
+                        browserCtx,
+                        headers,
+                        "http://127.0.0.1:" + upstream.getAddress().getPort() + "/echo",
+                        pipe,
+                        true)
+                .get(5, TimeUnit.SECONDS);
+        assertEquals(200, second.statusCode());
+        assertEquals("payload-c", seen.get());
+        assertEquals(0, client.getInFlightCount());
+    }
+
     private ChannelHandlerContext openBrowserCtx(CopyOnWriteArrayList<Object> written) throws Exception {
         boss = new NioEventLoopGroup(1);
         worker = new NioEventLoopGroup(1);

@@ -14,6 +14,7 @@ import com.rover.gateway.core.discovery.NoopServiceDiscovery;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.filter.FilterSettings;
+import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteConfig;
@@ -250,6 +251,18 @@ public class GatewayHttpServer {
         configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_LIMIT, String.valueOf(rateLimit.getLimit()));
         configManager.seed(GatewayRuntimeConfigKeys.RATE_LIMIT_WINDOW_SECONDS,
                 String.valueOf(rateLimit.getWindowSeconds()));
+        CircuitBreakerSettings circuitBreaker = filterSettings == null
+                ? new CircuitBreakerSettings()
+                : filterSettings.getCircuitBreaker();
+        configManager.seed(GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_ENABLED,
+                String.valueOf(circuitBreaker.isEnabled()));
+        configManager.seed(GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+                String.valueOf(circuitBreaker.getFailureThreshold()));
+        configManager.seed(GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_OPEN_SECONDS,
+                String.valueOf(circuitBreaker.getOpenSeconds()));
+        configManager.seed(GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_RECOVERY, circuitBreaker.getRecovery());
+        configManager.seed(GatewayRuntimeConfigKeys.RETRY_ENABLED,
+                String.valueOf(filterSettings != null && filterSettings.getRetry().isEnabled()));
         configManager.seed(GatewayRuntimeConfigKeys.METRICS_ENABLED, String.valueOf(metricsEnabled));
         configManager.seed(GatewayRuntimeConfigKeys.METRICS_WINDOW_SECONDS, String.valueOf(metricsWindowSeconds));
         configManager.seed(GatewayRuntimeConfigKeys.TRACE_ENABLED, String.valueOf(traceEnabled));
