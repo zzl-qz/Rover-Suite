@@ -6,7 +6,7 @@ This document explains the current local reference numbers. If you want to bench
 
 Rover-Suite does not publish a universal QPS limit. Throughput depends on CPU, JDK, container limits, route count, upstream latency, connection reuse, network placement, metric windows and trace sampling.
 
-The numbers below are **local Docker Desktop reference samples** (updated 2026-08-25 with streaming proxy before/after comparisons). They show the cost of the Gateway path under capped resources. They are not a Linux production SLA.
+The numbers below are **local Docker Desktop reference samples** (updated through 2026-08-26: streaming, Netty outbound, and I/O comparison). They show the cost of the Gateway path under capped resources. They are not a Linux production SLA.
 
 For capacity planning, run the same commands on your target machine and keep the raw output.
 
@@ -23,6 +23,7 @@ Same host, Docker Desktop, `perf-fair` (Gateway **2 CPU / 2 GB**). Empty cells w
 | 3 | Metrics/trace off + hop-by-hop constants; EventLoop was an experiment | Retention **12.13%→12.53%** (~2215→2138) | EventLoop experiment: 503 **~2%→12%** | **Almost no lift**; EventLoop stays off by default |
 | 4 | Netty outbound (JDK path kept) | About **2100→6800 (~3.2×)**; vs direct **12%→40%**; all 200 | Success ~**8830**; 503 ~**5.6%** | **The only small-body QPS jump** |
 | 5 | Inbound no Aggregator; body piped | Remeasure ~**6610**, all 200; same band as 6800 | Remeasure success ~**8300–8400**; 503 ~**4%** | **GET hello did not rise**; POST can overlap connect |
+| 6 | Default `ioTransport=auto` (Epoll in the container) vs pinned NIO | Median ~**6190→6405 (~+3.5%)**, all 200; same band | Success median ~**7544→8003**; 503 ~**7.6%→6.4%** | Native I/O is selected correctly; the Epoll vs NIO gap was about 3.5% in this sample. Capacity stays with the Netty-outbound run |
 
 **Large responses: `GET /api/payload?size=N` (c=20)**
 
@@ -180,7 +181,7 @@ Turning observability off and skipping `toLowerCase` does **not** move throughpu
 
 ## 8.2 Netty outbound (2026-08-25)
 
-Default upstream client is now Netty (`rover.gateway.proxy.outbound: netty`). The first-generation JDK `HttpClient` HTTP/1.1 path is still in the tree (`outbound: jdk`) so the compatibility work is not deleted.
+Default upstream client is now Netty (`rover.gateway.proxy.outbound: netty`). The first-generation JDK `HttpClient` HTTP/1.1 path is still in the tree (`outbound: jdk`) for rollback and comparison. It includes TLS, so an `https://` upstream can use that switch; throughput then returns to the JDK-outbound band.
 
 Run: `2026-08-25-152000-phase-a-netty-outbound`. Same `perf-fair` / Phase A script / biz pool / metrics and trace off. Direct c=50 median **16939** is **−0.7%** vs `141900` and **−7.3%** vs `132633` (both within the 10% gate).
 
@@ -197,9 +198,9 @@ Nameserver path c=50 median **7266** (42.9% of same-run Direct), all 200. That i
 - Steady QPS is about **3.1×–3.2×** the JDK-outbound qualified runs. This is the first Phase A change that actually moved the ~12% retention ceiling.
 - c=50 is still the only band we treat as stable (all 200).
 - c=100 still rejects; quote **successful** QPS (~8830) and the ~5.6% 503 rate. Do not publish the mixed total (~9360).
-- Inbound no longer uses `HttpObjectAggregator` (headers start the proxy; body is piped). Phase A remasure: GET `/api/hello` did **not** rise (about 6610 vs 6800 here). **Capacity numbers stay at the Netty-outbound row above.**
+- Inbound no longer uses `HttpObjectAggregator` (headers start the proxy; body is piped). Phase A remasure: GET `/api/hello` did **not** rise (about 6610 vs 6800 here). Capacity numbers stay at the Netty-outbound row above.
 
-Current 2 CPU / 2 GB local capacity: **c=50 / ~6800 QPS / all 200 / ~40% of Direct**.
+Current 2 CPU / 2 GB local reference: **c=50 / ~6800 QPS / all 200 / ~40% of Direct**.
 
 Same-session A/B (`2026-08-25-154500-phase-a-outbound-ab`): one image, YAML-only switch, startup logs checked (`JDK HttpClient HTTP/1.1` vs `Netty`). Direct c=50 drift **3.3%**. JDK half: GW **1865** / 12.0% of Direct. Netty half: GW **6615** / **43.8%** of Direct. About **3.5×** on the same jar. c=50 all 200 on both sides.
 
@@ -229,6 +230,17 @@ This-run Direct: 1161 / 294 / 81 vs wave-1 stream Direct 1189 / 288 / 76 — sam
 There is no old-Aggregator A/B. This is a baseline, not a “how much faster than before”. Same-session 4 MB POST with JDK outbound is about 62 QPS (Direct 84 on both halves) — **QPS is the same**; JDK outbound memory is about **790 MiB** vs Netty **300 MiB**.
 
 The JDK-outbound GET half had Direct collapse (256 KB 1161→663). That absolute QPS is **void**.
+
+## 8.4 I/O comparison (2026-08-26)
+
+Same-session A/B (`2026-08-26-110700-phase-a-io-ab`, `bench-phase-a-io-ab.sh`): one image, only `server.ioTransport` changed. The Docker Desktop container is **Linux aarch64**; `auto` logged **epoll** (not host macOS kqueue). Direct c=50 drift **2.6%** (qualified).
+
+| Half | Direct c=50 median | GW c=50 median | Retention | P50 | c=100 success median | c=100 503 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Pinned `nio` | 14946 | **6190** | 41.4% | 6.7 ms | **7544** | **~7.6%** |
+| `auto`→epoll | 14561 | **6405** | 44.0% | 6.5 ms | **8003** | **~6.4%** |
+
+c=50 all 200 both sides. Memory was about 229 MiB on both halves. Epoll was about **3.5%** above NIO, same band as the 6800 row in §8.2. Capacity numbers stay with the Netty-outbound run. Host `java -jar` on macOS would select kqueue; that path was not measured.
 
 ## 9. Making results more credible
 

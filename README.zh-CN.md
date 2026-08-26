@@ -275,8 +275,8 @@ rover:
 并为协议面与管理面配置不同 token。token 只做鉴权，不加密流量；需要链路加密时由 VPN、TLS 隧道或外层
 HTTPS 代理承担。Gateway `/_manage/**` 与业务流量共用监听端口，可通过 `adminToken` 和外层 ACL/代理限制访问。
 
-当前源码仍是单机 `1.0.0-SNAPSHOT`。已知运行边界（包括最后实例空快照、分组发现、冷启动恢复和代理缓冲）
-集中记录在[使用指南](./docs-public/user-guide.zh-CN.md#9-当前运行边界)。
+当前源码仍是单机 `1.0.0-SNAPSHOT`。已知运行边界（包括最后实例空快照、分组发现、冷启动恢复、WebSocket/SSE，
+以及网关进程不终止 HTTPS）集中记录在[使用指南](./docs-public/user-guide.zh-CN.md#9-当前运行边界)。
 
 ---
 

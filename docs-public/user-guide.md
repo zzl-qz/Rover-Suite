@@ -120,6 +120,18 @@ strategies: `round_robin`, `random`, `weighted_round_robin`, `ip_hash`, and `lea
 Static upstreams currently use only the URL scheme, host, and port. Do not put a base path in `targetUrl` or
 `targetUrls`; express path transformation with the route's `stripPrefix`.
 
+### Upstream HTTP and HTTPS
+
+Default outbound is Netty and forwards `http://` upstreams only. Terminate client HTTPS at a reverse proxy in
+front of Gateway; keep Gateway-to-service traffic as plain HTTP on the private network.
+
+If the upstream URL must be `https://`, set `rover.gateway.proxy.outbound` to `jdk`. That is the first-generation
+JDK `HttpClient` (HTTP/1.1), kept for rollback and comparison; it includes TLS. Throughput then returns to the
+JDK-outbound band — see the [Performance Report](./performance-report.md).
+
+With the default outbound, startup and hot-reload reject `https://` so a config cannot pass and then fail on the
+first request.
+
 ## 5. Define routes
 
 Nameserver-backed route:
@@ -227,15 +239,18 @@ public control plane. The deployer chooses hardening when exposing control ports
   restoration of online instances.
 - Discovery is push-first with periodic query reconciliation, not strongly real-time. A last-instance empty push is
   currently protected by Gateway, so the cache clears at the next reconciliation — up to about 30 seconds by
-  default. Requests in that window may still select the recently stopped address.
+  default. Requests in that window may still select the recently stopped address. On this machine's Compose run
+  (`demo-fault.sh`), stopping the last instance produced 502 immediately and `503 NO_UPSTREAM` after about 17 seconds.
 - If Nameserver is unavailable when Gateway starts, the failed initial subscription may not be recovered until the
   next reconciliation, again up to about 30 seconds by default.
 - Multi-group push isolation is still being finalized; keep `group` empty for the current build. See
   [Service Registration](./service-registration.md#23-current-group-boundary).
 - When all persistent instances are marked unhealthy, Gateway currently falls back to the complete cached list — a
   fail-open policy.
-- Gateway aggregates complete requests and responses. WebSocket, SSE, and streaming proxying are not supported;
-  the default request-body limit is 1 MiB and the hard response-body limit is 16 MiB.
+- Gateway targets ordinary HTTP/1.1: inbound headers start the proxy and the request body is piped; default Netty
+  outbound writes the upstream response in chunks. WebSocket and SSE are not supported. The default request-body
+  limit is 1 MiB and the hard response-body limit is 16 MiB.
+- The Gateway process does not terminate client HTTPS, and the default outbound path does not speak TLS to upstreams.
 - Static upstream URLs preserve only scheme, host, and port; URL base paths are not preserved.
 
 These boundaries do not prevent the ordinary single-node HTTP API and empty-group use case, but should be evaluated
@@ -249,12 +264,21 @@ for strict removal consistency, group isolation, streaming protocols, or an inte
 | Java provider cannot authenticate | `rover.nameserver.token` in the application does not match Nameserver. |
 | Gateway cannot discover services | Check `rover.gateway.discovery.nameserver.address` and `.token`; these are Gateway keys, not Starter keys. |
 | Nameserver is back but Gateway still has no instance | A failed initial watch may wait until the next reconciliation; wait for `reconcileIntervalMs` or restart Gateway. |
-| Traffic briefly targets the last stopped instance | Gateway's empty-snapshot protection clears it at the next reconciliation, up to about 30 seconds by default. |
+| Traffic briefly targets the last stopped instance | Gateway's empty-snapshot protection clears it at the next reconciliation, up to about 30 seconds by default. This machine's run: 502 immediately, 503 after about 17 seconds. |
 | HTTP Registrar receives `404 NOT_FOUND` | `clientApiEnabled` is false, the path is wrong, or the HTTP listener is disabled. Enable the Registration API and restart. |
 | HTTP Registrar receives `409 STALE_SESSION` | Another process registered the same `serviceName + instanceId`. Give replicas unique IDs and one owner per endpoint. |
 | Provider is visible but unreachable | The registered host/port is not reachable from Gateway. |
 | YAML route is ignored | `config/routes.overlay.json` is replacing the YAML route list. |
+| Startup or hot-reload says only http upstreams are supported | Default Netty outbound does not forward `https://`. Use `http://`, or set `proxy.outbound: jdk`. |
+| Confirm the current I/O implementation | Read `ioTransport=` in the startup log. In a Docker Linux container, `auto` is usually epoll. Host `java -jar` on macOS selects kqueue. |
 | A custom LB is missing from Admin | Normal. `gateway.loadbalance.strategy` is a startup/plugin-mounting setting. Put the built-in strategy, SPI `name()`, or implementation FQCN in `rover-gateway.yml` and restart Gateway; Admin no longer edits it. |
+
+To replay discovery faults on local Compose, run `./deploy/scripts/demo-fault.sh`. This machine's sample:
+20 hellos split 10 / 10; `docker stop` and `docker kill` of one instance both avoided it immediately
+(unregister or TCP-disconnect cleanup); `docker pause` avoided it after about 35 seconds (connection up,
+heartbeats frozen); after Nameserver was stopped, forwarding continued within about 2 seconds; after the last
+instance stopped, requests were 502 immediately and `503 NO_UPSTREAM` after about 17 seconds.
+See the [Docker Compose README](../deploy/docker/README.md).
 
 Further reading: [Service Registration](./service-registration.md), [Architecture](./architecture.md), and
 [Development Guide](./development-guide.md).

@@ -69,10 +69,12 @@ and are not documented as published to a public Maven repository yet.
 
 This is currently a single-node preview. It is complete enough for the documented ordinary HTTP and empty-group
 workflow, while operational boundaries such as last-instance reconciliation, grouped discovery, cold-start recovery,
-and buffered proxying are listed in [User Guide: Current runtime boundaries](./user-guide.md#9-current-runtime-boundaries).
+WebSocket/SSE, and client HTTPS termination are listed in
+[User Guide: Current runtime boundaries](./user-guide.md#9-current-runtime-boundaries).
 
-当前定位是单机预览版，已覆盖文档中的普通 HTTP 与默认空分组链路。最后实例对账、分组发现、冷启动恢复和整包代理等
-运行边界统一记录在[使用指南：当前运行边界](./user-guide.zh-CN.md#9-当前运行边界)，避免 README 与真实代码能力不一致。
+当前定位是单机预览版，已覆盖文档中的普通 HTTP 与默认空分组链路。最后实例对账、分组发现、冷启动恢复、WebSocket/SSE，
+以及网关进程不终止 HTTPS 等运行边界，统一记录在[使用指南：当前运行边界](./user-guide.zh-CN.md#9-当前运行边界)，
+避免 README 与真实代码能力不一致。
 
 Documentation should describe released code, not planned behavior. When a public contract, configuration key, or
 extension boundary changes, update the corresponding guide and both root READMEs in the same change.

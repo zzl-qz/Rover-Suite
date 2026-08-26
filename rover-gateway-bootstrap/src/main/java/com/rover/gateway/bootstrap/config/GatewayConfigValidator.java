@@ -1,12 +1,12 @@
 package com.rover.gateway.bootstrap.config;
 
-import com.rover.common.constants.HttpConstants;
 import com.rover.common.util.HostPort;
 import com.rover.gateway.bootstrap.config.GatewayConfig.FilterProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.GatewayProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.NameserverProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RateLimitProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
+import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 
@@ -35,6 +35,7 @@ final class GatewayConfigValidator {
         validatePositive("proxy.connectTimeoutMillis", config.getConnectTimeoutMillisOrDefault());
         validatePositive("proxy.requestTimeoutMillis", config.getRequestTimeoutMillisOrDefault());
         validateProxyOutbound(config.getProxyOutboundOrDefault());
+        validateIoTransport(config.getIoTransportOrDefault());
         validateFilterSettings(gateway.getFilters());
         validateRateLimit(gateway.getRateLimit());
         validateObservability(config);
@@ -65,6 +66,14 @@ final class GatewayConfigValidator {
         String normalized = outbound.trim().toLowerCase(Locale.ROOT);
         if (!"netty".equals(normalized) && !"jdk".equals(normalized)) {
             throw new IllegalArgumentException("proxy.outbound 仅支持 netty/jdk");
+        }
+    }
+
+    private static void validateIoTransport(String ioTransport) {
+        String normalized = ioTransport.trim().toLowerCase(Locale.ROOT);
+        if (!"auto".equals(normalized) && !"nio".equals(normalized)
+                && !"epoll".equals(normalized) && !"kqueue".equals(normalized)) {
+            throw new IllegalArgumentException("server.ioTransport 仅支持 auto/nio/epoll/kqueue");
         }
     }
 
@@ -152,13 +161,14 @@ final class GatewayConfigValidator {
                         "static 模式下需要 targetUrl 或 targetUrls，businessPrefix="
                                 + route.getBusinessPrefix());
             }
+            String outbound = config.getProxyOutboundOrDefault();
             if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
-                validateTargetUrl(GatewayConfigMapper.stripWeightSuffix(route.getTargetUrl()));
+                validateTargetUrl(GatewayConfigMapper.stripWeightSuffix(route.getTargetUrl()), outbound);
             }
             if (route.getTargetUrls() != null) {
                 for (String raw : route.getTargetUrls()) {
                     if (raw != null && !raw.isBlank()) {
-                        validateTargetUrl(GatewayConfigMapper.stripWeightSuffix(raw.trim()));
+                        validateTargetUrl(GatewayConfigMapper.stripWeightSuffix(raw.trim()), outbound);
                     }
                 }
             }
@@ -172,13 +182,14 @@ final class GatewayConfigValidator {
         validateStripPrefix(config.resolveStripPrefix(route), route.getBusinessPrefix());
     }
 
-    private static void validateTargetUrl(String targetUrl) {
+    private static void validateTargetUrl(String targetUrl, String outbound) {
         try {
             URI uri = new URI(targetUrl);
-            String scheme = uri.getScheme();
-            if (!HttpConstants.SCHEME_HTTP.equalsIgnoreCase(scheme)
-                    && !HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(scheme)) {
-                throw new IllegalStateException("Gateway 路由 targetUrl 只支持 http/https：" + targetUrl);
+            try {
+                GatewaySystemProperties.requireUpstreamScheme(
+                        uri.getScheme(), targetUrl, outbound);
+            } catch (IllegalArgumentException err) {
+                throw new IllegalStateException(err.getMessage(), err);
             }
             if (uri.getHost() == null || uri.getHost().isBlank()) {
                 throw new IllegalStateException("Gateway 路由 targetUrl 必须包含主机地址：" + targetUrl);

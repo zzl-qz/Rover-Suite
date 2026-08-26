@@ -298,6 +298,16 @@ cmake -S examples/http-registration/cpp -B build/rover-http
 cmake --build build/rover-http
 ```
 
+本地 Compose 发现行为（可选）：
+
+```bash
+./deploy/scripts/demo-fault.sh
+```
+
+本场参考：20 次 hello 为 10 / 10；`docker stop` / `kill` 其中一个都是立刻躲开；`docker pause` 约 35 秒躲开；
+停 Nameserver 约 2 秒内仍转；停最后一个实例立刻 502，约 17 秒后 503。
+`docker kill` 走断连清理，不是心跳超时。说明见 [`deploy/docker/README.md`](../deploy/docker/README.md)。
+
 合入维护分支前：
 
 - 运行变更模块的定向测试；跨模块变更运行 `mvn test` 或 `mvn clean verify`。

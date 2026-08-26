@@ -55,6 +55,9 @@ public class GatewayApplication {
         System.setProperty(
                 com.rover.gateway.core.config.GatewaySystemProperties.PROXY_OUTBOUND,
                 config.getProxyOutboundOrDefault());
+        System.setProperty(
+                com.rover.gateway.core.config.GatewaySystemProperties.IO_TRANSPORT,
+                config.getIoTransportOrDefault());
         log.info("proxy.outbound={}", config.getProxyOutboundOrDefault());
 
         // 封装启动服务，内置接收前端HTTP请求+定时拉取NameSever实例信息的功能

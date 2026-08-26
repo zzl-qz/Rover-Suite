@@ -16,6 +16,8 @@ Use this guide to diagnose common Rover-Suite runtime issues.
 | Management API returns 401 | `X-Rover-Admin-Token` must match the target component admin token |
 | Instances are evicted repeatedly | Heartbeat timeout, network jitter and registered host/port reachability |
 | Log volume grows quickly | Access log level and `filters.accessLog` |
+| Startup or hot-reload says only http upstreams are supported | Default Netty outbound does not forward `https://`. See section 4.1 |
+| Confirm the current I/O implementation | Read `ioTransport=` in the startup log. In a Docker Linux container, `auto` is usually epoll |
 
 ## 2. Check component health first
 
@@ -50,9 +52,22 @@ If Gateway starts before Nameserver, discovery may be completed by the next reco
 | `businessPrefix` | The request path starts with this prefix |
 | `stripPrefix` | The upstream path is rewritten as expected |
 | `serviceName` | Nameserver has a healthy service with this name |
-| `targetUrl/targetUrls` | Static upstreams are reachable |
+| `targetUrl/targetUrls` | Static upstreams are reachable. Default outbound forwards `http://` only; see section 4.1 for `https://` |
 
 If routes were changed from Admin, `config/routes.overlay.json` overrides the YAML route list.
+
+### 4.1 Startup or hot-reload says only http upstreams are supported
+
+Default outbound is Netty and forwards `http://` only. Validation rejects an unsupported upstream scheme at
+startup or hot-reload so a config cannot pass and then fail on the first request.
+
+Pick one:
+
+- Change the upstream to `http://`. The usual pattern is to terminate caller HTTPS at Nginx, an SLB, or a CDN,
+  and keep Gateway-to-service traffic as plain HTTP.
+- Set `rover.gateway.proxy.outbound` to `jdk` and restart. That is the first-generation JDK client, kept for
+  rollback and comparison; it includes TLS. Throughput then returns to the JDK-outbound band — see the
+  [Performance Report](./performance-report.md).
 
 ## 5. Route returns 502 or 503
 

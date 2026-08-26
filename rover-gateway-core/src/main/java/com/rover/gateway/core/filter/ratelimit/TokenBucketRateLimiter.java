@@ -19,15 +19,15 @@ final class TokenBucketRateLimiter implements RateLimiter {
 
     @Override
     public boolean tryAcquire(String key) {
-        return bucket(key).tryAcquire(permitsPerSecond, capacity);
-    }
-
-    private Bucket bucket(String key) {
-        if (!buckets.containsKey(key) && buckets.size() >= MAX_KEYS) {
-            // 保持本地限流内存有上限；高基数键需求再引入带淘汰策略的缓存。
-            buckets.clear();
+        Bucket existing = buckets.get(key);
+        if (existing != null) {
+            return existing.tryAcquire(permitsPerSecond, capacity);
         }
-        return buckets.computeIfAbsent(key, ignored -> new Bucket(capacity));
+        if (buckets.size() >= MAX_KEYS) {
+            return false;
+        }
+        return buckets.computeIfAbsent(key, ignored -> new Bucket(capacity))
+                .tryAcquire(permitsPerSecond, capacity);
     }
 
     /** 单个键的令牌余额，只服务令牌桶算法，无独立复用价值。 */

@@ -174,7 +174,7 @@ window.RoverAdminPages.dashboard = {
                     text: `近 ${this.liveRange} 秒无请求`,
                     left: 'center',
                     top: 'middle',
-                    textStyle: { color: '#8a9a90', fontSize: 14, fontWeight: 500 },
+                    textStyle: { color: '#7a857c', fontSize: 14, fontWeight: 500 },
                 } : { text: '' },
                 tooltip: {
                     show: !idle,
@@ -188,19 +188,19 @@ window.RoverAdminPages.dashboard = {
                     show: !idle,
                     type: 'category',
                     data: series.map(p => this.fmtSecond(p.second)),
-                    axisLine: { lineStyle: { color: '#d8e0db' } },
-                    axisLabel: { color: '#6b7a72', fontSize: 11 },
+                    axisLine: { lineStyle: { color: '#c4cbc3' } },
+                    axisLabel: { color: '#5a655e', fontSize: 11 },
                 },
                 yAxis: {
                     show: !idle,
                     type: 'value',
                     name: '请求/秒',
-                    nameTextStyle: { color: '#6b7a72', fontSize: 11, padding: [0, 0, 0, 8] },
+                    nameTextStyle: { color: '#5a655e', fontSize: 11, padding: [0, 0, 0, 8] },
                     minInterval: 1,
                     // 峰值×1.15 再取整档；纵轴不是容量上限
                     max: idle ? 1 : this.niceCeil(peak),
-                    splitLine: { show: !idle, lineStyle: { color: '#eef2ef' } },
-                    axisLabel: { color: '#6b7a72', fontSize: 11 },
+                    splitLine: { show: !idle, lineStyle: { color: '#dfe3db' } },
+                    axisLabel: { color: '#5a655e', fontSize: 11 },
                 },
                 series: idle ? [] : [{
                     name: '请求/秒',
@@ -210,13 +210,8 @@ window.RoverAdminPages.dashboard = {
                     step: 'end',
                     showSymbol: false,
                     data: series.map(p => p.count),
-                    lineStyle: { color: '#1f6f5b', width: 2 },
-                    areaStyle: {
-                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-                            { offset: 0, color: 'rgba(31, 111, 91, 0.22)' },
-                            { offset: 1, color: 'rgba(31, 111, 91, 0)' },
-                        ]),
-                    },
+                    lineStyle: { color: '#3f5a38', width: 2 },
+                    areaStyle: { color: 'rgba(63, 90, 56, 0.16)' },
                 }],
             }, true);
         },
@@ -232,7 +227,7 @@ window.RoverAdminPages.dashboard = {
                         text: `近 ${this.liveRange} 秒无状态码样本`,
                         left: 'center',
                         top: 'middle',
-                        textStyle: { color: '#8a9a90', fontSize: 14, fontWeight: 500 },
+                        textStyle: { color: '#7a857c', fontSize: 14, fontWeight: 500 },
                     },
                     series: [],
                     legend: { show: false },
@@ -243,16 +238,16 @@ window.RoverAdminPages.dashboard = {
             chart.setOption({
                 title: { text: '' },
                 tooltip: { show: true, trigger: 'item', formatter: '{b}: {c} ({d}%)' },
-                legend: { show: true, bottom: 0, textStyle: { color: '#6b7a72', fontSize: 12 } },
+                legend: { show: true, bottom: 0, textStyle: { color: '#5a655e', fontSize: 12 } },
                 series: [{
                     type: 'pie',
                     radius: ['46%', '70%'],
                     center: ['50%', '44%'],
                     avoidLabelOverlap: true,
-                    itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+                    itemStyle: { borderRadius: 0, borderColor: '#f4f5f2', borderWidth: 2 },
                     label: { show: false },
                     emphasis: { label: { show: true, fontWeight: 'bold', fontSize: 14 } },
-                    color: ['#1f6f5b', '#5aa08a', '#e0a458', '#c05555'],
+                    color: ['#3f5a38', '#6d8a62', '#c17a22', '#a33b35'],
                     data: [
                         { name: '2xx', value: s['2xx'] || 0 },
                         { name: '3xx', value: s['3xx'] || 0 },

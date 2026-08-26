@@ -19,9 +19,12 @@ final class SlidingWindowRateLimiter implements RateLimiter {
 
     @Override
     public boolean tryAcquire(String key) {
-        if (!counters.containsKey(key) && counters.size() >= MAX_KEYS) {
-            // 与令牌桶一致，防止路径等外部输入无限占用本地内存。
-            counters.clear();
+        SlidingCounter existing = counters.get(key);
+        if (existing != null) {
+            return existing.tryAcquire(limit, windowNanos);
+        }
+        if (counters.size() >= MAX_KEYS) {
+            return false;
         }
         return counters.computeIfAbsent(key, ignored -> new SlidingCounter())
                 .tryAcquire(limit, windowNanos);

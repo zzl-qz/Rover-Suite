@@ -77,6 +77,8 @@ Run each case at least five times and keep the raw output.
 | `deploy/scripts/bench-phase-a-payload.sh` | Historical wave-1 A/B (checks out HEAD sources; do not run on a dirty tree) |
 | `deploy/scripts/bench-phase-a-payload-remasure.sh` | Current-code remasure: large GET + POST `/api/ingest`, Netty vs JDK outbound |
 | `deploy/scripts/bench-phase-a-static-ab.sh` | Same-session A/B for static upstream snapshot; redo if Direct drifts >10% |
+| `deploy/scripts/bench-phase-a-outbound-ab.sh` | Same-session A/B: `proxy.outbound` only (`jdk` / `netty`) |
+| `deploy/scripts/bench-phase-a-io-ab.sh` | Same-session A/B: `server.ioTransport` only (`nio` / `auto`). In a Docker Linux container, `auto` is usually epoll |
 
 Example:
 

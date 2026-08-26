@@ -10,6 +10,7 @@ Shortest checklist for **single-node / small private-network** deploys. Details:
 | In-memory registry + push/reconcile | Silent registry restore after process death (apps must re-register) |
 | Token + network isolation for manage plane | Full auth / circuit-breaking platform out of the box |
 | Overlay hot-update with backup script | Drop-in replacement for APISIX / Nacos stacks |
+| Caller HTTPS at a reverse proxy; Gateway-to-upstream HTTP by default | Default outbound TLS to upstreams, or TLS termination inside the Gateway process |
 
 ## Ten checks
 

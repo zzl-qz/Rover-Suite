@@ -1,0 +1,14 @@
+# 叠在 docker-compose.yml 上：再起一个 demo，用来跑双实例 / 停实例。
+# 用法见 deploy/scripts/demo-fault.sh
+services:
+  demo-b:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.demo
+    restart: unless-stopped
+    depends_on:
+      - nameserver
+    expose:
+      - "8082"
+    volumes:
+      - ./config/demo-b-application.yml:/app/config/application.yml:ro

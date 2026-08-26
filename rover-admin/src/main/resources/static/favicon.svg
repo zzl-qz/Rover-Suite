@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="8" fill="#1f6f5b"/>
-  <text x="16" y="22" text-anchor="middle" font-size="16" font-weight="700"
-        font-family="Segoe UI, PingFang SC, sans-serif" fill="#ffffff">R</text>
+  <rect x="1" y="1" width="30" height="30" rx="2" fill="#e6e9e4" stroke="#3f5a38" stroke-width="2"/>
+  <text x="16" y="22" text-anchor="middle" font-size="15" font-weight="500"
+        font-family="IBM Plex Mono, ui-monospace, monospace" fill="#3f5a38">R</text>
 </svg>

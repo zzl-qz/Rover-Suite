@@ -37,12 +37,13 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.server.bindHost` | `0.0.0.0` | 业务监听地址 | 重启 |
 | `rover.gateway.server.maxContentLengthBytes` | `1048576` | 请求体上限（入站管道计数，超限 413）。不再经过 `HttpObjectAggregator` | 重启 |
 | `rover.gateway.server.dispatchOnEventLoop` | `false` | 业务 Handler 是否留在 EventLoop。默认走业务线程池，和收发包分开。确认无阻塞才改 `true` | 重启；也可用 `-Drover.gateway.dispatchOnEventLoop` |
+| `rover.gateway.server.ioTransport` | `auto` | 入站 EventLoop 与出站 Channel 用同一套 I/O。`auto`：Linux 选 Epoll（Docker Linux 容器里一般是这个），macOS 上直接运行进程选 KQueue，原生库不可用时退 NIO。也可写死 `nio` / `epoll` / `kqueue`（不可用时退 NIO） | 重启；也可用 `-Drover.gateway.ioTransport` |
 | `rover.gateway.metrics.enabled` | `true` | 启动时指标总开关；`false` 热路径不记 inflight/record。503 拒绝计数仍记 | 重启；Admin 关闭时只认 YAML |
 | `rover.gateway.metrics.windowSeconds` | `300` | 指标滑动窗口（秒） | 重启 / 运行时 |
 | `rover.gateway.trace.enabled` | `true` | 启动时时间线开关；`false` 不 `markPhase`、不造 traceId | 重启；Admin 关闭时只认 YAML |
 | `rover.gateway.trace.slowThresholdMillis` | `100` | 慢请求阈值 | 重启 / 运行时 |
 | `rover.gateway.trace.sampleRate` | `0.0` | 采样率 0~1 | 重启 / 运行时 |
-| `rover.gateway.proxy.outbound` | `netty` | 出站客户端：`netty`（默认）或 `jdk`（第一版 JDK `HttpClient` HTTP/1.1，留给回滚和对照）。也可用 `-Drover.gateway.proxy.outbound` | 重启 |
+| `rover.gateway.proxy.outbound` | `netty` | 出站客户端。默认 `netty` 只转发 `http://` 上游。`jdk` 是第一版 JDK `HttpClient`（强制 HTTP/1.1），主要用于回滚和对照；它自带 TLS，因此上游必须是 `https://` 时可以切过去。也可用 `-Drover.gateway.proxy.outbound` | 重启 |
 | `rover.gateway.proxy.connectTimeoutMillis` | `3000` | 上游连接超时 | 重启 |
 | `rover.gateway.proxy.requestTimeoutMillis` | `30000` | 上游请求超时的启动默认值 | 重启 |
 | `rover.gateway.discovery.type` | `STATIC`（代码默认）/ 示例为 `nameserver` | `static` 或 `nameserver` | 重启 |
@@ -83,7 +84,7 @@ Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（
 
 `rover.gateway.routes` 是路由数组，不是单值配置。每项支持：`id`、`businessPrefix`、`serviceName`、`group`、
 `targetUrl`、`targetUrls`、`stripPrefix`。动态发现填写 `serviceName`（可配 `group`）；静态模式填写
-`targetUrl` 或 `targetUrls`。`targetUrls` 的元素可使用 `http://host:port|weight` 指定权重。Admin 保存的路由会写入
+`targetUrl` 或 `targetUrls`。`targetUrls` 的元素可使用 `http://host:port|weight` 指定权重。默认 `outbound=netty` 时上游必须是 `http://`。写入 `https://` 会在启动或热更新时被拒绝，避免配置通过、请求才失败；若上游确实是 HTTPS，先把 `proxy.outbound` 设为 `jdk` 再重启。Admin 保存的路由会写入
 `config/routes.overlay.json`，并整体替换启动 YAML 中的路由列表。
 
 ## Gateway 运行时配置

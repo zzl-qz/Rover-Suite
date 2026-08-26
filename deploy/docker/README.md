@@ -42,6 +42,30 @@ docker compose down
 # 排障时保留容器：SMOKE_KEEP=1 ./deploy/scripts/smoke-compose.sh
 ```
 
+`smoke-compose.sh` 只证明幸福路径：起来之后 `/api/hello` 能通。
+
+要看发现在坏一块时怎么表现，用故障演示（再起一个 `demo-b`）：
+
+```bash
+./deploy/scripts/demo-fault.sh
+# 排障时保留：FAULT_KEEP=1 ./deploy/scripts/demo-fault.sh
+```
+
+本机 Compose 参考，不是 SLA。完整一场（`20260826-155804`）：
+
+| 场 | 做法 | 本场 |
+| --- | --- | --- |
+| 1 | 20 次 hello | 10 / 10 交替 |
+| 2 | `docker stop` 其中一个 | 立刻躲开（注销） |
+| 3 | `docker kill` 其中一个 | 也是立刻躲开（TCP 断了，Nameserver 清临时实例） |
+| 3b | `docker pause` 其中一个 | 约 **35s** 躲开（连接还在、心跳停；过期 30s + 检查 5s） |
+| 4 | 停 Nameserver | 约 2s 内仍能转到缓存里的两个实例 |
+| 5 | 停最后一个实例 | 立刻 502（还打死人）；约 **17s** 首次 `503 NO_UPSTREAM` |
+
+强杀快，不是心跳变成了 0。心跳要用「连接还在、心跳停」才能看到。最后一个实例的空快照保护本场大约二十秒，上限仍按对账间隔约 30s 理解。
+
+hello 响应里的 `host` 来自 `rover.nameserver.host`，用来区分两个 demo。默认四件套仍然只有一个 demo，日常 `compose up` 不用叠 `docker-compose.fault.yml`。
+
 ## 小团队限额压测（无 Admin）
 
 测的是 **Gateway + Nameserver + demo**，故意限 CPU/内存，模拟「机器不太够」；**不启 Admin**，避免观察面抢资源。

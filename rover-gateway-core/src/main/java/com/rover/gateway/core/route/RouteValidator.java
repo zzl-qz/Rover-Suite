@@ -1,7 +1,7 @@
 package com.rover.gateway.core.route;
 
-import com.rover.common.constants.HttpConstants;
 import com.rover.common.model.ServiceInstance;
+import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 import java.net.URI;
@@ -84,15 +84,11 @@ public class RouteValidator {
         }
     }
 
-    /** 校验 targetUrl 必须是 http/https 且含主机。 */
+    /** 校验 targetUrl：有主机；netty 只认 http，jdk 才放 https。 */
     private void validateTargetUrl(String targetUrl) {
         try {
             URI uri = URI.create(targetUrl);
-            String scheme = uri.getScheme();
-            if (!HttpConstants.SCHEME_HTTP.equalsIgnoreCase(scheme)
-                    && !HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(scheme)) {
-                throw new IllegalArgumentException("targetUrl 只支持 http/https: " + targetUrl);
-            }
+            GatewaySystemProperties.requireUpstreamScheme(uri.getScheme(), targetUrl);
             if (uri.getHost() == null || uri.getHost().isBlank()) {
                 throw new IllegalArgumentException("targetUrl 必须包含主机: " + targetUrl);
             }

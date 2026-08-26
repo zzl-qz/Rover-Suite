@@ -23,7 +23,7 @@ Single-node systemd units: [`deploy/systemd/README.md`](../deploy/systemd/README
 1. Use non-empty random protocol tokens for Gateway and Nameserver.
 2. Use separate management tokens for Gateway and Nameserver.
 3. Restrict management ports to the operations network; do not expose Admin publicly.
-4. Put HTTP/TCP traffic behind TLS termination, an ACL or a VPN. Tokens do not encrypt traffic.
+4. Put HTTP/TCP traffic behind TLS termination, an ACL or a VPN. Tokens do not encrypt traffic. Gateway-to-upstream traffic is plain HTTP by default. Terminate caller HTTPS at the reverse proxy. If the upstream URL must be `https://`, set `rover.gateway.proxy.outbound` to `jdk` and restart; throughput then returns to the JDK-outbound band.
 5. Disable unused HTTP registration and CORS endpoints.
 6. On real hosts, enable strict security so blank tokens refuse to start:
 

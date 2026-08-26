@@ -4,5 +4,7 @@
 | --- | --- | --- |
 | `vue.global.prod.js` | 3.4.21 | https://cdn.jsdelivr.net/npm/vue@3.4.21/dist/vue.global.prod.js |
 | `echarts.min.js` | 5.5.0 | https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js |
+| `fonts/AtkinsonHyperlegible-*.woff2` | 5.2.5 | https://www.npmjs.com/package/@fontsource/atkinson-hyperlegible |
+| `fonts/IBMPlexMono-*.woff2` | 5.2.5 | https://www.npmjs.com/package/@fontsource/ibm-plex-mono |
 
 升级时替换文件并改本表版本号；许可证见仓库根目录 `NOTICE`。

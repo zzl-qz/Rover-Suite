@@ -10,7 +10,11 @@ rover:
     server:
       maxContentLengthBytes: 1048576
       bindHost: 10.0.10.12
+      # auto：Linux 容器一般为 epoll。对照可写 nio。改完需重启
+      # ioTransport: auto
     proxy:
+      # 默认 netty 只转发 http 上游。上游必须 https 时改为 jdk（回滚路径，吞吐较低），改完需重启
+      # outbound: netty
       connectTimeoutMillis: 3000
       requestTimeoutMillis: 30000
     filters:

@@ -112,6 +112,14 @@ rover:
 `round_robin`、`random`、`weighted_round_robin`、`ip_hash`、`least_connections` 五种负载均衡策略。
 当前静态上游只使用 URL 的 scheme、host 与 port；避免在 `targetUrl` / `targetUrls` 中配置基路径，路径变换统一使用路由的 `stripPrefix`。
 
+### 上游 HTTP 与 HTTPS
+
+默认出站是 Netty，只转发 `http://` 上游。浏览器或调用方的 HTTPS 请在 Gateway 前面的反向代理上终止，Gateway 到业务服务走内网 HTTP。
+
+上游地址必须是 `https://` 时，把 `rover.gateway.proxy.outbound` 设为 `jdk`。这是第一版 JDK `HttpClient`（强制 HTTP/1.1），自带 TLS，也用于回滚和对照。切换后吞吐会回到 JDK 出站那一档，数字见[性能报告](./performance-report.zh-CN.md)。
+
+默认配置下，启动或热更新写入 `https://` 会被拒绝，避免配置通过、请求才失败。
+
 ## 5. 定义路由
 
 Nameserver 动态路由示例：
@@ -211,10 +219,12 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
 - 当前是单节点 `1.0.0-SNAPSHOT`，不提供 Nameserver 高可用或在线实例持久化恢复。
 - 发现链路是“推送优先、周期查询对账兜底”，不是强实时一致。最后一个实例注销或过期时，空推送当前会被 Gateway 保护，
   本地缓存最迟在下一次对账时清空，默认最长约 30 秒；窗口内请求可能命中刚退出的地址。
+  本地 Compose 本场（`demo-fault.sh`）：停最后一个实例后立刻 502，约 17 秒后变为 `503 NO_UPSTREAM`。
 - 如果 Gateway 启动时 Nameserver 不可用，初始订阅失败后可能等到下一次对账才补齐，默认最长约 30 秒。
 - 同一服务多组推送隔离仍在完善，当前建议 `group` 留空。具体说明见[服务注册指南](./service-registration.zh-CN.md#23-当前分组边界)。
 - 持久实例全部被标记为不健康时，Gateway 当前会退回全部缓存实例继续尝试，属于 fail-open 行为。
-- Gateway 聚合完整请求与响应，不支持 WebSocket、SSE 或流式代理；默认请求体上限 1 MiB，响应体硬上限 16 MiB。
+- Gateway 面向普通 HTTP/1.1：入站头到了就开始转发，请求体走管道；默认 Netty 出站按块回写上游响应。不支持 WebSocket、SSE。默认请求体上限 1 MiB，响应体硬上限 16 MiB。
+- 网关进程不终止客户端 HTTPS，也不在默认出站路径上对上游做 TLS。
 - 静态上游 URL 只保留 scheme、host 与 port，不保留 URL 基路径。
 
 这些边界不影响普通单机 HTTP API 与默认空 group 场景，但对强一致摘除、分组隔离、流式协议或公网控制面有要求时需要评估。
@@ -227,12 +237,19 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
 | Java 服务鉴权失败 | 应用的 `rover.nameserver.token` 与 Nameserver 不一致。 |
 | Gateway 无法发现服务 | 检查 `rover.gateway.discovery.nameserver.address` 和 `.token`；它们是 Gateway 配置，不是 Starter 配置。 |
 | Nameserver 已恢复但 Gateway 仍无实例 | 当前初始订阅失败可能等到下一次对账；等待 `reconcileIntervalMs` 或重启 Gateway。 |
-| 最后一个实例退出后仍短暂收到转发 | Gateway 的空快照保护等待下一次对账清空，默认最长约 30 秒。 |
+| 最后一个实例退出后仍短暂收到转发 | Gateway 的空快照保护等待对账清空，默认最长约 30 秒。本场立刻 502，约 17 秒后 503。 |
 | HTTP Registrar 收到 `404 NOT_FOUND` | `clientApiEnabled` 未开启、路径错误或 HTTP 监听器未启动。开启 Registration API 后需重启。 |
 | HTTP Registrar 收到 `409 STALE_SESSION` | 另一个进程注册了相同 `serviceName + instanceId`。每副本应使用唯一 ID，每端点只有一个 owner。 |
 | 实例可见但不可达 | 注册的 host/port 对 Gateway 不可达。 |
 | YAML 路由被忽略 | `config/routes.overlay.json` 正在整体覆盖 YAML 路由。 |
+| 启动或热更新提示只支持 http 上游 | 默认 Netty 出站不转发 `https://`。改成 `http://`，或设 `proxy.outbound: jdk`。 |
+| 想确认当前 I/O 实现 | 看启动日志里的 `ioTransport=`。Docker Linux 容器里 `auto` 一般为 epoll；在 macOS 上直接运行进程才是 kqueue。 |
 | 自定义 LB 在 Admin 看不到 | 正常。`gateway.loadbalance.strategy` 是启动/插件装配配置，请在 `rover-gateway.yml` 中填写内置策略、SPI `name()` 或实现类全名并重启 Gateway；Admin 不再提供修改入口，避免覆盖自定义插件。 |
+
+本地 Compose 想把发现故障跑一遍，用 `./deploy/scripts/demo-fault.sh`。
+本场参考：20 次 hello 为 10 / 10；`docker stop` / `docker kill` 其中一个都是立刻躲开（注销或 TCP 断连清理）；
+`docker pause` 约 35 秒躲开（心跳停、连接还在）；停 Nameserver 约 2 秒内仍能转；停最后一个实例立刻 502，约 17 秒后 `503 NO_UPSTREAM`。
+说明见 [Docker Compose](../deploy/docker/README.md)。
 
 延伸阅读：[服务注册指南](./service-registration.zh-CN.md)、[架构说明](./architecture.zh-CN.md)、
 [二次开发指南](./development-guide.zh-CN.md)。
