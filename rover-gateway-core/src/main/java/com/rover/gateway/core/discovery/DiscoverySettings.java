@@ -3,7 +3,9 @@ package com.rover.gateway.core.discovery;
 import com.rover.common.constants.NameserverConstants;
 import com.rover.gateway.core.config.GatewayDefaults;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import lombok.Data;
 
 /**
@@ -31,6 +33,9 @@ public class DiscoverySettings {
 
     /** 启动时需要订阅的服务列表；路由热更新时也会动态追加 */
     private List<ServiceSubscribeSpec> subscribeServices = new ArrayList<>();
+
+    /** 注册中心专属配置；由具体 adapter 解释，核心不感知 Nacos 等供应商字段。 */
+    private Map<String, String> providerProperties = new LinkedHashMap<>();
 
     /** 单个服务的订阅规格。 */
     @Data

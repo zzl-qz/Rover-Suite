@@ -13,7 +13,7 @@ public enum DiscoveryType {
     /** 组件自带注册中心 */
     NAMESERVER,
 
-    /** @DL 预留：接入 Nacos 适配器后启用。 */
+    /** Nacos 服务发现；需要额外加入 Nacos adapter。 */
     NACOS,
 
     /** @DL 预留：接入 Redis 发现实现后启用。 */

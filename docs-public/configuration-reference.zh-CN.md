@@ -46,7 +46,7 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.proxy.outbound` | `netty` | 出站客户端。默认 `netty` 只转发 `http://` 上游。`jdk` 是第一版 JDK `HttpClient`（强制 HTTP/1.1），主要用于回滚和对照；它自带 TLS，因此上游必须是 `https://` 时可以切过去。也可用 `-Drover.gateway.proxy.outbound` | 重启 |
 | `rover.gateway.proxy.connectTimeoutMillis` | `3000` | 上游连接超时 | 重启 |
 | `rover.gateway.proxy.requestTimeoutMillis` | `30000` | 上游请求超时的启动默认值 | 重启 |
-| `rover.gateway.discovery.type` | `STATIC`（代码默认）/ 示例为 `nameserver` | `static` 或 `nameserver` | 重启 |
+| `rover.gateway.discovery.type` | `STATIC`（代码默认）/ 示例为 `nameserver` | `static`、`nameserver` 或 `nacos` | 重启 |
 | `rover.gateway.discovery.nameserver.address` | `127.0.0.1:8888` | Nameserver TCP 地址 | 重启 |
 | `rover.gateway.discovery.nameserver.reconcileIntervalMs` | `30000` | 本地实例缓存周期对账间隔 | 重启 |
 | `rover.gateway.discovery.nameserver.token` | 空 | Gateway 访问 Nameserver 的协议 token | 重启 |

@@ -400,7 +400,7 @@ Conventions:
 - `*-bootstrap` modules are process entry points.
 - `rover-admin` is an optional console that calls management APIs over HTTP; it does not compile against the
   Nameserver or Gateway core modules.
-- `rover-gateway-adapter-nacos` is currently a reserved skeleton, not a working runtime adapter.
+- `rover-gateway-adapter-nacos` is an optional Nacos service-discovery adapter, included with the `nacos` Maven profile.
 - Cross-language Registrar examples live under [`examples/http-registration/`](../examples/http-registration/README.md).
 
 ---

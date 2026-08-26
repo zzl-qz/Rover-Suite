@@ -292,7 +292,7 @@ public class RouteAndProxyFilter implements Filter {
         String clusterKey = null;
         List<ServiceInstance> instances = null;
         long discoveryStart = System.nanoTime();
-        if (discoveryType == DiscoveryType.NAMESERVER) {
+        if (discoveryType == DiscoveryType.NAMESERVER || discoveryType == DiscoveryType.NACOS) {
             if (serviceDiscovery == null) {
                 return null;
             }
@@ -343,7 +343,7 @@ public class RouteAndProxyFilter implements Filter {
             return false;
         }
         List<ServiceInstance> instances;
-        if (discoveryType == DiscoveryType.NAMESERVER) {
+        if (discoveryType == DiscoveryType.NAMESERVER || discoveryType == DiscoveryType.NACOS) {
             if (serviceDiscovery == null || route.getServiceName() == null || route.getServiceName().isBlank()) {
                 return false;
             }

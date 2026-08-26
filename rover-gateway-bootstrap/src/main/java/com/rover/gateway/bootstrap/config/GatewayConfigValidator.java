@@ -4,6 +4,7 @@ import com.rover.common.util.HostPort;
 import com.rover.gateway.bootstrap.config.GatewayConfig.FilterProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.GatewayProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.NameserverProperties;
+import com.rover.gateway.bootstrap.config.GatewayConfig.NacosProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.CircuitBreakerProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RateLimitProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
@@ -46,6 +47,8 @@ final class GatewayConfigValidator {
         DiscoveryType discoveryType = config.getDiscoveryType();
         if (discoveryType == DiscoveryType.NAMESERVER) {
             validateNameserverAddress(gateway.getDiscovery().getNameserver());
+        } else if (discoveryType == DiscoveryType.NACOS) {
+            validateNacos(gateway.getDiscovery().getNacos());
         }
 
         List<RouteProperties> routes = gateway.getRoutes();
@@ -159,6 +162,15 @@ final class GatewayConfigValidator {
         HostPort.require(nameserver.getAddress(), NAMESERVER_ADDRESS_CONFIG);
     }
 
+    private static void validateNacos(NacosProperties nacos) {
+        if (nacos == null || nacos.getServerAddr() == null || nacos.getServerAddr().isBlank()) {
+            throw new IllegalStateException("discovery.type=nacos 时必须配置 discovery.nacos.serverAddr");
+        }
+        if (nacos.getTimeoutMs() <= 0) {
+            throw new IllegalStateException("discovery.nacos.timeoutMs 必须大于 0");
+        }
+    }
+
     private static void validateRoute(
             GatewayConfig config,
             RouteProperties route,
@@ -195,7 +207,7 @@ final class GatewayConfigValidator {
             }
         } else {
             if (route.getServiceName() == null || route.getServiceName().isBlank()) {
-                throw new IllegalStateException("nameserver 模式下 serviceName 不能为空，businessPrefix="
+                throw new IllegalStateException("动态发现模式下 serviceName 不能为空，businessPrefix="
                         + route.getBusinessPrefix());
             }
         }

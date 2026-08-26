@@ -30,5 +30,4 @@ public final class ExampleLoadBalancer implements LoadBalancer {
 
 ## Nacos 适配器状态
 
-`rover-gateway-adapter-nacos` 当前是保留的适配器骨架，尚未实现可用的 Nacos 服务发现运行时集成。当前可用发现模式是内置 Nameserver 和静态上游；适配器完成前请使用外部适配层或自行实现
-`ServiceDiscovery` 扩展。
+`rover-gateway-adapter-nacos` 现在提供可选的 Nacos 服务发现能力。它不是独立进程：用户可以自行添加 adapter 依赖，也可以使用 Maven 的 `nacos` profile 构建带 Nacos 的 Gateway。Nacos Config 和 Nacos 服务注册不在本适配器范围内。

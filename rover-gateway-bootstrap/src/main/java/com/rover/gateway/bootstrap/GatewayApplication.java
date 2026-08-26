@@ -46,7 +46,8 @@ public class GatewayApplication {
         // 加载注册中心
         // todo 这里后续改成工厂模式，然后支持多种注册中心比较好
         DiscoverySettings discoverySettings = config.toDiscoverySettings();
-        if (discoverySettings.getType() == DiscoveryType.NAMESERVER) {
+        if (discoverySettings.getType() == DiscoveryType.NAMESERVER
+                || discoverySettings.getType() == DiscoveryType.NACOS) {
             discoverySettings.setSubscribeServices(subscribeSpecsFrom(routes));
         }
         log.info("discovery.type={}, routeCount={}", discoverySettings.getType(), routes.size());

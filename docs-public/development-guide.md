@@ -51,7 +51,7 @@ See [Quick Start](./quick-start.md) for the runnable end-to-end path.
 | [`rover-gateway-core`](../rover-gateway-core/) | Netty server, routes, filters, proxy, discovery, load balancing, runtime state |
 | [`rover-gateway-bootstrap`](../rover-gateway-bootstrap/) | Gateway YAML mapping and executable assembly |
 | [`rover-admin`](../rover-admin/) | Optional UI/server that calls management APIs over HTTP; it does not depend on either core module |
-| [`rover-gateway-adapter-nacos`](../rover-gateway-adapter-nacos/) | Reserved module skeleton; it is not a working Nacos adapter yet |
+| [`rover-gateway-adapter-nacos`](../rover-gateway-adapter-nacos/) | Optional Nacos service-discovery adapter |
 | [`rover-gateway-test/backend`](../rover-gateway-test/backend/) | Spring Boot Starter integration example |
 
 The [Architecture](./architecture.md) describes runtime flows and dependency direction.
@@ -268,8 +268,9 @@ This interface is not currently a drop-in plugin. Adding a registry requires sou
 3. Lifecycle, cache, reconnect/watch, and reconciliation tests.
 4. User and deployment documentation.
 
-`NACOS` and `REDIS` enum values are reserved. The current `rover-gateway-adapter-nacos` module is a skeleton, not
-a working adapter. Do not advertise it as supported until its runtime wiring and tests exist.
+`NACOS` is provided by the optional `rover-gateway-adapter-nacos` module. Build the Gateway with `-Pnacos` or add
+the adapter dependency yourself. It provides service discovery only; Nacos Config and service registration are out
+of scope.
 
 ## 8. Runtime configuration extension
 

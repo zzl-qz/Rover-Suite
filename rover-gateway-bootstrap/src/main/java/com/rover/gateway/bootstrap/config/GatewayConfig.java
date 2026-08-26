@@ -158,6 +158,9 @@ public class GatewayConfig {
         if (gateway.getDiscovery().getNameserver() == null) {
             gateway.getDiscovery().setNameserver(new NameserverProperties());
         }
+        if (gateway.getDiscovery().getNacos() == null) {
+            gateway.getDiscovery().setNacos(new NacosProperties());
+        }
         if (gateway.getMetrics() == null) {
             gateway.setMetrics(new MetricsProperties());
         }
@@ -225,9 +228,10 @@ public class GatewayConfig {
 
     @Data
     public static class DiscoveryProperties {
-        /** static | nameserver */
+        /** static | nameserver | nacos */
         private String type = DiscoveryType.STATIC.name();
         private NameserverProperties nameserver = new NameserverProperties();
+        private NacosProperties nacos = new NacosProperties();
     }
 
     @Data
@@ -236,6 +240,20 @@ public class GatewayConfig {
         private long reconcileIntervalMs = GatewayDefaults.RECONCILE_INTERVAL_MILLIS;
         /** 连接 Nameserver 订阅/查询时携带的协议 token；空表示不鉴权 */
         private String token;
+    }
+
+    @Data
+    public static class NacosProperties {
+        /** Nacos 服务端地址，例如 127.0.0.1:8848；也支持 Nacos SDK 的地址列表格式。 */
+        private String serverAddr = "127.0.0.1:8848";
+        /** Nacos 命名空间；留空使用 public 命名空间。 */
+        private String namespace;
+        /** Nacos 登录用户名；不启用鉴权时留空。 */
+        private String username;
+        /** Nacos 登录密码；不启用鉴权时留空。 */
+        private String password;
+        /** Nacos Naming 请求超时时间，单位为毫秒。 */
+        private long timeoutMs = 3000;
     }
 
     @Data

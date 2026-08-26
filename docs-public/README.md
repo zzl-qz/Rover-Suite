@@ -39,7 +39,7 @@ This is the public documentation shipped with the source repository.
 | Request auth, audit, tenant labels, custom rate limiting / 鉴权、审计、租户标记、自定义限流 | User `Filter` plugin JAR / 用户 Filter 插件 |
 | Custom upstream selection / 自定义负载均衡 | `LoadBalancer` strategy plugin JAR; used by the fixed proxy stage / 负载均衡策略插件，由固定转发环节调用 |
 | Plugin runtime settings visible in Admin / 插件自己的动态配置 | Implement `ConfigurablePlugin` |
-| Nacos or other registry integration / Nacos 或其他发现源 | Source-level adapter; Nacos runtime adapter is not implemented yet |
+| Nacos or other registry integration / Nacos 或其他发现源 | Optional source-level adapter; Nacos discovery is available in the Nacos adapter module |
 | Built-in local rate limiting / 内置本地限流 | `rover.gateway.rateLimit.*`, local to each Gateway instance |
 | Built-in process-local circuit breaker / 进程内熔断 | `rover.gateway.circuitBreaker.*`, consecutive failures per `host:port` |
 | Connect-fail retry / 连不上换台 | `rover.gateway.retry.enabled`, one extra attempt if the request was never sent |

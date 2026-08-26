@@ -6,6 +6,7 @@ import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.common.spi.discovery.ServiceDiscovery;
+import com.rover.common.spi.discovery.ServiceDiscoveryStatus;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.GatewayFilterAssembler;
 import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
@@ -26,6 +27,7 @@ import com.rover.gateway.core.route.RouteOverlayStore;
 import com.rover.gateway.core.route.RouteValidator;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.Getter;
@@ -152,6 +154,8 @@ public class GatewayRuntime {
         this.routeOverlayStore = new RouteOverlayStore();
         this.routeValidator = new RouteValidator(this.discoveryType);
         this.metricsRegistry.setUpstreamInFlightSupplier(proxyClient::getInFlightCount);
+        this.metricsRegistry.setDiscoveryStatusSupplier(() -> serviceDiscovery instanceof ServiceDiscoveryStatus status
+                ? status.status() : Map.of("supported", false));
         String pluginDir = this.filterSettings.getPluginDir();
         this.loadBalancer.set(LoadBalancerFactory.create(LoadBalancer.ROUND_ROBIN, pluginDir));
         this.loadBalanceStrategy.set(LoadBalancer.ROUND_ROBIN);
@@ -370,9 +374,10 @@ public class GatewayRuntime {
         return applyRoutes(current);
     }
 
-    /** NAMESERVER 模式下，对路由里出现的 serviceName 补订 watch。 */
+    /** 动态发现模式下，对路由里出现的 serviceName 补订 watch。 */
     private void watchServices(List<RouteConfig> routes) {
-        if (discoveryType != DiscoveryType.NAMESERVER || serviceDiscovery == null) {
+        if ((discoveryType != DiscoveryType.NAMESERVER && discoveryType != DiscoveryType.NACOS)
+                || serviceDiscovery == null) {
             return;
         }
         for (RouteConfig route : routes) {

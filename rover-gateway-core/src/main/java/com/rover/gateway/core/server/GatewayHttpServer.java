@@ -11,6 +11,7 @@ import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
 import com.rover.gateway.core.discovery.NoopServiceDiscovery;
+import com.rover.gateway.core.discovery.ServiceDiscoveryFactory;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.filter.FilterSettings;
@@ -29,6 +30,7 @@ import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
 import java.util.List;
+import java.util.ServiceLoader;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -383,6 +385,15 @@ public class GatewayHttpServer {
     private static ServiceDiscovery createServiceDiscovery(DiscoverySettings settings) {
         if (settings.getType() == DiscoveryType.NAMESERVER) {
             return new NameserverServiceDiscovery(settings);
+        }
+        if (settings.getType() != DiscoveryType.STATIC) {
+            for (ServiceDiscoveryFactory factory : ServiceLoader.load(ServiceDiscoveryFactory.class)) {
+                if (factory.type() == settings.getType()) {
+                    return factory.create(settings);
+                }
+            }
+            throw new IllegalStateException(
+                    "未找到 discovery.type=" + settings.getType() + " 的适配器，请确认对应模块已加入 classpath");
         }
         return new NoopServiceDiscovery();
     }

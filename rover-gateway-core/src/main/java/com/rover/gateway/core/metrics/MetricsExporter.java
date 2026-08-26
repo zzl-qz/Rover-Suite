@@ -38,6 +38,7 @@ final class MetricsExporter {
 
         // JVM 运行时指标（两组件通用，零依赖）
         root.put("jvm", JvmMetricsCollector.collect());
+        root.put("discovery", r.discoveryStatusSupplier.get());
 
         // 资源指标：活跃连接 / 在途请求 / 在途上游请求（近似连接池使用）
         Map<String, Object> resources = new LinkedHashMap<>();
@@ -326,6 +327,19 @@ final class MetricsExporter {
         sb.append("# HELP rover_gateway_inflight_requests Requests currently being processed\n");
         sb.append("# TYPE rover_gateway_inflight_requests gauge\n");
         sb.append("rover_gateway_inflight_requests ").append(r.inflightRequests.get()).append('\n');
+        Map<String, Object> discovery = r.discoveryStatusSupplier.get();
+        sb.append("# HELP rover_gateway_discovery_connected Whether service discovery is connected\n");
+        sb.append("# TYPE rover_gateway_discovery_connected gauge\n");
+        sb.append("rover_gateway_discovery_connected ")
+                .append(Boolean.TRUE.equals(discovery.get("connected")) ? 1 : 0).append('\n');
+        sb.append("# HELP rover_gateway_discovery_subscribe_failures_total Service discovery subscription failures\n");
+        sb.append("# TYPE rover_gateway_discovery_subscribe_failures_total counter\n");
+        sb.append("rover_gateway_discovery_subscribe_failures_total ")
+                .append(discovery.getOrDefault("subscribeFailures", 0)).append('\n');
+        sb.append("# HELP rover_gateway_discovery_last_snapshot_updated_at_millis Last discovery snapshot update time\n");
+        sb.append("# TYPE rover_gateway_discovery_last_snapshot_updated_at_millis gauge\n");
+        sb.append("rover_gateway_discovery_last_snapshot_updated_at_millis ")
+                .append(discovery.getOrDefault("lastSnapshotUpdatedAtMillis", 0)).append('\n');
         sb.append("# HELP rover_gateway_rejects_total Gateway 503 rejects by reason\n");
         sb.append("# TYPE rover_gateway_rejects_total counter\n");
         sb.append("rover_gateway_rejects_total{reason=\"inflight_limit\"} ")
