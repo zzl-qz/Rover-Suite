@@ -127,7 +127,7 @@ See **[docs-public/architecture.md](./docs-public/architecture.md)** for module 
 | `rover-nameserver-starter` | Spring Boot Starter |
 | `rover-gateway-core` | Gateway core |
 | `rover-gateway-bootstrap` | Gateway executable |
-| `rover-gateway-adapter-nacos` | Reserved adapter skeleton; Nacos runtime integration is not implemented yet |
+| `rover-gateway-adapter-nacos` | Optional Nacos service-discovery adapter; package Gateway with `-Pnacos` to include it |
 | `rover-admin` | Admin console |
 | `rover-gateway-test/demo/backend` | Test backend service for gateway verification |
 | `rover-gateway-test/demo/frontend` | Test frontend panel (separate from core suite) |

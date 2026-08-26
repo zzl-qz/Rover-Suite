@@ -32,8 +32,7 @@ threads/connections or log sensitive request data.
 
 ## Nacos adapter status
 
-`rover-gateway-adapter-nacos` is currently a reserved adapter skeleton. It does
-not provide a usable Nacos discovery runtime integration and must not be
-advertised as “Nacos supported”. The supported discovery modes are the built-in
-Nameserver and static upstreams; use an external adapter or implement the
-`ServiceDiscovery` extension until the Nacos adapter is completed.
+`rover-gateway-adapter-nacos` provides optional Nacos service discovery. It is
+not a separate process: add the adapter dependency yourself, or build the
+Gateway distribution with the `nacos` Maven profile. Nacos Config and Nacos
+service registration are outside this adapter's scope.

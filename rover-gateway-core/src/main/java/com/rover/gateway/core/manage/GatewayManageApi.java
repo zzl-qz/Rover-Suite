@@ -4,6 +4,7 @@ import com.rover.common.config.RuntimeConfigManager;
 import com.rover.common.constants.HttpConstants;
 import com.rover.common.constants.ManageApiPaths;
 import com.rover.common.constants.RoverComponent;
+import com.rover.common.spi.discovery.ServiceDiscoveryStatus;
 import com.rover.common.config.ConfigValues;
 import com.rover.common.json.JsonCodec;
 import com.rover.common.manage.AbstractManageApi;
@@ -191,6 +192,9 @@ public class GatewayManageApi extends AbstractManageApi {
         status.put("up", true);
         status.put("port", runtime.getPort());
         status.put("discoveryType", runtime.getDiscoveryType().name());
+        if (runtime.getServiceDiscovery() instanceof ServiceDiscoveryStatus discoveryStatus) {
+            status.put("discovery", discoveryStatus.status());
+        }
         status.put("routeCount", runtime.getRouteMatcher().listRoutes().size());
         status.put("filterEnabled", runtime.getFilterSettings().isEnabled());
         status.put("loadBalanceStrategy", runtime.getLoadBalanceStrategy().get());

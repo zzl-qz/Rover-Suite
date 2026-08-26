@@ -14,6 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.IntSupplier;
+import java.util.function.Supplier;
 
 /**
  * Author: Daylight
@@ -77,6 +78,7 @@ public class MetricsRegistry {
 
     /** 在途上游请求数来源，由 HttpProxyClient 提供（近似连接池使用情况）。 */
     volatile IntSupplier upstreamInFlightSupplier = () -> 0;
+    volatile Supplier<Map<String, Object>> discoveryStatusSupplier = () -> Map.of("supported", false);
 
     /** live 路由 Top 缓存：降低每秒排序成本。 */
     volatile List<Map<String, Object>> liveTopRoutesCache = List.of();
@@ -94,6 +96,11 @@ public class MetricsRegistry {
     /** 注入在途上游请求数来源（HttpProxyClient）。 */
     public void setUpstreamInFlightSupplier(IntSupplier supplier) {
         this.upstreamInFlightSupplier = supplier == null ? () -> 0 : supplier;
+    }
+
+    /** 注入服务发现状态来源，供 metrics 和 Prometheus 导出。 */
+    public void setDiscoveryStatusSupplier(Supplier<Map<String, Object>> supplier) {
+        this.discoveryStatusSupplier = supplier == null ? () -> Map.of("supported", false) : supplier;
     }
 
     /**

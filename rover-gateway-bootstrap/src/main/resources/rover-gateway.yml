@@ -112,3 +112,18 @@ rover:
       #     - http://127.0.0.1:8081
       #     - http://127.0.0.1:8082|200
       #   stripPrefix: /api/static
+
+      # ===== 场景三：Nacos 服务发现 =====
+      # discovery:
+      #   type: nacos
+      #   nacos:
+      #     serverAddr: 127.0.0.1:8848
+      #     namespace: public
+      #     username: nacos
+      #     password: nacos
+      # routes:
+      #   - id: nacos-demo-api
+      #     businessPrefix: /api/nacos
+      #     serviceName: demo-service
+      #     group: DEFAULT_GROUP
+      #     stripPrefix: /api/nacos

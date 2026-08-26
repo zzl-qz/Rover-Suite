@@ -38,7 +38,7 @@ Payload、路由数量、上游延迟、并发饱和点
 Nginx 基线对比
 ```
 
-如果 Gateway 静态最小链路已经明显变慢，建议先分析代理实现、线程切换、请求/响应聚合和对象创建。不要急着把所有功能都打开一起测。
+如果 Gateway 静态最小链路已经明显变慢，建议先分析代理实现、线程切换、请求/响应聚合和对象创建。先不要把所有功能都打开一起测，否则结果很难归因。
 
 ## 3. 测试环境记录
 
@@ -84,9 +84,9 @@ hey -z 30s -c 50 http://127.0.0.1:80/api/hello
 | 脚本 | 用途 |
 | --- | --- |
 | `deploy/scripts/bench-phase-a.sh` | Direct / Gateway 静态 / Gateway+NS，`GET /api/hello` |
-| `deploy/scripts/bench-phase-a-payload.sh` | 历史第一波：定长大包整包 vs 流式 A/B（会回退源码，脏工作区别跑） |
+| `deploy/scripts/bench-phase-a-payload.sh` | 历史第一阶段：定长大包整包 vs 流式 A/B（脚本会切换源码状态，建议在干净工作区运行） |
 | `deploy/scripts/bench-phase-a-payload-remasure.sh` | 当前代码复测：大包 GET + POST `/api/ingest`，同场 Netty / JDK 出站 |
-| `deploy/scripts/bench-phase-a-static-ab.sh` | 同场 A/B：无静态快照 vs 有快照；Direct 中位差 >10% 作废重跑 |
+| `deploy/scripts/bench-phase-a-static-ab.sh` | 同场 A/B：无静态快照 vs 有快照；Direct 中位差 >10% 时建议重跑 |
 | `deploy/scripts/bench-phase-a-outbound-ab.sh` | 同场 A/B：只改 `proxy.outbound`（jdk / netty） |
 | `deploy/scripts/bench-phase-a-io-ab.sh` | 同场 A/B：只改 `server.ioTransport`（nio / auto）。Docker Linux 容器里 `auto` 一般为 epoll |
 
@@ -248,7 +248,7 @@ Nginx 可以作为专用反向代理基线。它和 Rover Gateway 的定位不�
 ```text
 Rover 静态链路比 Direct Demo 多多少
 Rover Nameserver 链路比静态链路多多少
-每个功能打开后分别多多少
+每个功能开启后分别增加多少开销
 ```
 
 ## 9. 常见瓶颈判断
