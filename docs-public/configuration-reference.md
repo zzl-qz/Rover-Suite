@@ -50,7 +50,7 @@ a VPN in production.
 | `rover.gateway.proxy.outbound` | `netty` | Upstream HTTP client. Default `netty` forwards `http://` only. `jdk` is the first-generation JDK `HttpClient` (HTTP/1.1), kept for rollback and comparison; it includes TLS, so an `https://` upstream can use this switch. Also `-Drover.gateway.proxy.outbound` | Restart |
 | `rover.gateway.proxy.connectTimeoutMillis` | `3000` | Upstream connection timeout | Restart |
 | `rover.gateway.proxy.requestTimeoutMillis` | `30000` | Startup default for request timeout | Restart |
-| `rover.gateway.discovery.type` | `STATIC` in code / `nameserver` in example | `static` or `nameserver` | Restart |
+| `rover.gateway.discovery.type` | `STATIC` in code / `nameserver` in example | `static`, `nameserver`, or `nacos` | Restart |
 | `rover.gateway.discovery.nameserver.address` | `127.0.0.1:8888` | Nameserver TCP address | Restart |
 | `rover.gateway.discovery.nameserver.reconcileIntervalMs` | `30000` | Local-cache reconciliation interval | Restart |
 | `rover.gateway.discovery.nameserver.token` | empty | Gateway-to-Nameserver protocol token | Restart |
@@ -145,14 +145,14 @@ to `config/gateway-runtime.overlay.json`. Adding or
 replacing plugin JARs, or changing ports, bind addresses, tokens, discovery
 type, plugin directories, or CORS requires a Gateway restart.
 
-### Precedence and common pitfalls
+### Configuration precedence
 
 With `adminEnabled: true`, startup precedence is **YAML baseline → Gateway overlay**. An Admin save makes the matching overlay value win after every restart; merely opening Admin does not write the file. The current overlay is a full snapshot, so one save can retain stale values for other keys. If a YAML change appears ignored, inspect `config/gateway-runtime.overlay.json`; for routes inspect `config/routes.overlay.json`, which replaces the complete YAML route list.
 
 `gateway.loadbalance.strategy` is not edited from Admin and is not written to
 `config/gateway-runtime.overlay.json`. Configure a custom LoadBalancer with an
 SPI `name()` or implementation FQCN in `rover-gateway.yml`, then restart Gateway
-so Admin cannot overwrite the plugin-mounting decision.
+so this startup decision remains owned by YAML.
 
 ## Nameserver startup configuration
 

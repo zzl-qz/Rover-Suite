@@ -127,7 +127,7 @@ flowchart TB
 | `rover-nameserver-starter` | Spring Boot Starter |
 | `rover-gateway-core` | Gateway 核心逻辑 |
 | `rover-gateway-bootstrap` | Gateway 可执行进程 |
-| `rover-gateway-adapter-nacos` | 预留适配骨架；Nacos 运行时尚未实现 |
+| `rover-gateway-adapter-nacos` | 可选 Nacos 服务发现适配器；使用 `-Pnacos` 打包带 Nacos 的 Gateway |
 | `rover-admin` | 管理控制台 |
 | `rover-gateway-test/demo/backend` | Gateway 验证测试服务 |
 | `rover-gateway-test/demo/frontend` | 测试前端面板（独立于核心套件） |

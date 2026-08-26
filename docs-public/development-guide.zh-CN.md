@@ -48,7 +48,7 @@ mvn clean install -DskipTests
 | [`rover-gateway-core`](../rover-gateway-core/) | Netty Server、路由、Filter、代理、发现、负载均衡、运行时状态 |
 | [`rover-gateway-bootstrap`](../rover-gateway-bootstrap/) | Gateway YAML 映射与可执行进程装配 |
 | [`rover-admin`](../rover-admin/) | 可选 UI/Server，通过 HTTP 调用管理 API，不依赖两个 core 模块 |
-| [`rover-gateway-adapter-nacos`](../rover-gateway-adapter-nacos/) | 预留模块骨架，尚不是可用 Nacos 适配器 |
+| [`rover-gateway-adapter-nacos`](../rover-gateway-adapter-nacos/) | 可选 Nacos 服务发现适配器 |
 | [`rover-gateway-test/backend`](../rover-gateway-test/backend/) | Spring Boot Starter 接入示例 |
 
 运行时链路与依赖方向见[架构说明](./architecture.zh-CN.md)。
@@ -252,7 +252,7 @@ flowchart TB
 3. 生命周期、缓存、重连/watch、对账测试。
 4. 使用与部署文档。
 
-`NACOS` 和 `REDIS` 枚举值当前是预留项；`rover-gateway-adapter-nacos` 只是骨架，尚不能作为可用适配器使用。
+`NACOS` 由可选的 `rover-gateway-adapter-nacos` 模块提供。可以使用 `-Pnacos` 打包 Gateway，或自行添加 adapter 依赖；当前只提供服务发现，不包含 Nacos Config 和服务注册。
 
 ## 8. 运行时配置扩展
 

@@ -5,6 +5,7 @@ import com.rover.common.util.ServiceKeys;
 import com.rover.gateway.bootstrap.config.GatewayConfig.CorsProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.FilterProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.NameserverProperties;
+import com.rover.gateway.bootstrap.config.GatewayConfig.NacosProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.CircuitBreakerProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RateLimitProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
@@ -106,7 +107,7 @@ final class GatewayConfigMapper {
             if (discoveryType == DiscoveryType.STATIC && !hasStaticUpstream(route)) {
                 continue;
             }
-            if (discoveryType == DiscoveryType.NAMESERVER
+            if ((discoveryType == DiscoveryType.NAMESERVER || discoveryType == DiscoveryType.NACOS)
                     && (route.getServiceName() == null || route.getServiceName().isBlank())) {
                 continue;
             }
@@ -146,6 +147,19 @@ final class GatewayConfigMapper {
         }
 
         if (type == DiscoveryType.NAMESERVER) {
+            settings.setSubscribeServices(collectSubscribeServices(config));
+        }
+        NacosProperties nacos = config.gatewayProperties().getDiscovery().getNacos();
+        if (nacos != null) {
+            Map<String, String> provider = new LinkedHashMap<>();
+            provider.put("serverAddr", nacos.getServerAddr());
+            provider.put("namespace", nacos.getNamespace());
+            provider.put("username", nacos.getUsername());
+            provider.put("password", nacos.getPassword());
+            provider.put("timeoutMs", Long.toString(nacos.getTimeoutMs()));
+            settings.setProviderProperties(provider);
+        }
+        if (type == DiscoveryType.NACOS) {
             settings.setSubscribeServices(collectSubscribeServices(config));
         }
         return settings;

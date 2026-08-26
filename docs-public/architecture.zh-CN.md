@@ -374,7 +374,7 @@ flowchart TB
 - `*-core` 模块保存业务逻辑。
 - `*-bootstrap` 模块是进程入口。
 - `rover-admin` 是通过 HTTP 调用管理 API 的可选控制台，编译时不依赖 Nameserver 或 Gateway core 模块。
-- `rover-gateway-adapter-nacos` 当前只是预留骨架，还不是可运行适配器。
+- `rover-gateway-adapter-nacos` 当前是可选的 Nacos 服务发现适配器，可通过 Maven `nacos` profile 打包。
 - 跨语言 Registrar 示例位于 [`examples/http-registration/`](../examples/http-registration/README.md)。
 
 ---
