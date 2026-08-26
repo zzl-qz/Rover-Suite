@@ -77,6 +77,13 @@ public class HttpProxyClient {
         this(DEFAULT_CONNECT_TIMEOUT_MILLIS, DEFAULT_REQUEST_TIMEOUT_MILLIS);
     }
 
+    /** 单测替身用，不建出站客户端。 */
+    protected HttpProxyClient(Void unused) {
+        this.requestTimeoutMillis = new java.util.concurrent.atomic.AtomicLong(DEFAULT_REQUEST_TIMEOUT_MILLIS);
+        this.httpClient = null;
+        this.nettyClient = null;
+    }
+
     /** 指定连接/请求超时构造。出站实现看 -Drover.gateway.proxy.outbound，默认 netty。 */
     public HttpProxyClient(int connectTimeoutMillis, int requestTimeoutMillis) {
         this.requestTimeoutMillis = new java.util.concurrent.atomic.AtomicLong(requestTimeoutMillis);
@@ -150,8 +157,17 @@ public class HttpProxyClient {
             io.netty.handler.codec.http.HttpRequest request,
             String targetUrl,
             InboundBodyPipe body) {
+        return forwardAsync(ctx, request, targetUrl, body, true);
+    }
+
+    public CompletableFuture<ProxyResult> forwardAsync(
+            ChannelHandlerContext ctx,
+            io.netty.handler.codec.http.HttpRequest request,
+            String targetUrl,
+            InboundBodyPipe body,
+            boolean writeClientError) {
         if (nettyClient != null) {
-            return nettyClient.forwardAsync(ctx, request, targetUrl, body);
+            return nettyClient.forwardAsync(ctx, request, targetUrl, body, writeClientError);
         }
         long startNanos = System.nanoTime();
         inFlight.incrementAndGet();
@@ -162,15 +178,34 @@ public class HttpProxyClient {
                         .sendAsync(proxyRequest, info -> new StreamingResponseSubscriber(ctx, info, DEFAULT_MAX_RESPONSE_BYTES))
                         .handle((proxyResponse, err) -> {
                             if (err != null) {
-                                return handleError(ctx, err, targetUrl, startNanos);
+                                return handleError(ctx, err, targetUrl, startNanos, writeClientError);
                             }
                             return new ProxyResult(proxyResponse.statusCode(), elapsedMillis(startNanos), false, false);
                         });
             } catch (Exception err) {
-                return CompletableFuture.completedFuture(handleError(ctx, err, targetUrl, startNanos));
+                return CompletableFuture.completedFuture(
+                        handleError(ctx, err, targetUrl, startNanos, writeClientError));
             }
-        }).exceptionally(err -> handleError(ctx, err, targetUrl, startNanos))
+        }).exceptionally(err -> handleError(ctx, err, targetUrl, startNanos, writeClientError))
                 .whenComplete((ignored, err) -> inFlight.decrementAndGet());
+    }
+
+    /** 第一枪压了错包时，换台失败或不换台，再补写给客户端。头已写出就不动。 */
+    public void writeDeferredError(ChannelHandlerContext ctx, ProxyResult result) {
+        if (ctx == null || result == null) {
+            return;
+        }
+        if (Boolean.TRUE.equals(ctx.channel().attr(RESPONSE_STARTED).get())) {
+            return;
+        }
+        if (result.timeout()) {
+            writeProxyError(ctx, HttpResponseStatus.GATEWAY_TIMEOUT, "后端请求超时");
+            return;
+        }
+        writeProxyError(
+                ctx,
+                HttpResponseStatus.BAD_GATEWAY,
+                result.connectFail() ? "后端连接失败" : "后端响应异常");
     }
 
     /** 统一错误分类：把异常解包后按类型回写对应错误响应，并返回可统计的 ProxyResult。 */
@@ -179,6 +214,15 @@ public class HttpProxyClient {
             Throwable err,
             String targetUrl,
             long startNanos) {
+        return handleError(ctx, err, targetUrl, startNanos, true);
+    }
+
+    private ProxyResult handleError(
+            ChannelHandlerContext ctx,
+            Throwable err,
+            String targetUrl,
+            long startNanos,
+            boolean writeClientError) {
         Throwable cause = unwrap(err);
         String safeTarget = redactTargetUrl(targetUrl);
         // 响应头已写出时不能再塞 JSON 错包，只能关连接，避免半包后再写一个完整响应。
@@ -186,6 +230,9 @@ public class HttpProxyClient {
             if (ctx.channel().isActive()) {
                 ctx.close();
             }
+            return classifyWithoutWrite(cause, startNanos);
+        }
+        if (!writeClientError) {
             return classifyWithoutWrite(cause, startNanos);
         }
         if (cause instanceof HttpTimeoutException) {

@@ -8,6 +8,8 @@ import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.GatewayFilterAssembler;
+import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
+import com.rover.gateway.core.filter.circuit.InstanceCircuitBreaker;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.common.spi.plugin.ConfigurablePlugin;
@@ -73,6 +75,9 @@ public class GatewayRuntime {
 
     /** 过滤器链组装器。 */
     private final GatewayFilterAssembler assembler = new GatewayFilterAssembler();
+
+    /** 进程内熔断器，关着时不塞进 RouteAndProxyFilter。 */
+    private final InstanceCircuitBreaker circuitBreaker;
 
     /** 运行时配置管理器。 */
     private final GatewayRuntimeConfigManager configManager;
@@ -140,6 +145,7 @@ public class GatewayRuntime {
         this.discoverySettings = discoverySettings == null ? new DiscoverySettings() : discoverySettings;
         this.discoveryType = this.discoverySettings.getType();
         this.filterSettings = filterSettings == null ? new FilterSettings() : filterSettings;
+        this.circuitBreaker = new InstanceCircuitBreaker(this.filterSettings.getCircuitBreaker());
         this.proxyClient = new HttpProxyClient(connectTimeoutMillis, requestTimeoutMillis);
         this.serviceDiscovery = serviceDiscovery;
         this.configManager = configManager;
@@ -229,6 +235,34 @@ public class GatewayRuntime {
     /** 热更新滑动窗口时长。 */
     public void applyRateLimitWindowSeconds(int windowSeconds) {
         updateRateLimit(() -> filterSettings.getRateLimit().setWindowSeconds(windowSeconds));
+    }
+
+    /** 热更新熔断开关，重建过滤器链决定选点时挂不挂熔断器。 */
+    public void applyCircuitBreakerEnabled(boolean enabled) {
+        filterSettings.getCircuitBreaker().setEnabled(enabled);
+        rebuildFilters();
+        logCircuitBreaker("开关");
+    }
+
+    public void applyCircuitBreakerFailureThreshold(int failureThreshold) {
+        filterSettings.getCircuitBreaker().setFailureThreshold(failureThreshold);
+        logCircuitBreaker("连续失败阈值");
+    }
+
+    public void applyCircuitBreakerOpenSeconds(int openSeconds) {
+        filterSettings.getCircuitBreaker().setOpenSeconds(openSeconds);
+        logCircuitBreaker("打开秒数");
+    }
+
+    public void applyCircuitBreakerRecovery(String recovery) {
+        filterSettings.getCircuitBreaker().setRecovery(recovery);
+        logCircuitBreaker("恢复策略");
+    }
+
+    /** 热更新换台重试开关。过滤器握着同一份 settings，不用重建链。 */
+    public void applyRetryEnabled(boolean enabled) {
+        filterSettings.getRetry().setEnabled(enabled);
+        log.info("内置换台重试已热更新: enabled={}", enabled);
     }
 
     /** 热更新代理请求超时（毫秒），必须大于 0。 */
@@ -355,6 +389,16 @@ public class GatewayRuntime {
                 settings.isEnabled(), settings.getAlgorithm(), settings.getKey());
     }
 
+    private void logCircuitBreaker(String changed) {
+        CircuitBreakerSettings settings = filterSettings.getCircuitBreaker();
+        log.info("内置熔断已热更新({}): enabled={}, failureThreshold={}, openSeconds={}, recovery={}",
+                changed,
+                settings.isEnabled(),
+                settings.getFailureThreshold(),
+                settings.getOpenSeconds(),
+                settings.getRecovery());
+    }
+
     /** 按当前路由、发现、LB、Filter 配置重新组装过滤器链并原子替换。 */
     private void rebuildFilters() {
         List<Filter> assembled = assembler.assemble(
@@ -364,7 +408,8 @@ public class GatewayRuntime {
                 discoveryType,
                 serviceDiscovery,
                 loadBalancer.get(),
-                metricsRegistry);
+                metricsRegistry,
+                filterSettings.getCircuitBreaker().isEnabled() ? circuitBreaker : null);
         configManager.replacePluginConfigs(configurablePlugins(assembled));
         filters.set(assembled);
     }

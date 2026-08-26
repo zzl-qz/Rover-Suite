@@ -101,7 +101,12 @@ Green “hot reload” badges identify settings that can be applied immediately.
 Save controls appear only after a value changes. Gateway also exposes the
 default-off local rate limiter: choose token bucket or sliding window, a quota
 key, and thresholds. It counts per Gateway instance and is not a replacement
-for a business limit shared across instances.
+for a business limit shared across instances. The same page also has a
+default-off process-local circuit breaker: failure threshold, rest window, and
+`recovery` (`all` after the rest, or `half` for one probe). It counts per
+upstream `host:port` and is not shared across Gateway replicas.
+`gateway.retry.enabled` retries one other instance when connect failed and the
+request was never sent.
 
 Plugins that explicitly implement `ConfigurablePlugin` are shown with the
 Gateway settings. Their fields use the same save and rollback flow as built-in

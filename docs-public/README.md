@@ -41,6 +41,8 @@ This is the public documentation shipped with the source repository.
 | Plugin runtime settings visible in Admin / 插件自己的动态配置 | Implement `ConfigurablePlugin` |
 | Nacos or other registry integration / Nacos 或其他发现源 | Source-level adapter; Nacos runtime adapter is not implemented yet |
 | Built-in local rate limiting / 内置本地限流 | `rover.gateway.rateLimit.*`, local to each Gateway instance |
+| Built-in process-local circuit breaker / 进程内熔断 | `rover.gateway.circuitBreaker.*`, consecutive failures per `host:port` |
+| Connect-fail retry / 连不上换台 | `rover.gateway.retry.enabled`, one extra attempt if the request was never sent |
 
 ## References / 参考入口
 

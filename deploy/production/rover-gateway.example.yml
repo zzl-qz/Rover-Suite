@@ -31,6 +31,14 @@ rover:
       burst: 2000
       limit: 1000
       windowSeconds: 1
+    # 进程内熔断，按需打开。多 Gateway 不共享状态
+    circuitBreaker:
+      enabled: false
+      failureThreshold: 5
+      openSeconds: 10
+      recovery: all
+    retry:
+      enabled: false
     loadbalance:
       strategy: round_robin
     cors:

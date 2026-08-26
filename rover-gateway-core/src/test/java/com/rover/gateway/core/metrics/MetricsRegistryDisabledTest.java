@@ -43,10 +43,14 @@ class MetricsRegistryDisabledTest {
         registry.recordReject(HttpConstants.REJECT_INFLIGHT_LIMIT);
         registry.recordReject(HttpConstants.REJECT_NO_UPSTREAM);
         registry.recordReject(HttpConstants.REJECT_NO_UPSTREAM);
+        registry.recordReject(HttpConstants.REJECT_CIRCUIT_OPEN);
 
         assertEquals(1, registry.rejectInflightLimit.sum());
         assertEquals(2, registry.rejectNoUpstream.sum());
+        assertEquals(1, registry.rejectCircuitOpen.sum());
         assertTrue(registry.snapshotJson().contains("\"inflightLimit\":1"));
+        assertTrue(registry.snapshotJson().contains("\"circuitOpen\":1"));
         assertTrue(registry.prometheusText().contains("reason=\"inflight_limit\""));
+        assertTrue(registry.prometheusText().contains("reason=\"circuit_open\""));
     }
 }

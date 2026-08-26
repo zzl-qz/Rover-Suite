@@ -45,6 +45,7 @@ final class MetricsExporter {
         resources.put("inflightRequests", r.inflightRequests.get());
         resources.put("upstreamInFlight", r.upstreamInFlightSupplier.getAsInt());
         resources.put("rejects", rejectCounts());
+        resources.put("retries", retryCounts());
         root.put("resources", resources);
 
         long nowSecond = System.currentTimeMillis() / 1000;
@@ -127,6 +128,7 @@ final class MetricsExporter {
         resources.put("inflightRequests", r.inflightRequests.get());
         resources.put("upstreamInFlight", r.upstreamInFlightSupplier.getAsInt());
         resources.put("rejects", rejectCounts());
+        resources.put("retries", retryCounts());
         root.put("resources", resources);
 
         Map<String, Object> traffic = new LinkedHashMap<>();
@@ -330,6 +332,12 @@ final class MetricsExporter {
                 .append(r.rejectInflightLimit.sum()).append('\n');
         sb.append("rover_gateway_rejects_total{reason=\"no_upstream\"} ")
                 .append(r.rejectNoUpstream.sum()).append('\n');
+        sb.append("rover_gateway_rejects_total{reason=\"circuit_open\"} ")
+                .append(r.rejectCircuitOpen.sum()).append('\n');
+        sb.append("# HELP rover_gateway_retries_total Gateway retries by reason\n");
+        sb.append("# TYPE rover_gateway_retries_total counter\n");
+        sb.append("rover_gateway_retries_total{reason=\"connect\"} ")
+                .append(r.retryConnect.sum()).append('\n');
 
         sb.append("# HELP rover_gateway_window_requests Requests in current window\n");
         sb.append("# TYPE rover_gateway_window_requests gauge\n");
@@ -396,7 +404,14 @@ final class MetricsExporter {
         Map<String, Object> rejects = new LinkedHashMap<>();
         rejects.put("inflightLimit", r.rejectInflightLimit.sum());
         rejects.put("noUpstream", r.rejectNoUpstream.sum());
+        rejects.put("circuitOpen", r.rejectCircuitOpen.sum());
         return rejects;
+    }
+
+    private Map<String, Object> retryCounts() {
+        Map<String, Object> retries = new LinkedHashMap<>();
+        retries.put("connect", r.retryConnect.sum());
+        return retries;
     }
 
     /** Prometheus 标签值转义：反斜杠、双引号、换行。 */

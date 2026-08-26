@@ -11,12 +11,14 @@ import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.common.spi.plugin.ConfigurablePlugin;
 import com.rover.common.spi.plugin.PluginConfigProperty;
 import com.rover.common.constants.RoverComponent;
+import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import lombok.Getter;
 
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -92,6 +94,20 @@ public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
                 "1000", "1000", "滑动窗口内最多允许的请求数", List.of("100", "500", "1000", "5000"));
         addConfig(GatewayRuntimeConfigKeys.RATE_LIMIT_WINDOW_SECONDS,
                 "1", "1", "滑动窗口时长（秒）", List.of("1", "10", "60"));
+        addConfig(GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_ENABLED,
+                ConfigValues.FALSE, ConfigValues.FALSE,
+                "进程内熔断开关；按上游 host:port 连续失败计数", ConfigValues.BOOLEAN_OPTIONS);
+        addConfig(GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+                "5", "5", "连续失败几次后打开", List.of("3", "5", "10"));
+        addConfig(GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_OPEN_SECONDS,
+                "10", "10", "打开后休息秒数", List.of("5", "10", "30"));
+        addConfig(GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_RECOVERY,
+                CircuitBreakerSettings.ALL, CircuitBreakerSettings.ALL,
+                "恢复策略：all=到期全开，half=只发一个探测",
+                List.of(CircuitBreakerSettings.ALL, CircuitBreakerSettings.HALF));
+        addConfig(GatewayRuntimeConfigKeys.RETRY_ENABLED,
+                ConfigValues.FALSE, ConfigValues.FALSE,
+                "连不上时换下一台；只救还没发出去的连接失败，默认关", ConfigValues.BOOLEAN_OPTIONS);
         addConfig(GatewayRuntimeConfigKeys.TRACE_ENABLED,
                 ConfigValues.TRUE, ConfigValues.TRUE, "请求链路时间线总开关", ConfigValues.BOOLEAN_OPTIONS);
         String slowThreshold = Long.toString(GatewayDefaults.TRACE_SLOW_THRESHOLD_MILLIS);
@@ -218,6 +234,23 @@ public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
                 throw new IllegalArgumentException("rateLimit.windowSeconds 必须在 1~3600 之间");
             }
         }
+        if (GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_FAILURE_THRESHOLD.equals(key)
+                && Integer.parseInt(value.trim()) <= 0) {
+            throw new IllegalArgumentException("circuitBreaker.failureThreshold 必须大于 0");
+        }
+        if (GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_OPEN_SECONDS.equals(key)) {
+            int seconds = Integer.parseInt(value.trim());
+            if (seconds <= 0 || seconds > 3600) {
+                throw new IllegalArgumentException("circuitBreaker.openSeconds 必须在 1~3600 之间");
+            }
+        }
+        if (GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_RECOVERY.equals(key)) {
+            String recovery = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+            if (!CircuitBreakerSettings.ALL.equals(recovery)
+                    && !CircuitBreakerSettings.HALF.equals(recovery)) {
+                throw new IllegalArgumentException("circuitBreaker.recovery 仅支持 all/half");
+            }
+        }
     }
 
     @Override
@@ -225,6 +258,9 @@ public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
         // loadbalance.strategy 可能是自定义类全名，不能强行 toLowerCase
         if (GatewayRuntimeConfigKeys.BOOLEAN_KEYS.contains(key)) {
             return ConfigValues.normalizeBoolean(value);
+        }
+        if (GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_RECOVERY.equals(key) && value != null) {
+            return value.trim().toLowerCase(Locale.ROOT);
         }
         return value;
     }

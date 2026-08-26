@@ -11,7 +11,7 @@ Use this guide to diagnose common Rover-Suite runtime issues.
 | Configuration update fails | Field type, enum value, hot-reload flag and component logs |
 | Route returns 404 | `businessPrefix`, `stripPrefix`, discovery mode and instance health |
 | Route returns 502 | Upstream reachability, connection timeout and registration state |
-| Route returns 503 | No healthy instance, Gateway resource pressure, rate limiting or plugin rejection |
+| Route returns 503 | Read `X-Rover-Reject-Reason`: `NO_UPSTREAM`, `INFLIGHT_LIMIT`, or `CIRCUIT_OPEN`. Rate limiting is `429` |
 | HTTP registration returns 401 | `Authorization: Bearer` must match the Nameserver protocol token |
 | Management API returns 401 | `X-Rover-Admin-Token` must match the target component admin token |
 | Instances are evicted repeatedly | Heartbeat timeout, network jitter and registered host/port reachability |

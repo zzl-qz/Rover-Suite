@@ -100,6 +100,15 @@ final class NettyUpstreamClient {
             HttpRequest request,
             String targetUrl,
             InboundBodyPipe body) {
+        return forwardAsync(clientCtx, request, targetUrl, body, true);
+    }
+
+    CompletableFuture<HttpProxyClient.ProxyResult> forwardAsync(
+            ChannelHandlerContext clientCtx,
+            HttpRequest request,
+            String targetUrl,
+            InboundBodyPipe body,
+            boolean writeClientError) {
         long startNanos = System.nanoTime();
         URI uri;
         try {
@@ -112,8 +121,11 @@ final class NettyUpstreamClient {
                         "netty 出站只支持 http 上游；https 请设 rover.gateway.proxy.outbound=jdk");
             }
         } catch (Exception err) {
-            body.abort();
-            return CompletableFuture.completedFuture(handleError(clientCtx, err, targetUrl, startNanos));
+            if (writeClientError) {
+                body.abort();
+            }
+            return CompletableFuture.completedFuture(
+                    handleError(clientCtx, err, targetUrl, startNanos, writeClientError));
         }
 
         int port = uri.getPort() > 0 ? uri.getPort() : 80;
@@ -128,8 +140,11 @@ final class NettyUpstreamClient {
             Future<Channel> acquire = pool.acquire();
             acquire.addListener(future -> {
                 if (!future.isSuccess()) {
-                    body.abort();
-                    finish(result, handleError(clientCtx, future.cause(), targetUrl, startNanos));
+                    if (writeClientError) {
+                        body.abort();
+                    }
+                    finish(result, handleError(
+                            clientCtx, future.cause(), targetUrl, startNanos, writeClientError));
                     return;
                 }
                 Channel upstream = acquire.getNow();
@@ -146,8 +161,10 @@ final class NettyUpstreamClient {
                 }
             });
         } catch (Exception err) {
-            body.abort();
-            finish(result, handleError(clientCtx, err, targetUrl, startNanos));
+            if (writeClientError) {
+                body.abort();
+            }
+            finish(result, handleError(clientCtx, err, targetUrl, startNanos, writeClientError));
         }
         return result;
     }
@@ -325,7 +342,8 @@ final class NettyUpstreamClient {
         }
         cancelTimeout(exchange);
         exchange.body.abort();
-        HttpProxyClient.ProxyResult result = handleError(exchange.clientCtx, err, exchange.targetUrl, exchange.startNanos);
+        HttpProxyClient.ProxyResult result = handleError(
+                exchange.clientCtx, err, exchange.targetUrl, exchange.startNanos, true);
         release(exchange, true);
         finish(exchange.result, result);
     }
@@ -369,13 +387,17 @@ final class NettyUpstreamClient {
             ChannelHandlerContext ctx,
             Throwable err,
             String targetUrl,
-            long startNanos) {
+            long startNanos,
+            boolean writeClientError) {
         Throwable cause = unwrap(err);
         String safeTarget = HttpProxyClient.redactTargetUrl(targetUrl);
         if (clearStarted(ctx)) {
             if (ctx.channel().isActive()) {
                 ctx.close();
             }
+            return classify(cause, startNanos);
+        }
+        if (!writeClientError) {
             return classify(cause, startNanos);
         }
         if (cause instanceof TimeoutException) {

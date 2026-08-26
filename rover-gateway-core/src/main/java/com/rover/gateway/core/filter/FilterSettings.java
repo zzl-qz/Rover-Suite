@@ -1,7 +1,9 @@
 package com.rover.gateway.core.filter;
 
 import com.rover.common.plugin.PluginSpiLoader;
+import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
+import com.rover.gateway.core.filter.retry.RetrySettings;
 import java.util.List;
 
 /**
@@ -25,6 +27,12 @@ public class FilterSettings {
 
     /** 内置本地限流配置，默认关闭。 */
     private final RateLimitSettings rateLimit = new RateLimitSettings();
+
+    /** 进程内熔断配置，默认关闭。 */
+    private final CircuitBreakerSettings circuitBreaker = new CircuitBreakerSettings();
+
+    /** 连不上换下一台，默认关闭。 */
+    private final RetrySettings retry = new RetrySettings();
 
     /**
      * 是否装配访问日志过滤器。默认 true：打 debug（默认 INFO 级别下不刷屏）；
@@ -60,6 +68,14 @@ public class FilterSettings {
 
     public RateLimitSettings getRateLimit() {
         return rateLimit;
+    }
+
+    public CircuitBreakerSettings getCircuitBreaker() {
+        return circuitBreaker;
+    }
+
+    public RetrySettings getRetry() {
+        return retry;
     }
 
     public boolean isAccessLog() {
