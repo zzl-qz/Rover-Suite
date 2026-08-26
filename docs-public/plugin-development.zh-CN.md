@@ -31,7 +31,7 @@ SPI 更省事，但登记的 Filter 都会被加载。显式类名更灵活，�
 | `com.rover.common.spi.filter.Filter` | 在请求转发前后做鉴权、灰度标记、审计、业务限流等轻量处理 | SPI 自动发现，或在 `filters.classes` 中填写全限定类名 |
 | `com.rover.common.spi.loadbalance.LoadBalancer` | 固定转发环节中的上游选择策略，从健康实例列表中选择一个上游实例 | SPI `name()` 选择，或直接填写实现类全限定名 |
 
-Filter 的 `getOrder()` 越小越早执行。过滤器要继续执行后续链路时，需要调用 `chain.doFilter(context)`。读取鉴权头时可以使用 `context.requestHeader(name)`。拒绝请求时可以使用 `context.reject(status, body)`，然后返回已完成的 Future。Gateway 自带的本地限流可通过 `rover.gateway.rateLimit` 开启。按用户、租户或共享全局维度限流时，建议关闭内置限流，并实现自己的 Filter。
+Filter 的 `getOrder()` 越小越早执行。过滤器要继续执行后续链路时，需要调用 `chain.doFilter(context)`。读取鉴权头时可以使用 `context.requestHeader(name)`。拒绝请求时可以使用 `context.reject(status, body)`，然后返回已完成的 Future。Gateway 自带的本地限流可通过 `rover.gateway.rateLimit` 开启。按用户、租户或共享全局维度限流时，建议关闭内置限流，并实现自己的 Filter。进程内熔断走 `rover.gateway.circuitBreaker`，挂在选点和转发收尾，不是独立 Filter。连不上换台走 `rover.gateway.retry.enabled`，也不是独立 Filter。
 
 ## 2. 创建最小 Maven 插件项目
 

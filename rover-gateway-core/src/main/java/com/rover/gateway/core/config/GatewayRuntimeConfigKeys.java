@@ -20,10 +20,16 @@ public final class GatewayRuntimeConfigKeys {
     public static final String RATE_LIMIT_BURST = "gateway.rateLimit.burst";
     public static final String RATE_LIMIT_LIMIT = "gateway.rateLimit.limit";
     public static final String RATE_LIMIT_WINDOW_SECONDS = "gateway.rateLimit.windowSeconds";
+    public static final String CIRCUIT_BREAKER_ENABLED = "gateway.circuitBreaker.enabled";
+    public static final String CIRCUIT_BREAKER_FAILURE_THRESHOLD = "gateway.circuitBreaker.failureThreshold";
+    public static final String CIRCUIT_BREAKER_OPEN_SECONDS = "gateway.circuitBreaker.openSeconds";
+    public static final String CIRCUIT_BREAKER_RECOVERY = "gateway.circuitBreaker.recovery";
+    public static final String RETRY_ENABLED = "gateway.retry.enabled";
     public static final String TRACE_ENABLED = "gateway.trace.enabled";
     public static final String TRACE_SLOW_THRESHOLD_MILLIS = "gateway.trace.slowThresholdMillis";
     public static final String TRACE_SAMPLE_RATE = "gateway.trace.sampleRate";
 
     public static final Set<String> BOOLEAN_KEYS =
-            Set.of(FILTER_ENABLED, RATE_LIMIT_ENABLED, METRICS_ENABLED, TRACE_ENABLED);
+            Set.of(FILTER_ENABLED, RATE_LIMIT_ENABLED, CIRCUIT_BREAKER_ENABLED, RETRY_ENABLED,
+                    METRICS_ENABLED, TRACE_ENABLED);
 }

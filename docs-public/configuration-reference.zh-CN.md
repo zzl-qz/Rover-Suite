@@ -61,6 +61,11 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.rateLimit.burst` | `2000` | 令牌桶容量/突发上限 | 重启 |
 | `rover.gateway.rateLimit.limit` | `1000` | 滑动窗口最大请求数 | 重启 |
 | `rover.gateway.rateLimit.windowSeconds` | `1` | 滑动窗口长度，范围 1~3600 秒 | 重启 |
+| `rover.gateway.circuitBreaker.enabled` | `false` | 进程内熔断开关；按上游 `host:port` 连续失败计数 | 重启 |
+| `rover.gateway.circuitBreaker.failureThreshold` | `5` | 连续失败几次后打开 | 重启 |
+| `rover.gateway.circuitBreaker.openSeconds` | `10` | 打开后休息秒数，范围 1~3600 | 重启 |
+| `rover.gateway.circuitBreaker.recovery` | `all` | `all`=到期全开；`half`=只发一个探测 | 重启 |
+| `rover.gateway.retry.enabled` | `false` | 连不上时换下一台；只救还没发出去的连接失败 | 重启 |
 | `rover.gateway.rewrite.stripPrefix` | 空 | 全局重写前缀 | 重启 |
 | `rover.gateway.cors.enabled` | `false`（代码默认）/ 示例为 `true` | CORS 开关 | 重启 |
 | `rover.gateway.cors.allowedOrigins` | `[]` | 允许的来源；`*` 仅建议开发环境 | 重启 |
@@ -71,12 +76,16 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 
 本地限流只维护 Gateway 进程内状态，不访问 Nameserver 或外部存储；多实例部署时每个 Gateway 独立计数。复杂的用户、租户或全局分布式限流，请关闭该开关并使用自定义 Filter 插件。
 
+进程内熔断同样只记本机状态，默认关闭。打开后按实例 `host:port` 连续失败计数：连接失败、超时、上游 5xx 算失败；2xx/4xx 算活着并清零。选点时跳过打开的实例；全被打开则回 `503`，原因头 `CIRCUIT_OPEN`。它不是独立 Filter，挂在选点和转发收尾，全健康时只多读一个整数。多 Gateway 不共享状态。
+
+换台重试默认关闭，和熔断分开。打开后只在「连接失败、请求还没发出去、旁边还有另一台」时再打一枪。上游 5xx、请求超时、已经写出响应头、POST body 已经流走，都不换台。最多换 1 次。客户端业务重试仍然要自己做。换台次数在 `/_manage/metrics` 的 `resources.retries.connect` 和 Prometheus `rover_gateway_retries_total{reason="connect"}`。
+
 `rover.gateway.adminEnabled: false` 适合不部署 Rover-Admin、只把 YAML 当作配置事实来源的环境。它会跳过
 `config/routes.overlay.json` 和 `config/gateway-runtime.overlay.json`，并使 `/_manage/**` 返回 `404`；不会影响 Gateway
 连接 Nameserver、订阅服务或转发业务请求。已有 overlay 文件不会被删除，重新设为 `true` 后仍会继续生效。
 
 Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（在途闸门满，默认 `max(64, CPU×8)`，可用
-`-Drover.gateway.maxInflight` 覆盖）或 `NO_UPSTREAM`（没有可用上游）。日志里会打 `inflight=已用/上限`。
+`-Drover.gateway.maxInflight` 覆盖）、`NO_UPSTREAM`（没有可用上游）或 `CIRCUIT_OPEN`（候选实例都被熔断打开）。日志里会打 `inflight=已用/上限`。
 `/_manage/metrics` 的 `resources.rejects` 和 Prometheus `rover_gateway_rejects_total` 按原因计数。
 这些只发生在拒绝路径，成功请求不加活。
 
@@ -101,6 +110,11 @@ Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（
 | `gateway.rateLimit.burst` | `2000` | 令牌桶最大容量（请求数） |
 | `gateway.rateLimit.limit` | `1000` | 一个滑动窗口内允许的最大请求数 |
 | `gateway.rateLimit.windowSeconds` | `1` | 滑动窗口时长（秒） |
+| `gateway.circuitBreaker.enabled` | `false` | 开启进程内熔断 |
+| `gateway.circuitBreaker.failureThreshold` | `5` | 连续失败几次后打开 |
+| `gateway.circuitBreaker.openSeconds` | `10` | 打开后休息秒数 |
+| `gateway.circuitBreaker.recovery` | `all` | `all`=到期全开；`half`=只发一个探测 |
+| `gateway.retry.enabled` | `false` | 连不上时换下一台 |
 | `gateway.metrics.enabled` | `true` | 指标采集总开关；`false` 时热路径不记 inflight/record |
 | `gateway.metrics.windowSeconds` | `300` | 指标滑动窗口，最大 300 秒 |
 | `gateway.trace.enabled` | `true` | 请求链路时间线开关；`false` 时不 `markPhase`、不造 traceId |
@@ -113,6 +127,8 @@ Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（
 
 内置限流任一字段变更都会原子重建过滤器链：在途请求继续使用原 Filter，后续请求立即使用新限流器。限流只在每个
 Gateway 进程内独立计数，不是分布式全局配额。
+
+熔断开关变更会重建过滤器链（关着时选点路径不持有熔断器）。阈值、休息时间和 `recovery` 改的是同一份配置对象，不重建熔断状态。
 
 除 `gateway.loadbalance.strategy` 外，这些可热更新键会落盘到 `config/gateway-runtime.overlay.json`。新增或替换插件 JAR、修改端口、监听地址、token、发现类型、
 插件目录和 CORS 等启动配置不能只依赖热更新，应重启 Gateway。

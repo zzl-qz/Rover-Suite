@@ -45,6 +45,16 @@ rover:
       burst: 2000
       limit: 1000
       windowSeconds: 1
+    # 进程内熔断：按上游 host:port 连续失败计数，默认关。不挡回包，全健康时只读一个整数
+    circuitBreaker:
+      enabled: false
+      failureThreshold: 5
+      openSeconds: 10
+      # all=休息到点大家都能打；half=只放行 1 个探测
+      recovery: all
+    # 连不上换下一台。只救还没发出去的连接失败，默认关。业务 5xx / 超时不换
+    retry:
+      enabled: false
     # 负载均衡（静态多 IP / Nameserver 动态实例共用）
     # round_robin | random | weighted_round_robin | ip_hash | least_connections
     # 也可填自定义类全名，或 plugins 里 SPI 的 name()

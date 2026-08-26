@@ -7,6 +7,7 @@ import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
+import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.server.CorsSettings;
@@ -145,6 +146,12 @@ public class GatewayConfig {
         if (gateway.getRateLimit() == null) {
             gateway.setRateLimit(new RateLimitProperties());
         }
+        if (gateway.getCircuitBreaker() == null) {
+            gateway.setCircuitBreaker(new CircuitBreakerProperties());
+        }
+        if (gateway.getRetry() == null) {
+            gateway.setRetry(new RetryProperties());
+        }
         if (gateway.getDiscovery() == null) {
             gateway.setDiscovery(new DiscoveryProperties());
         }
@@ -186,6 +193,8 @@ public class GatewayConfig {
         private ProxyProperties proxy = new ProxyProperties();
         private FilterProperties filters = new FilterProperties();
         private RateLimitProperties rateLimit = new RateLimitProperties();
+        private CircuitBreakerProperties circuitBreaker = new CircuitBreakerProperties();
+        private RetryProperties retry = new RetryProperties();
         private LoadBalanceProperties loadbalance = new LoadBalanceProperties();
         private RewriteProperties rewrite = new RewriteProperties();
         private CorsProperties cors = new CorsProperties();
@@ -247,6 +256,19 @@ public class GatewayConfig {
         private long burst = 2000;
         private long limit = 1000;
         private int windowSeconds = 1;
+    }
+
+    @Data
+    public static class CircuitBreakerProperties {
+        private boolean enabled = false;
+        private int failureThreshold = 5;
+        private int openSeconds = 10;
+        private String recovery = CircuitBreakerSettings.ALL;
+    }
+
+    @Data
+    public static class RetryProperties {
+        private boolean enabled = false;
     }
 
     @Data

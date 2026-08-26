@@ -43,6 +43,14 @@ public class GatewayRuntimeConfigApplier implements ConfigApplier {
                     current.applyRateLimitLimit(parsePositiveLong(value, key));
             case GatewayRuntimeConfigKeys.RATE_LIMIT_WINDOW_SECONDS ->
                     current.applyRateLimitWindowSeconds(parsePositiveInt(value, key));
+            case GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_ENABLED ->
+                    current.applyCircuitBreakerEnabled(Boolean.parseBoolean(value));
+            case GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_FAILURE_THRESHOLD ->
+                    current.applyCircuitBreakerFailureThreshold(parsePositiveInt(value, key));
+            case GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_OPEN_SECONDS ->
+                    current.applyCircuitBreakerOpenSeconds(parsePositiveInt(value, key));
+            case GatewayRuntimeConfigKeys.CIRCUIT_BREAKER_RECOVERY -> current.applyCircuitBreakerRecovery(value);
+            case GatewayRuntimeConfigKeys.RETRY_ENABLED -> current.applyRetryEnabled(Boolean.parseBoolean(value));
             case GatewayRuntimeConfigKeys.REQUEST_TIMEOUT_MILLIS ->
                     current.applyRequestTimeoutMillis(parsePositiveLong(value, key));
             case GatewayRuntimeConfigKeys.LOAD_BALANCE_STRATEGY -> current.applyLoadBalanceStrategy(value);

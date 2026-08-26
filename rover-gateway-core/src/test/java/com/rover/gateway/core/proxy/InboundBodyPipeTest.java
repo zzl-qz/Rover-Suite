@@ -57,4 +57,31 @@ class InboundBodyPipeTest {
         assertEquals(0, pipe.collectBytes().get(1, TimeUnit.SECONDS).length);
         pipe.offer(LastHttpContent.EMPTY_LAST_CONTENT);
     }
+
+    @Test
+    void canReplayUntilAttachedOrAborted() {
+        InboundBodyPipe pipe = new InboundBodyPipe(1024);
+        pipe.offer(new DefaultLastHttpContent(Unpooled.copiedBuffer("x", StandardCharsets.UTF_8)));
+        assertTrue(pipe.canReplay());
+
+        pipe.attach(HttpContent::release);
+        assertFalse(pipe.canReplay());
+    }
+
+    @Test
+    void abortStopsReplay() {
+        InboundBodyPipe pipe = InboundBodyPipe.empty(16);
+        assertTrue(pipe.canReplay());
+        pipe.abort();
+        assertFalse(pipe.canReplay());
+    }
+
+    @Test
+    void collectBytesStillReplayableForJdkConnectFail() throws Exception {
+        InboundBodyPipe pipe = new InboundBodyPipe(1024);
+        pipe.offer(new DefaultLastHttpContent(Unpooled.copiedBuffer("ab", StandardCharsets.UTF_8)));
+        assertArrayEquals("ab".getBytes(StandardCharsets.UTF_8), pipe.collectBytes().get(1, TimeUnit.SECONDS));
+        assertTrue(pipe.canReplay(), "JDK 连不上时 byte[] 还在，可以换台再发");
+        assertArrayEquals("ab".getBytes(StandardCharsets.UTF_8), pipe.collectBytes().get(1, TimeUnit.SECONDS));
+    }
 }

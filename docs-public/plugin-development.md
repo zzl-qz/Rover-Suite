@@ -32,7 +32,7 @@ renaming a Filter also requires a configuration change and a Gateway restart.
 | `com.rover.common.spi.filter.Filter` | Lightweight auth, traffic labels, audit, business rate limiting, and request policy | Auto-discovered through SPI, or listed by FQCN in `filters.classes` |
 | `com.rover.common.spi.loadbalance.LoadBalancer` | Upstream selection strategy used by the fixed proxy stage | Select by SPI `name()`, or configure the implementation FQCN |
 
-Lower `Filter.getOrder()` values run earlier. A filter must call `chain.doFilter(context)` to continue. Use `context.requestHeader(name)` to read an authentication header and `context.reject(status, body)` to short-circuit a request, then return an already-completed future. Gateway's built-in local limiter is enabled with `rover.gateway.rateLimit`; disable it and implement a custom Filter when limits must use user, tenant, or shared global state.
+Lower `Filter.getOrder()` values run earlier. A filter must call `chain.doFilter(context)` to continue. Use `context.requestHeader(name)` to read an authentication header and `context.reject(status, body)` to short-circuit a request, then return an already-completed future. Gateway's built-in local limiter is enabled with `rover.gateway.rateLimit`; disable it and implement a custom Filter when limits must use user, tenant, or shared global state. The process-local circuit breaker is `rover.gateway.circuitBreaker`; it hooks pick and proxy completion, and is not a separate Filter. Connect-fail retry is `rover.gateway.retry.enabled`, also not a separate Filter.
 
 ## 2. Create a minimal Maven plugin project
 

@@ -26,6 +26,7 @@ public final class InboundBodyPipe {
     private boolean lastSeen;
     private boolean aborted;
     private boolean overflow;
+    private boolean attached;
     private CompletableFuture<byte[]> bytesFuture;
 
     public InboundBodyPipe(int maxBytes) {
@@ -55,7 +56,13 @@ public final class InboundBodyPipe {
             return;
         }
         this.sink = sink;
+        this.attached = true;
         drainToSink();
+    }
+
+    /** 还没挂到上游、也没 abort，就能换台再发。 */
+    public synchronized boolean canReplay() {
+        return !aborted && !attached;
     }
 
     /**
