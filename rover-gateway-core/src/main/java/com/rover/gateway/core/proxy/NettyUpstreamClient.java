@@ -3,6 +3,7 @@ package com.rover.gateway.core.proxy;
 import com.rover.common.constants.HttpConstants;
 import com.rover.common.json.JsonCodec;
 import com.rover.gateway.core.config.GatewayDefaults;
+import com.rover.gateway.core.server.IoTransport;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -13,13 +14,10 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelOption;
 import io.netty.channel.EventLoop;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoop;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.pool.ChannelHealthChecker;
 import io.netty.channel.pool.ChannelPool;
 import io.netty.channel.pool.ChannelPoolHandler;
 import io.netty.channel.pool.FixedChannelPool;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.DefaultFullHttpRequest;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.DefaultHttpContent;
@@ -110,7 +108,8 @@ final class NettyUpstreamClient {
                 throw new IllegalArgumentException("missing host");
             }
             if (uri.getScheme() != null && !"http".equalsIgnoreCase(uri.getScheme())) {
-                throw new IllegalArgumentException("only http upstream is supported");
+                throw new IllegalArgumentException(
+                        "netty 出站只支持 http 上游；https 请设 rover.gateway.proxy.outbound=jdk");
             }
         } catch (Exception err) {
             body.abort();
@@ -226,7 +225,7 @@ final class NettyUpstreamClient {
 
     private EventLoop outboundLoop(ChannelHandlerContext clientCtx) {
         EventLoop loop = clientCtx.channel().eventLoop();
-        if (loop instanceof NioEventLoop) {
+        if (IoTransport.current().sameFamily(loop)) {
             return loop;
         }
         return fallbackGroup().next();
@@ -234,7 +233,7 @@ final class NettyUpstreamClient {
 
     private synchronized EventLoopGroup fallbackGroup() {
         if (fallbackGroup == null) {
-            fallbackGroup = new NioEventLoopGroup(1);
+            fallbackGroup = IoTransport.current().newGroup(1);
         }
         return fallbackGroup;
     }
@@ -242,7 +241,7 @@ final class NettyUpstreamClient {
     private FixedChannelPool newPool(PoolKey key) {
         Bootstrap bootstrap = new Bootstrap()
                 .group(key.loop)
-                .channel(NioSocketChannel.class)
+                .channel(IoTransport.current().clientChannelClass())
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMillis)
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.SO_KEEPALIVE, true)

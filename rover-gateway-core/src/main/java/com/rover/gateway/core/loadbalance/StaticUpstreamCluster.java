@@ -2,6 +2,7 @@ package com.rover.gateway.core.loadbalance;
 
 import com.rover.common.constants.HttpConstants;
 import com.rover.common.model.ServiceInstance;
+import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.route.RouteConfig;
 import java.net.URI;
 import java.util.ArrayList;
@@ -134,10 +135,7 @@ public final class StaticUpstreamCluster {
         try {
             URI uri = URI.create(urlPart);
             String scheme = uri.getScheme();
-            if (!HttpConstants.SCHEME_HTTP.equalsIgnoreCase(scheme)
-                    && !HttpConstants.SCHEME_HTTPS.equalsIgnoreCase(scheme)) {
-                throw new IllegalArgumentException("只支持 http/https: " + raw);
-            }
+            GatewaySystemProperties.requireUpstreamScheme(scheme, raw);
             if (uri.getHost() == null || uri.getHost().isBlank()) {
                 throw new IllegalArgumentException("必须包含主机: " + raw);
             }

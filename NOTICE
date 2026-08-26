@@ -19,6 +19,8 @@ Bundled / referenced third-party software
 * Alibaba Nacos Client 2.3.0 (optional adapter): Apache-2.0.
 * Vue 3.4.21 bundled under rover-admin/.../static/vendor/: MIT.
 * Apache ECharts 5.5.0 bundled under rover-admin/.../static/vendor/: Apache-2.0.
+* Atkinson Hyperlegible (latin woff2) under rover-admin/.../static/vendor/fonts/: SIL OFL 1.1.
+* IBM Plex Mono (latin woff2) under rover-admin/.../static/vendor/fonts/: SIL OFL 1.1.
 
 Documentation media
 -------------------

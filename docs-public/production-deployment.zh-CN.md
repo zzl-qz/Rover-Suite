@@ -23,7 +23,7 @@ Rover-Suite 当前定位是轻量单机或小规模内网部署。生产部署�
 1. Gateway、Nameserver 的业务/协议 token 使用随机非空值。
 2. Gateway admin token 与 Nameserver admin token 使用不同随机值；Admin 携带对应管理 token。
 3. 管理端口只允许运维网段访问，Admin 不直接暴露公网。
-4. HTTP/TCP 前放置 TLS 终止、ACL 或 VPN；token 本身不加密链路。
+4. HTTP/TCP 前放置 TLS 终止、ACL 或 VPN；token 本身不加密链路。Gateway 到上游默认是明文 HTTP。调用方 HTTPS 在反向代理上终止。上游地址必须是 `https://` 时，再把 `rover.gateway.proxy.outbound` 设为 `jdk` 并重启；吞吐会回到 JDK 出站那一档。
 5. 关闭不使用的 HTTP Registration API 和 CORS。
 6. 正式机开启严格安全：空 token 直接拒绝启动。
 

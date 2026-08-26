@@ -12,6 +12,7 @@
 - Nameserver TCP 注册/订阅协议和 HTTP Registration API 是跨版本重点兼容面。
 - Admin API 属于同版本控制面，客户端不建议依赖未文档化字段。
 - 配置键新增通常兼容；删除、改类型或改变默认值需要记录在 Changelog。
+- `rover.gateway.proxy.outbound` 与 `rover.gateway.server.ioTransport` 在启动时选定，热更新不会切换出站客户端或 I/O 实现。改完后重启 Gateway。当前实现可从启动日志里的 `outbound=` / `ioTransport=` 核对。
 
 ## 插件开发
 

@@ -22,9 +22,7 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
-import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
-import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
@@ -285,8 +283,9 @@ public class GatewayHttpServer {
     public void start() {
         serviceDiscovery.start();
 
-        bossGroup = new NioEventLoopGroup(1);
-        workerGroup = new NioEventLoopGroup();
+        IoTransport io = IoTransport.current();
+        bossGroup = io.newGroup(1);
+        workerGroup = io.newGroup(0);
         if (!dispatchOnEventLoop) {
             bizGroup = new DefaultEventExecutorGroup(BIZ_THREADS);
         }
@@ -294,7 +293,7 @@ public class GatewayHttpServer {
         try {
             ServerBootstrap bootstrap = new ServerBootstrap();
             bootstrap.group(bossGroup, workerGroup)
-                    .channel(NioServerSocketChannel.class)
+                    .channel(io.serverChannelClass())
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
@@ -315,9 +314,9 @@ public class GatewayHttpServer {
 
             serverChannel = bootstrap.bind(bindHost, port).sync().channel();
             warnIfAdminTokenBlank();
-            log.info("Rover Gateway HTTP server listening on {}:{}, discovery={}, adminEnabled={}, dispatchOnEventLoop={}, managePrefix={}",
-                    bindHost, port, runtime.getDiscoveryType(), adminEnabled, dispatchOnEventLoop,
-                    adminEnabled ? ManageApiPaths.PREFIX : "disabled");
+            log.info("Rover Gateway HTTP server listening on {}:{}, ioTransport={}, discovery={}, adminEnabled={}, dispatchOnEventLoop={}, managePrefix={}",
+                    bindHost, port, io.name().toLowerCase(), runtime.getDiscoveryType(), adminEnabled,
+                    dispatchOnEventLoop, adminEnabled ? ManageApiPaths.PREFIX : "disabled");
         } catch (InterruptedException err) {
             Thread.currentThread().interrupt();
             shutdown();

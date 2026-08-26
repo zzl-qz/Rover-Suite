@@ -282,7 +282,7 @@ transport encryption is required. Gateway `/_manage/**` shares the business list
 `adminToken` plus an outer ACL/proxy.
 
 The source tree is still a single-node `1.0.0-SNAPSHOT`. Current runtime boundaries — including last-instance empty
-snapshots, grouped discovery, cold-start recovery, and proxy buffering — are documented in the
+snapshots, grouped discovery, cold-start recovery, WebSocket/SSE, and client HTTPS termination — are documented in the
 [User Guide](./docs-public/user-guide.md#9-current-runtime-boundaries).
 
 ---

@@ -29,6 +29,9 @@ public class HelloController {
     @Value("${server.port:8081}")
     private int port;
 
+    @Value("${rover.nameserver.host:}")
+    private String registeredHost;
+
     /** 压测用定长响应；上限 8MiB，避免误打爆机器。 */
     private static final int MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
@@ -40,6 +43,7 @@ public class HelloController {
         Map<String, Object> result = new HashMap<>();
         result.put("message", "hello from rover-demo");
         result.put("service", serviceName);
+        result.put("host", registeredHost);
         result.put("port", port);
         result.put("timestamp", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         System.out.println("请求进来");

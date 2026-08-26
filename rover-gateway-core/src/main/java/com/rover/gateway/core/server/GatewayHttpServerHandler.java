@@ -213,7 +213,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
                 if (!context.isCompleted()) {
                     context.writeText(
                             HttpResponseStatus.INTERNAL_SERVER_ERROR,
-                            "Gateway filter chain error: " + err.getMessage());
+                            "Gateway internal error");
                 }
             }
         } finally {

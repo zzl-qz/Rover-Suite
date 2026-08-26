@@ -268,7 +268,8 @@ startup, reconnect, a missed or rejected push, and epoch/revision reconciliation
 This is not a strong real-time consistency guarantee. Two current boundaries are explicit: Gateway protects the
 empty snapshot produced by the last instance and clears it at the next periodic reconciliation, while a failed
 initial subscription when Nameserver is unavailable may also recover only at that reconciliation. With the default
-`reconcileIntervalMs=30000`, either window can last roughly 30 seconds.
+`reconcileIntervalMs=30000`, either window can last roughly 30 seconds. On this machine's Compose run, stopping
+the last instance produced 502 immediately and `503 NO_UPSTREAM` after about 17 seconds.
 
 `group` is a query/subscription filter rather than part of the instance identity. Multi-group snapshot isolation is
 still being finalized; the recommended current mode is an empty group.
@@ -341,12 +342,24 @@ HTTP request
 Discovery is outside the hot request path: request routing reads the Gateway's local cache rather than querying
 the Nameserver synchronously for every request.
 
-The current proxy path aggregates complete request and response bodies. The default request-body limit is 1 MiB,
-and the hard response-body limit is 16 MiB. It targets ordinary HTTP APIs and does not provide WebSocket, SSE, or
-general streaming proxying. If every persistent discovered instance is unhealthy, Gateway falls back to the full
-cached set and keeps trying, which is an availability-first fail-open policy. A static upstream URL contributes only
-its scheme, host, and port; use route options such as `stripPrefix` for path rewriting instead of relying on a base
-path in the upstream URL.
+The default path starts the proxy when inbound headers arrive and pipes the request body. Default Netty outbound
+writes the upstream response in chunks. An empty GET is still sent as one complete outbound request. The JDK
+outbound path waits until the request body is complete. The default request-body limit is 1 MiB and the hard
+response-body limit is 16 MiB. The path targets ordinary HTTP/1.1 APIs and does not provide WebSocket or SSE.
+
+Inbound EventLoops and outbound Channels use the same I/O family. `server.ioTransport` defaults to `auto`: Epoll
+on Linux, KQueue when the process runs on macOS, and NIO if native libraries are missing. The published reference
+benchmarks run in a Docker Desktop Linux container, so `auto` logs epoll rather than host kqueue. In the same-session
+comparison Epoll was about 3.5% above NIO; capacity numbers stay with the Netty-outbound run.
+
+The Gateway process does not terminate client HTTPS, and default outbound does not speak TLS to upstreams.
+Terminate caller HTTPS at a reverse proxy and keep Gateway-to-service traffic as plain HTTP. If the upstream URL
+must be `https://`, set `proxy.outbound` to `jdk` (the first-generation client, kept for rollback and comparison;
+throughput then returns to that band).
+
+If every persistent discovered instance is unhealthy, Gateway falls back to the full cached set and keeps trying,
+which is an availability-first fail-open policy. A static upstream URL contributes only its scheme, host, and port;
+use route options such as `stripPrefix` for path rewriting instead of relying on a base path in the upstream URL.
 
 ---
 
