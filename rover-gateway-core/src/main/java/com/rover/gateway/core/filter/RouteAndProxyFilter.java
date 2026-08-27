@@ -30,7 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-08 16:53:00
- * Description: 终端过滤器：路由匹配 + 选上游 + 真实转发，静态多 IP / Nameserver 动态实例统一走 LoadBalancer
+ * Description: 终端过滤器：路由匹配 + 选上游 + 真实转发，静态多 IP / 动态发现实例统一走 LoadBalancer
  */
 @Slf4j
 public class RouteAndProxyFilter implements Filter {
@@ -267,47 +267,28 @@ public class RouteAndProxyFilter implements Filter {
     private ChosenUpstream resolveUpstream(
             RouteConfig route, GatewayRequestContext gatewayContext, Set<String> exclude) {
         if (loadBalancer == null) {
-            // 极端兜底：无 LB 时静态只取第一个
-            if (discoveryType == DiscoveryType.STATIC) {
-                long discoveryStart = System.nanoTime();
-                List<ServiceInstance> instances = StaticUpstreamCluster.instancesOf(route);
-                gatewayContext.markPhase(TracePhase.DISCOVERY.phaseName(), System.nanoTime() - discoveryStart);
-                if (instances.isEmpty()) {
-                    return null;
-                }
-                List<ServiceInstance> candidates = applyCircuitAndExclude(instances, exclude);
-                if (candidates == null) {
-                    return exclude.isEmpty() ? ChosenUpstream.allOpen() : null;
-                }
-                if (candidates.isEmpty()) {
-                    return null;
-                }
-                ServiceInstance first = candidates.get(0);
-                return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(first), first);
+            // 极端兜底：无 LB 时取第一台。写了静态地址也能走。
+            long discoveryStart = System.nanoTime();
+            List<ServiceInstance> instances = listInstances(route);
+            gatewayContext.markPhase(TracePhase.DISCOVERY.phaseName(), System.nanoTime() - discoveryStart);
+            if (instances == null || instances.isEmpty()) {
+                return null;
             }
-            return null;
+            List<ServiceInstance> candidates = applyCircuitAndExclude(instances, exclude);
+            if (candidates == null) {
+                return exclude.isEmpty() ? ChosenUpstream.allOpen() : null;
+            }
+            if (candidates.isEmpty()) {
+                return null;
+            }
+            ServiceInstance first = candidates.get(0);
+            return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(first), first);
         }
 
         // 服务发现查询：从注册中心缓存/静态配置拉取候选实例列表
-        String clusterKey = null;
-        List<ServiceInstance> instances = null;
         long discoveryStart = System.nanoTime();
-        if (discoveryType == DiscoveryType.NAMESERVER || discoveryType == DiscoveryType.NACOS) {
-            if (serviceDiscovery == null) {
-                return null;
-            }
-            String serviceName = route.getServiceName();
-            if (serviceName == null || serviceName.isBlank()) {
-                return null;
-            }
-            clusterKey = serviceName;
-            instances = serviceDiscovery.getInstances(serviceName, route.getGroup());
-        } else if (discoveryType == DiscoveryType.STATIC) {
-            clusterKey = StaticUpstreamCluster.clusterKey(route);
-            instances = StaticUpstreamCluster.instancesOf(route);
-        } else {
-            log.warn("暂时没有该 discoveryType 类型， discoveryType is {}", discoveryType);
-        }
+        List<ServiceInstance> instances = listInstances(route);
+        String clusterKey = clusterKeyOf(route);
         gatewayContext.markPhase(TracePhase.DISCOVERY.phaseName(), System.nanoTime() - discoveryStart);
         if (instances == null || instances.isEmpty()) {
             log.warn("无可用上游: discovery={}, clusterKey={}", discoveryType, clusterKey);
@@ -337,20 +318,31 @@ public class RouteAndProxyFilter implements Filter {
         return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(chosen), chosen);
     }
 
+    /** 读快照/缓存，不走 LB。写了静态地址就用地址，否则才问注册中心。 */
+    private List<ServiceInstance> listInstances(RouteConfig route) {
+        if (StaticUpstreamCluster.hasRawTargets(route) || !discoveryType.usesServiceDiscovery()) {
+            return StaticUpstreamCluster.instancesOf(route);
+        }
+        if (serviceDiscovery == null || route.getServiceName() == null || route.getServiceName().isBlank()) {
+            return null;
+        }
+        return serviceDiscovery.getInstances(route.getServiceName(), route.getGroup());
+    }
+
+    private String clusterKeyOf(RouteConfig route) {
+        if (StaticUpstreamCluster.hasRawTargets(route) || !discoveryType.usesServiceDiscovery()) {
+            return StaticUpstreamCluster.clusterKey(route);
+        }
+        return route.getServiceName();
+    }
+
     /** 还有没有另一台能打。只看列表，不走 LB，避免预检查把轮询指针推走。 */
     private boolean hasSibling(RouteConfig route, ServiceInstance chosen) {
         if (chosen == null) {
             return false;
         }
-        List<ServiceInstance> instances;
-        if (discoveryType == DiscoveryType.NAMESERVER || discoveryType == DiscoveryType.NACOS) {
-            if (serviceDiscovery == null || route.getServiceName() == null || route.getServiceName().isBlank()) {
-                return false;
-            }
-            instances = serviceDiscovery.getInstances(route.getServiceName(), route.getGroup());
-        } else if (discoveryType == DiscoveryType.STATIC) {
-            instances = StaticUpstreamCluster.instancesOf(route);
-        } else {
+        List<ServiceInstance> instances = listInstances(route);
+        if (instances == null || instances.isEmpty()) {
             return false;
         }
         List<ServiceInstance> candidates = applyCircuitAndExclude(instances, Set.of(hostPortOf(chosen)));
@@ -408,7 +400,7 @@ public class RouteAndProxyFilter implements Filter {
     private String joinUrl(String baseUrl, String requestUri, String requestPath, String stripPrefix) {
         String query = extractQuery(requestUri);
         String forwardPath = requestPath;
-        String normalizedStripPrefix = normalizePrefix(stripPrefix);
+        String normalizedStripPrefix = RouteConfig.normalizePrefix(stripPrefix);
         if (shouldStripPrefix(normalizedStripPrefix, requestPath)) {
             forwardPath = requestPath.substring(normalizedStripPrefix.length());
             if (forwardPath.isBlank()) {
@@ -423,17 +415,6 @@ public class RouteAndProxyFilter implements Filter {
             return false;
         }
         return requestPath.equals(stripPrefix) || requestPath.startsWith(stripPrefix + "/");
-    }
-
-    private String normalizePrefix(String prefix) {
-        if (prefix == null) {
-            return null;
-        }
-        String normalized = prefix.trim();
-        while (normalized.length() > 1 && normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized;
     }
 
     private String extractQuery(String requestUri) {

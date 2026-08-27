@@ -319,6 +319,7 @@ code {
     color: var(--ink);
 }
 .field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+.field select.nice-select { width: 100%; }
 
 .form-actions { display: flex; gap: 10px; }
 

@@ -336,7 +336,6 @@ snapshots, grouped discovery, cold-start recovery, WebSocket/SSE, and client HTT
 
 - [ ] Distributed tracing integration beyond the local Gateway timeline
 - [ ] Advanced traffic governance (auth policies, distributed limiting)
-- [ ] External registry adapters
 - [ ] Nameserver cluster high availability (online instances remain lease-based soft state)
 
 ---

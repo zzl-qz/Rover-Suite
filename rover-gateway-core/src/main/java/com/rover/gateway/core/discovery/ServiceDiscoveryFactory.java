@@ -3,8 +3,8 @@ package com.rover.gateway.core.discovery;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 
 /**
- * 按配置创建服务发现实现的扩展工厂。
- * <p>Gateway core 只依赖该接口；具体注册中心通过 ServiceLoader 提供实现。</p>
+ * 按配置创建服务发现实现的工厂。
+ * Nameserver 工厂在 core 里；Nacos 等可选 adapter 自己挂一条 SPI。
  */
 public interface ServiceDiscoveryFactory {
 

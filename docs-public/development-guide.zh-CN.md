@@ -245,10 +245,14 @@ flowchart TB
 [`ServiceDiscovery`](../rover-common/src/main/java/com/rover/common/spi/discovery/ServiceDiscovery.java)
 定义 `start`、`getInstances`、`ensureWatch`、`close`。远端 watch/对账应在后台执行，`getInstances` 在请求路径中只读取本地缓存。
 
-当前它不是可直接放入 `plugins` 目录的插件。增加新的 `ServiceDiscovery` 适配至少要修改：
+当前它不是可直接放入 `plugins` 目录的插件。`static` 走空实现；其它类型由
+[`ServiceDiscoveryLoader`](../rover-gateway-core/src/main/java/com/rover/gateway/core/discovery/ServiceDiscoveryLoader.java)
+用 ServiceLoader 找工厂。Nameserver 工厂在 core 里；Nacos 在可选模块里。
+不做 Redis 发现：Redis 没有官方 Naming 协议，上报/拉取/摘除都得自研，和 Nacos/Nameserver 不是一类东西。
+真有第三个中心（且它自带发现协议）再加类型：
 
-1. [`DiscoveryType`](../rover-gateway-core/src/main/java/com/rover/gateway/core/discovery/DiscoveryType.java) 与配置映射。
-2. [`GatewayHttpServer#createServiceDiscovery`](../rover-gateway-core/src/main/java/com/rover/gateway/core/server/GatewayHttpServer.java)，或抽出专用 Factory。
+1. 在 [`DiscoveryType`](../rover-gateway-core/src/main/java/com/rover/gateway/core/discovery/DiscoveryType.java) 加一个值，并补配置映射。
+2. 实现 `ServiceDiscoveryFactory`，写入 `META-INF/services`。
 3. 生命周期、缓存、重连/watch、对账测试。
 4. 使用与部署文档。
 

@@ -1,7 +1,6 @@
 package com.rover.gateway.bootstrap.config;
 
 import com.rover.common.util.HostPort;
-import com.rover.common.util.ServiceKeys;
 import com.rover.gateway.bootstrap.config.GatewayConfig.CorsProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.FilterProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.NameserverProperties;
@@ -15,6 +14,7 @@ import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
+import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.server.CorsSettings;
 
@@ -104,11 +104,12 @@ final class GatewayConfigMapper {
             if (route.getBusinessPrefix() == null || route.getBusinessPrefix().isBlank()) {
                 continue;
             }
-            if (discoveryType == DiscoveryType.STATIC && !hasStaticUpstream(route)) {
+            boolean staticUpstream = hasStaticUpstream(route);
+            boolean namedService = route.getServiceName() != null && !route.getServiceName().isBlank();
+            if (staticUpstream == namedService) {
                 continue;
             }
-            if ((discoveryType == DiscoveryType.NAMESERVER || discoveryType == DiscoveryType.NACOS)
-                    && (route.getServiceName() == null || route.getServiceName().isBlank())) {
+            if (!staticUpstream && !discoveryType.usesServiceDiscovery()) {
                 continue;
             }
 
@@ -146,9 +147,6 @@ final class GatewayConfigMapper {
             settings.setReconcileIntervalMs(reconcile);
         }
 
-        if (type == DiscoveryType.NAMESERVER) {
-            settings.setSubscribeServices(collectSubscribeServices(config));
-        }
         NacosProperties nacos = config.gatewayProperties().getDiscovery().getNacos();
         if (nacos != null) {
             Map<String, String> provider = new LinkedHashMap<>();
@@ -159,39 +157,11 @@ final class GatewayConfigMapper {
             provider.put("timeoutMs", Long.toString(nacos.getTimeoutMs()));
             settings.setProviderProperties(provider);
         }
-        if (type == DiscoveryType.NACOS) {
-            settings.setSubscribeServices(collectSubscribeServices(config));
-        }
         return settings;
     }
 
-    private static List<DiscoverySettings.ServiceSubscribeSpec> collectSubscribeServices(GatewayConfig config) {
-        Map<String, DiscoverySettings.ServiceSubscribeSpec> unique = new LinkedHashMap<>();
-        for (RouteConfig route : toRouteConfigs(config)) {
-            if (route.getServiceName() == null || route.getServiceName().isBlank()) {
-                continue;
-            }
-            String key = ServiceKeys.serviceGroup(route.getServiceName(), route.getGroup());
-            DiscoverySettings.ServiceSubscribeSpec spec = new DiscoverySettings.ServiceSubscribeSpec();
-            spec.setServiceName(route.getServiceName());
-            spec.setGroup(route.getGroup());
-            unique.putIfAbsent(key, spec);
-        }
-        return new ArrayList<>(unique.values());
-    }
-
     static boolean hasStaticUpstream(RouteProperties route) {
-        if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
-            return true;
-        }
-        if (route.getTargetUrls() != null) {
-            for (String raw : route.getTargetUrls()) {
-                if (raw != null && !raw.isBlank()) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        return StaticUpstreamCluster.hasRawTargets(route.getTargetUrl(), route.getTargetUrls());
     }
 
     static List<String> copyTargetUrls(List<String> source) {
@@ -205,16 +175,5 @@ final class GatewayConfigMapper {
             }
         }
         return copy;
-    }
-
-    static String stripWeightSuffix(String raw) {
-        int bar = raw.lastIndexOf('|');
-        if (bar > 0 && bar < raw.length() - 1) {
-            String maybeWeight = raw.substring(bar + 1).trim();
-            if (maybeWeight.chars().allMatch(Character::isDigit)) {
-                return raw.substring(0, bar).trim();
-            }
-        }
-        return raw;
     }
 }

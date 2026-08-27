@@ -315,7 +315,7 @@
                             <div class="comp-head"><strong>环境</strong><span class="card-hint">当前运行参数快照</span></div>
                             <div class="comp-kv" v-if="gatewayData">
                                 <div title="网关对外监听端口"><span>Gateway 端口</span>{{ gatewayData.port }}</div>
-                                <div title="实例从哪来：NAMESERVER=注册中心，STATIC=配置写死"><span>发现</span>{{ gatewayData.discoveryType }}</div>
+                                <div title="实例从哪来：STATIC=配置写死，其它=注册中心（Nameserver/Nacos）"><span>发现</span>{{ gatewayData.discoveryType }}</div>
                                 <div title="当前生效的路由条数"><span>路由</span>{{ gatewayData.routeCount }}</div>
                                 <div title="多实例时怎么挑上游"><span>LB</span>{{ gatewayData.loadBalanceStrategy }}</div>
                                 <div title="等上游回包的最长时间，超时会记「累计超时」"><span>超时</span>{{ gatewayData.requestTimeoutMillis }}ms</div>
@@ -592,21 +592,27 @@
                 <label>stripPrefix</label>
                 <input v-model="routeForm.stripPrefix" placeholder="/api/demo">
             </div>
-            <div class="field" v-if="discoveryType === 'NAMESERVER'">
+            <div class="field" v-if="dynamicDiscovery">
+                <label>上游从哪来</label>
+                <select v-model="routeForm.upstreamKind" class="nice-select">
+                    <option v-for="opt in routeUpstreamOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+                </select>
+            </div>
+            <div class="field" v-if="showDiscoveryFields">
                 <label>serviceName *</label>
                 <input v-model="routeForm.serviceName" placeholder="demo-service">
             </div>
-            <div class="field" v-if="discoveryType !== 'NAMESERVER'">
+            <div class="field" v-if="showDiscoveryFields">
+                <label>group</label>
+                <input v-model="routeForm.group" placeholder="可选">
+            </div>
+            <div class="field" v-if="showStaticFields">
                 <label>targetUrl</label>
                 <input v-model="routeForm.targetUrl" placeholder="http://127.0.0.1:8081">
             </div>
-            <div class="field" v-if="discoveryType !== 'NAMESERVER'">
+            <div class="field" v-if="showStaticFields">
                 <label>targetUrls（多机，可带|权重）</label>
                 <input v-model="routeForm.targetUrls" placeholder="http://127.0.0.1:8081,http://127.0.0.1:8082|200">
-            </div>
-            <div class="field">
-                <label>group</label>
-                <input v-model="routeForm.group" placeholder="可选">
             </div>
         </div>
         <div class="form-actions">

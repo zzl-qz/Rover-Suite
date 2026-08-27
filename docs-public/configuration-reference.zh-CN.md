@@ -50,6 +50,11 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.discovery.nameserver.address` | `127.0.0.1:8888` | Nameserver TCP 地址 | 重启 |
 | `rover.gateway.discovery.nameserver.reconcileIntervalMs` | `30000` | 本地实例缓存周期对账间隔 | 重启 |
 | `rover.gateway.discovery.nameserver.token` | 空 | Gateway 访问 Nameserver 的协议 token | 重启 |
+| `rover.gateway.discovery.nacos.serverAddr` | `127.0.0.1:8848` | Nacos 地址；`discovery.type=nacos` 时必填。需 `-Pnacos` 或自行加入 adapter | 重启 |
+| `rover.gateway.discovery.nacos.namespace` | 空 | 命名空间 ID。public 请留空，不要填 `public` | 重启 |
+| `rover.gateway.discovery.nacos.username` | 空 | Nacos 登录用户名；未开鉴权留空 | 重启 |
+| `rover.gateway.discovery.nacos.password` | 空 | Nacos 登录密码；未开鉴权留空 | 重启 |
+| `rover.gateway.discovery.nacos.timeoutMs` | `3000` | Naming 请求超时（毫秒） | 重启 |
 | `rover.gateway.filters.enabled` | `true` | Filter 启动总开关 | 重启；运行时另见下表 |
 | `rover.gateway.filters.pluginDir` | `plugins` | Filter/LoadBalancer JAR 目录 | 重启 |
 | `rover.gateway.filters.accessLog` | `true` | 是否装配访问日志过滤器；内容为 debug（默认 INFO 不刷屏） | 重启 |
@@ -66,7 +71,7 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.circuitBreaker.openSeconds` | `10` | 打开后休息秒数，范围 1~3600 | 重启 |
 | `rover.gateway.circuitBreaker.recovery` | `all` | `all`=到期全开；`half`=只发一个探测 | 重启 |
 | `rover.gateway.retry.enabled` | `false` | 连不上时换下一台；只救还没发出去的连接失败 | 重启 |
-| `rover.gateway.rewrite.stripPrefix` | 空 | 全局重写前缀 | 重启 |
+| `rover.gateway.rewrite.stripPrefix` | 空 | 全局重写前缀；建议留空，改写写在每条路由上，避免新路由继承 `/api` | 重启 |
 | `rover.gateway.cors.enabled` | `false`（代码默认）/ 示例为 `true` | CORS 开关 | 重启 |
 | `rover.gateway.cors.allowedOrigins` | `[]` | 允许的来源；`*` 仅建议开发环境 | 重启 |
 | `rover.gateway.cors.allowedMethods` | `[]` | 允许的 HTTP 方法 | 重启 |
@@ -92,9 +97,8 @@ Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（
 ### 路由字段
 
 `rover.gateway.routes` 是路由数组，不是单值配置。每项支持：`id`、`businessPrefix`、`serviceName`、`group`、
-`targetUrl`、`targetUrls`、`stripPrefix`。动态发现填写 `serviceName`（可配 `group`）；静态模式填写
-`targetUrl` 或 `targetUrls`。`targetUrls` 的元素可使用 `http://host:port|weight` 指定权重。默认 `outbound=netty` 时上游必须是 `http://`。写入 `https://` 会在启动或热更新时被拒绝，避免配置通过、请求才失败；若上游确实是 HTTPS，先把 `proxy.outbound` 设为 `jdk` 再重启。Admin 保存的路由会写入
-`config/routes.overlay.json`，并整体替换启动 YAML 中的路由列表。
+`targetUrl`、`targetUrls`、`stripPrefix`。一条路由二选一：`serviceName`（可配 `group`）走注册中心，或 `targetUrl`/`targetUrls` 走静态地址。整机 `discovery.type` 是 `nameserver`/`nacos` 时，个别路由仍可只写静态地址。不要在同一条上两套都写。`targetUrls` 的元素可使用 `http://host:port|weight` 指定权重。默认 `outbound=netty` 时上游必须是 `http://`。写入 `https://` 会在启动或热更新时被拒绝，避免配置通过、请求才失败；若上游确实是 HTTPS，先把 `proxy.outbound` 设为 `jdk` 再重启。Admin 保存的路由会写入
+`config/routes.overlay.json`，并整体替换启动 YAML 中的路由列表。Nacos 整机示例见 `deploy/docker/config/rover-gateway-nacos.yml`。
 
 ## Gateway 运行时配置
 

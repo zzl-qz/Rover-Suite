@@ -376,8 +376,7 @@ public class GatewayRuntime {
 
     /** 动态发现模式下，对路由里出现的 serviceName 补订 watch。 */
     private void watchServices(List<RouteConfig> routes) {
-        if ((discoveryType != DiscoveryType.NAMESERVER && discoveryType != DiscoveryType.NACOS)
-                || serviceDiscovery == null) {
+        if (!discoveryType.usesServiceDiscovery() || serviceDiscovery == null) {
             return;
         }
         for (RouteConfig route : routes) {
