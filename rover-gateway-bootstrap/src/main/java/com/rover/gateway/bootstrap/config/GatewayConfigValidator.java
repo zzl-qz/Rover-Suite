@@ -12,6 +12,7 @@ import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
+import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -188,28 +189,35 @@ final class GatewayConfigValidator {
                     + route.getBusinessPrefix());
         }
 
-        if (discoveryType == DiscoveryType.STATIC) {
-            if (!GatewayConfigMapper.hasStaticUpstream(route)) {
-                throw new IllegalStateException(
-                        "static 模式下需要 targetUrl 或 targetUrls，businessPrefix="
-                                + route.getBusinessPrefix());
-            }
+        boolean staticUpstream = GatewayConfigMapper.hasStaticUpstream(route);
+        boolean namedService = route.getServiceName() != null && !route.getServiceName().isBlank();
+        if (staticUpstream && namedService) {
+            throw new IllegalStateException(
+                    "一条路由不能同时写 serviceName 和 targetUrl/targetUrls，businessPrefix="
+                            + route.getBusinessPrefix());
+        }
+        if (staticUpstream) {
             String outbound = config.getProxyOutboundOrDefault();
             if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
-                validateTargetUrl(GatewayConfigMapper.stripWeightSuffix(route.getTargetUrl()), outbound);
+                validateTargetUrl(StaticUpstreamCluster.stripWeightSuffix(route.getTargetUrl()), outbound);
             }
             if (route.getTargetUrls() != null) {
                 for (String raw : route.getTargetUrls()) {
                     if (raw != null && !raw.isBlank()) {
-                        validateTargetUrl(GatewayConfigMapper.stripWeightSuffix(raw.trim()), outbound);
+                        validateTargetUrl(StaticUpstreamCluster.stripWeightSuffix(raw.trim()), outbound);
                     }
                 }
             }
-        } else {
-            if (route.getServiceName() == null || route.getServiceName().isBlank()) {
-                throw new IllegalStateException("动态发现模式下 serviceName 不能为空，businessPrefix="
-                        + route.getBusinessPrefix());
+        } else if (discoveryType.usesServiceDiscovery()) {
+            if (!namedService) {
+                throw new IllegalStateException(
+                        "请写 serviceName，或改成静态地址 targetUrl/targetUrls，businessPrefix="
+                                + route.getBusinessPrefix());
             }
+        } else {
+            throw new IllegalStateException(
+                    "static 模式下需要 targetUrl 或 targetUrls，businessPrefix="
+                            + route.getBusinessPrefix());
         }
 
         validateStripPrefix(config.resolveStripPrefix(route), route.getBusinessPrefix());

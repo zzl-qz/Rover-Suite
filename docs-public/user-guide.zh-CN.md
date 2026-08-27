@@ -112,6 +112,12 @@ rover:
 `round_robin`、`random`、`weighted_round_robin`、`ip_hash`、`least_connections` 五种负载均衡策略。
 当前静态上游只使用 URL 的 scheme、host 与 port；避免在 `targetUrl` / `targetUrls` 中配置基路径，路径变换统一使用路由的 `stripPrefix`。
 
+整机只选一种注册中心：`static` / `nameserver` / `nacos`。选了 `nameserver` 或 `nacos` 后，个别路由仍可只写 `targetUrls`，不必再开一个静态网关。一条路由不要同时写 `serviceName` 和 `targetUrl`/`targetUrls`。
+
+Nacos 发现需要 `-Pnacos` 打包，示例见 [`deploy/docker/config/rover-gateway-nacos.yml`](../deploy/docker/config/rover-gateway-nacos.yml)。整机静态见 [`deploy/docker/config/rover-gateway-static.yml`](../deploy/docker/config/rover-gateway-static.yml)。
+
+默认 classpath 的 `rover-gateway.yml` 不再叠三种场景注释。全局 `rewrite.stripPrefix` 建议留空，前缀改写写在每条路由上，避免新路由忘写时继承 `/api`。
+
 ### 上游 HTTP 与 HTTPS
 
 默认出站是 Netty，只转发 `http://` 上游。浏览器或调用方的 HTTPS 请在 Gateway 前面的反向代理上终止，Gateway 到业务服务走内网 HTTP。
@@ -136,12 +142,12 @@ routes:
 | :--- | :--- |
 | `id` | 唯一路由标识 |
 | `businessPrefix` | 匹配入站请求的路径前缀 |
-| `serviceName` | 动态发现时的 Nameserver 服务名 |
+| `serviceName` | 走注册中心时的服务名 |
 | `group` | 可选分组过滤；当前版本多组推送隔离仍在完善，建议留空 |
 | `targetUrls` | 静态路由的固定上游列表 |
 | `stripPrefix` | 转发前移除的前缀；设为 `""` 保留完整路径 |
 
-一条路由通常根据当前发现模式二选一使用 `serviceName` 或 `targetUrls`。
+一条路由二选一：写 `serviceName` 走注册中心，或写 `targetUrls` 走静态地址。动态模式下可以混这两种路由，但不能写在同一条上。
 
 ## 6. 注册服务提供方
 

@@ -1,5 +1,9 @@
 /** 路由管理页。 */
 window.RoverAdminPages = window.RoverAdminPages || {};
+const EMPTY_ROUTE_FORM = {
+    id: '', businessPrefix: '', serviceName: '', targetUrl: '', targetUrls: '', group: '', stripPrefix: '',
+    upstreamKind: 'discovery',
+};
 window.RoverAdminPages.routes = {
     data() {
         return {
@@ -8,11 +12,24 @@ window.RoverAdminPages.routes = {
             savingRoute: false,
             editingPrefix: null,
             routeDrawerOpen: false,
-            routeForm: { id: '', businessPrefix: '', serviceName: '', targetUrl: '', targetUrls: '', group: '', stripPrefix: '' },
+            routeForm: { ...EMPTY_ROUTE_FORM },
         };
     },
 
-    computed: {},
+    computed: {
+        routeUpstreamOptions() {
+            return [
+                { label: '注册中心（服务名）', value: 'discovery' },
+                { label: '静态地址', value: 'static' },
+            ];
+        },
+        showDiscoveryFields() {
+            return this.dynamicDiscovery && this.routeForm.upstreamKind === 'discovery';
+        },
+        showStaticFields() {
+            return !this.dynamicDiscovery || this.routeForm.upstreamKind === 'static';
+        },
+    },
 
     methods: {
         async fetchRoutes() {
@@ -24,12 +41,16 @@ window.RoverAdminPages.routes = {
             }
         },
         resetRouteForm() {
-            this.routeForm = { id: '', businessPrefix: '', serviceName: '', targetUrl: '', targetUrls: '', group: '', stripPrefix: '' };
+            this.routeForm = {
+                ...EMPTY_ROUTE_FORM,
+                upstreamKind: this.dynamicDiscovery ? 'discovery' : 'static',
+            };
             this.editingPrefix = null;
         },
         openRouteDrawer(route) {
             if (route) {
                 this.editingPrefix = route.businessPrefix;
+                const hasStatic = Boolean(route.targetUrl || route.targetUrls);
                 this.routeForm = {
                     id: route.id || '',
                     businessPrefix: route.businessPrefix || '',
@@ -38,6 +59,7 @@ window.RoverAdminPages.routes = {
                     targetUrls: route.targetUrls || '',
                     group: route.group || '',
                     stripPrefix: route.stripPrefix || '',
+                    upstreamKind: hasStatic ? 'static' : (this.dynamicDiscovery ? 'discovery' : 'static'),
                 };
             } else {
                 this.resetRouteForm();
@@ -54,16 +76,37 @@ window.RoverAdminPages.routes = {
                 this.toast('error', 'businessPrefix 必填');
                 return;
             }
-            if (this.discoveryType === 'NAMESERVER' && !form.serviceName) {
-                this.toast('error', '动态模式需要填写 serviceName');
-                return;
+            const payload = {
+                id: form.id,
+                businessPrefix: form.businessPrefix,
+                stripPrefix: form.stripPrefix,
+                group: form.group,
+                serviceName: '',
+                targetUrl: '',
+                targetUrls: '',
+            };
+            if (this.showDiscoveryFields) {
+                if (!form.serviceName) {
+                    this.toast('error', '请填服务名');
+                    return;
+                }
+                payload.serviceName = form.serviceName;
+                payload.group = form.group;
+            } else {
+                if (!form.targetUrl && !form.targetUrls) {
+                    this.toast('error', '请填静态地址');
+                    return;
+                }
+                payload.group = '';
+                payload.targetUrl = form.targetUrl;
+                payload.targetUrls = form.targetUrls;
             }
             this.savingRoute = true;
             try {
                 const result = await RoverAdminApi.api('/api/routes', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(form),
+                    body: JSON.stringify(payload),
                 });
                 this.toast('success', result.message || '路由已保存并热生效');
                 this.closeRouteDrawer();

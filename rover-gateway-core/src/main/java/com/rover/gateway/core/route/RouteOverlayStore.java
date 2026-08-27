@@ -72,24 +72,37 @@ public class RouteOverlayStore {
             if (path.getParent() != null) {
                 Files.createDirectories(path.getParent());
             }
-            List<Map<String, Object>> rows = new ArrayList<>();
-            for (RouteConfig route : routes) {
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put(RouteField.ID.jsonName(), nullToEmpty(route.getId()));
-                row.put(RouteField.BUSINESS_PREFIX.jsonName(), nullToEmpty(route.getBusinessPrefix()));
-                row.put(RouteField.TARGET_URL.jsonName(), nullToEmpty(route.getTargetUrl()));
-                row.put(RouteField.TARGET_URLS.jsonName(), joinTargetUrls(route.getTargetUrls()));
-                row.put(RouteField.SERVICE_NAME.jsonName(), nullToEmpty(route.getServiceName()));
-                row.put(RouteField.GROUP.jsonName(), nullToEmpty(route.getGroup()));
-                row.put(RouteField.STRIP_PREFIX.jsonName(), nullToEmpty(route.getStripPrefix()));
-                rows.add(row);
-            }
+            List<Map<String, Object>> rows = toRows(routes);
             // 落盘用缩进 JSON，方便人眼看；解析不挑格式
             Files.writeString(path, JsonCodec.toPrettyJson(rows), StandardCharsets.UTF_8);
             log.info("路由已写入覆盖文件: {}", path.toAbsolutePath());
         } catch (IOException ex) {
             throw new IllegalStateException("写入路由覆盖文件失败: " + path.toAbsolutePath(), ex);
         }
+    }
+
+    /** 管理口和 overlay 落盘共用同一套字段。 */
+    public static List<Map<String, Object>> toRows(List<RouteConfig> routes) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        if (routes == null) {
+            return rows;
+        }
+        for (RouteConfig route : routes) {
+            rows.add(toRow(route));
+        }
+        return rows;
+    }
+
+    public static Map<String, Object> toRow(RouteConfig route) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put(RouteField.ID.jsonName(), nullToEmpty(route.getId()));
+        row.put(RouteField.BUSINESS_PREFIX.jsonName(), nullToEmpty(route.getBusinessPrefix()));
+        row.put(RouteField.TARGET_URL.jsonName(), nullToEmpty(route.getTargetUrl()));
+        row.put(RouteField.TARGET_URLS.jsonName(), joinTargetUrls(route.getTargetUrls()));
+        row.put(RouteField.SERVICE_NAME.jsonName(), nullToEmpty(route.getServiceName()));
+        row.put(RouteField.GROUP.jsonName(), nullToEmpty(route.getGroup()));
+        row.put(RouteField.STRIP_PREFIX.jsonName(), nullToEmpty(route.getStripPrefix()));
+        return row;
     }
 
     /** 把 JSON 行列表转成 RouteConfig 列表。 */

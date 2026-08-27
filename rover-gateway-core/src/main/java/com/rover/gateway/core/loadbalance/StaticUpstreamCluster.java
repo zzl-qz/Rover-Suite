@@ -69,9 +69,24 @@ public final class StaticUpstreamCluster {
         return "static:" + route.getBusinessPrefix();
     }
 
-    /** 是否配置了至少一个静态上游。 */
-    public static boolean hasUpstreams(RouteConfig route) {
-        return !resolve(route).isEmpty();
+    /** 配置里有没有写上游地址（还不解析）。 */
+    public static boolean hasRawTargets(RouteConfig route) {
+        return route != null && hasRawTargets(route.getTargetUrl(), route.getTargetUrls());
+    }
+
+    public static boolean hasRawTargets(String targetUrl, List<String> targetUrls) {
+        if (targetUrl != null && !targetUrl.isBlank()) {
+            return true;
+        }
+        if (targetUrls == null) {
+            return false;
+        }
+        for (String raw : targetUrls) {
+            if (raw != null && !raw.isBlank()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -120,18 +135,19 @@ public final class StaticUpstreamCluster {
         out.add(instance);
     }
 
+    /** 校验/展示用：剥掉 |weight，地址部分原样留下。 */
+    public static String stripWeightSuffix(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        return splitWeight(raw).url();
+    }
+
     /** 解析 http://host:port 或 http://host:port|weight。 */
     static ParsedEndpoint parse(String raw) {
-        String urlPart = raw;
-        int weight = ServiceInstance.DEFAULT_WEIGHT;
-        int bar = raw.lastIndexOf('|');
-        if (bar > 0 && bar < raw.length() - 1) {
-            String maybeWeight = raw.substring(bar + 1).trim();
-            if (maybeWeight.chars().allMatch(Character::isDigit)) {
-                urlPart = raw.substring(0, bar).trim();
-                weight = Math.max(1, Integer.parseInt(maybeWeight));
-            }
-        }
+        WeightSplit split = splitWeight(raw);
+        String urlPart = split.url();
+        int weight = split.weight();
         try {
             URI uri = URI.create(urlPart);
             String scheme = uri.getScheme();
@@ -174,5 +190,21 @@ public final class StaticUpstreamCluster {
     }
 
     record ParsedEndpoint(String scheme, String host, int port, int weight, String baseUrl) {
+    }
+
+    private static WeightSplit splitWeight(String raw) {
+        int bar = raw.lastIndexOf('|');
+        if (bar > 0 && bar < raw.length() - 1) {
+            String maybeWeight = raw.substring(bar + 1).trim();
+            if (!maybeWeight.isEmpty() && maybeWeight.chars().allMatch(Character::isDigit)) {
+                return new WeightSplit(
+                        raw.substring(0, bar).trim(),
+                        Math.max(1, Integer.parseInt(maybeWeight)));
+            }
+        }
+        return new WeightSplit(raw, ServiceInstance.DEFAULT_WEIGHT);
+    }
+
+    private record WeightSplit(String url, int weight) {
     }
 }

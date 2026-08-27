@@ -72,9 +72,10 @@ overlapping prefixes before changing a route.
 
 ![Route editor](images/admin/06-route-editor.png)
 
-Dynamic discovery routes use `serviceName`; static routes use `targetUrl` or
-`targetUrls`. `stripPrefix` controls which matched path is removed before the
-request reaches the upstream.
+In dynamic discovery, pick registry or static address first. Registry routes
+use `serviceName`; static routes use `targetUrl` or `targetUrls`. Do not keep
+both on one route. `stripPrefix` is removed before the request reaches the
+upstream; set it per route instead of relying on global `rewrite.stripPrefix`.
 
 ### Instances
 

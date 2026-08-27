@@ -261,12 +261,16 @@ multi-`group` push boundaries. Changes to registry snapshots, push, or the Gatew
 `start`, `getInstances`, `ensureWatch`, and `close`. Keep remote watches/reconciliation in the background and make
 `getInstances` a fast local-cache read because it participates in the request path.
 
-This interface is not currently a drop-in plugin. Adding a registry requires source changes at least in:
+This interface is not a `plugins/` drop-in. `static` uses a no-op client; every other type is resolved by
+[`ServiceDiscoveryLoader`](../rover-gateway-core/src/main/java/com/rover/gateway/core/discovery/ServiceDiscoveryLoader.java)
+through ServiceLoader. The Nameserver factory lives in core; Nacos ships in the optional adapter.
+Do not add Redis discovery: Redis has no official naming protocol, so register/pull/evict would be homegrown.
+Add a new type only when a real registry already has a discovery protocol:
 
-1. [`DiscoveryType`](../rover-gateway-core/src/main/java/com/rover/gateway/core/discovery/DiscoveryType.java) and the configuration mapping.
-2. [`GatewayHttpServer#createServiceDiscovery`](../rover-gateway-core/src/main/java/com/rover/gateway/core/server/GatewayHttpServer.java) or a new dedicated factory.
-3. Lifecycle, cache, reconnect/watch, and reconciliation tests.
-4. User and deployment documentation.
+1. Add a [`DiscoveryType`](../rover-gateway-core/src/main/java/com/rover/gateway/core/discovery/DiscoveryType.java) value and map its config.
+2. Implement `ServiceDiscoveryFactory` and register it in `META-INF/services`.
+3. Cover lifecycle, cache, reconnect/watch, and reconciliation.
+4. Update user and deployment docs.
 
 `NACOS` is provided by the optional `rover-gateway-adapter-nacos` module. Build the Gateway with `-Pnacos` or add
 the adapter dependency yourself. It provides service discovery only; Nacos Config and service registration are out

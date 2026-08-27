@@ -24,7 +24,7 @@ public class RouteConfig {
     /** 静态多上游，元素支持 http://host:port 或 http://host:port|weight。 */
     private List<String> targetUrls = new ArrayList<>();
 
-    /** 动态模式下的服务名，配合 Nameserver 发现实例 */
+    /** 动态模式下的服务名，配合注册中心发现实例 */
     private String serviceName;
 
     /** 动态模式下的分组，可空表示默认组 */
@@ -32,4 +32,19 @@ public class RouteConfig {
 
     /** 转发前去前缀规则，如 /api/user 会被剥掉再拼到后端 */
     private String stripPrefix;
+
+    /** 除根路径外去掉尾斜杠，避免 /api 和 /api/ 当成两条规则。 */
+    public static String normalizePrefix(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        while (normalized.length() > 1 && normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
 }

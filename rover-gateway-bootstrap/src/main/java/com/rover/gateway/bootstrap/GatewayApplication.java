@@ -3,15 +3,10 @@ package com.rover.gateway.bootstrap;
 import com.rover.gateway.bootstrap.config.GatewayConfig;
 import com.rover.gateway.bootstrap.config.GatewayConfigLoader;
 import com.rover.gateway.core.discovery.DiscoverySettings;
-import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteOverlayStore;
 import com.rover.gateway.core.server.GatewayHttpServer;
-import com.rover.common.util.ServiceKeys;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -43,12 +38,10 @@ public class GatewayApplication {
             log.info("Admin 管理面已关闭，使用 YAML 路由, routeCount={}", routes.size());
         }
 
-        // 加载注册中心
-        // todo 这里后续改成工厂模式，然后支持多种注册中心比较好
         DiscoverySettings discoverySettings = config.toDiscoverySettings();
-        if (discoverySettings.getType() == DiscoveryType.NAMESERVER
-                || discoverySettings.getType() == DiscoveryType.NACOS) {
-            discoverySettings.setSubscribeServices(subscribeSpecsFrom(routes));
+        if (discoverySettings.getType().usesServiceDiscovery()) {
+            // overlay 之后的最终路由才订阅，Mapper 不再提前扫一遍 YAML
+            discoverySettings.setSubscribeServices(DiscoverySettings.subscribeSpecsFrom(routes));
         }
         log.info("discovery.type={}, routeCount={}", discoverySettings.getType(), routes.size());
 
@@ -84,21 +77,5 @@ public class GatewayApplication {
 
         Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown, "gateway-shutdown"));
         server.start();
-    }
-
-    /** 从路由中提取待订阅的 Nameserver 服务（去重）。 */
-    private static List<DiscoverySettings.ServiceSubscribeSpec> subscribeSpecsFrom(List<RouteConfig> routes) {
-        Map<String, DiscoverySettings.ServiceSubscribeSpec> unique = new LinkedHashMap<>();
-        for (RouteConfig route : routes) {
-            if (route.getServiceName() == null || route.getServiceName().isBlank()) {
-                continue;
-            }
-            String key = ServiceKeys.serviceGroup(route.getServiceName(), route.getGroup());
-            DiscoverySettings.ServiceSubscribeSpec spec = new DiscoverySettings.ServiceSubscribeSpec();
-            spec.setServiceName(route.getServiceName());
-            spec.setGroup(route.getGroup());
-            unique.putIfAbsent(key, spec);
-        }
-        return new ArrayList<>(unique.values());
     }
 }

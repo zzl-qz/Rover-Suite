@@ -9,9 +9,7 @@ import com.rover.common.security.StrictSecurity;
 import com.rover.common.security.TokenAuth;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
-import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
-import com.rover.gateway.core.discovery.NoopServiceDiscovery;
-import com.rover.gateway.core.discovery.ServiceDiscoveryFactory;
+import com.rover.gateway.core.discovery.ServiceDiscoveryLoader;
 import com.rover.common.spi.discovery.ServiceDiscovery;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.filter.FilterSettings;
@@ -30,7 +28,6 @@ import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
 import java.util.List;
-import java.util.ServiceLoader;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -96,7 +93,7 @@ public class GatewayHttpServer {
         this(port, List.of(), GatewayDefaults.MAX_REQUEST_BODY_BYTES,
                 HttpProxyClient.DEFAULT_CONNECT_TIMEOUT_MILLIS,
                 HttpProxyClient.DEFAULT_REQUEST_TIMEOUT_MILLIS,
-                new FilterSettings(), defaultStaticDiscovery());
+                new FilterSettings(), DiscoverySettings.staticDefaults());
     }
 
     /** 指定端口和初始路由表构造。 */
@@ -104,7 +101,7 @@ public class GatewayHttpServer {
         this(port, routes, GatewayDefaults.MAX_REQUEST_BODY_BYTES,
                 HttpProxyClient.DEFAULT_CONNECT_TIMEOUT_MILLIS,
                 HttpProxyClient.DEFAULT_REQUEST_TIMEOUT_MILLIS,
-                new FilterSettings(), defaultStaticDiscovery());
+                new FilterSettings(), DiscoverySettings.staticDefaults());
     }
 
     /** 指定端口、路由、body 上限和代理超时。 */
@@ -116,7 +113,7 @@ public class GatewayHttpServer {
             int requestTimeoutMillis,
             FilterSettings filterSettings) {
         this(port, routes, maxContentLengthBytes, connectTimeoutMillis, requestTimeoutMillis,
-                filterSettings, defaultStaticDiscovery());
+                filterSettings, DiscoverySettings.staticDefaults());
     }
 
     /** 全参数构造，组装 GatewayRuntime 并加载配置 overlay。 */
@@ -232,8 +229,9 @@ public class GatewayHttpServer {
         this.maxContentLengthBytes = maxContentLengthBytes;
         this.corsSettings = corsSettings == null ? new CorsSettings() : corsSettings;
         this.dispatchOnEventLoop = dispatchOnEventLoop;
-        DiscoverySettings settings = discoverySettings == null ? defaultStaticDiscovery() : discoverySettings;
-        this.serviceDiscovery = createServiceDiscovery(settings);
+        DiscoverySettings settings = discoverySettings == null
+                ? DiscoverySettings.staticDefaults() : discoverySettings;
+        this.serviceDiscovery = ServiceDiscoveryLoader.load(settings);
 
         String lbStrategy = loadBalanceStrategy == null || loadBalanceStrategy.isBlank()
                 ? LoadBalancer.ROUND_ROBIN
@@ -379,29 +377,5 @@ public class GatewayHttpServer {
             log.warn("关闭服务发现失败", ex);
         }
         runtime.close();
-    }
-
-    /** 按 discovery.type 创建对应的 ServiceDiscovery 实现。 */
-    private static ServiceDiscovery createServiceDiscovery(DiscoverySettings settings) {
-        if (settings.getType() == DiscoveryType.NAMESERVER) {
-            return new NameserverServiceDiscovery(settings);
-        }
-        if (settings.getType() != DiscoveryType.STATIC) {
-            for (ServiceDiscoveryFactory factory : ServiceLoader.load(ServiceDiscoveryFactory.class)) {
-                if (factory.type() == settings.getType()) {
-                    return factory.create(settings);
-                }
-            }
-            throw new IllegalStateException(
-                    "未找到 discovery.type=" + settings.getType() + " 的适配器，请确认对应模块已加入 classpath");
-        }
-        return new NoopServiceDiscovery();
-    }
-
-    /** 返回 type=STATIC 的默认发现配置。 */
-    private static DiscoverySettings defaultStaticDiscovery() {
-        DiscoverySettings settings = new DiscoverySettings();
-        settings.setType(DiscoveryType.STATIC);
-        return settings;
     }
 }

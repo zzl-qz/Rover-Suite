@@ -79,6 +79,23 @@ class StaticUpstreamClusterTest {
     }
 
     @Test
+    void hasRawTargetsLooksAtBlankOnly() {
+        assertEquals(false, StaticUpstreamCluster.hasRawTargets(null, null));
+        assertEquals(true, StaticUpstreamCluster.hasRawTargets("http://127.0.0.1:1", List.of()));
+        assertEquals(true, StaticUpstreamCluster.hasRawTargets("  ", List.of("http://127.0.0.1:1")));
+        assertEquals(false, StaticUpstreamCluster.hasRawTargets("  ", List.of("  ")));
+    }
+
+    @Test
+    void stripWeightSuffixKeepsBareUrl() {
+        assertEquals("http://127.0.0.1:8081",
+                StaticUpstreamCluster.stripWeightSuffix("http://127.0.0.1:8081|200"));
+        assertEquals("http://127.0.0.1:8081",
+                StaticUpstreamCluster.stripWeightSuffix("http://127.0.0.1:8081"));
+        assertEquals(null, StaticUpstreamCluster.stripWeightSuffix(null));
+    }
+
+    @Test
     void rebuildEmptyDropsOldSnapshot() {
         RouteConfig route = new RouteConfig();
         route.setId("gone");

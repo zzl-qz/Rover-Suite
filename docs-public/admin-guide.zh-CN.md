@@ -70,9 +70,10 @@ Gateway 的记录和内存开销也越大。
 
 编辑时最重要的是：
 
-- 动态发现模式填写 `serviceName`，由 Nameserver 提供实例。
-- 静态模式填写 `targetUrl` 或 `targetUrls`，并确认目标网络可达。
-- `stripPrefix` 决定转发给上游时是否移除匹配前缀。
+- 动态发现时先选「注册中心」或「静态地址」。选注册中心填 `serviceName`；选静态地址填 `targetUrl` / `targetUrls`。
+- 整机是 `static` 时只填静态地址。
+- 同一条路由不要两套字段都留着。
+- `stripPrefix` 决定转发给上游时是否移除匹配前缀。建议每条自己写，不要依赖全局 `rewrite.stripPrefix`。
 
 ### 4. 实例管理：确认 Nameserver 是否有可用后端
 

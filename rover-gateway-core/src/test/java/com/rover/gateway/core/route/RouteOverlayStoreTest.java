@@ -23,6 +23,8 @@ class RouteOverlayStoreTest {
         route.setGroup("blue");
         route.setStripPrefix("/api");
 
+        assertEquals("http://127.0.0.1:8081|2", RouteOverlayStore.toRow(route).get(RouteField.TARGET_URLS.jsonName()));
+
         RouteOverlayStore store = new RouteOverlayStore(tempDir.resolve("routes.json"));
         store.save(List.of(route));
         RouteConfig loaded = store.loadOrEmpty().get(0);

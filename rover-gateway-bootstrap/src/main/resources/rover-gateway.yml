@@ -1,19 +1,19 @@
+# 整个网关只连一种注册中心：static / nameserver / nacos。
+# 选了 nameserver 或 nacos 后，个别路由仍可只写 targetUrls，走静态地址。
+# 一条路由不要同时写 serviceName 和 targetUrl。
+# 整机静态：deploy/docker/config/rover-gateway-static.yml
+# Nacos：先 -Pnacos 打包，再看 deploy/docker/config/rover-gateway-nacos.yml
 rover:
   gateway:
     port: 80
-    # Admin 管理面：false 时不开放 /_manage/**，也不读取 config/*-overlay.json；只使用本 YAML。
+    # false 时不开放 /_manage/**，也不读 overlay，只认本 YAML
     adminEnabled: true
-    # 管理口鉴权 token：非空时，访问 /_manage/** 必须带 X-Rover-Admin-Token 请求头
-    # 留空 = 关闭管理口鉴权（本地方便；bindHost=0.0.0.0 时等同裸奔，启动会 WARN）
-    # 生产务必设置非空 token，或把 bindHost 收紧到 127.0.0.1 / 内网
+    # 非空时访问 /_manage/** 必须带 X-Rover-Admin-Token。留空=不鉴权（生产不要这样）
     adminToken: ""
     server:
       maxContentLengthBytes: 1048576
-      # 监听地址：默认 0.0.0.0；可收紧到 127.0.0.1 或内网 IP
       bindHost: 0.0.0.0
-      # 默认 false：业务 Handler 走线程池，跟 EventLoop 收发包分开。确认无阻塞才改 true
       dispatchOnEventLoop: false
-      # auto=Linux 用 Epoll（Docker Linux 容器里一般是这个）、macOS 上直接跑进程用 KQueue，没有原生库退 NIO。也可写死 nio/epoll/kqueue
       ioTransport: auto
     metrics:
       enabled: true
@@ -23,59 +23,40 @@ rover:
       slowThresholdMillis: 100
       sampleRate: 0.0
     proxy:
-      # netty=出站走 Netty（默认，只转发 http 上游）。jdk=第一版 JDK HttpClient，对照/回滚用；它自带 TLS，上游必须 https 时可以切过去
+      # netty 只转发 http 上游；上游必须 https 时改 jdk
       outbound: netty
       connectTimeoutMillis: 3000
       requestTimeoutMillis: 30000
     filters:
       enabled: true
       pluginDir: plugins
-      # 访问日志：true=装配过滤器并打 debug（默认 INFO 不刷屏）；false=不装配
       accessLog: true
-      # 显式加载外部 Filter：无需 META-INF/services SPI 声明。
       classes: []
-    # 本地限流：按 Gateway 实例执行，不访问注册中心或外部存储，默认关闭
     rateLimit:
       enabled: false
-      # token_bucket 支持突发流量；sliding_window 边界更平滑
       algorithm: token_bucket
-      # global=全实例；path=按请求路径
       key: path
       permitsPerSecond: 1000
       burst: 2000
       limit: 1000
       windowSeconds: 1
-    # 进程内熔断：按上游 host:port 连续失败计数，默认关。不挡回包，全健康时只读一个整数
     circuitBreaker:
       enabled: false
       failureThreshold: 5
       openSeconds: 10
-      # all=休息到点大家都能打；half=只放行 1 个探测
       recovery: all
-    # 连不上换下一台。只救还没发出去的连接失败，默认关。业务 5xx / 超时不换
     retry:
       enabled: false
-    # 负载均衡（静态多 IP / Nameserver 动态实例共用）
-    # round_robin | random | weighted_round_robin | ip_hash | least_connections
-    # 也可填自定义类全名，或 plugins 里 SPI 的 name()
     loadbalance:
-       strategy: round_robin
-      # SPI name 方式：demo_highest_port
-      # 类路径方式：不需要 META-INF/services，直接填实现类全限定名
-      # strategy: org.example.rover.DemoHighestPortLoadBalancer
-    # static: 静态多 IP，不连 Nameserver；nameserver: 读下面配置订阅动态实例
-    # 两种模式共用同一套 LB 策略，测试时二选一（注释/取消注释即可切换）
+      strategy: round_robin
     discovery:
       type: nameserver
       nameserver:
         address: 127.0.0.1:8888
         reconcileIntervalMs: 30000
-        # 连接 Nameserver 订阅/查询时携带的协议 token；与服务端 token 保持一致，留空=不鉴权
         token: ""
-    # 跨域（CORS）：前端 dev server 等异源页面访问网关时需要开启
     cors:
       enabled: true
-      # 允许的来源；* 表示任意（开发联调用），生产建议列明具体地址
       allowedOrigins:
         - "*"
       allowedMethods:
@@ -85,45 +66,21 @@ rover:
         - DELETE
         - PATCH
         - OPTIONS
-      # * 表示任意请求头
       allowedHeaders:
         - "*"
-      # 是否允许携带凭证（Cookie/Authorization）；开启后响应回显具体 Origin 而非 *
       credentials: false
-      # 预检结果缓存秒数
       maxAgeSeconds: 1800
-    rewrite:
-      stripPrefix: /api
     routes:
-      # ===== 场景一：nameserver 动态发现（discovery.type=nameserver 生效）=====
-      # 后端 demo-service 接口自带 /api 前缀（/api/hello 等），网关匹配后透传、不剥前缀
-      # 测试：GET http://localhost/api/hello
+      # 动态：按服务名找实例。demo 自带 /api 前缀，所以不剥
       - id: demo-api
         businessPrefix: /api
         serviceName: demo-service
         stripPrefix: ""
 
-      # ===== 场景二：静态多上游（discovery.type=static 生效，演示负载均衡）=====
-      # 访问 /api/static/api/hello，网关剥掉 /api/static 后转发 /api/hello 给后端
-      # 两个后端（8081、8082|200）按 LB 策略轮询
+      # 动态模式下夹一条静态也可以，取消注释即可
       # - id: static-demo-api
       #   businessPrefix: /api/static
       #   targetUrls:
       #     - http://127.0.0.1:8081
       #     - http://127.0.0.1:8082|200
       #   stripPrefix: /api/static
-
-      # ===== 场景三：Nacos 服务发现 =====
-      # discovery:
-      #   type: nacos
-      #   nacos:
-      #     serverAddr: 127.0.0.1:8848
-      #     namespace: public
-      #     username: nacos
-      #     password: nacos
-      # routes:
-      #   - id: nacos-demo-api
-      #     businessPrefix: /api/nacos
-      #     serviceName: demo-service
-      #     group: DEFAULT_GROUP
-      #     stripPrefix: /api/nacos

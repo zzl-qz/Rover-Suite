@@ -9,7 +9,6 @@ import com.rover.common.config.ConfigValues;
 import com.rover.common.json.JsonCodec;
 import com.rover.common.manage.AbstractManageApi;
 import com.rover.gateway.core.route.RouteConfig;
-import com.rover.gateway.core.route.RouteField;
 import com.rover.gateway.core.route.RouteOverlayStore;
 import com.rover.gateway.core.runtime.GatewayRuntime;
 import io.netty.channel.ChannelHandlerContext;
@@ -221,23 +220,7 @@ public class GatewayManageApi extends AbstractManageApi {
 
     /** 把 RouteConfig 列表转成 Map 行，供 JSON 序列化。 */
     private List<Map<String, Object>> routeMaps(List<RouteConfig> routes) {
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (RouteConfig route : routes) {
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put(RouteField.ID.jsonName(), nullToEmpty(route.getId()));
-            row.put(RouteField.BUSINESS_PREFIX.jsonName(), nullToEmpty(route.getBusinessPrefix()));
-            row.put(RouteField.TARGET_URL.jsonName(), nullToEmpty(route.getTargetUrl()));
-            row.put(
-                    RouteField.TARGET_URLS.jsonName(),
-                    route.getTargetUrls() == null || route.getTargetUrls().isEmpty()
-                            ? ""
-                            : String.join(",", route.getTargetUrls()));
-            row.put(RouteField.SERVICE_NAME.jsonName(), nullToEmpty(route.getServiceName()));
-            row.put(RouteField.GROUP.jsonName(), nullToEmpty(route.getGroup()));
-            row.put(RouteField.STRIP_PREFIX.jsonName(), nullToEmpty(route.getStripPrefix()));
-            rows.add(row);
-        }
-        return rows;
+        return RouteOverlayStore.toRows(routes);
     }
 
     /** 取 query 参数第一个值。 */

@@ -54,6 +54,11 @@ a VPN in production.
 | `rover.gateway.discovery.nameserver.address` | `127.0.0.1:8888` | Nameserver TCP address | Restart |
 | `rover.gateway.discovery.nameserver.reconcileIntervalMs` | `30000` | Local-cache reconciliation interval | Restart |
 | `rover.gateway.discovery.nameserver.token` | empty | Gateway-to-Nameserver protocol token | Restart |
+| `rover.gateway.discovery.nacos.serverAddr` | `127.0.0.1:8848` | Nacos address; required when `discovery.type=nacos`. Build with `-Pnacos` or add the adapter yourself | Restart |
+| `rover.gateway.discovery.nacos.namespace` | empty | Namespace ID. Leave empty for public; do not set `public` | Restart |
+| `rover.gateway.discovery.nacos.username` | empty | Nacos username; leave empty when auth is off | Restart |
+| `rover.gateway.discovery.nacos.password` | empty | Nacos password; leave empty when auth is off | Restart |
+| `rover.gateway.discovery.nacos.timeoutMs` | `3000` | Naming request timeout in milliseconds | Restart |
 | `rover.gateway.filters.enabled` | `true` | Startup filter switch | Restart; runtime key below |
 | `rover.gateway.filters.pluginDir` | `plugins` | Filter/LoadBalancer JAR directory | Restart |
 | `rover.gateway.filters.accessLog` | `true` | Assemble access-log filter; logs at debug | Restart |
@@ -92,8 +97,9 @@ A 503 response includes `X-Rover-Reject-Reason`: `INFLIGHT_LIMIT` (in-flight gat
 
 `rover.gateway.routes` is an array. Each item supports `id`, `businessPrefix`,
 `serviceName`, `group`, `targetUrl`, `targetUrls`, and `stripPrefix`. Dynamic
-discovery uses `serviceName` (and optionally `group`); static routes use
-`targetUrl` or `targetUrls`. A `targetUrls` item may use
+discovery uses `serviceName` (and optionally `group`); a route may also use
+`targetUrl` or `targetUrls` even when `discovery.type` is `nameserver` or
+`nacos`. Do not set both kinds on one route. A `targetUrls` item may use
 `http://host:port|weight`. Default `outbound=netty` accepts `http://` only.
 Startup and hot-reload reject `https://` so a config cannot pass and then fail on the first request.
 If the upstream is really HTTPS, set `proxy.outbound` to `jdk` and restart.

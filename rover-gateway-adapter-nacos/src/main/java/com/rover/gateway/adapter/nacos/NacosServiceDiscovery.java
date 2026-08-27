@@ -10,8 +10,10 @@ import com.rover.common.util.ServiceKeys;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -46,15 +48,15 @@ public final class NacosServiceDiscovery implements ServiceDiscovery, ServiceDis
 
     /** 测试用构造：注入客户端工厂，避免单元测试依赖真实 Nacos。 */
     NacosServiceDiscovery(DiscoverySettings settings, NacosClientFactory clientFactory) {
-        this.settings = java.util.Objects.requireNonNull(settings, "settings");
-        this.clientFactory = java.util.Objects.requireNonNull(clientFactory, "clientFactory");
+        this.settings = Objects.requireNonNull(settings, "settings");
+        this.clientFactory = Objects.requireNonNull(clientFactory, "clientFactory");
         this.subscribeServices = new CopyOnWriteArrayList<>(
                 settings.getSubscribeServices() == null ? List.of() : settings.getSubscribeServices());
     }
 
     /** 连接 Nacos，并订阅启动时配置的服务。重复启动不会重复创建客户端。 */
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!started.compareAndSet(false, true)) {
             return;
         }
@@ -73,18 +75,23 @@ public final class NacosServiceDiscovery implements ServiceDiscovery, ServiceDis
         }
     }
 
-    /** 返回指定服务的本地快照；Nacos 暂时不可用时保留最近一次结果。 */
+    /**
+     * 返回指定服务的本地快照。优先健康实例；全不健康时退回全部缓存，和 Nameserver 发现一致。
+     * Nacos 暂时不可用时保留最近一次结果。
+     */
     @Override
     public List<ServiceInstance> getInstances(String serviceName, String group) {
-        List<ServiceInstance> instances = snapshots.get(ServiceKeys.serviceGroup(serviceName, group));
-        if (instances == null || instances.isEmpty()) {
+        List<ServiceInstance> cached = snapshots.get(ServiceKeys.serviceGroup(serviceName, group));
+        if (cached == null || cached.isEmpty()) {
             return List.of();
         }
-        List<ServiceInstance> copy = new ArrayList<>(instances.size());
-        for (ServiceInstance instance : instances) {
-            copy.add(copyOf(instance));
+        List<ServiceInstance> healthy = new ArrayList<>(cached.size());
+        for (ServiceInstance instance : cached) {
+            if (instance != null && instance.isHealthy()) {
+                healthy.add(instance);
+            }
         }
-        return Collections.unmodifiableList(copy);
+        return healthy.isEmpty() ? cached : List.copyOf(healthy);
     }
 
     /** 动态追加服务订阅；已订阅的 service/group 不会重复订阅。 */
@@ -94,8 +101,14 @@ public final class NacosServiceDiscovery implements ServiceDiscovery, ServiceDis
             return;
         }
         String key = ServiceKeys.serviceGroup(serviceName, group);
+        if (subscriptions.containsKey(key)) {
+            return;
+        }
         for (DiscoverySettings.ServiceSubscribeSpec spec : subscribeServices) {
             if (key.equals(ServiceKeys.serviceGroup(spec.getServiceName(), spec.getGroup()))) {
+                if (started.get()) {
+                    subscribeOne(serviceName, group);
+                }
                 return;
             }
         }
@@ -114,27 +127,33 @@ public final class NacosServiceDiscovery implements ServiceDiscovery, ServiceDis
             return;
         }
         String key = ServiceKeys.serviceGroup(serviceName, group);
+        EventListener listener = event -> {
+            if (event instanceof NamingEvent namingEvent) {
+                replace(key, serviceName, group, namingEvent.getInstances());
+            }
+        };
+        Subscription subscription = new Subscription(serviceName, groupOrDefault(group), listener);
+        if (subscriptions.putIfAbsent(key, subscription) != null) {
+            return;
+        }
         try {
-            EventListener listener = event -> {
-                if (event instanceof NamingEvent namingEvent) {
-                    replace(key, group, namingEvent.getInstances());
-                }
-            };
             client.subscribe(serviceName, groupOrDefault(group), listener);
-            subscriptions.put(key, new Subscription(serviceName, groupOrDefault(group), listener));
-            replace(key, group, client.getAllInstances(serviceName, groupOrDefault(group)));
+            replace(key, serviceName, group, client.getAllInstances(serviceName, groupOrDefault(group)));
         } catch (Exception ex) {
+            subscriptions.remove(key, subscription);
             subscribeFailures.increment();
             log.warn("Nacos 订阅服务失败: serviceName={}, group={}", serviceName, group, ex);
         }
     }
 
     /** 将 Nacos 实例列表转换成 Gateway 统一的 ServiceInstance 快照并原子替换。 */
-    private void replace(String key, String group, List<Instance> instances) {
+    private void replace(String key, String serviceName, String group, List<Instance> instances) {
+        if (!started.get()) {
+            return;
+        }
         if (instances == null || instances.isEmpty()) {
             snapshots.put(key, List.of());
-            snapshotUpdates.increment();
-            lastSnapshotUpdatedAtMillis.set(System.currentTimeMillis());
+            markSnapshotUpdated();
             return;
         }
         List<ServiceInstance> mapped = new ArrayList<>(instances.size());
@@ -143,7 +162,7 @@ public final class NacosServiceDiscovery implements ServiceDiscovery, ServiceDis
                 continue;
             }
             ServiceInstance target = new ServiceInstance();
-            target.setServiceName(source.getServiceName());
+            target.setServiceName(serviceName);
             target.setHost(source.getIp());
             target.setPort(source.getPort());
             target.setInstanceId(source.getInstanceId());
@@ -156,6 +175,10 @@ public final class NacosServiceDiscovery implements ServiceDiscovery, ServiceDis
             mapped.add(target);
         }
         snapshots.put(key, Collections.unmodifiableList(mapped));
+        markSnapshotUpdated();
+    }
+
+    private void markSnapshotUpdated() {
         snapshotUpdates.increment();
         lastSnapshotUpdatedAtMillis.set(System.currentTimeMillis());
     }
@@ -163,7 +186,7 @@ public final class NacosServiceDiscovery implements ServiceDiscovery, ServiceDis
     /** 返回 Nacos 连接、订阅和快照状态，供 Gateway Admin 与指标导出使用。 */
     @Override
     public Map<String, Object> status() {
-        Map<String, Object> status = new java.util.LinkedHashMap<>();
+        Map<String, Object> status = new LinkedHashMap<>();
         status.put("started", started.get());
         status.put("connected", client != null && client.isConnected());
         status.put("subscriptions", subscriptions.size());
@@ -220,26 +243,9 @@ public final class NacosServiceDiscovery implements ServiceDiscovery, ServiceDis
         }
     }
 
-    /** 复制统一实例对象，避免调用方修改本地发现快照。 */
-    private static ServiceInstance copyOf(ServiceInstance source) {
-        ServiceInstance copy = new ServiceInstance();
-        copy.setServiceName(source.getServiceName());
-        copy.setHost(source.getHost());
-        copy.setPort(source.getPort());
-        copy.setInstanceId(source.getInstanceId());
-        copy.setRegisterTime(source.getRegisterTime());
-        copy.setHealthy(source.isHealthy());
-        copy.setWeight(source.getWeight());
-        copy.setGroup(source.getGroup());
-        copy.setZone(source.getZone());
-        copy.setEphemeral(source.isEphemeral());
-        copy.setMetadata(source.getMetadata() == null ? Map.of() : Map.copyOf(source.getMetadata()));
-        return copy;
-    }
-
     /** 停止 Nacos 客户端并清理本地快照与订阅状态。 */
     @Override
-    public void close() {
+    public synchronized void close() {
         started.set(false);
         closeNamingService();
         snapshots.clear();
