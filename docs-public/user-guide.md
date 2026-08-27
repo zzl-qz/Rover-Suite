@@ -120,6 +120,19 @@ strategies: `round_robin`, `random`, `weighted_round_robin`, `ip_hash`, and `lea
 Static upstreams currently use only the URL scheme, host, and port. Do not put a base path in `targetUrl` or
 `targetUrls`; express path transformation with the route's `stripPrefix`.
 
+The process uses one registry: `static`, `nameserver`, or `nacos`. After
+`nameserver` or `nacos`, a route may still use only `targetUrls`. Do not set
+both `serviceName` and `targetUrl`/`targetUrls` on the same route.
+
+Nacos needs a `-Pnacos` build; see
+[`deploy/docker/config/rover-gateway-nacos.yml`](../deploy/docker/config/rover-gateway-nacos.yml).
+Whole-process static config is
+[`deploy/docker/config/rover-gateway-static.yml`](../deploy/docker/config/rover-gateway-static.yml).
+
+The default classpath `rover-gateway.yml` is one nameserver scene, not three
+commented stacks. Leave global `rewrite.stripPrefix` empty and set rewrite on
+each route so a new route does not inherit `/api`.
+
 ### Upstream HTTP and HTTPS
 
 Default outbound is Netty and forwards `http://` upstreams only. Terminate client HTTPS at a reverse proxy in
@@ -153,7 +166,8 @@ routes:
 | `targetUrls` | Fixed upstream list for a static route |
 | `stripPrefix` | Prefix removed before proxying; use `""` to preserve the full path |
 
-A route should normally use either `serviceName` or `targetUrls`, according to the selected discovery mode.
+A route uses either `serviceName` (registry) or `targetUrls` (static). Dynamic
+mode may mix those route kinds, but not on the same route.
 
 ## 6. Register providers
 

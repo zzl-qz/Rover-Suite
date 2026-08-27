@@ -53,33 +53,44 @@ public class RouteValidator {
         if (!prefixes.add(route.getBusinessPrefix())) {
             throw new IllegalArgumentException("businessPrefix 重复: " + route.getBusinessPrefix());
         }
-        if (discoveryType == DiscoveryType.STATIC) {
-            if (!StaticUpstreamCluster.hasUpstreams(route)) {
+        boolean staticUpstream = StaticUpstreamCluster.hasRawTargets(route);
+        boolean namedService = route.getServiceName() != null && !route.getServiceName().isBlank();
+        if (staticUpstream && namedService) {
+            throw new IllegalArgumentException(
+                    "一条路由不能同时写 serviceName 和 targetUrl/targetUrls: " + route.getBusinessPrefix());
+        }
+        if (staticUpstream) {
+            validateStaticUpstream(route);
+        } else if (discoveryType.usesServiceDiscovery()) {
+            if (!namedService) {
                 throw new IllegalArgumentException(
-                        "static 模式需要 targetUrl 或 targetUrls: " + route.getBusinessPrefix());
+                        "请写 serviceName，或改成静态地址 targetUrl/targetUrls: " + route.getBusinessPrefix());
             }
-            // resolve 会解析并校验地址；再对原始配置校验，错误信息更直观
-            List<ServiceInstance> staticInstances = StaticUpstreamCluster.resolve(route);
-            if (staticInstances.isEmpty()) {
-                throw new IllegalArgumentException(
-                        "static 模式没有合法上游: " + route.getBusinessPrefix());
-            }
-            if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
-                validateTargetUrl(stripWeight(route.getTargetUrl()));
-            }
-            if (route.getTargetUrls() != null) {
-                for (String raw : route.getTargetUrls()) {
-                    if (raw != null && !raw.isBlank()) {
-                        validateTargetUrl(stripWeight(raw.trim()));
-                    }
-                }
-            }
-        } else if (route.getServiceName() == null || route.getServiceName().isBlank()) {
-            throw new IllegalArgumentException("nameserver 模式 serviceName 不能为空: " + route.getBusinessPrefix());
+        } else {
+            throw new IllegalArgumentException(
+                    "static 模式需要 targetUrl 或 targetUrls: " + route.getBusinessPrefix());
         }
         if (route.getStripPrefix() != null && !route.getStripPrefix().isBlank()) {
             if (!route.getStripPrefix().startsWith("/")) {
                 throw new IllegalArgumentException("stripPrefix 必须以 / 开头");
+            }
+        }
+    }
+
+    private void validateStaticUpstream(RouteConfig route) {
+        List<ServiceInstance> staticInstances = StaticUpstreamCluster.resolve(route);
+        if (staticInstances.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "静态上游没有合法地址: " + route.getBusinessPrefix());
+        }
+        if (route.getTargetUrl() != null && !route.getTargetUrl().isBlank()) {
+            validateTargetUrl(StaticUpstreamCluster.stripWeightSuffix(route.getTargetUrl()));
+        }
+        if (route.getTargetUrls() != null) {
+            for (String raw : route.getTargetUrls()) {
+                if (raw != null && !raw.isBlank()) {
+                    validateTargetUrl(StaticUpstreamCluster.stripWeightSuffix(raw.trim()));
+                }
             }
         }
     }
@@ -103,11 +114,11 @@ public class RouteValidator {
     private static RouteConfig copyRoute(RouteConfig route) {
         RouteConfig copy = new RouteConfig();
         copy.setId(trimToNull(route.getId()));
-        copy.setBusinessPrefix(normalizePrefix(route.getBusinessPrefix()));
+        copy.setBusinessPrefix(RouteConfig.normalizePrefix(route.getBusinessPrefix()));
         copy.setTargetUrl(trimToNull(route.getTargetUrl()));
         copy.setServiceName(trimToNull(route.getServiceName()));
         copy.setGroup(trimToNull(route.getGroup()));
-        copy.setStripPrefix(normalizePrefix(route.getStripPrefix()));
+        copy.setStripPrefix(RouteConfig.normalizePrefix(route.getStripPrefix()));
         List<String> urls = new ArrayList<>();
         if (route.getTargetUrls() != null) {
             for (String raw : route.getTargetUrls()) {
@@ -121,34 +132,11 @@ public class RouteValidator {
         return copy;
     }
 
-    private static String stripWeight(String raw) {
-        int bar = raw.lastIndexOf('|');
-        if (bar > 0 && bar < raw.length() - 1) {
-            String maybeWeight = raw.substring(bar + 1).trim();
-            if (maybeWeight.chars().allMatch(Character::isDigit)) {
-                return raw.substring(0, bar).trim();
-            }
-        }
-        return raw;
-    }
-
     private static String trimToNull(String value) {
         if (value == null) {
             return null;
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
-    }
-
-    /** 路由前缀除根路径外统一去掉尾斜杠，避免 /api 与 /api/ 产生不同匹配语义。 */
-    private static String normalizePrefix(String value) {
-        String normalized = trimToNull(value);
-        if (normalized == null) {
-            return null;
-        }
-        while (normalized.length() > 1 && normalized.endsWith("/")) {
-            normalized = normalized.substring(0, normalized.length() - 1);
-        }
-        return normalized;
     }
 }

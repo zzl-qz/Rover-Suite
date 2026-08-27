@@ -79,6 +79,10 @@ window.RoverAdminPages.shared = {
         },
         gatewayData() { return this.status.gateway ? this.status.gateway.data : null; },
         nameserverData() { return this.status.nameserver ? this.status.nameserver.data : null; },
+        dynamicDiscovery() {
+            const type = this.discoveryType;
+            return Boolean(type) && type !== 'STATIC' && type !== 'UNKNOWN';
+        },
         selfcheckOk() { return Boolean(this.selfcheck && this.selfcheck.ok); },
         selfcheckText() {
             if (!this.selfcheck) return '自洽校验尚未拉取';
@@ -101,62 +105,7 @@ window.RoverAdminPages.shared = {
                 this.toasts = this.toasts.filter(t => t.id !== id);
             }, 3200);
         },
-        num(v) {
-            if (v === null || v === undefined) return '0';
-            if (typeof v === 'number') {
-                return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
-            }
-            return String(v);
-        },
-        fmtTime(millis) {
-            if (!millis) return '-';
-            const d = new Date(millis);
-            const pad = n => String(n).padStart(2, '0');
-            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-        },
-        fmtSecond(epochSecond) {
-            const d = new Date(epochSecond * 1000);
-            const pad = n => String(n).padStart(2, '0');
-            return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-        },
-        fmtFullTime(millis) { return this.fmtTime(millis); },
-        fmtUptime(seconds) {
-            if (seconds === null || seconds === undefined) return '-';
-            const s = Number(seconds);
-            if (s < 60) return Math.floor(s) + 's';
-            if (s < 3600) return Math.floor(s / 60) + 'm ' + Math.floor(s % 60) + 's';
-            const h = Math.floor(s / 3600);
-            const m = Math.floor((s % 3600) / 60);
-            return (h >= 24 ? Math.floor(h / 24) + 'd ' : '') + (h % 24) + 'h ' + m + 'm';
-        },
-        fmtHeap(jvm) {
-            if (!jvm) return '-';
-            return (jvm.heapUsedPercent || 0).toFixed(1) + '%';
-        },
-        fmtCpu(jvm) {
-            if (!jvm || jvm.processCpuPercent === undefined) return '-';
-            return Number(jvm.processCpuPercent).toFixed(1) + '%';
-        },
-        idleText(millis) {
-            if (!millis) return '-';
-            const sec = Math.max(0, Math.floor((Date.now() - millis) / 1000));
-            if (sec < 5) return '刚刚';
-            if (sec < 60) return sec + 's';
-            return Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
-        },
-        /** 纵轴好看的上限：峰值 * 1.15 再取 1/2/5×10^n，避免贴顶和假「上限 5」。 */
-        niceCeil(value) {
-            if (!value || value <= 0) return 1;
-            const target = value * 1.15;
-            const exp = Math.floor(Math.log10(target));
-            const f = Math.pow(10, exp);
-            const n = target / f;
-            let nice = 10;
-            if (n <= 1) nice = 1;
-            else if (n <= 2) nice = 2;
-            else if (n <= 5) nice = 5;
-            return Math.ceil(nice * f);
-        },
+        ...RoverAdminFormatters,
         switchPage(page) {
             this.page = page;
             this.refreshAll();

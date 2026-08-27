@@ -36,6 +36,13 @@ class RouteMatcherTest {
         assertEquals("api", new RouteMatcher(List.of(api)).match("/api").getId());
     }
 
+    @Test
+    void normalizePrefixStripsTrailingSlashExceptRoot() {
+        assertEquals("/api", RouteConfig.normalizePrefix("/api/"));
+        assertEquals("/", RouteConfig.normalizePrefix("/"));
+        assertNull(RouteConfig.normalizePrefix("  "));
+    }
+
     private static RouteConfig route(String id, String prefix) {
         RouteConfig config = new RouteConfig();
         config.setId(id);

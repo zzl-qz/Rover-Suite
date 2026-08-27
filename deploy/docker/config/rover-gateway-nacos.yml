@@ -1,0 +1,35 @@
+# Nacos 发现示例。Gateway 必须用 -Pnacos 打包，否则启动会说找不到 NACOS 适配器。
+# public 命名空间请把 namespace 留空，不要填 public。
+rover:
+  gateway:
+    port: 80
+    adminEnabled: true
+    adminToken: ""
+    server:
+      bindHost: 0.0.0.0
+    proxy:
+      outbound: netty
+      connectTimeoutMillis: 3000
+      requestTimeoutMillis: 30000
+    filters:
+      enabled: true
+      pluginDir: plugins
+      accessLog: true
+    loadbalance:
+      strategy: round_robin
+    discovery:
+      type: nacos
+      nacos:
+        serverAddr: 127.0.0.1:8848
+        namespace: ""
+        username: ""
+        password: ""
+        timeoutMs: 3000
+    cors:
+      enabled: false
+    routes:
+      - id: nacos-demo-api
+        businessPrefix: /api/nacos
+        serviceName: demo-service
+        group: DEFAULT_GROUP
+        stripPrefix: /api/nacos

@@ -1,4 +1,4 @@
-/** 纯格式化函数（页面方法里也有同名拷贝，保证 this.num 等可用）。 */
+/** 数字/时间格式化。shared.js 会 spread 进 Vue methods，模板里 this.num 照旧能用。 */
 function num(v) {
     if (v === null || v === undefined) return '0';
     if (typeof v === 'number') {
