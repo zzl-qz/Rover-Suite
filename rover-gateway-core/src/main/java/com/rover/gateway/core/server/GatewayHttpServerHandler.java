@@ -82,12 +82,16 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        // head
         if (msg instanceof HttpRequest request) {
             onHeaders(ctx, request);
         }
+        // body
         if (msg instanceof HttpContent content) {
+            // FullHttpRequest 就单独去除body加上前面的head凑一下
             if (msg instanceof HttpRequest) {
                 // FullHttpRequest 同时是 LastHttpContent。管道只拿 body 副本，别把整包 release 掉。
+                // 其实这里不拷贝也行，但是后续想用的时候会报错，防御一手
                 ByteBuf data = content.content();
                 HttpContent copy = data.readableBytes() == 0
                         ? LastHttpContent.EMPTY_LAST_CONTENT
