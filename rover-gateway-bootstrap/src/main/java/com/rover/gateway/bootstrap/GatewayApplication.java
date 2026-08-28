@@ -38,6 +38,7 @@ public class GatewayApplication {
             log.info("Admin 管理面已关闭，使用 YAML 路由, routeCount={}", routes.size());
         }
 
+        // 服务发现配置
         DiscoverySettings discoverySettings = config.toDiscoverySettings();
         if (discoverySettings.getType().usesServiceDiscovery()) {
             // overlay 之后的最终路由才订阅，Mapper 不再提前扫一遍 YAML
