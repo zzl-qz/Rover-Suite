@@ -62,6 +62,7 @@ public class CorsSettings {
 
     /** 拼接 Access-Control-Allow-Methods。 */
     public String joinAllowedMethods() {
+        // 为空默认允许所有
         if (allowedMethods == null || allowedMethods.isEmpty()) {
             return String.join(", ", List.of(
                     HttpConstants.METHOD_GET,
