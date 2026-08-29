@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Rover-Suite 系统架构",
+    "locale": "zh-CN",
+    "subtitle": "请求数据面、服务发现控制面与可选管理面",
+    "output": "rover-suite-architecture-editorial.html",
+    "visual_preset": "editorial",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "request-plane",
+        "label": "请求数据面",
+        "focus": ["client", "gateway_server", "filter_chain", "route_proxy", "business_services"],
+        "note": "客户端请求进入 Gateway，经过保护策略和路由后代理到业务服务。"
+      },
+      {
+        "id": "discovery-plane",
+        "label": "注册发现面",
+        "focus": ["java_starter", "http_registrar", "nameserver", "registry", "gateway_cache", "route_proxy"],
+        "note": "Nameserver 统一承载 Java TCP 与跨语言 HTTP 注册；Gateway Discovery 通过推送和对账维护本地实例缓存。"
+      },
+      {
+        "id": "operations",
+        "label": "运维与扩展",
+        "focus": ["admin_console", "gateway_server", "nameserver", "nacos"],
+        "note": "Admin 管理运行时配置，Nacos 作为可选服务发现适配器接入。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "client", "type": "external", "label": "业务客户端", "sublabel": "HTTP 请求方", "pos": [40, 360], "size": [140, 68] },
+    { "id": "gateway_server", "type": "backend", "label": "Rover-Gateway", "sublabel": "Netty HTTP Server", "tag": "请求入口", "pos": [250, 360], "size": [170, 72] },
+    { "id": "filter_chain", "type": "security", "label": "FilterChain", "sublabel": "限流 · 熔断 · 重试 · 访问日志", "tag": "可插拔 SPI", "pos": [480, 360], "size": [190, 72] },
+    { "id": "route_proxy", "type": "backend", "label": "路由 / LB / 代理", "sublabel": "Route → choose instance → Proxy", "pos": [730, 360], "size": [210, 72] },
+    { "id": "business_services", "type": "backend", "label": "业务服务", "sublabel": "动态发现或静态上游", "pos": [1010, 360], "size": [170, 68] },
+    { "id": "java_starter", "type": "external", "label": "Java 服务提供方", "sublabel": "Spring Boot Starter", "pos": [40, 100], "size": [210, 68] },
+    { "id": "http_registrar", "type": "external", "label": "跨语言 Registrar", "sublabel": "Node · Python · Go · PHP · C++", "pos": [40, 205], "size": [210, 68] },
+    { "id": "nameserver", "type": "backend", "label": "Rover-Nameserver", "sublabel": "Netty TCP :8888 / HTTP :8889", "tag": "控制面核心", "pos": [300, 130], "size": [200, 76] },
+    { "id": "registry", "type": "database", "label": "注册核心", "sublabel": "Registration · in-memory", "tag": "软状态 / epoch + revision", "pos": [540, 130], "size": [220, 76] },
+    { "id": "gateway_cache", "type": "database", "label": "Gateway Discovery", "sublabel": "订阅 · Query · 本地缓存", "tag": "请求热路径只读实例", "pos": [820, 130], "size": [190, 76] },
+    { "id": "admin_console", "type": "frontend", "label": "Admin 控制台", "sublabel": "可选 Spring Boot 管理面", "pos": [40, 500], "size": [210, 68] },
+    { "id": "nacos", "type": "external", "label": "Nacos", "sublabel": "可选 ServiceDiscovery 适配器", "tag": "discovery.type=nacos", "pos": [1080, 205], "size": [170, 68] }
+  ],
+  "boundaries": [
+    { "kind": "security-group", "label": "Gateway 进程", "wraps": ["gateway_server", "filter_chain", "route_proxy"], "pad": 28 },
+    { "kind": "security-group", "label": "Nameserver 进程", "wraps": ["nameserver", "registry"], "pad": 28 }
+  ],
+  "connections": [
+    { "id": "client-to-gateway", "from": "client", "to": "gateway_server", "label": "HTTP", "variant": "emphasis" },
+    { "id": "gateway-to-filters", "from": "gateway_server", "to": "filter_chain", "label": "Netty pipeline", "variant": "emphasis", "labelAt": [450, 450] },
+    { "id": "filters-to-route", "from": "filter_chain", "to": "route_proxy", "label": "route + protection", "variant": "emphasis", "labelDy": 60 },
+    { "id": "route-to-service", "from": "route_proxy", "to": "business_services", "label": "HTTP reverse proxy", "variant": "emphasis", "labelAt": [975, 450] },
+    { "id": "java-to-nameserver", "from": "java_starter", "to": "nameserver", "label": "TCP :8888 · register / heartbeat", "labelAt": [260, 55] },
+    { "id": "registrar-to-nameserver", "from": "http_registrar", "to": "nameserver", "label": "HTTP+JSON :8889 · register / heartbeat", "labelAt": [270, 285] },
+    { "id": "nameserver-to-registry", "from": "nameserver", "to": "registry", "label": "RegistrationService", "labelDy": 58 },
+    { "id": "registry-to-cache", "from": "registry", "to": "gateway_cache", "label": "snapshot push · epoch / revision", "variant": "emphasis", "labelDy": 58 },
+    { "id": "cache-to-nameserver", "from": "gateway_cache", "to": "nameserver", "label": "subscribe + periodic query", "variant": "dashed", "fromSide": "top", "toSide": "top", "via": [[915, 45], [400, 45]], "labelAt": [655, 45] },
+    { "id": "cache-to-route", "from": "gateway_cache", "to": "route_proxy", "label": "request-time local instance read", "fromSide": "bottom", "toSide": "top", "via": [[915, 250], [835, 250]], "labelAt": [885, 275] },
+    { "id": "nacos-to-cache", "from": "nacos", "to": "gateway_cache", "label": "optional event snapshots", "variant": "dashed", "fromSide": "top", "toSide": "right", "via": [[1165, 100], [1040, 100], [1040, 168]], "labelAt": [1100, 100] },
+    { "id": "admin-to-gateway", "from": "admin_console", "to": "gateway_server", "label": "HTTP /_manage", "variant": "security", "fromSide": "right", "toSide": "bottom", "via": [[280, 534], [280, 470], [335, 470]], "labelAt": [280, 582] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "核心设计", "items": ["请求数据面与注册发现控制面分离", "Gateway 请求热路径只读本地实例缓存，不逐请求查询 Nameserver"] },
+    { "dot": "emerald", "title": "发现一致性", "items": ["Nameserver 以 epoch + revision 标记快照", "Gateway 采用推送加拉取对账修复丢失或拒绝的推送"] },
+    { "dot": "rose", "title": "运行边界", "items": ["注册表是纯内存软状态，Nameserver 重启后由客户端恢复", "Admin、Nacos 和 HTTP Registrar 都是可选接入面"] }
+  ]
+}

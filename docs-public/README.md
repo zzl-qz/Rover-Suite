@@ -4,6 +4,18 @@ This is the public documentation shipped with the source repository.
 
 本目录是随源码一起发布的公开文档。若你是第一次打开项目，建议先看“最快路线”，再按具体任务查阅参考文档。
 
+<p align="center">
+  <img src="../img/rover-logo.svg" alt="Rover-Suite" width="220">
+</p>
+
+<p align="center"><strong>Gateway · Service Discovery · Runtime Admin</strong><br/>A focused, source-backed documentation set for the current single-node preview.</p>
+
+<p align="center">
+  <a href="./quick-start.md">Quick Start</a> ·
+  <a href="./architecture.md">Architecture</a> ·
+  <a href="../README.md">Project README</a>
+</p>
+
 ## Fast path / 最快路线
 
 | Step | English | 简体中文 | Goal / 目标 |
@@ -11,6 +23,27 @@ This is the public documentation shipped with the source repository.
 | 1 | [Quick Start](./quick-start.md) | [快速上手](./quick-start.zh-CN.md) | Build, start Nameserver/Gateway/Admin, and send one real request |
 | 2 | [User Guide](./user-guide.md) | [使用指南](./user-guide.zh-CN.md) | Understand routes, discovery, Admin, and current runtime boundaries |
 | 3 | [Troubleshooting](./troubleshooting.md) | [故障排查](./troubleshooting.zh-CN.md) | Fix common 404/502/registration/config issues |
+
+## Visual overview / 视觉总览
+
+The system is easiest to understand as three cooperating surfaces: the Gateway request path, the Nameserver discovery path, and the optional Admin/adapter surface.
+
+系统可以先按三个协作面理解：Gateway 请求链路、Nameserver 注册发现链路，以及可选的 Admin/适配器管理面。
+
+<p align="center">
+  <img src="./assets/rover-suite-architecture.gif" alt="Rover-Suite animated system architecture preview" width="100%">
+</p>
+
+> Animated signals cover provider registration, discovery reconciliation, request processing, and Admin control paths. If GIF playback is unavailable, use the static preview or interactive diagram below.
+> 动态信号覆盖服务注册、发现对账、请求处理和 Admin 管理链路。如果当前阅读器不播放 GIF，请使用下方的静态预览或可交互架构图。
+
+<div align="center">
+
+[Static preview / 静态预览](./assets/rover-suite-architecture.png) · [Open the interactive architecture diagram / 打开可交互架构图](./rover-suite-architecture-editorial.html)
+
+</div>
+
+> **Current status / 当前状态:** `1.0.0-SNAPSHOT` single-node preview. The guides describe released code and call out explicit boundaries such as in-memory recovery, grouped discovery, WebSocket/SSE, and client HTTPS termination.
 
 ## Choose by task / 按任务找文档
 

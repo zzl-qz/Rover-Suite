@@ -8,6 +8,18 @@
 
 ---
 
+<p align="center">
+  <img src="./assets/rover-suite-architecture.gif" alt="Rover-Suite 动态系统架构" width="100%">
+</p>
+
+> 动态信号覆盖服务注册、发现对账、请求处理和 Admin 管理链路。如果当前阅读器不播放 GIF，请使用下方的静态预览或可交互架构图。
+
+<div align="center">
+
+[静态架构图](./assets/rover-suite-architecture.png) · [打开可交互架构图](./rover-suite-architecture-editorial.html)
+
+</div>
+
 ## 1. 概览
 
 Rover-Suite 将请求数据面与注册发现控制面分开：
@@ -62,16 +74,18 @@ flowchart TB
         direction LR
         Java["Java · Starter"] -->|"TCP · 8888"| NS["Rover-Nameserver"]
         Other["其他语言 · Registrar"] -->|"HTTP+JSON · 8889"| NS
-        NS -->|"推送 / 查询对账"| Cache["Gateway 实例缓存"]
+        NS -->|"实例快照推送"| Cache["Gateway Discovery / 本地缓存"]
+        Cache -.->|"首次查询 + 周期对账"| NS
+        Nacos["可选 Nacos 适配器"] -.->|"事件快照"| Cache
     end
 
-    Cache -.-> GW
+    Cache -.->|"请求时读取本地实例"| GW
 
     classDef edge fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
     classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
     classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
     classDef registry fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
-    class Client,Java,Other,Cache edge;
+    class Client,Java,Other,Cache,Nacos edge;
     class GW gateway;
     class Service service;
     class NS registry;
