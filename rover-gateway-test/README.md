@@ -2,8 +2,8 @@
 
 > 本目录只用于验证 Rover Gateway 与 Nameserver，不是生产业务模板。
 
-首次使用建议先按公开[快速上手](../../docs-public/quick-start.zh-CN.md)跑通单实例链路，再使用本页验证多实例与 Gateway 行为。
-如果要验证外部插件 JAR 的真实挂载，请看同级的[插件真实进程验收 Demo](../plugin-demo/README.md)。
+首次使用建议先按公开[快速上手](../docs-public/quick-start.zh-CN.md)跑通单实例链路，再使用本页验证多实例与 Gateway 行为。
+如果要验证外部插件 JAR 的真实挂载，请看公开的[插件挂载指南](../docs-public/plugin-mounting-guide.zh-CN.md)。
 
 ## 目录
 
@@ -95,4 +95,4 @@ npm run dev
 
 - 本测试使用本地空 token 配置，不是生产安全示例。
 - 如果 YAML 路由修改不生效，检查 `config/routes.overlay.json` 是否在覆盖路由列表。
-- 完整生产配置、鉴权和部署边界见[使用指南](../../docs-public/user-guide.zh-CN.md)。
+- 完整生产配置、鉴权和部署边界见[使用指南](../docs-public/user-guide.zh-CN.md)。

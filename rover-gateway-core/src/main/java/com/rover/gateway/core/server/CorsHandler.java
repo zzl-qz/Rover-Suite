@@ -46,19 +46,22 @@ public class CorsHandler extends ChannelDuplexHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        // 未开启跨域处理直接交给下一个handler
         if (!settings.isEnabled()) {
             ctx.fireChannelRead(msg);
             return;
         }
         if (msg instanceof HttpContent content) {
+            // 预检/403 已经回了，后面的 body chunk 直接丢掉
             if (Boolean.TRUE.equals(ctx.channel().attr(DRAIN_BODY).get())) {
                 boolean last = content instanceof LastHttpContent;
-                content.release();
+                content.release(); // 释放掉这个请求体
                 if (last) {
                     ctx.channel().attr(DRAIN_BODY).set(null);
                 }
                 return;
             }
+            // 正常请求体 chunk，继续交给下一个 handler
             ctx.fireChannelRead(msg);
             return;
         }
@@ -74,6 +77,7 @@ public class CorsHandler extends ChannelDuplexHandler {
             return;
         }
 
+        // 判断origin是否允许跨域
         String allowedOrigin = settings.resolveAllowedOrigin(origin);
         if (allowedOrigin == null) {
             ctx.channel().attr(DRAIN_BODY).set(Boolean.TRUE);

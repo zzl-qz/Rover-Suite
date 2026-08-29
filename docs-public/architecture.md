@@ -8,6 +8,18 @@
 
 ---
 
+<p align="center">
+  <img src="./assets/rover-suite-architecture.gif" alt="Rover-Suite animated system architecture" width="100%">
+</p>
+
+> Animated signals cover provider registration, discovery reconciliation, request processing, and Admin control paths. If GIF playback is unavailable, use the static preview or interactive diagram below.
+
+<div align="center">
+
+[Static preview](./assets/rover-suite-architecture.png) · [Open the interactive architecture diagram](./rover-suite-architecture-editorial.html)
+
+</div>
+
 ## 1. Overview
 
 Rover-Suite separates the request data plane from the registration and discovery control plane:
@@ -62,16 +74,18 @@ flowchart TB
         direction LR
         Java["Java · Starter"] -->|"TCP · 8888"| NS["Rover-Nameserver"]
         Other["Other languages · Registrar"] -->|"HTTP+JSON · 8889"| NS
-        NS -->|"Push / query reconcile"| Cache["Gateway instance cache"]
+        NS -->|"Snapshot push"| Cache["Gateway Discovery / local cache"]
+        Cache -.->|"Initial + periodic query"| NS
+        Nacos["Optional Nacos adapter"] -.->|"Event snapshots"| Cache
     end
 
-    Cache -.-> GW
+    Cache -.->|"Request-time local read"| GW
 
     classDef edge fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:1.5px;
     classDef gateway fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:2px;
     classDef service fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
     classDef registry fill:#F5F3FF,stroke:#7C3AED,color:#3B0764,stroke-width:2px;
-    class Client,Java,Other,Cache edge;
+    class Client,Java,Other,Cache,Nacos edge;
     class GW gateway;
     class Service service;
     class NS registry;
