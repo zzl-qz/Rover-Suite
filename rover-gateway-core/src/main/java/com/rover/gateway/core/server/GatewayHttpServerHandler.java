@@ -111,6 +111,8 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
             ReferenceCountUtil.release(request);
             return;
         }
+
+        // 枪锁失败说明有http请求在了
         if (!tryOccupy(ctx.channel())) {
             log.warn("Gateway reject pipelined request path={}, reason={}",
                     requestPath, HttpConstants.REJECT_CONNECTION_BUSY);
@@ -252,6 +254,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    // body太大的时候直接拒绝（这里就是开启清除操作）
     private void rejectTooLarge(ChannelHandlerContext ctx, InboundExchange exchange) {
         ctx.channel().attr(DRAIN).set(Boolean.TRUE);
         if (exchange.context != null && !exchange.context.isCompleted()) {
