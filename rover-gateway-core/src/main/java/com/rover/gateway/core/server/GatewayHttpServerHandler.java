@@ -150,7 +150,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
-        runtime.getMetricsRegistry().requestStarted();
+        runtime.getMetricsRegistry().requestStarted(); // 在途数量加1，给仪表盘使用的
         GatewayRequestContext context = new GatewayRequestContext(ctx, request, requestPath, maxBodyBytes);
         boolean traceOn = runtime.getTraceSettings().isEnabled();
         context.setTraceEnabled(traceOn);
@@ -160,6 +160,8 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         InboundExchange exchange = new InboundExchange(requestPath, request, false, context);
         ctx.channel().attr(INBOUND).set(exchange);
 
+
+        // 直接开一条Filter链去跑
         boolean handedOff = false;
         try {
             CompletableFuture<Void> chainFuture;

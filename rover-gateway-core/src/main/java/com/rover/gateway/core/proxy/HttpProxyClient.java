@@ -166,9 +166,11 @@ public class HttpProxyClient {
             String targetUrl,
             InboundBodyPipe body,
             boolean writeClientError) {
+        // netty 模式
         if (nettyClient != null) {
             return nettyClient.forwardAsync(ctx, request, targetUrl, body, writeClientError);
         }
+        // jdk 模式
         long startNanos = System.nanoTime();
         inFlight.incrementAndGet();
         return body.collectBytes().thenCompose(bytes -> {
