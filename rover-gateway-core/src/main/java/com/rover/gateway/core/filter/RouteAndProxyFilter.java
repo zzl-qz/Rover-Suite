@@ -131,7 +131,9 @@ public class RouteAndProxyFilter implements Filter {
             return CompletableFuture.completedFuture(null);
         }
 
+        // 选出一台节点并进行请求
         ChosenUpstream chosen = resolveUpstream(route, gatewayContext);
+        // 都熔断了，就直接会503就行
         if (chosen != null && chosen.circuitOpen()) {
             if (metricsRegistry != null) {
                 metricsRegistry.recordReject(HttpConstants.REJECT_CIRCUIT_OPEN);
@@ -144,6 +146,7 @@ public class RouteAndProxyFilter implements Filter {
                     HttpConstants.REJECT_CIRCUIT_OPEN);
             return CompletableFuture.completedFuture(null);
         }
+        // 没有后台
         if (chosen == null || chosen.baseUrl() == null) {
             if (metricsRegistry != null) {
                 metricsRegistry.recordReject(HttpConstants.REJECT_NO_UPSTREAM);
@@ -264,6 +267,7 @@ public class RouteAndProxyFilter implements Filter {
         return resolveUpstream(route, gatewayContext, Set.of());
     }
 
+    // 选出一台节点
     private ChosenUpstream resolveUpstream(
             RouteConfig route, GatewayRequestContext gatewayContext, Set<String> exclude) {
         if (loadBalancer == null) {

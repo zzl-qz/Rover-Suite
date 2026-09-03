@@ -103,6 +103,7 @@ final class NettyUpstreamClient {
         return forwardAsync(clientCtx, request, targetUrl, body, true);
     }
 
+    // netty模式 发送请求
     CompletableFuture<HttpProxyClient.ProxyResult> forwardAsync(
             ChannelHandlerContext clientCtx,
             HttpRequest request,
@@ -110,6 +111,8 @@ final class NettyUpstreamClient {
             InboundBodyPipe body,
             boolean writeClientError) {
         long startNanos = System.nanoTime();
+
+        // 将targetUrl解析成URI，并检查是否有host，是否是http
         URI uri;
         try {
             uri = URI.create(targetUrl);
@@ -128,6 +131,7 @@ final class NettyUpstreamClient {
                     handleError(clientCtx, err, targetUrl, startNanos, writeClientError));
         }
 
+        // 拿到ip 端口
         int port = uri.getPort() > 0 ? uri.getPort() : 80;
         EventLoop loop = outboundLoop(clientCtx);
         FixedChannelPool pool = pools.computeIfAbsent(
