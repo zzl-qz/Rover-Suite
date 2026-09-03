@@ -43,7 +43,7 @@ final class HopByHopHeaders {
     }
 
     private static boolean matches(AsciiString[] names, CharSequence name) {
-        if (name == null || name.length() == 0) {
+        if (name == null || name.isEmpty()) {
             return false;
         }
         for (AsciiString candidate : names) {
