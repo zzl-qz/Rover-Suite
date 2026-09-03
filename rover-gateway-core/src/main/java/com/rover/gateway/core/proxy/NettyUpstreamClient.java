@@ -133,10 +133,11 @@ final class NettyUpstreamClient {
 
         // 拿到ip 端口
         int port = uri.getPort() > 0 ? uri.getPort() : 80;
+        // 出站Channel不需要重新分配EventLoop，而是尝试"寄生"在入站Channel已有的EventLoop上
         EventLoop loop = outboundLoop(clientCtx);
         FixedChannelPool pool = pools.computeIfAbsent(
                 new PoolKey(loop, uri.getHost(), port),
-                key -> newPool(key));
+                key -> newPool(key)); // 第一个到的线程会进行创建这个池子
 
         inFlight.incrementAndGet();
         CompletableFuture<HttpProxyClient.ProxyResult> result = new CompletableFuture<>();
@@ -259,6 +260,7 @@ final class NettyUpstreamClient {
         return fallbackGroup;
     }
 
+    // 以后端的ip+端口为维度去创建channel池，后续每次来的时候就是尝试从里面获取，而不是重新创建
     private FixedChannelPool newPool(PoolKey key) {
         Bootstrap bootstrap = new Bootstrap()
                 .group(key.loop)
