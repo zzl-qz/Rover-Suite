@@ -4,6 +4,7 @@ import com.rover.common.constants.NameserverConstants;
 import com.rover.common.plugin.PluginSpiLoader;
 import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.config.GatewayDefaults;
+import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.FilterSettings;
@@ -49,11 +50,54 @@ public class GatewayConfig {
     }
 
     public int getConnectTimeoutMillisOrDefault() {
-        return gatewayProperties().getProxy().getConnectTimeoutMillis();
+        return GatewayDefaults.positiveOrDefault(
+                gatewayProperties().getProxy().getConnectTimeoutMillis(),
+                GatewayDefaults.CONNECT_TIMEOUT_MILLIS);
     }
 
     public int getRequestTimeoutMillisOrDefault() {
-        return gatewayProperties().getProxy().getRequestTimeoutMillis();
+        return GatewayDefaults.positiveOrDefault(
+                gatewayProperties().getProxy().getRequestTimeoutMillis(),
+                GatewayDefaults.REQUEST_TIMEOUT_MILLIS);
+    }
+
+    public int getMaxConnectionsPerEventLoopOrDefault() {
+        return GatewayDefaults.positiveOrDefault(
+                gatewayProperties().getProxy().getMaxConnectionsPerEventLoop(),
+                GatewayDefaults.MAX_CONNECTIONS_PER_EVENT_LOOP);
+    }
+
+    public int getMaxPendingAcquiresOrDefault() {
+        return GatewayDefaults.positiveOrDefault(
+                gatewayProperties().getProxy().getMaxPendingAcquires(),
+                GatewayDefaults.MAX_PENDING_ACQUIRES);
+    }
+
+    /** YAML > -D > CPU 默认。 */
+    public int getMaxInflightOrDefault() {
+        int yaml = gatewayProperties().getServer().getMaxInflight();
+        if (yaml > 0) {
+            return yaml;
+        }
+        return GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.MAX_INFLIGHT, GatewayDefaults.defaultMaxInflight());
+    }
+
+    /** 用户在 YAML 里填了正数，才写进 -D，给连接池和在途闸门读。 */
+    public void exportPositiveOverrides() {
+        putIfPositive(GatewaySystemProperties.MAX_INFLIGHT, gatewayProperties().getServer().getMaxInflight());
+        putIfPositive(
+                GatewaySystemProperties.MAX_CONNECTIONS_PER_EVENT_LOOP,
+                gatewayProperties().getProxy().getMaxConnectionsPerEventLoop());
+        putIfPositive(
+                GatewaySystemProperties.MAX_PENDING_ACQUIRES,
+                gatewayProperties().getProxy().getMaxPendingAcquires());
+    }
+
+    private static void putIfPositive(String key, int value) {
+        if (value > 0) {
+            System.setProperty(key, Integer.toString(value));
+        }
     }
 
     public String getProxyOutboundOrDefault() {
@@ -301,6 +345,8 @@ public class GatewayConfig {
         private boolean dispatchOnEventLoop = false;
         /** auto / nio / epoll / kqueue。auto 有原生库就用。 */
         private String ioTransport = "auto";
+        /** 在途闸门。0=默认 max(64, CPU×8)，也可 -Drover.gateway.maxInflight */
+        private int maxInflight;
     }
 
     @Data
@@ -309,6 +355,10 @@ public class GatewayConfig {
         private int requestTimeoutMillis = GatewayDefaults.REQUEST_TIMEOUT_MILLIS;
         /** netty=出站走 Netty；jdk=第一版 JDK HttpClient，留给对照和回滚 */
         private String outbound = "netty";
+        /** 每条 EventLoop、每个后端一个池。0=默认 64 */
+        private int maxConnectionsPerEventLoop;
+        /** 池满后排队数。0=默认 256 */
+        private int maxPendingAcquires;
     }
 
     @Data

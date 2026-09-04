@@ -1,6 +1,7 @@
 package com.rover.gateway.core.runtime;
 
 import com.rover.common.spi.filter.Filter;
+import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.config.GatewayRuntimeConfigManager;
 import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoverySettings;
@@ -105,17 +106,15 @@ public class GatewayRuntime {
     /**
      * 在途请求准入闸门（有界并发）：超过上限时快速返回 503，避免内存/上游连接被无限堆积。
      * 异步模型下在途请求不占业务线程，闸门与线程数解耦，仅用于背压保护；
-     * 默认 CPU×8（下限 64），可用 -Drover.gateway.maxInflight 覆盖。
+     * 默认 CPU×8（下限 64）。YAML server.maxInflight 或 -Drover.gateway.maxInflight 可覆盖。
      */
     private final int processingPermits = defaultProcessingPermits();
     private final Semaphore processingGate = new Semaphore(processingPermits);
 
-    /** 默认准入上限：CPU 核数 × 8，下限 64，可用 -Drover.gateway.maxInflight 覆盖。 */
+    /** YAML 启动时会写进系统属性；没写就认 -D，再没有用 CPU 默认。 */
     private static int defaultProcessingPermits() {
-        int fromProp = Integer.getInteger(GatewaySystemProperties.MAX_INFLIGHT, 0);
-        return fromProp > 0
-                ? fromProp
-                : Math.max(64, Runtime.getRuntime().availableProcessors() * 8);
+        return GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.MAX_INFLIGHT, GatewayDefaults.defaultMaxInflight());
     }
 
     /**

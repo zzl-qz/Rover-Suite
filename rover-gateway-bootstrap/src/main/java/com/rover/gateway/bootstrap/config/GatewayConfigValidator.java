@@ -36,6 +36,11 @@ final class GatewayConfigValidator {
         GatewayProperties gateway = config.gatewayProperties();
         validatePort(gateway.getPort());
         validatePositive("server.maxContentLengthBytes", config.getMaxContentLengthBytesOrDefault());
+        validateNotNegative("proxy.connectTimeoutMillis", gateway.getProxy().getConnectTimeoutMillis());
+        validateNotNegative("proxy.requestTimeoutMillis", gateway.getProxy().getRequestTimeoutMillis());
+        validateNotNegative("proxy.maxConnectionsPerEventLoop", gateway.getProxy().getMaxConnectionsPerEventLoop());
+        validateNotNegative("proxy.maxPendingAcquires", gateway.getProxy().getMaxPendingAcquires());
+        validateNotNegative("server.maxInflight", gateway.getServer().getMaxInflight());
         validatePositive("proxy.connectTimeoutMillis", config.getConnectTimeoutMillisOrDefault());
         validatePositive("proxy.requestTimeoutMillis", config.getRequestTimeoutMillisOrDefault());
         validateProxyOutbound(config.getProxyOutboundOrDefault());
@@ -87,6 +92,13 @@ final class GatewayConfigValidator {
     private static void validatePositive(String configName, int value) {
         if (value <= 0) {
             throw new IllegalStateException("Gateway 配置必须大于 0：" + configName + "=" + value);
+        }
+    }
+
+    /** 0 表示跟默认走；负数才是配错了。 */
+    private static void validateNotNegative(String configName, int value) {
+        if (value < 0) {
+            throw new IllegalStateException("Gateway 配置不能为负数：" + configName + "=" + value);
         }
     }
 

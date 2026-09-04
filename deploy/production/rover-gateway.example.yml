@@ -12,11 +12,16 @@ rover:
       bindHost: 10.0.10.12
       # auto：Linux 容器一般为 epoll。对照可写 nio。改完需重启
       # ioTransport: auto
+      # 不写或 0：默认 max(64, CPU×8)
+      # maxInflight: 256
     proxy:
       # 默认 netty 只转发 http 上游。上游必须 https 时改为 jdk（回滚路径，吞吐较低），改完需重启
       # outbound: netty
+      # 超时/连接池不写或写 0 用默认。连接池是每条 EventLoop × 每个后端，不是整机一个数字
       connectTimeoutMillis: 3000
       requestTimeoutMillis: 30000
+      # maxConnectionsPerEventLoop: 64
+      # maxPendingAcquires: 256
     filters:
       enabled: true
       pluginDir: plugins
