@@ -3,6 +3,7 @@ package com.rover.gateway.core.proxy;
 import com.rover.common.constants.HttpConstants;
 import com.rover.common.json.JsonCodec;
 import com.rover.gateway.core.config.GatewayDefaults;
+import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.server.IoTransport;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
@@ -62,10 +63,9 @@ final class NettyUpstreamClient {
     private static final AttributeKey<Exchange> EXCHANGE = AttributeKey.valueOf("rover.netty.exchange");
     private static final AttributeKey<Boolean> RESPONSE_STARTED =
             AttributeKey.valueOf("rover.proxy.responseStarted");
-    private static final int MAX_CONNECTIONS_PER_LOOP = 64;
-    private static final int MAX_PENDING_ACQUIRES = 256;
-
     private final int connectTimeoutMillis;
+    private final int maxConnectionsPerEventLoop;
+    private final int maxPendingAcquires;
     private final AtomicLong requestTimeoutMillis;
     private final AtomicInteger inFlight = new AtomicInteger();
     private final ConcurrentHashMap<PoolKey, FixedChannelPool> pools = new ConcurrentHashMap<>();
@@ -74,6 +74,14 @@ final class NettyUpstreamClient {
     NettyUpstreamClient(int connectTimeoutMillis, int requestTimeoutMillis) {
         this.connectTimeoutMillis = connectTimeoutMillis;
         this.requestTimeoutMillis = new AtomicLong(requestTimeoutMillis);
+        this.maxConnectionsPerEventLoop = GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.MAX_CONNECTIONS_PER_EVENT_LOOP,
+                GatewayDefaults.MAX_CONNECTIONS_PER_EVENT_LOOP);
+        this.maxPendingAcquires = GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.MAX_PENDING_ACQUIRES,
+                GatewayDefaults.MAX_PENDING_ACQUIRES);
+        log.info("Netty 出站连接池: maxConnectionsPerEventLoop={}, maxPendingAcquires={}",
+                maxConnectionsPerEventLoop, maxPendingAcquires);
     }
 
     int getInFlightCount() {
@@ -275,8 +283,8 @@ final class NettyUpstreamClient {
                 ChannelHealthChecker.ACTIVE,
                 FixedChannelPool.AcquireTimeoutAction.FAIL,
                 connectTimeoutMillis,
-                MAX_CONNECTIONS_PER_LOOP,
-                MAX_PENDING_ACQUIRES);
+                maxConnectionsPerEventLoop,
+                maxPendingAcquires);
     }
 
     private DefaultHttpRequest buildOutboundHeaders(
@@ -566,7 +574,6 @@ final class NettyUpstreamClient {
                         writeOn(exchange.clientCtx, LastHttpContent.EMPTY_LAST_CONTENT, true);
                         succeed(exchange, exchange.statusCode, exchange.keepAlive);
                     }
-                    return;
                 }
             } finally {
                 io.netty.util.ReferenceCountUtil.release(msg);

@@ -42,14 +42,17 @@ a VPN in production.
 | `rover.gateway.server.maxContentLengthBytes` | `1048576` | Request body limit (inbound pipe; 413 when exceeded). No `HttpObjectAggregator` | Restart |
 | `rover.gateway.server.dispatchOnEventLoop` | `false` | Run the business handler on the EventLoop. Default is the biz pool (I/O and business stay split). Set `true` only when the path is non-blocking | Restart; or `-Drover.gateway.dispatchOnEventLoop` |
 | `rover.gateway.server.ioTransport` | `auto` | Same I/O family for inbound EventLoops and outbound Channels. `auto` selects Epoll on Linux (typical in a Docker Linux container), KQueue when the process runs on macOS, and NIO if natives are missing. Pin `nio` / `epoll` / `kqueue` (falls back to NIO when unavailable) | Restart; or `-Drover.gateway.ioTransport` |
+| `rover.gateway.server.maxInflight` | `max(64, CPU×8)` | In-flight gate. Omit or `0` uses the default. Excess requests get 503 with `INFLIGHT_LIMIT` | Restart; or `-Drover.gateway.maxInflight`. A positive YAML value wins |
 | `rover.gateway.metrics.enabled` | `true` | Startup metrics switch; `false` skips inflight/record on the hot path. 503 reject counters still increment | Restart; YAML-only when Admin is off |
 | `rover.gateway.metrics.windowSeconds` | `300` | Metrics sliding window (seconds) | Restart / runtime |
 | `rover.gateway.trace.enabled` | `true` | Startup timeline switch; `false` skips `markPhase` and minted trace IDs | Restart; YAML-only when Admin is off |
 | `rover.gateway.trace.slowThresholdMillis` | `100` | Slow-request threshold | Restart / runtime |
 | `rover.gateway.trace.sampleRate` | `0.0` | Sample rate `0..1` | Restart / runtime |
 | `rover.gateway.proxy.outbound` | `netty` | Upstream HTTP client. Default `netty` forwards `http://` only. `jdk` is the first-generation JDK `HttpClient` (HTTP/1.1), kept for rollback and comparison; it includes TLS, so an `https://` upstream can use this switch. Also `-Drover.gateway.proxy.outbound` | Restart |
-| `rover.gateway.proxy.connectTimeoutMillis` | `3000` | Upstream connection timeout | Restart |
-| `rover.gateway.proxy.requestTimeoutMillis` | `30000` | Startup default for request timeout | Restart |
+| `rover.gateway.proxy.connectTimeoutMillis` | `3000` | Upstream connection timeout. Omit or `0` uses the default | Restart |
+| `rover.gateway.proxy.requestTimeoutMillis` | `30000` | Startup default for request timeout. Omit or `0` uses the default; runtime can still change `gateway.request.timeoutMillis` | Restart |
+| `rover.gateway.proxy.maxConnectionsPerEventLoop` | `64` | Max connections in each pool (one pool per EventLoop × upstream `host:port`). Omit or `0` uses the default. Rough total is this value × worker count (workers default to about CPU×2) | Restart; or `-Drover.gateway.proxy.maxConnectionsPerEventLoop` |
+| `rover.gateway.proxy.maxPendingAcquires` | `256` | Max waiters when a pool is full. Omit or `0` uses the default | Restart; or `-Drover.gateway.proxy.maxPendingAcquires` |
 | `rover.gateway.discovery.type` | `STATIC` in code / `nameserver` in example | `static`, `nameserver`, or `nacos` | Restart |
 | `rover.gateway.discovery.nameserver.address` | `127.0.0.1:8888` | Nameserver TCP address | Restart |
 | `rover.gateway.discovery.nameserver.reconcileIntervalMs` | `30000` | Local-cache reconciliation interval | Restart |
@@ -91,7 +94,7 @@ Connect-fail retry is a separate switch, also off by default. When enabled, Gate
 
 Use `rover.gateway.adminEnabled: false` when Rover-Admin is not deployed and YAML must be the sole configuration source. Gateway then skips `config/routes.overlay.json` and `config/gateway-runtime.overlay.json`, and `/_manage/**` returns `404`. This does not affect Nameserver discovery or business proxying. Existing overlay files are retained and take effect again if the flag is re-enabled.
 
-A 503 response includes `X-Rover-Reject-Reason`: `INFLIGHT_LIMIT` (in-flight gate full; default `max(64, CPU×8)`, override with `-Drover.gateway.maxInflight`), `NO_UPSTREAM` (no usable upstream), or `CIRCUIT_OPEN` (every candidate is open). Logs print `inflight=used/max`. Counts are in `/_manage/metrics` `resources.rejects` and Prometheus `rover_gateway_rejects_total`. This work runs only on the reject path.
+A 503 response includes `X-Rover-Reject-Reason`: `INFLIGHT_LIMIT` (in-flight gate full; default `max(64, CPU×8)`, override with YAML `server.maxInflight` or `-Drover.gateway.maxInflight`), `NO_UPSTREAM` (no usable upstream), or `CIRCUIT_OPEN` (every candidate is open). Logs print `inflight=used/max`. Counts are in `/_manage/metrics` `resources.rejects` and Prometheus `rover_gateway_rejects_total`. This work runs only on the reject path.
 
 ### Route fields
 

@@ -8,6 +8,8 @@ import com.rover.common.spi.discovery.ServiceDiscoveryStatus;
 import com.rover.common.config.ConfigValues;
 import com.rover.common.json.JsonCodec;
 import com.rover.common.manage.AbstractManageApi;
+import com.rover.gateway.core.config.GatewayDefaults;
+import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteOverlayStore;
 import com.rover.gateway.core.runtime.GatewayRuntime;
@@ -199,6 +201,12 @@ public class GatewayManageApi extends AbstractManageApi {
         status.put("loadBalanceStrategy", runtime.getLoadBalanceStrategy().get());
         status.put("requestTimeoutMillis", runtime.getProxyClient().getRequestTimeoutMillis());
         status.put("connectTimeoutMillis", runtime.getConnectTimeoutMillis());
+        status.put("maxConnectionsPerEventLoop", GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.MAX_CONNECTIONS_PER_EVENT_LOOP,
+                GatewayDefaults.MAX_CONNECTIONS_PER_EVENT_LOOP));
+        status.put("maxPendingAcquires", GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.MAX_PENDING_ACQUIRES,
+                GatewayDefaults.MAX_PENDING_ACQUIRES));
         status.put("maxInflight", runtime.maxInflight());
         status.put("inflightUsed", runtime.inflightUsed());
         return JsonCodec.toJson(status);

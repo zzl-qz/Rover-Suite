@@ -15,6 +15,8 @@ rover:
       bindHost: 0.0.0.0
       dispatchOnEventLoop: false
       ioTransport: auto
+      # 不写或 0：默认 max(64, CPU×8)。超限回 503
+      # maxInflight: 64
     metrics:
       enabled: true
       windowSeconds: 300
@@ -25,8 +27,11 @@ rover:
     proxy:
       # netty 只转发 http 上游；上游必须 https 时改 jdk
       outbound: netty
-      connectTimeoutMillis: 3000
-      requestTimeoutMillis: 30000
+      # 下面这些不写或写 0 都用默认。连接池按「每条 EventLoop × 每个后端」计
+      # connectTimeoutMillis: 3000
+      # requestTimeoutMillis: 30000
+      # maxConnectionsPerEventLoop: 64
+      # maxPendingAcquires: 256
     filters:
       enabled: true
       pluginDir: plugins
