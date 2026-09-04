@@ -38,14 +38,17 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.server.maxContentLengthBytes` | `1048576` | 请求体上限（入站管道计数，超限 413）。不再经过 `HttpObjectAggregator` | 重启 |
 | `rover.gateway.server.dispatchOnEventLoop` | `false` | 业务 Handler 是否留在 EventLoop。默认走业务线程池，和收发包分开。确认无阻塞才改 `true` | 重启；也可用 `-Drover.gateway.dispatchOnEventLoop` |
 | `rover.gateway.server.ioTransport` | `auto` | 入站 EventLoop 与出站 Channel 用同一套 I/O。`auto`：Linux 选 Epoll（Docker Linux 容器里一般是这个），macOS 上直接运行进程选 KQueue，原生库不可用时退 NIO。也可写死 `nio` / `epoll` / `kqueue`（不可用时退 NIO） | 重启；也可用 `-Drover.gateway.ioTransport` |
+| `rover.gateway.server.maxInflight` | `max(64, CPU×8)` | 整机在途闸门。不写或 `0` 用默认。超限 503，原因头 `INFLIGHT_LIMIT` | 重启；也可用 `-Drover.gateway.maxInflight`。YAML 正数优先 |
 | `rover.gateway.metrics.enabled` | `true` | 启动时指标总开关；`false` 热路径不记 inflight/record。503 拒绝计数仍记 | 重启；Admin 关闭时只认 YAML |
 | `rover.gateway.metrics.windowSeconds` | `300` | 指标滑动窗口（秒） | 重启 / 运行时 |
 | `rover.gateway.trace.enabled` | `true` | 启动时时间线开关；`false` 不 `markPhase`、不造 traceId | 重启；Admin 关闭时只认 YAML |
 | `rover.gateway.trace.slowThresholdMillis` | `100` | 慢请求阈值 | 重启 / 运行时 |
 | `rover.gateway.trace.sampleRate` | `0.0` | 采样率 0~1 | 重启 / 运行时 |
 | `rover.gateway.proxy.outbound` | `netty` | 出站客户端。默认 `netty` 只转发 `http://` 上游。`jdk` 是第一版 JDK `HttpClient`（强制 HTTP/1.1），主要用于回滚和对照；它自带 TLS，因此上游必须是 `https://` 时可以切过去。也可用 `-Drover.gateway.proxy.outbound` | 重启 |
-| `rover.gateway.proxy.connectTimeoutMillis` | `3000` | 上游连接超时 | 重启 |
-| `rover.gateway.proxy.requestTimeoutMillis` | `30000` | 上游请求超时的启动默认值 | 重启 |
+| `rover.gateway.proxy.connectTimeoutMillis` | `3000` | 上游连接超时。不写或 `0` 用默认 | 重启 |
+| `rover.gateway.proxy.requestTimeoutMillis` | `30000` | 上游请求超时的启动默认值。不写或 `0` 用默认；运行时还可改 `gateway.request.timeoutMillis` | 重启 |
+| `rover.gateway.proxy.maxConnectionsPerEventLoop` | `64` | 每个 EventLoop、每个后端 `host:port` 各一个连接池，池内最多这么多条。不写或 `0` 用默认。总连接大约是该值 × worker 数（worker 默认约 CPU×2） | 重启；也可用 `-Drover.gateway.proxy.maxConnectionsPerEventLoop` |
+| `rover.gateway.proxy.maxPendingAcquires` | `256` | 单个池满了以后最多排队等连接的请求数。不写或 `0` 用默认 | 重启；也可用 `-Drover.gateway.proxy.maxPendingAcquires` |
 | `rover.gateway.discovery.type` | `STATIC`（代码默认）/ 示例为 `nameserver` | `static`、`nameserver` 或 `nacos` | 重启 |
 | `rover.gateway.discovery.nameserver.address` | `127.0.0.1:8888` | Nameserver TCP 地址 | 重启 |
 | `rover.gateway.discovery.nameserver.reconcileIntervalMs` | `30000` | 本地实例缓存周期对账间隔 | 重启 |
@@ -90,7 +93,7 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 连接 Nameserver、订阅服务或转发业务请求。已有 overlay 文件不会被删除，重新设为 `true` 后仍会继续生效。
 
 Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（在途闸门满，默认 `max(64, CPU×8)`，可用
-`-Drover.gateway.maxInflight` 覆盖）、`NO_UPSTREAM`（没有可用上游）或 `CIRCUIT_OPEN`（候选实例都被熔断打开）。日志里会打 `inflight=已用/上限`。
+YAML `server.maxInflight` 或 `-Drover.gateway.maxInflight` 覆盖）、`NO_UPSTREAM`（没有可用上游）或 `CIRCUIT_OPEN`（候选实例都被熔断打开）。日志里会打 `inflight=已用/上限`。
 `/_manage/metrics` 的 `resources.rejects` 和 Prometheus `rover_gateway_rejects_total` 按原因计数。
 这些只发生在拒绝路径，成功请求不加活。
 
