@@ -35,9 +35,11 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.netty.handler.codec.http.HttpUtil;
 import io.netty.handler.codec.http.HttpVersion;
 import io.netty.handler.codec.http.LastHttpContent;
+import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.ScheduledFuture;
+import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.URI;
@@ -51,6 +53,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -60,12 +63,13 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 final class NettyUpstreamClient {
 
-    private static final AttributeKey<Exchange> EXCHANGE = AttributeKey.valueOf("rover.netty.exchange");
+    static final AttributeKey<Exchange> EXCHANGE = AttributeKey.valueOf("rover.netty.exchange");
     private static final AttributeKey<Boolean> RESPONSE_STARTED =
             AttributeKey.valueOf("rover.proxy.responseStarted");
     private final int connectTimeoutMillis;
     private final int maxConnectionsPerEventLoop;
     private final int maxPendingAcquires;
+    private final int idleTimeoutSeconds;
     private final AtomicLong requestTimeoutMillis;
     private final AtomicInteger inFlight = new AtomicInteger();
     private final ConcurrentHashMap<PoolKey, FixedChannelPool> pools = new ConcurrentHashMap<>();
@@ -80,8 +84,11 @@ final class NettyUpstreamClient {
         this.maxPendingAcquires = GatewayDefaults.intPropertyOrDefault(
                 GatewaySystemProperties.MAX_PENDING_ACQUIRES,
                 GatewayDefaults.MAX_PENDING_ACQUIRES);
-        log.info("Netty 出站连接池: maxConnectionsPerEventLoop={}, maxPendingAcquires={}",
-                maxConnectionsPerEventLoop, maxPendingAcquires);
+        this.idleTimeoutSeconds = GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.OUTBOUND_IDLE_TIMEOUT_SECONDS,
+                GatewayDefaults.OUTBOUND_IDLE_TIMEOUT_SECONDS);
+        log.info("Netty 出站连接池: maxConnectionsPerEventLoop={}, maxPendingAcquires={}, idleTimeoutSeconds={}",
+                maxConnectionsPerEventLoop, maxPendingAcquires, idleTimeoutSeconds);
     }
 
     int getInFlightCount() {
@@ -149,10 +156,26 @@ final class NettyUpstreamClient {
 
         inFlight.incrementAndGet();
         CompletableFuture<HttpProxyClient.ProxyResult> result = new CompletableFuture<>();
+        AtomicReference<Exchange> exchangeRef = new AtomicReference<>();
+        // 413 / 客户端半截不送：入站 abort 立刻拆上游，别干等请求超时
+        body.whenAborted(() -> {
+            Exchange exchange = exchangeRef.get();
+            if (exchange != null) {
+                fail(exchange, new IOException("inbound aborted"), false);
+            } else {
+                finish(result, abortedResult(body, startNanos));
+            }
+        });
+        if (result.isDone()) {
+            return result;
+        }
         try {
             Future<Channel> acquire = pool.acquire();
             acquire.addListener(future -> {
                 if (!future.isSuccess()) {
+                    if (result.isDone()) {
+                        return;
+                    }
                     if (writeClientError) {
                         body.abort();
                     }
@@ -161,8 +184,19 @@ final class NettyUpstreamClient {
                     return;
                 }
                 Channel upstream = acquire.getNow();
+                if (result.isDone() || body.isAborted()) {
+                    // 入站已经拆了，这条刚借来的上游别发出去
+                    upstream.close();
+                    pool.release(upstream);
+                    return;
+                }
                 Exchange exchange = new Exchange(clientCtx, pool, upstream, result, startNanos, targetUrl, body);
                 upstream.attr(EXCHANGE).set(exchange);
+                exchangeRef.set(exchange);
+                if (result.isDone() || body.isAborted()) {
+                    fail(exchange, new IOException("inbound aborted"), false);
+                    return;
+                }
                 exchange.timeout = loop.schedule(
                         () -> fail(exchange, new TimeoutException("upstream request timeout")),
                         requestTimeoutMillis.get(),
@@ -174,6 +208,9 @@ final class NettyUpstreamClient {
                 }
             });
         } catch (Exception err) {
+            if (result.isDone()) {
+                return result;
+            }
             if (writeClientError) {
                 body.abort();
             }
@@ -193,6 +230,9 @@ final class NettyUpstreamClient {
             URI uri,
             int port,
             InboundBodyPipe body) {
+        if (exchange.done.get() || body.isAborted()) {
+            return;
+        }
         HttpRequest outbound = buildOutboundHeaders(exchange.clientCtx, request, uri, port);
         boolean emptyBody = !HttpUtil.isTransferEncodingChunked(outbound)
                 && outbound.headers().getInt(HttpHeaderNames.CONTENT_LENGTH, -1) == 0;
@@ -351,13 +391,26 @@ final class NettyUpstreamClient {
     }
 
     private void fail(Exchange exchange, Throwable err) {
+        fail(exchange, err, true);
+    }
+
+    private void fail(Exchange exchange, Throwable err, boolean writeClientError) {
         if (!exchange.done.compareAndSet(false, true)) {
             return;
         }
         cancelTimeout(exchange);
         exchange.body.abort();
-        HttpProxyClient.ProxyResult result = handleError(
-                exchange.clientCtx, err, exchange.targetUrl, exchange.startNanos, true);
+        HttpProxyClient.ProxyResult result;
+        if (!writeClientError) {
+            // 413 已经回给客户端了，这里只拆上游，别再叠 502
+            if (clearStarted(exchange.clientCtx) && exchange.clientCtx.channel().isActive()) {
+                exchange.clientCtx.close();
+            }
+            result = abortedResult(exchange.body, exchange.startNanos);
+        } else {
+            result = handleError(
+                    exchange.clientCtx, err, exchange.targetUrl, exchange.startNanos, true);
+        }
         release(exchange, true);
         finish(exchange.result, result);
     }
@@ -386,8 +439,15 @@ final class NettyUpstreamClient {
     }
 
     private void finish(CompletableFuture<HttpProxyClient.ProxyResult> result, HttpProxyClient.ProxyResult value) {
-        inFlight.updateAndGet(v -> Math.max(0, v - 1));
-        result.complete(value);
+        if (result.complete(value)) {
+            inFlight.updateAndGet(v -> Math.max(0, v - 1));
+        }
+    }
+
+    /** 入站拆了：超限 413，半截不送按 499。不算上游挂了。 */
+    private static HttpProxyClient.ProxyResult abortedResult(InboundBodyPipe body, long startNanos) {
+        int code = body != null && body.overflowed() ? 413 : 499;
+        return new HttpProxyClient.ProxyResult(code, elapsedMillis(startNanos), false, false);
     }
 
     private static void cancelTimeout(Exchange exchange) {
@@ -528,6 +588,8 @@ final class NettyUpstreamClient {
     private final class PoolHandler implements ChannelPoolHandler {
         @Override
         public void channelCreated(Channel ch) {
+            ch.pipeline().addLast(new IdleStateHandler(idleTimeoutSeconds, 0, 0, TimeUnit.SECONDS));
+            ch.pipeline().addLast(new OutboundIdleCloser());
             ch.pipeline().addLast(new HttpClientCodec());
             ch.pipeline().addLast(new UpstreamResponseHandler());
         }

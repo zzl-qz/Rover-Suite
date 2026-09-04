@@ -54,13 +54,15 @@ public class GatewayApplication {
                 com.rover.gateway.core.config.GatewaySystemProperties.IO_TRANSPORT,
                 config.getIoTransportOrDefault());
         config.exportPositiveOverrides();
-        log.info("proxy.outbound={}, connectTimeoutMillis={}, requestTimeoutMillis={}, maxConnectionsPerEventLoop={}, maxPendingAcquires={}, maxInflight={}",
+        log.info("proxy.outbound={}, connectTimeoutMillis={}, requestTimeoutMillis={}, maxConnectionsPerEventLoop={}, maxPendingAcquires={}, maxInflight={}, inboundIdleTimeoutSeconds={}, outboundIdleTimeoutSeconds={}",
                 config.getProxyOutboundOrDefault(),
                 config.getConnectTimeoutMillisOrDefault(),
                 config.getRequestTimeoutMillisOrDefault(),
                 config.getMaxConnectionsPerEventLoopOrDefault(),
                 config.getMaxPendingAcquiresOrDefault(),
-                config.getMaxInflightOrDefault());
+                config.getMaxInflightOrDefault(),
+                config.getInboundIdleTimeoutSecondsOrDefault(),
+                config.getOutboundIdleTimeoutSecondsOrDefault());
 
         // 封装启动服务，内置接收前端HTTP请求+定时拉取NameSever实例信息的功能
         GatewayHttpServer server = new GatewayHttpServer(

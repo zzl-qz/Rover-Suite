@@ -188,8 +188,13 @@ public class HttpProxyClient {
                 return CompletableFuture.completedFuture(
                         handleError(ctx, err, targetUrl, startNanos, writeClientError));
             }
-        }).exceptionally(err -> handleError(ctx, err, targetUrl, startNanos, writeClientError))
-                .whenComplete((ignored, err) -> inFlight.decrementAndGet());
+        }).exceptionally(err -> {
+            if (body.isAborted()) {
+                int code = body.overflowed() ? 413 : 499;
+                return new ProxyResult(code, elapsedMillis(startNanos), false, false);
+            }
+            return handleError(ctx, err, targetUrl, startNanos, writeClientError);
+        }).whenComplete((ignored, err) -> inFlight.decrementAndGet());
     }
 
     /** 第一枪压了错包时，换台失败或不换台，再补写给客户端。头已写出就不动。 */

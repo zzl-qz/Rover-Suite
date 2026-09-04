@@ -20,6 +20,12 @@ public final class GatewayDefaults {
     public static final int MAX_CONNECTIONS_PER_EVENT_LOOP = 64;
     /** 单个池满了以后，最多排队等连接的请求数。 */
     public static final int MAX_PENDING_ACQUIRES = 256;
+    /** 入站 Keep-Alive 读空闲超时（秒）。闲着且没在处理请求才关。 */
+    public static final int INBOUND_IDLE_TIMEOUT_SECONDS = 60;
+    /** 请求没收齐时，客户端多久不送字节就关连接（秒）。 */
+    public static final int REQUEST_IDLE_TIMEOUT_SECONDS = 30;
+    /** 出站池里闲连接读空闲超时（秒）。池里暖着、没在转发才踢。 */
+    public static final int OUTBOUND_IDLE_TIMEOUT_SECONDS = 60;
     public static final long RECONCILE_INTERVAL_MILLIS = 30_000L;
     public static final int METRICS_WINDOW_SECONDS = 300;
     public static final long TRACE_SLOW_THRESHOLD_MILLIS = 100L;

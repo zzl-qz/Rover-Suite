@@ -83,7 +83,25 @@ public class GatewayConfig {
                 GatewaySystemProperties.MAX_INFLIGHT, GatewayDefaults.defaultMaxInflight());
     }
 
-    /** 用户在 YAML 里填了正数，才写进 -D，给连接池和在途闸门读。 */
+    public int getInboundIdleTimeoutSecondsOrDefault() {
+        return GatewayDefaults.positiveOrDefault(
+                gatewayProperties().getServer().getIdleTimeoutSeconds(),
+                GatewayDefaults.INBOUND_IDLE_TIMEOUT_SECONDS);
+    }
+
+    public int getOutboundIdleTimeoutSecondsOrDefault() {
+        return GatewayDefaults.positiveOrDefault(
+                gatewayProperties().getProxy().getIdleTimeoutSeconds(),
+                GatewayDefaults.OUTBOUND_IDLE_TIMEOUT_SECONDS);
+    }
+
+    public int getRequestIdleTimeoutSecondsOrDefault() {
+        return GatewayDefaults.positiveOrDefault(
+                gatewayProperties().getServer().getRequestIdleTimeoutSeconds(),
+                GatewayDefaults.REQUEST_IDLE_TIMEOUT_SECONDS);
+    }
+
+    /** 用户在 YAML 里填了正数，才写进 -D，给连接池、闸门、空闲超时和半截请求超时读。 */
     public void exportPositiveOverrides() {
         putIfPositive(GatewaySystemProperties.MAX_INFLIGHT, gatewayProperties().getServer().getMaxInflight());
         putIfPositive(
@@ -92,6 +110,15 @@ public class GatewayConfig {
         putIfPositive(
                 GatewaySystemProperties.MAX_PENDING_ACQUIRES,
                 gatewayProperties().getProxy().getMaxPendingAcquires());
+        putIfPositive(
+                GatewaySystemProperties.INBOUND_IDLE_TIMEOUT_SECONDS,
+                gatewayProperties().getServer().getIdleTimeoutSeconds());
+        putIfPositive(
+                GatewaySystemProperties.REQUEST_IDLE_TIMEOUT_SECONDS,
+                gatewayProperties().getServer().getRequestIdleTimeoutSeconds());
+        putIfPositive(
+                GatewaySystemProperties.OUTBOUND_IDLE_TIMEOUT_SECONDS,
+                gatewayProperties().getProxy().getIdleTimeoutSeconds());
     }
 
     private static void putIfPositive(String key, int value) {
@@ -347,6 +374,10 @@ public class GatewayConfig {
         private String ioTransport = "auto";
         /** 在途闸门。0=默认 max(64, CPU×8)，也可 -Drover.gateway.maxInflight */
         private int maxInflight;
+        /** 入站读空闲超时（秒）。0=默认 60 */
+        private int idleTimeoutSeconds;
+        /** 请求没收齐时，客户端多久不送字节就关连接（秒）。0=默认 30 */
+        private int requestIdleTimeoutSeconds;
     }
 
     @Data
@@ -359,6 +390,8 @@ public class GatewayConfig {
         private int maxConnectionsPerEventLoop;
         /** 池满后排队数。0=默认 256 */
         private int maxPendingAcquires;
+        /** 出站池闲连接读空闲超时（秒）。0=默认 60 */
+        private int idleTimeoutSeconds;
     }
 
     @Data

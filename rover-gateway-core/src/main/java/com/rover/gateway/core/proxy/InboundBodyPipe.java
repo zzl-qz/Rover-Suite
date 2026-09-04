@@ -28,6 +28,7 @@ public final class InboundBodyPipe {
     private boolean overflow;
     private boolean attached;
     private CompletableFuture<byte[]> bytesFuture;
+    private Runnable abortedCallback;
 
     public InboundBodyPipe(int maxBytes) {
         this.maxBytes = maxBytes;
@@ -69,32 +70,59 @@ public final class InboundBodyPipe {
      * 收下入站 chunk（所有权转给管道）。
      * @return false 超限，调用方回 413；chunk 已被释放
      */
-    public synchronized boolean offer(HttpContent content) {
-        if (aborted || lastSeen) {
-            content.release();
-            return !overflow;
-        }
-        int size = content.content().readableBytes();
-        if (received + size > maxBytes) {
-            content.release();
-            overflow = true;
-            abort();
-            return false;
-        }
-        received += size;
-        pending.add(content);
-        if (content instanceof LastHttpContent) {
-            lastSeen = true;
-            if (bytesFuture != null && sink == null) {
-                completeBytes();
+    public boolean offer(HttpContent content) {
+        Runnable callback;
+        boolean ok;
+        synchronized (this) {
+            if (aborted || lastSeen) {
+                content.release();
+                return !overflow;
+            }
+            int size = content.content().readableBytes();
+            if (received + size > maxBytes) {
+                content.release();
+                overflow = true;
+                callback = markAborted();
+                ok = false;
+            } else {
+                received += size;
+                pending.add(content);
+                if (content instanceof LastHttpContent) {
+                    lastSeen = true;
+                    if (bytesFuture != null && sink == null) {
+                        completeBytes();
+                    }
+                }
+                drainToSink();
+                callback = null;
+                ok = true;
             }
         }
-        drainToSink();
-        return true;
+        fireAborted(callback);
+        return ok;
     }
 
     public synchronized boolean overflowed() {
         return overflow;
+    }
+
+    public synchronized boolean isAborted() {
+        return aborted;
+    }
+
+    /**
+     * 入站拆了就通知出站。已经 abort 过的立刻跑，别等第二次。
+     * 回调在锁外跑，避免出站 fail 再进 abort 把自己卡死。
+     */
+    public void whenAborted(Runnable callback) {
+        boolean runNow;
+        synchronized (this) {
+            abortedCallback = callback;
+            runNow = aborted;
+        }
+        if (runNow) {
+            callback.run();
+        }
     }
 
     /** JDK 出站要整段 byte[]；Netty 路径不要调这个。 */
@@ -110,16 +138,34 @@ public final class InboundBodyPipe {
         return bytesFuture;
     }
 
-    public synchronized void abort() {
+    public void abort() {
+        Runnable callback;
+        synchronized (this) {
+            callback = markAborted();
+        }
+        fireAborted(callback);
+    }
+
+    /** 刚标上 aborted 才把回调交出去；已经 abort 过的不再触发。 */
+    private Runnable markAborted() {
         if (aborted) {
             releasePending();
-            return;
+            return null;
         }
         aborted = true;
         sink = null;
         releasePending();
         if (bytesFuture != null && !bytesFuture.isDone()) {
             bytesFuture.completeExceptionally(new IllegalStateException("inbound body aborted"));
+        }
+        Runnable callback = abortedCallback;
+        abortedCallback = null;
+        return callback;
+    }
+
+    private static void fireAborted(Runnable callback) {
+        if (callback != null) {
+            callback.run();
         }
     }
 

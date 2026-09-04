@@ -41,6 +41,9 @@ final class GatewayConfigValidator {
         validateNotNegative("proxy.maxConnectionsPerEventLoop", gateway.getProxy().getMaxConnectionsPerEventLoop());
         validateNotNegative("proxy.maxPendingAcquires", gateway.getProxy().getMaxPendingAcquires());
         validateNotNegative("server.maxInflight", gateway.getServer().getMaxInflight());
+        validateNotNegative("server.idleTimeoutSeconds", gateway.getServer().getIdleTimeoutSeconds());
+        validateNotNegative("server.requestIdleTimeoutSeconds", gateway.getServer().getRequestIdleTimeoutSeconds());
+        validateNotNegative("proxy.idleTimeoutSeconds", gateway.getProxy().getIdleTimeoutSeconds());
         validatePositive("proxy.connectTimeoutMillis", config.getConnectTimeoutMillisOrDefault());
         validatePositive("proxy.requestTimeoutMillis", config.getRequestTimeoutMillisOrDefault());
         validateProxyOutbound(config.getProxyOutboundOrDefault());

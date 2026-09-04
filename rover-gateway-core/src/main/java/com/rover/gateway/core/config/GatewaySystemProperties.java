@@ -13,6 +13,9 @@ public final class GatewaySystemProperties {
     public static final String MAX_CONNECTIONS_PER_EVENT_LOOP =
             "rover.gateway.proxy.maxConnectionsPerEventLoop";
     public static final String MAX_PENDING_ACQUIRES = "rover.gateway.proxy.maxPendingAcquires";
+    public static final String INBOUND_IDLE_TIMEOUT_SECONDS = "rover.gateway.server.idleTimeoutSeconds";
+    public static final String REQUEST_IDLE_TIMEOUT_SECONDS = "rover.gateway.server.requestIdleTimeoutSeconds";
+    public static final String OUTBOUND_IDLE_TIMEOUT_SECONDS = "rover.gateway.proxy.idleTimeoutSeconds";
     public static final String DISPATCH_ON_EVENT_LOOP = "rover.gateway.dispatchOnEventLoop";
     public static final String PROXY_OUTBOUND = "rover.gateway.proxy.outbound";
     /** auto / nio / epoll / kqueue。auto=有原生库就用，没有退 NIO。 */

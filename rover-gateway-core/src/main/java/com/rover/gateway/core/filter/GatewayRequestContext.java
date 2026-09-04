@@ -6,6 +6,7 @@ import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.proxy.InboundBodyPipe;
 import com.rover.gateway.core.route.RouteConfig;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.http.DefaultFullHttpResponse;
 import io.netty.handler.codec.http.FullHttpResponse;
@@ -201,6 +202,15 @@ public class GatewayRequestContext implements RequestContext {
 
     /** 短路回写；rejectReason 非空时带上 X-Rover-Reject-Reason。已结束的请求不再写第二份。 */
     public void writeText(HttpResponseStatus status, String responseBody, String rejectReason) {
+        writeText(status, responseBody, rejectReason, false);
+    }
+
+    /** closeConnection=true 写完就关，413 这种半截请求别留着复用。 */
+    public void writeText(
+            HttpResponseStatus status,
+            String responseBody,
+            String rejectReason,
+            boolean closeConnection) {
         if (!completed.compareAndSet(false, true)) {
             return;
         }
@@ -214,7 +224,12 @@ public class GatewayRequestContext implements RequestContext {
         if (rejectReason != null && !rejectReason.isBlank()) {
             response.headers().set(HttpConstants.REJECT_REASON_HEADER, rejectReason);
         }
-        channelContext.writeAndFlush(response);
+        if (closeConnection) {
+            response.headers().set(HttpHeaderNames.CONNECTION, "close");
+            channelContext.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
+        } else {
+            channelContext.writeAndFlush(response);
+        }
         this.statusCode = status.code();
     }
 }

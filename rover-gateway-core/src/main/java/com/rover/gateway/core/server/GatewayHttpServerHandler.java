@@ -2,6 +2,7 @@ package com.rover.gateway.core.server;
 
 import com.rover.common.constants.HttpConstants;
 import com.rover.gateway.core.config.GatewayDefaults;
+import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.filter.DefaultFilterChain;
 import com.rover.gateway.core.filter.GatewayRequestContext;
 import com.rover.gateway.core.filter.GatewayContextKeys;
@@ -65,6 +66,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
     private final GatewayRuntime runtime;
     private final GatewayManageApi manageApi;
     private final int maxBodyBytes;
+    private final int requestIdleTimeoutSeconds;
 
     public GatewayHttpServerHandler(GatewayRuntime runtime) {
         this(runtime, true);
@@ -78,6 +80,9 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         this.runtime = runtime;
         this.manageApi = adminEnabled ? new GatewayManageApi(runtime) : null;
         this.maxBodyBytes = maxBodyBytes;
+        this.requestIdleTimeoutSeconds = GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.REQUEST_IDLE_TIMEOUT_SECONDS,
+                GatewayDefaults.REQUEST_IDLE_TIMEOUT_SECONDS);
     }
 
     @Override
@@ -126,6 +131,8 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
             ReferenceCountUtil.release(request);
             return;
         }
+
+        InboundRequestStall.arm(ctx.channel(), requestIdleTimeoutSeconds);
 
         if (requestPath.startsWith(GatewayManageApi.PREFIX)) {
             InboundExchange exchange = new InboundExchange(requestPath, request, true, maxBodyBytes);
@@ -205,6 +212,11 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
             rejectTooLarge(ctx, exchange);
             return;
         }
+        if (last) {
+            InboundRequestStall.cancel(ctx.channel());
+        } else {
+            InboundRequestStall.arm(ctx.channel(), requestIdleTimeoutSeconds);
+        }
         if (last && exchange.manage) {
             finishManage(ctx, exchange);
         }
@@ -256,14 +268,20 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    // body太大的时候直接拒绝（这里就是开启清除操作）
+    // body 超限：413 写完关连接。pipe.abort 会拆已经转出去的上游，别让后端干等
     private void rejectTooLarge(ChannelHandlerContext ctx, InboundExchange exchange) {
+        InboundRequestStall.cancel(ctx.channel());
         ctx.channel().attr(DRAIN).set(Boolean.TRUE);
         if (exchange.context != null && !exchange.context.isCompleted()) {
             exchange.context.writeText(
-                    HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large");
-        } else {
+                    HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE,
+                    "Request body too large",
+                    null,
+                    true);
+        } else if (exchange.context == null) {
             writeText(ctx, HttpResponseStatus.REQUEST_ENTITY_TOO_LARGE, "Request body too large", true);
+        } else {
+            ctx.close();
         }
     }
 
@@ -307,7 +325,13 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
     }
 
     static void releaseOccupy(Channel channel) {
+        InboundRequestStall.cancel(channel);
         channel.attr(CHANNEL_BUSY).set(null);
+    }
+
+    /** 这根管子上还有单在跑。空闲回收看到 true 就别关。 */
+    static boolean isOccupied(Channel channel) {
+        return Boolean.TRUE.equals(channel.attr(CHANNEL_BUSY).get());
     }
 
     static void attachTraceId(HttpRequest request, GatewayRequestContext context, boolean enabled) {
