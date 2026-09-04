@@ -35,10 +35,12 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.adminEnabled` | `true` | 是否启用 `/_manage/**`、Admin 路由 overlay 与运行时配置 overlay | 重启 |
 | `rover.gateway.adminToken` | 空 | `/_manage/**` 管理口 token；空=不鉴权（启动 WARN）。正式机建议非空，或设 `ROVER_STRICT_SECURITY=true` | 重启 |
 | `rover.gateway.server.bindHost` | `0.0.0.0` | 业务监听地址 | 重启 |
-| `rover.gateway.server.maxContentLengthBytes` | `1048576` | 请求体上限（入站管道计数，超限 413）。不再经过 `HttpObjectAggregator` | 重启 |
+| `rover.gateway.server.maxContentLengthBytes` | `1048576` | 请求体上限（入站管道计数，超限回 413 并关掉这根连接；已经转到上游的立刻拆掉，不等请求超时）。不再经过 `HttpObjectAggregator` | 重启 |
 | `rover.gateway.server.dispatchOnEventLoop` | `false` | 业务 Handler 是否留在 EventLoop。默认走业务线程池，和收发包分开。确认无阻塞才改 `true` | 重启；也可用 `-Drover.gateway.dispatchOnEventLoop` |
 | `rover.gateway.server.ioTransport` | `auto` | 入站 EventLoop 与出站 Channel 用同一套 I/O。`auto`：Linux 选 Epoll（Docker Linux 容器里一般是这个），macOS 上直接运行进程选 KQueue，原生库不可用时退 NIO。也可写死 `nio` / `epoll` / `kqueue`（不可用时退 NIO） | 重启；也可用 `-Drover.gateway.ioTransport` |
 | `rover.gateway.server.maxInflight` | `max(64, CPU×8)` | 整机在途闸门。不写或 `0` 用默认。超限 503，原因头 `INFLIGHT_LIMIT` | 重启；也可用 `-Drover.gateway.maxInflight`。YAML 正数优先 |
+| `rover.gateway.server.idleTimeoutSeconds` | `60` | 入站 Keep-Alive 读空闲超时。闲着且这根连接上没有正在处理的请求才关掉，不回 408。不写或 `0` 用默认 | 重启；也可用 `-Drover.gateway.server.idleTimeoutSeconds` |
+| `rover.gateway.server.requestIdleTimeoutSeconds` | `30` | 请求还没收齐时，客户端多久不送字节就关连接（顺带拆上游）。每个 chunk 会重置计时。body 收齐后改等 `proxy.requestTimeoutMillis`。不写或 `0` 用默认 | 重启；也可用 `-Drover.gateway.server.requestIdleTimeoutSeconds` |
 | `rover.gateway.metrics.enabled` | `true` | 启动时指标总开关；`false` 热路径不记 inflight/record。503 拒绝计数仍记 | 重启；Admin 关闭时只认 YAML |
 | `rover.gateway.metrics.windowSeconds` | `300` | 指标滑动窗口（秒） | 重启 / 运行时 |
 | `rover.gateway.trace.enabled` | `true` | 启动时时间线开关；`false` 不 `markPhase`、不造 traceId | 重启；Admin 关闭时只认 YAML |
@@ -49,6 +51,7 @@ Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录�
 | `rover.gateway.proxy.requestTimeoutMillis` | `30000` | 上游请求超时的启动默认值。不写或 `0` 用默认；运行时还可改 `gateway.request.timeoutMillis` | 重启 |
 | `rover.gateway.proxy.maxConnectionsPerEventLoop` | `64` | 每个 EventLoop、每个后端 `host:port` 各一个连接池，池内最多这么多条。不写或 `0` 用默认。总连接大约是该值 × worker 数（worker 默认约 CPU×2） | 重启；也可用 `-Drover.gateway.proxy.maxConnectionsPerEventLoop` |
 | `rover.gateway.proxy.maxPendingAcquires` | `256` | 单个池满了以后最多排队等连接的请求数。不写或 `0` 用默认 | 重启；也可用 `-Drover.gateway.proxy.maxPendingAcquires` |
+| `rover.gateway.proxy.idleTimeoutSeconds` | `60` | 出站池闲连接读空闲超时。还在转发（等上游）时不踢。不写或 `0` 用默认 | 重启；也可用 `-Drover.gateway.proxy.idleTimeoutSeconds` |
 | `rover.gateway.discovery.type` | `STATIC`（代码默认）/ 示例为 `nameserver` | `static`、`nameserver` 或 `nacos` | 重启 |
 | `rover.gateway.discovery.nameserver.address` | `127.0.0.1:8888` | Nameserver TCP 地址 | 重启 |
 | `rover.gateway.discovery.nameserver.reconcileIntervalMs` | `30000` | 本地实例缓存周期对账间隔 | 重启 |

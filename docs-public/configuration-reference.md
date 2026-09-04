@@ -39,10 +39,12 @@ a VPN in production.
 | `rover.gateway.adminEnabled` | `true` | Enables `/_manage/**`, Admin route overlays, and runtime config overlays | Restart |
 | `rover.gateway.adminToken` | empty | `/_manage/**` token; blank = no auth (startup WARN). Prefer non-empty or `ROVER_STRICT_SECURITY=true` | Restart |
 | `rover.gateway.server.bindHost` | `0.0.0.0` | Business listener address | Restart |
-| `rover.gateway.server.maxContentLengthBytes` | `1048576` | Request body limit (inbound pipe; 413 when exceeded). No `HttpObjectAggregator` | Restart |
+| `rover.gateway.server.maxContentLengthBytes` | `1048576` | Request body limit (inbound pipe). Oversize returns 413 and closes the connection; any upstream already started is torn down immediately. No `HttpObjectAggregator` | Restart |
 | `rover.gateway.server.dispatchOnEventLoop` | `false` | Run the business handler on the EventLoop. Default is the biz pool (I/O and business stay split). Set `true` only when the path is non-blocking | Restart; or `-Drover.gateway.dispatchOnEventLoop` |
 | `rover.gateway.server.ioTransport` | `auto` | Same I/O family for inbound EventLoops and outbound Channels. `auto` selects Epoll on Linux (typical in a Docker Linux container), KQueue when the process runs on macOS, and NIO if natives are missing. Pin `nio` / `epoll` / `kqueue` (falls back to NIO when unavailable) | Restart; or `-Drover.gateway.ioTransport` |
 | `rover.gateway.server.maxInflight` | `max(64, CPU×8)` | In-flight gate. Omit or `0` uses the default. Excess requests get 503 with `INFLIGHT_LIMIT` | Restart; or `-Drover.gateway.maxInflight`. A positive YAML value wins |
+| `rover.gateway.server.idleTimeoutSeconds` | `60` | Inbound Keep-Alive reader-idle timeout. Close only when the connection is idle and not handling a request. No 408. Omit or `0` uses the default | Restart; or `-Drover.gateway.server.idleTimeoutSeconds` |
+| `rover.gateway.server.requestIdleTimeoutSeconds` | `30` | While a request is still arriving, close the connection if the client sends no more bytes for this long (also tears down upstream). Each chunk resets the timer. After the body is complete, `proxy.requestTimeoutMillis` applies. Omit or `0` uses the default | Restart; or `-Drover.gateway.server.requestIdleTimeoutSeconds` |
 | `rover.gateway.metrics.enabled` | `true` | Startup metrics switch; `false` skips inflight/record on the hot path. 503 reject counters still increment | Restart; YAML-only when Admin is off |
 | `rover.gateway.metrics.windowSeconds` | `300` | Metrics sliding window (seconds) | Restart / runtime |
 | `rover.gateway.trace.enabled` | `true` | Startup timeline switch; `false` skips `markPhase` and minted trace IDs | Restart; YAML-only when Admin is off |
@@ -53,6 +55,7 @@ a VPN in production.
 | `rover.gateway.proxy.requestTimeoutMillis` | `30000` | Startup default for request timeout. Omit or `0` uses the default; runtime can still change `gateway.request.timeoutMillis` | Restart |
 | `rover.gateway.proxy.maxConnectionsPerEventLoop` | `64` | Max connections in each pool (one pool per EventLoop × upstream `host:port`). Omit or `0` uses the default. Rough total is this value × worker count (workers default to about CPU×2) | Restart; or `-Drover.gateway.proxy.maxConnectionsPerEventLoop` |
 | `rover.gateway.proxy.maxPendingAcquires` | `256` | Max waiters when a pool is full. Omit or `0` uses the default | Restart; or `-Drover.gateway.proxy.maxPendingAcquires` |
+| `rover.gateway.proxy.idleTimeoutSeconds` | `60` | Idle timeout for pooled upstream connections. In-flight exchanges are not evicted. Omit or `0` uses the default | Restart; or `-Drover.gateway.proxy.idleTimeoutSeconds` |
 | `rover.gateway.discovery.type` | `STATIC` in code / `nameserver` in example | `static`, `nameserver`, or `nacos` | Restart |
 | `rover.gateway.discovery.nameserver.address` | `127.0.0.1:8888` | Nameserver TCP address | Restart |
 | `rover.gateway.discovery.nameserver.reconcileIntervalMs` | `30000` | Local-cache reconciliation interval | Restart |

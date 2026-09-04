@@ -25,9 +25,11 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.handler.codec.http.HttpServerCodec;
 import io.netty.handler.codec.http.HttpServerKeepAliveHandler;
+import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.concurrent.DefaultEventExecutorGroup;
 import io.netty.util.concurrent.EventExecutorGroup;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 
@@ -302,6 +304,12 @@ public class GatewayHttpServer {
         if (!dispatchOnEventLoop) {
             bizGroup = new DefaultEventExecutorGroup(BIZ_THREADS);
         }
+        int inboundIdleSeconds = GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.INBOUND_IDLE_TIMEOUT_SECONDS,
+                GatewayDefaults.INBOUND_IDLE_TIMEOUT_SECONDS);
+        int requestIdleSeconds = GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.REQUEST_IDLE_TIMEOUT_SECONDS,
+                GatewayDefaults.REQUEST_IDLE_TIMEOUT_SECONDS);
 
         try {
             ServerBootstrap bootstrap = new ServerBootstrap();
@@ -312,6 +320,8 @@ public class GatewayHttpServer {
                         protected void initChannel(SocketChannel ch) {
                             var pipeline = ch.pipeline()
                                     .addLast(new HttpServerCodec())
+                                    .addLast(new IdleStateHandler(inboundIdleSeconds, 0, 0, TimeUnit.SECONDS))
+                                    .addLast(new InboundIdleCloser())
                                     .addLast(new HttpServerKeepAliveHandler())
                                     .addLast(new CorsHandler(corsSettings));
                             GatewayHttpServerHandler handler = new GatewayHttpServerHandler(
@@ -327,9 +337,12 @@ public class GatewayHttpServer {
 
             serverChannel = bootstrap.bind(bindHost, port).sync().channel();
             warnIfAdminTokenBlank();
-            log.info("Rover Gateway HTTP server listening on {}:{}, ioTransport={}, discovery={}, adminEnabled={}, dispatchOnEventLoop={}, managePrefix={}",
+            log.info("Rover Gateway HTTP server listening on {}:{}, ioTransport={}, discovery={}, adminEnabled={}, dispatchOnEventLoop={}, inboundIdleTimeoutSeconds={}, requestIdleTimeoutSeconds={}, managePrefix={}",
                     bindHost, port, io.name().toLowerCase(), runtime.getDiscoveryType(), adminEnabled,
-                    dispatchOnEventLoop, adminEnabled ? ManageApiPaths.PREFIX : "disabled");
+                    dispatchOnEventLoop,
+                    inboundIdleSeconds,
+                    requestIdleSeconds,
+                    adminEnabled ? ManageApiPaths.PREFIX : "disabled");
         } catch (InterruptedException err) {
             Thread.currentThread().interrupt();
             shutdown();
