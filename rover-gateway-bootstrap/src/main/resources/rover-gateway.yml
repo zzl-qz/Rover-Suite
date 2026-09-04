@@ -17,6 +17,10 @@ rover:
       ioTransport: auto
       # 不写或 0：默认 max(64, CPU×8)。超限回 503
       # maxInflight: 64
+      # 入站 Keep-Alive 读空闲超时，闲着且没在处理请求才关。不写或 0=60
+      # idleTimeoutSeconds: 60
+      # 请求没收齐时，客户端多久不送字节就关连接。不写或 0=30
+      # requestIdleTimeoutSeconds: 30
     metrics:
       enabled: true
       windowSeconds: 300
@@ -32,6 +36,8 @@ rover:
       # requestTimeoutMillis: 30000
       # maxConnectionsPerEventLoop: 64
       # maxPendingAcquires: 256
+      # 出站池闲连接超时，没在转发才踢。不写或 0=60
+      # idleTimeoutSeconds: 60
     filters:
       enabled: true
       pluginDir: plugins

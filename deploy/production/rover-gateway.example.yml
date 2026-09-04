@@ -14,6 +14,10 @@ rover:
       # ioTransport: auto
       # 不写或 0：默认 max(64, CPU×8)
       # maxInflight: 256
+      # 入站闲连接读空闲超时，不写或 0=60
+      # idleTimeoutSeconds: 60
+      # 请求没收齐、客户端半截不送就关。不写或 0=30
+      # requestIdleTimeoutSeconds: 30
     proxy:
       # 默认 netty 只转发 http 上游。上游必须 https 时改为 jdk（回滚路径，吞吐较低），改完需重启
       # outbound: netty
@@ -22,6 +26,7 @@ rover:
       requestTimeoutMillis: 30000
       # maxConnectionsPerEventLoop: 64
       # maxPendingAcquires: 256
+      # idleTimeoutSeconds: 60
     filters:
       enabled: true
       pluginDir: plugins

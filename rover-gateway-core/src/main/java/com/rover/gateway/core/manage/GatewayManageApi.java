@@ -209,6 +209,15 @@ public class GatewayManageApi extends AbstractManageApi {
                 GatewayDefaults.MAX_PENDING_ACQUIRES));
         status.put("maxInflight", runtime.maxInflight());
         status.put("inflightUsed", runtime.inflightUsed());
+        status.put("inboundIdleTimeoutSeconds", GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.INBOUND_IDLE_TIMEOUT_SECONDS,
+                GatewayDefaults.INBOUND_IDLE_TIMEOUT_SECONDS));
+        status.put("requestIdleTimeoutSeconds", GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.REQUEST_IDLE_TIMEOUT_SECONDS,
+                GatewayDefaults.REQUEST_IDLE_TIMEOUT_SECONDS));
+        status.put("outboundIdleTimeoutSeconds", GatewayDefaults.intPropertyOrDefault(
+                GatewaySystemProperties.OUTBOUND_IDLE_TIMEOUT_SECONDS,
+                GatewayDefaults.OUTBOUND_IDLE_TIMEOUT_SECONDS));
         return JsonCodec.toJson(status);
     }
 
