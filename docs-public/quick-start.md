@@ -90,7 +90,7 @@ java -jar rover-nameserver-bootstrap/target/rover-nameserver-bootstrap-1.0.0-SNA
 Terminal 2 — demo business service:
 
 ```bash
-java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
+java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
 ```
 
 Wait until the Spring Boot application reports that it has started. The Starter registers `demo-service` at

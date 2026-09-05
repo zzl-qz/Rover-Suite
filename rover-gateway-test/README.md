@@ -8,7 +8,7 @@
 ## 目录
 
 ```text
-rover-gateway-test/demo/
+rover-gateway-test/
 ├── backend/    # Spring Boot 测试服务，已接入 Rover Starter
 ├── frontend/   # Vue 3 测试面板
 └── README.md
@@ -47,15 +47,15 @@ java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.
 单实例：
 
 ```bash
-java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
+java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
 ```
 
 多实例负载均衡验证（每条命令使用独立终端）：
 
 ```bash
-java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8081
-java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8082
-java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8083
+java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8081
+java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8082
+java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8083
 ```
 
 Starter 在每个 Web Server ready 后将实际端口注册到 `127.0.0.1:8888`。这组地址只适合所有进程都在本机的测试环境。
@@ -77,7 +77,7 @@ curl -sS http://127.0.0.1/api/health
 需要 Node.js 与 npm：
 
 ```bash
-cd rover-gateway-test/demo/frontend
+cd rover-gateway-test/frontend
 npm install
 npm run dev
 ```
