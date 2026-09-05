@@ -46,9 +46,9 @@ npm run dev
 2. 启动 Gateway（默认端口 **80**；若改配置以你的为准）
 3. 启动多个后端实例：
    ```bash
-   java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8081
-   java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8082
-   java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8083
+   java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8081
+   java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8082
+   java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar --server.port=8083
    ```
 4. 启动前端：`npm run dev`
 5. 本页点「GET /api/hello」；成功会在下方「最新响应」出 JSON，统计区会记端口。
