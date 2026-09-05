@@ -65,7 +65,7 @@ the local Gateway to `127.0.0.1:8080`, then start the three processes:
 
 ```bash
 java -jar rover-nameserver-bootstrap/target/rover-nameserver-bootstrap-1.0.0-SNAPSHOT.jar
-java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
+java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
 java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.jar
 curl -i http://127.0.0.1:8080/api/hello
 ```

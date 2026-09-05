@@ -88,7 +88,7 @@ java -jar rover-nameserver-bootstrap/target/rover-nameserver-bootstrap-1.0.0-SNA
 终端 2 —— demo 业务服务：
 
 ```bash
-java -jar rover-gateway-test/demo/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
+java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
 ```
 
 等待 Spring Boot 输出启动成功日志。Web Server ready 后，Starter 会把 `demo-service` 注册为
