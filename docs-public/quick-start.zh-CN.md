@@ -26,7 +26,7 @@ demo-service → Rover-Nameserver :8888（TCP 注册）
 ## 2. 获取并构建源码
 
 ```bash
-git clone https://github.com/zzl-qz/Rover-Suite-.git roverSuite
+git clone https://github.com/zzl-qz/Rover-Suite.git roverSuite
 cd roverSuite
 mvn clean install -DskipTests
 ```

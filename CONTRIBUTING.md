@@ -12,7 +12,7 @@ contributors should use GitHub for public feedback and contributions.
 
 公开 Issue 与 Pull Request 统一在 GitHub 处理。Gitee 可作为维护者开发镜像，但外部反馈和贡献请走 GitHub。
 
-[Open an Issue / 提交 Issue](https://github.com/zzl-qz/Rover-Suite-/issues)
+[Open an Issue / 提交 Issue](https://github.com/zzl-qz/Rover-Suite/issues)
 
 ## Before opening an Issue / 提交前
 

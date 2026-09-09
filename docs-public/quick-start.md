@@ -26,7 +26,7 @@ Node.js is only needed for the optional frontend demo.
 ## 2. Get and build the source
 
 ```bash
-git clone https://github.com/zzl-qz/Rover-Suite-.git roverSuite
+git clone https://github.com/zzl-qz/Rover-Suite.git roverSuite
 cd roverSuite
 mvn clean install -DskipTests
 ```
