@@ -7,7 +7,12 @@ large design changes.
 Rover-Suite 按 Apache License 2.0 开源，欢迎提交 Issue、讨论和 Pull Request。带测试、文档和清晰复现步骤的
 小范围改动最容易审查；大型设计变更建议先提交 Issue 对齐方案。
 
-[Open an Issue / 提交 Issue](https://gitee.com/zzl-java/roverSuite/issues)
+Public Issues and Pull Requests are handled on GitHub. Gitee may be used by maintainers as a development mirror, but
+contributors should use GitHub for public feedback and contributions.
+
+公开 Issue 与 Pull Request 统一在 GitHub 处理。Gitee 可作为维护者开发镜像，但外部反馈和贡献请走 GitHub。
+
+[Open an Issue / 提交 Issue](https://github.com/zzl-qz/Rover-Suite-/issues)
 
 ## Before opening an Issue / 提交前
 
