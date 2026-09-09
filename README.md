@@ -54,7 +54,7 @@ The request data plane and discovery control plane are separate: Gateway reads a
 The complete configuration, boot order, and first-run troubleshooting are in the [Quick Start guide](docs-public/quick-start.md). The shortest path is:
 
 ```bash
-git clone https://gitee.com/zzl-java/roverSuite.git
+git clone https://github.com/zzl-qz/Rover-Suite-.git roverSuite
 cd roverSuite
 mvn clean install -DskipTests
 ```
@@ -118,6 +118,6 @@ See [docs-public/README.md](docs-public/README.md) for the complete English/Chin
 
 ## Feedback and license
 
-- Issues: [report a bug or request a feature](https://gitee.com/zzl-java/roverSuite/issues)
+- Issues and pull requests: [report a bug, request a feature, or contribute on GitHub](https://github.com/zzl-qz/Rover-Suite-/issues)
 - Read the [Contribution Guide](CONTRIBUTING.md) and [Security Policy](SECURITY.md) before contributing.
 - Rover-Suite is licensed under the [Apache License 2.0](LICENSE); third-party dependencies retain their own licenses (see [NOTICE](NOTICE)).
