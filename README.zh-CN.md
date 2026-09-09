@@ -54,7 +54,7 @@ Rover-Suite 为多单体、混合语言的小团队提供一套可独立部署�
 完整配置、启动顺序和首次排障见[快速上手](docs-public/quick-start.zh-CN.md)。最短路径如下：
 
 ```bash
-git clone https://github.com/zzl-qz/Rover-Suite-.git roverSuite
+git clone https://github.com/zzl-qz/Rover-Suite.git roverSuite
 cd roverSuite
 mvn clean install -DskipTests
 ```
@@ -118,6 +118,6 @@ curl -i http://127.0.0.1:8080/api/hello
 
 ## 反馈与许可证
 
-- Issue 与 Pull Request：[在 GitHub 提交缺陷反馈、功能建议或贡献代码](https://github.com/zzl-qz/Rover-Suite-/issues)
+- Issue 与 Pull Request：[在 GitHub 提交缺陷反馈、功能建议或贡献代码](https://github.com/zzl-qz/Rover-Suite/issues)
 - 贡献前请阅读[贡献指南](CONTRIBUTING.md)和[安全策略](SECURITY.md)。
 - Rover-Suite 使用 [Apache License 2.0](LICENSE)，第三方依赖遵循各自许可证，汇总见 [NOTICE](NOTICE)。
