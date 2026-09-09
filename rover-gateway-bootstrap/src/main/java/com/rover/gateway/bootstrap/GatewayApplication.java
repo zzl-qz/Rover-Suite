@@ -46,13 +46,13 @@ public class GatewayApplication {
         }
         log.info("discovery.type={}, routeCount={}", discoverySettings.getType(), routes.size());
 
-        // 出站实现：YAML 写到系统属性，HttpProxyClient 构造时读取。jdk 那条是第一版，别删。
+        // 出站实现
         System.setProperty(
                 com.rover.gateway.core.config.GatewaySystemProperties.PROXY_OUTBOUND,
-                config.getProxyOutboundOrDefault());
+                config.getProxyOutboundOrDefault()); // 指定使用netty还是jdk
         System.setProperty(
                 com.rover.gateway.core.config.GatewaySystemProperties.IO_TRANSPORT,
-                config.getIoTransportOrDefault());
+                config.getIoTransportOrDefault()); // 指定EventLoop模式
         config.exportPositiveOverrides();
         log.info("proxy.outbound={}, connectTimeoutMillis={}, requestTimeoutMillis={}, maxConnectionsPerEventLoop={}, maxPendingAcquires={}, maxInflight={}, inboundIdleTimeoutSeconds={}, outboundIdleTimeoutSeconds={}",
                 config.getProxyOutboundOrDefault(),

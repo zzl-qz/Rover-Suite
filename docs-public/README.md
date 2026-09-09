@@ -91,7 +91,7 @@ The system is easiest to understand as three cooperating surfaces: the Gateway r
 - [中文 README](../README.zh-CN.md)
 - [Gateway demo and test suite](../rover-gateway-test/README.md)
 - [Issue feedback policy](../CONTRIBUTING.md)
-- [Open an Issue / 提交 Issue](https://gitee.com/zzl-java/roverSuite/issues)
+- [Open an Issue / 提交 Issue](https://github.com/zzl-qz/Rover-Suite-/issues)
 - [Apache 2.0 License](../LICENSE)
 - [Third-party notices](../NOTICE)
 - [Security policy](../SECURITY.md)
