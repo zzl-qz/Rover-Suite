@@ -8,40 +8,66 @@
 
 <br/>
 
+![GitHub stars](https://img.shields.io/github/stars/zzl-qz/Rover-Suite?style=flat-square)
+![GitHub forks](https://img.shields.io/github/forks/zzl-qz/Rover-Suite?style=flat-square)
+![GitHub issues](https://img.shields.io/github/issues/zzl-qz/Rover-Suite?style=flat-square)
+![GitHub release](https://img.shields.io/github/v/release/zzl-qz/Rover-Suite?include_prereleases&style=flat-square)
+![GitHub license](https://img.shields.io/github/license/zzl-qz/Rover-Suite?style=flat-square)
+
+<br/>
+
 ![Java](https://img.shields.io/badge/Java-17-orange?style=flat-square)
 ![Netty](https://img.shields.io/badge/Netty-4.1-blue?style=flat-square)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2-green?style=flat-square)
 ![Maven](https://img.shields.io/badge/build-Maven-brightgreen?style=flat-square)
-![License](https://img.shields.io/badge/License-Apache--2.0-blue?style=flat-square)
 ![Status](https://img.shields.io/badge/status-preview-0ea5e9?style=flat-square)
 
 <br/>
 
-[Introduction](#introduction) · [Architecture](#architecture) · [Quick Start](#quick-start) · [Integration](#integration-paths) · [Roadmap](#roadmap)
+[Quick Start](#quick-start) · [Highlights](#highlights) · [Screenshots](#screenshots) · [Integration](#integration-paths) · [Roadmap](#roadmap)
 
 </div>
 
-> **Project status:** `1.0.0-SNAPSHOT` single-node preview. Public documentation describes implemented behavior and calls out runtime boundaries explicitly.
->
-> **License:** Apache License 2.0. Rover names, logos, and other brand identifiers are not granted as trademarks; see [NOTICE](NOTICE).
+> Lightweight microservice infrastructure with built-in service discovery and gateway routing, so small teams do not have to hardcode backend addresses in every Nginx or frontend configuration.
 
-## Introduction
+## Quick Start
 
-Rover-Suite is a standalone Gateway + Service Discovery combination for small teams running multiple monoliths or mixed-language services. Providers register with Nameserver, while Gateway uses a local instance cache for routing, load balancing, and reverse proxying instead of hardcoded backend addresses in every frontend or Nginx configuration.
+The fastest local demo uses Docker Compose. It starts Nameserver, Gateway, Admin, and a demo backend:
 
-| Request plane | Discovery plane | Management and extension plane |
-| :--- | :--- | :--- |
-| Netty Gateway: routing, filters, load balancing, reverse proxy | Nameserver: Java TCP, HTTP+JSON, health, snapshot push | Admin, Java SPI Filter/LoadBalancer, optional Nacos adapter |
+```bash
+git clone https://github.com/zzl-qz/Rover-Suite.git roverSuite
+cd roverSuite/deploy/docker
+docker compose up --build
+```
 
-## Architecture
+Verify the request path:
 
-The request data plane and discovery control plane are separate: Gateway reads a local instance cache on the request path, while Nameserver owns registration, health, and instance snapshots.
+```bash
+curl -i http://127.0.0.1:8080/api/hello
+```
+
+Open Admin at <http://127.0.0.1:9090>. See the [Docker Compose demo](deploy/docker/README.md) for cleanup, smoke tests, and production safety notes.
+
+## Highlights
+
+- **Gateway + service discovery in one small stack:** Gateway routes through a local instance cache while Nameserver owns registration, health, and snapshot push.
+- **Mixed-language registration:** Java services can use the Starter; Node.js, Python, Go, PHP, and C++ can register through the HTTP+JSON API.
+- **Runtime visibility:** Admin shows routes, instances, recent events, sampled request traces, metrics, and hot-reloadable settings.
+- **Extension points without a heavy platform:** Java SPI filters and load-balancers cover common customization without introducing a full service mesh.
+
+## What It Solves
+
+Rover-Suite is for small teams running multiple monoliths, side services, or mixed-language apps that outgrow hardcoded upstream addresses. Instead of editing Nginx or every frontend whenever a backend moves, providers register with Nameserver and Gateway routes to healthy instances.
+
+## Screenshots
 
 <p align="center">
   <img src="docs-public/assets/rover-suite-architecture.gif" alt="Rover-Suite animated system architecture" width="100%">
 </p>
 
-> Animated signals cover provider registration, discovery reconciliation, request processing, and Admin control paths. If your Markdown viewer does not animate GIFs, use the static preview or interactive diagram below.
+<p align="center">
+  <img src="docs-public/images/admin/01-dashboard-overview.png" alt="Rover-Admin dashboard overview" width="100%">
+</p>
 
 <div align="center">
 
@@ -49,26 +75,13 @@ The request data plane and discovery control plane are separate: Gateway reads a
 
 </div>
 
-## Quick Start
+## Current Runtime Boundaries
 
-The complete configuration, boot order, and first-run troubleshooting are in the [Quick Start guide](docs-public/quick-start.md). The shortest path is:
-
-```bash
-git clone https://github.com/zzl-qz/Rover-Suite.git roverSuite
-cd roverSuite
-mvn clean install -DskipTests
-```
-
-Copy `rover-gateway-bootstrap/src/main/resources/rover-gateway.yml` and
-`rover-nameserver-bootstrap/src/main/resources/rover-nameserver.yml` into `config/`. Follow the guide to bind
-the local Gateway to `127.0.0.1:8080`, then start the three processes:
-
-```bash
-java -jar rover-nameserver-bootstrap/target/rover-nameserver-bootstrap-1.0.0-SNAPSHOT.jar
-java -jar rover-gateway-test/backend/target/rover-demo-1.0.0-SNAPSHOT.jar
-java -jar rover-gateway-bootstrap/target/rover-gateway-bootstrap-1.0.0-SNAPSHOT.jar
-curl -i http://127.0.0.1:8080/api/hello
-```
+- Current version: `1.0.0-SNAPSHOT` single-node preview.
+- Nameserver is an in-memory soft-state registry; clients re-register after restart.
+- WebSocket/SSE, grouped discovery, cold-start recovery, and clustered high availability are not presented as implemented capabilities.
+- Defaults favor local or trusted-network startup. Across a trust boundary, restrict bind addresses and configure protocol/admin tokens plus outer TLS/ACL controls.
+- SDK artifacts are not published to Maven Central yet; build from source until the first public SDK release.
 
 ## Integration paths
 
@@ -103,12 +116,6 @@ See [docs-public/README.md](docs-public/README.md) for the complete English/Chin
 | `rover-admin` | Optional runtime management console |
 | `rover-gateway-test` | Demo backend and test frontend; verification only |
 | `docs-public` | Public English/Chinese documentation shipped with the source |
-
-## Current runtime boundaries
-
-- Nameserver is currently an in-memory soft-state registry; clients re-register after a restart.
-- The documented examples target a single-node ordinary HTTP path. WebSocket/SSE, grouped discovery, cold-start recovery, and clustered high availability are not presented as implemented capabilities.
-- Defaults favor zero-config startup on a local or trusted network. Across a trust boundary, restrict bind addresses and configure protocol/admin tokens plus outer TLS/ACL controls.
 
 ## Roadmap
 
