@@ -134,12 +134,14 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
 
         InboundRequestStall.arm(ctx.channel(), requestIdleTimeoutSeconds);
 
+        // 是admin发来的请求
         if (requestPath.startsWith(GatewayManageApi.PREFIX)) {
             InboundExchange exchange = new InboundExchange(requestPath, request, true, maxBodyBytes);
             ctx.channel().attr(INBOUND).set(exchange);
             return;
         }
 
+        // 整机闸门限制
         if (!runtime.tryAcquireProcessingPermit()) {
             int used = runtime.inflightUsed();
             int max = runtime.maxInflight();
@@ -222,6 +224,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    /** 请求结束后的一些收尾动作 **/
     private void finishBusiness(
             ChannelHandlerContext ctx,
             GatewayRequestContext context,
@@ -246,6 +249,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    /** 如果是admin的请求，直接在这里进行回应就行了 **/
     private void finishManage(ChannelHandlerContext ctx, InboundExchange exchange) {
         try {
             byte[] body = exchange.body().collectBytes().join();
@@ -268,7 +272,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    // body 超限：413 写完关连接。pipe.abort 会拆已经转出去的上游，别让后端干等
+    /** body 超限：413 写完关连接。pipe.abort 会拆已经转出去的上游，别让后端干等 **/
     private void rejectTooLarge(ChannelHandlerContext ctx, InboundExchange exchange) {
         InboundRequestStall.cancel(ctx.channel());
         ctx.channel().attr(DRAIN).set(Boolean.TRUE);
@@ -292,6 +296,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
+    /** 把请求body和header封装成一个FullHttpRequest **/
     private static FullHttpRequest toFull(HttpRequest headers, byte[] body) {
         DefaultFullHttpRequest full = new DefaultFullHttpRequest(
                 headers.protocolVersion(),
@@ -320,10 +325,12 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         return path.isEmpty() ? "/" : path;
     }
 
+    /** 枪锁 **/
     static boolean tryOccupy(Channel channel) {
         return channel.attr(CHANNEL_BUSY).compareAndSet(null, Boolean.TRUE);
     }
 
+    /** 还锁 **/
     static void releaseOccupy(Channel channel) {
         InboundRequestStall.cancel(channel);
         channel.attr(CHANNEL_BUSY).set(null);
