@@ -94,7 +94,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         // body
         if (msg instanceof HttpContent content) {
             // FullHttpRequest 就单独去除body加上前面的head凑一下
-            if (msg instanceof HttpRequest) {
+            if (msg instanceof FullHttpRequest) {
                 // FullHttpRequest 同时是 LastHttpContent。管道只拿 body 副本，别把整包 release 掉。
                 // 其实这里不拷贝也行，但是后续想用的时候会报错，防御一手
                 ByteBuf data = content.content();
