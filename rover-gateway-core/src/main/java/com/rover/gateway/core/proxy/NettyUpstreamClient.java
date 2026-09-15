@@ -75,6 +75,7 @@ final class NettyUpstreamClient {
     private final ConcurrentHashMap<PoolKey, FixedChannelPool> pools = new ConcurrentHashMap<>();
     private volatile EventLoopGroup fallbackGroup;
 
+    /** 初始化出站连接池的容量、连接超时和请求超时配置。 */
     NettyUpstreamClient(int connectTimeoutMillis, int requestTimeoutMillis) {
         this.connectTimeoutMillis = connectTimeoutMillis;
         this.requestTimeoutMillis = new AtomicLong(requestTimeoutMillis);
@@ -91,14 +92,17 @@ final class NettyUpstreamClient {
                 maxConnectionsPerEventLoop, maxPendingAcquires, idleTimeoutSeconds);
     }
 
+    /** 返回当前正在处理的出站请求数。 */
     int getInFlightCount() {
         return inFlight.get();
     }
 
+    /** 热更新单个上游请求允许占用的最长时间。 */
     void setRequestTimeoutMillis(long timeoutMillis) {
         this.requestTimeoutMillis.set(timeoutMillis);
     }
 
+    /** 兼容完整请求：先把 body 包成管道，再走统一的流式转发。 */
     CompletableFuture<HttpProxyClient.ProxyResult> forwardAsync(
             ChannelHandlerContext clientCtx,
             FullHttpRequest request,
@@ -110,6 +114,7 @@ final class NettyUpstreamClient {
                 InboundBodyPipe.fromFull(request, GatewayDefaults.MAX_REQUEST_BODY_BYTES));
     }
 
+    /** 转发已经拆成请求头和 body 管道的入站请求。 */
     CompletableFuture<HttpProxyClient.ProxyResult> forwardAsync(
             ChannelHandlerContext clientCtx,
             HttpRequest request,
@@ -118,7 +123,7 @@ final class NettyUpstreamClient {
         return forwardAsync(clientCtx, request, targetUrl, body, true);
     }
 
-    // netty模式 发送请求
+    /** 校验目标、借连接并启动一次 Netty 出站交换。 */
     CompletableFuture<HttpProxyClient.ProxyResult> forwardAsync(
             ChannelHandlerContext clientCtx,
             HttpRequest request,
@@ -220,6 +225,7 @@ final class NettyUpstreamClient {
     }
 
     /**
+     * 向上游写请求头，并把入站 body 管道接到上游连接。
      * GET/空 body 必须一帧 Full 发出去。
      * 头先写、Last 还在 biz 线程路上时，上游已经按 Content-Length:0 回了，
      * 出站 codec 还以为请求没写完，连接池下一发就会 502。
@@ -257,6 +263,7 @@ final class NettyUpstreamClient {
         });
     }
 
+    /** 将一片入站 body 转交给上游，并在最后一片结束请求。 */
     private void writeInboundChunk(Exchange exchange, HttpContent chunk) {
         if (exchange.done.get()) {
             chunk.release();
@@ -281,6 +288,7 @@ final class NettyUpstreamClient {
         }
     }
 
+    /** 关闭全部连接池，以及按需创建的备用 EventLoop。 */
     void close() {
         for (FixedChannelPool pool : pools.values()) {
             pool.close();
@@ -293,6 +301,7 @@ final class NettyUpstreamClient {
         }
     }
 
+    /** 优先复用入站 Channel 的 EventLoop，不兼容时切到备用组。 */
     private EventLoop outboundLoop(ChannelHandlerContext clientCtx) {
         EventLoop loop = clientCtx.channel().eventLoop();
         if (IoTransport.current().sameFamily(loop)) {
@@ -301,6 +310,7 @@ final class NettyUpstreamClient {
         return fallbackGroup().next();
     }
 
+    /** 懒创建 I/O 模型不兼容时使用的备用 EventLoop 组。 */
     private synchronized EventLoopGroup fallbackGroup() {
         if (fallbackGroup == null) {
             fallbackGroup = IoTransport.current().newGroup(1);
@@ -308,7 +318,7 @@ final class NettyUpstreamClient {
         return fallbackGroup;
     }
 
-    // 以后端的ip+端口为维度去创建channel池，后续每次来的时候就是尝试从里面获取，而不是重新创建
+    /** 按 EventLoop 和上游地址创建一个可复用的连接池。 */
     private FixedChannelPool newPool(PoolKey key) {
         Bootstrap bootstrap = new Bootstrap()
                 .group(key.loop)
@@ -327,6 +337,7 @@ final class NettyUpstreamClient {
                 maxPendingAcquires);
     }
 
+    /** 复制可透传请求头，并补齐 Host、长度和转发链路信息。 */
     private DefaultHttpRequest buildOutboundHeaders(
             ChannelHandlerContext clientCtx,
             HttpRequest inbound,
@@ -356,6 +367,7 @@ final class NettyUpstreamClient {
         return outbound;
     }
 
+    /** 从目标 URL 取出发给上游的 path 和 query。 */
     private static String requestUri(URI uri) {
         String path = uri.getRawPath();
         if (path == null || path.isEmpty()) {
@@ -367,10 +379,12 @@ final class NettyUpstreamClient {
         return path;
     }
 
+    /** 生成上游请求应携带的 Host 头。 */
     private static String hostHeader(String host, int port) {
         return port == 80 ? host : host + ":" + port;
     }
 
+    /** 写入请求 ID 和客户端来源等转发头。 */
     private static void addForwardedHeaders(
             ChannelHandlerContext clientCtx,
             HttpRequest inbound,
@@ -390,10 +404,12 @@ final class NettyUpstreamClient {
         }
     }
 
+    /** 按默认策略结束失败交换，并尽量回写错误给客户端。 */
     private void fail(Exchange exchange, Throwable err) {
         fail(exchange, err, true);
     }
 
+    /** 只允许一个失败分支收尾：取消超时、拆连接并完成结果。 */
     private void fail(Exchange exchange, Throwable err, boolean writeClientError) {
         if (!exchange.done.compareAndSet(false, true)) {
             return;
@@ -415,6 +431,7 @@ final class NettyUpstreamClient {
         finish(exchange.result, result);
     }
 
+    /** 收到上游最后一片响应后，归还连接并完成本次交换。 */
     private void succeed(Exchange exchange, int statusCode, boolean keepAlive) {
         if (!exchange.done.compareAndSet(false, true)) {
             return;
@@ -426,6 +443,7 @@ final class NettyUpstreamClient {
                 statusCode, elapsedMillis(exchange.startNanos), false, false));
     }
 
+    /** 清理连接上的交换状态，并归还或关闭上游连接。 */
     private void release(Exchange exchange, boolean closeChannel) {
         Channel upstream = exchange.upstream;
         upstream.attr(EXCHANGE).set(null);
@@ -438,6 +456,7 @@ final class NettyUpstreamClient {
         }
     }
 
+    /** 完成结果 Future；只有首次完成时才扣减在途计数。 */
     private void finish(CompletableFuture<HttpProxyClient.ProxyResult> result, HttpProxyClient.ProxyResult value) {
         if (result.complete(value)) {
             inFlight.updateAndGet(v -> Math.max(0, v - 1));
@@ -450,6 +469,7 @@ final class NettyUpstreamClient {
         return new HttpProxyClient.ProxyResult(code, elapsedMillis(startNanos), false, false);
     }
 
+    /** 在请求已经结束后取消尚未触发的超时任务。 */
     private static void cancelTimeout(Exchange exchange) {
         ScheduledFuture<?> timeout = exchange.timeout;
         if (timeout != null) {
@@ -457,6 +477,7 @@ final class NettyUpstreamClient {
         }
     }
 
+    /** 根据响应是否已开始和异常类型，关闭连接或回写对应错误码。 */
     private HttpProxyClient.ProxyResult handleError(
             ChannelHandlerContext ctx,
             Throwable err,
@@ -500,10 +521,12 @@ final class NettyUpstreamClient {
                 HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
     }
 
+    /** 判断异常是否属于连接阶段超时。 */
     private static boolean isConnectTimeout(Throwable cause) {
         return cause != null && cause.getClass().getName().contains("ConnectTimeout");
     }
 
+    /** 将异常归类为供指标和熔断器使用的代理结果。 */
     private static HttpProxyClient.ProxyResult classify(Throwable cause, long startNanos) {
         if (cause instanceof TimeoutException) {
             return new HttpProxyClient.ProxyResult(
@@ -517,6 +540,7 @@ final class NettyUpstreamClient {
                 HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
     }
 
+    /** 剥掉连接和 Future 包装异常，保留真正的失败原因。 */
     private static Throwable unwrap(Throwable err) {
         Throwable cause = err;
         while (cause.getCause() != null
@@ -527,6 +551,7 @@ final class NettyUpstreamClient {
         return cause == null ? err : cause;
     }
 
+    /** 向客户端写出统一格式的 JSON 代理错误。 */
     private static void writeProxyError(ChannelHandlerContext ctx, HttpResponseStatus status, String message) {
         Map<String, Object> error = new LinkedHashMap<>();
         error.put("code", status.code());
@@ -541,6 +566,7 @@ final class NettyUpstreamClient {
         writeOn(ctx, response, true);
     }
 
+    /** 透传上游响应头，并标记客户端响应已经开始。 */
     static void writeResponseHeaders(ChannelHandlerContext ctx, HttpResponse upstream) {
         DefaultHttpResponse response = new DefaultHttpResponse(HttpVersion.HTTP_1_1, upstream.status());
         for (Map.Entry<String, String> header : upstream.headers()) {
@@ -557,6 +583,7 @@ final class NettyUpstreamClient {
         writeOn(ctx, response, false);
     }
 
+    /** 始终切回客户端 Channel 所属 EventLoop 执行写操作。 */
     static void writeOn(ChannelHandlerContext ctx, Object msg, boolean flush) {
         EventLoop loop = ctx.channel().eventLoop();
         if (loop.inEventLoop()) {
@@ -576,16 +603,19 @@ final class NettyUpstreamClient {
         });
     }
 
+    /** 取走并清除“响应头已写入”标记。 */
     private static boolean clearStarted(ChannelHandlerContext ctx) {
         Boolean started = ctx.channel().attr(RESPONSE_STARTED).getAndSet(null);
         return Boolean.TRUE.equals(started);
     }
 
+    /** 将起始纳秒时间换算为非负的耗时毫秒数。 */
     private static long elapsedMillis(long startNanos) {
         return Math.max(0, (System.nanoTime() - startNanos) / 1_000_000);
     }
 
     private final class PoolHandler implements ChannelPoolHandler {
+        /** 为新建的上游连接装配编解码、空闲检测和响应处理器。 */
         @Override
         public void channelCreated(Channel ch) {
             ch.pipeline().addLast(new IdleStateHandler(idleTimeoutSeconds, 0, 0, TimeUnit.SECONDS));
@@ -594,10 +624,12 @@ final class NettyUpstreamClient {
             ch.pipeline().addLast(new UpstreamResponseHandler());
         }
 
+        /** 连接借出时无需额外初始化，交换状态在开始转发时绑定。 */
         @Override
         public void channelAcquired(Channel ch) {
         }
 
+        /** 连接归还连接池前清掉上一单残留的交换状态。 */
         @Override
         public void channelReleased(Channel ch) {
             ch.attr(EXCHANGE).set(null);
@@ -605,6 +637,7 @@ final class NettyUpstreamClient {
     }
 
     private final class UpstreamResponseHandler extends ChannelInboundHandlerAdapter {
+        /** 流式接收上游响应，并立刻将头和 body 转写给客户端。 */
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) {
             Exchange exchange = ctx.channel().attr(EXCHANGE).get();
@@ -642,6 +675,7 @@ final class NettyUpstreamClient {
             }
         }
 
+        /** 将上游 Channel 的 I/O 异常归入当前交换。 */
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
             Exchange exchange = ctx.channel().attr(EXCHANGE).get();
@@ -652,6 +686,7 @@ final class NettyUpstreamClient {
             }
         }
 
+        /** 上游连接意外关闭时，结束尚未完成的交换。 */
         @Override
         public void channelInactive(ChannelHandlerContext ctx) {
             Exchange exchange = ctx.channel().attr(EXCHANGE).get();
@@ -675,6 +710,7 @@ final class NettyUpstreamClient {
         volatile boolean keepAlive = true;
         int received;
 
+        /** 保存一次客户端到上游转发所需的全部状态。 */
         Exchange(
                 ChannelHandlerContext clientCtx,
                 ChannelPool pool,
