@@ -132,6 +132,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
             return;
         }
 
+        // 开一个闹钟
         InboundRequestStall.arm(ctx.channel(), requestIdleTimeoutSeconds);
 
         // 是admin发来的请求

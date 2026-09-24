@@ -1,14 +1,16 @@
 package com.rover.nameserver.core.push;
 
 import com.rover.common.codec.RoverMessageCodecSupport;
+import com.rover.common.model.ServiceInstance;
 import com.rover.common.protocol.PushType;
 import com.rover.common.protocol.ServicePushBody;
 import com.rover.nameserver.core.cluster.NameserverGeneration;
 import com.rover.nameserver.core.metrics.NameserverMetricsRegistry;
 import com.rover.nameserver.core.registry.RegistrySnapshot;
 import io.netty.channel.Channel;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -18,7 +20,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-06 09:00:00
- * Description: 服务变更推送：向订阅连接推送携带 revision 与 generation.epoch 的全量快照，供客户端拒旧/换代判断
+ * Description: 服务变更推送：按订阅组裁剪实例列表后推送，通配订阅仍收整份快照
  */
 @Slf4j
 public class PushService {
@@ -62,41 +64,53 @@ public class PushService {
     }
 
 
-    /** 推送服务实例快照给全部订阅者，含失效连接清理与单连接失败告警。 */
+    /**
+     * 按订阅组分别推送。
+     * 通配订阅收到整份名单；订了具体组的连接只收到这一组，避免和查询结果不一致。
+     */
     public void pushSnapshot(RegistrySnapshot snapshot) {
         if (!pushEnabled.get() || snapshot == null) {
             return;
         }
-        Set<Channel> subscribers =
-                subscriptionManager.findSubscribers(snapshot.getServiceName(), snapshot.getGroup());
-        if (subscribers.isEmpty()) {
+        List<String> groups = subscriptionManager.groupsToNotify(
+                snapshot.getServiceName(), snapshot.getGroup());
+        if (groups.isEmpty()) {
             return;
         }
-        metrics.push(snapshot.getServiceName(), subscribers.size());
-        ServicePushBody body = toPushBody(snapshot);
-
         long pushId = pushIdGenerator.getAndIncrement();
-        for (Channel channel : subscribers) {
-            if (channel == null) {
-                continue;
-            }
-            if (!channel.isActive()) {
-                subscriptionManager.removeChannel(channel);
-                continue;
-            }
-            channel.writeAndFlush(RoverMessageCodecSupport.push(pushId, body)).addListener(future -> {
-                if (!future.isSuccess()) {
-                    log.warn("推送失败: service={}, channel={}",
-                            snapshot.getServiceName(), channel.remoteAddress(), future.cause());
+        int delivered = 0;
+        String epoch = null;
+        for (String group : groups) {
+            ServicePushBody body = toPushBody(
+                    snapshot, wireGroup(group), instancesForGroup(snapshot.getInstances(), group));
+            epoch = body.getEpoch();
+            for (Channel channel : subscriptionManager.channels(snapshot.getServiceName(), group)) {
+                if (channel == null) {
+                    continue;
                 }
-            });
+                if (!channel.isActive()) {
+                    subscriptionManager.removeChannel(channel);
+                    continue;
+                }
+                channel.writeAndFlush(RoverMessageCodecSupport.push(pushId, body)).addListener(future -> {
+                    if (!future.isSuccess()) {
+                        log.warn("推送失败: service={}, channel={}",
+                                snapshot.getServiceName(), channel.remoteAddress(), future.cause());
+                    }
+                });
+                delivered++;
+            }
         }
+        if (delivered == 0) {
+            return;
+        }
+        metrics.push(snapshot.getServiceName(), delivered);
         log.info("推送服务变更: service={}, revision={}, epoch={}, term={}, subscribers={}",
                 snapshot.getServiceName(),
                 snapshot.getRevision(),
-                body.getEpoch(),
+                epoch,
                 generation.term(),
-                subscribers.size());
+                delivered);
     }
 
     /** 初次订阅只向发起订阅的连接发送当前快照，避免把老订阅者全部广播一遍。 */
@@ -105,7 +119,7 @@ public class PushService {
             return;
         }
         metrics.push(snapshot.getServiceName(), 1);
-        ServicePushBody body = toPushBody(snapshot);
+        ServicePushBody body = toPushBody(snapshot, snapshot.getGroup(), snapshot.getInstances());
         long pushId = pushIdGenerator.getAndIncrement();
         channel.writeAndFlush(RoverMessageCodecSupport.push(pushId, body)).addListener(future -> {
             if (!future.isSuccess()) {
@@ -115,14 +129,36 @@ public class PushService {
         });
     }
 
-    private ServicePushBody toPushBody(RegistrySnapshot snapshot) {
+    private ServicePushBody toPushBody(
+            RegistrySnapshot snapshot, String group, List<ServiceInstance> instances) {
         ServicePushBody body = new ServicePushBody();
         body.setServiceName(snapshot.getServiceName());
-        body.setGroup(snapshot.getGroup());
-        body.setInstances(snapshot.getInstances());
+        body.setGroup(group);
+        body.setInstances(instances == null ? List.of() : instances);
         body.setRevision(snapshot.getRevision());
         body.setEpoch(generation.epoch());
         body.setPushType(PushType.SNAPSHOT.name());
         return body;
+    }
+
+    /** 通配订阅保留整份；具体组只保留 group 相等的实例，规则与注册表 query 一致。 */
+    private static List<ServiceInstance> instancesForGroup(List<ServiceInstance> instances, String group) {
+        if (instances == null || instances.isEmpty()) {
+            return List.of();
+        }
+        if (group == null || group.isBlank()) {
+            return instances;
+        }
+        List<ServiceInstance> filtered = new ArrayList<>();
+        for (ServiceInstance instance : instances) {
+            if (instance != null && group.equals(instance.getGroup())) {
+                filtered.add(instance);
+            }
+        }
+        return filtered;
+    }
+
+    private static String wireGroup(String group) {
+        return group == null || group.isBlank() ? null : group;
     }
 }
