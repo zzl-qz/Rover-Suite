@@ -19,6 +19,7 @@ final class InboundRequestStall {
     private InboundRequestStall() {
     }
 
+    // 加上一个闹钟，大概就是 timeoutSeconds秒 还没有下一个body会直接关闭
     static void arm(Channel channel, int timeoutSeconds) {
         cancel(channel);
         if (timeoutSeconds <= 0 || channel == null || !channel.isActive()) {
@@ -33,6 +34,7 @@ final class InboundRequestStall {
         channel.attr(STALL).set(future);
     }
 
+    // 取消闹钟
     static void cancel(Channel channel) {
         if (channel == null) {
             return;

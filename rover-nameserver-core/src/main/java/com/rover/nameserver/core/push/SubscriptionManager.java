@@ -1,7 +1,9 @@
 package com.rover.nameserver.core.push;
 
 import io.netty.channel.Channel;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -68,6 +70,39 @@ public class SubscriptionManager {
         }
     }
 
+    /**
+     * 这次变更要通知哪些订阅组。
+     * 空字符串是通配订阅，始终通知；实例带了具体组时再通知该组。
+     */
+    public List<String> groupsToNotify(String serviceName, String instanceGroup) {
+        Map<String, Set<Channel>> byGroup = subscriptions.get(serviceName);
+        if (byGroup == null || byGroup.isEmpty()) {
+            return List.of();
+        }
+        List<String> groups = new ArrayList<>(2);
+        if (hasChannels(byGroup.get(""))) {
+            groups.add("");
+        }
+        String normalized = normalizeGroup(instanceGroup);
+        if (!normalized.isEmpty() && hasChannels(byGroup.get(normalized))) {
+            groups.add(normalized);
+        }
+        return groups;
+    }
+
+    /** 某个服务、某个订阅组上的连接副本。组名 null 或空白按通配组处理。 */
+    public Set<Channel> channels(String serviceName, String group) {
+        Map<String, Set<Channel>> byGroup = subscriptions.get(serviceName);
+        if (byGroup == null) {
+            return Set.of();
+        }
+        Set<Channel> channels = byGroup.get(normalizeGroup(group));
+        if (!hasChannels(channels)) {
+            return Set.of();
+        }
+        return Set.copyOf(channels);
+    }
+
     /** 查询某服务下应接收变更的连接（去重）：通配组订阅者一律返回，实例组非空时再加入指定组订阅者。 */
     public Set<Channel> findSubscribers(String serviceName, String instanceGroup) {
         Map<String, Set<Channel>> byGroup = subscriptions.get(serviceName);
@@ -94,5 +129,9 @@ public class SubscriptionManager {
     /** 组名归一化：null 或空白一律归一为 ""（通配组），避免同组多写法 */
     private String normalizeGroup(String group) {
         return group == null || group.isBlank() ? "" : group;
+    }
+
+    private static boolean hasChannels(Set<Channel> channels) {
+        return channels != null && !channels.isEmpty();
     }
 }
