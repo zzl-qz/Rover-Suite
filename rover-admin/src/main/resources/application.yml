@@ -4,6 +4,9 @@ server:
 spring:
   application:
     name: rover-admin
+  http:
+    converters:
+      preferred-json-mapper: jackson2
 
 # Admin 只调组件管理口，自己不持有真实配置
 rover:
