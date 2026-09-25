@@ -503,6 +503,22 @@ code {
     color: var(--muted);
 }
 
+/* ============ 智能诊断 ============ */
+.diagnosis-form { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(240px, 2fr) auto; gap: 12px; align-items: end; }
+.diagnosis-form .btn { min-height: 34px; }
+.diagnosis-target { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 14px; }
+.diagnosis-step { display: grid; grid-template-columns: 24px 110px 70px 1fr; align-items: start; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.diagnosis-step-num { color: var(--muted); font-family: var(--mono); }
+.diagnosis-step .muted, .diagnosis-evidence-row span { overflow-wrap: anywhere; }
+.diagnosis-task-error { margin: 12px 0 0; }
+.diagnosis-summary, .diagnosis-ai { margin: 0 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnosis-evidence-row { display: grid; grid-template-columns: 120px 1fr 150px; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.diagnosis-evidence-row time { text-align: right; white-space: nowrap; }
+.diagnosis-limitations { margin-top: 14px; }
+.diagnosis-limitations ul { margin: 6px 0 0; padding-left: 20px; color: var(--muted); }
+.diagnosis-limitations li { margin: 4px 0; }
+.page h3 { margin: 14px 0 8px; font-size: 13px; }
+
 /* ============ 响应式 ============ */
 @media (max-width: 1100px) {
     .stat-grid, .chart-grid, .comp-grid, .form-grid { grid-template-columns: 1fr 1fr; }
@@ -523,6 +539,8 @@ code {
     .stat-card:last-child { border-bottom: 0; }
     .content { padding: 16px; }
     .topbar { padding: 14px 16px; flex-direction: column; align-items: flex-start; gap: 8px; }
+    .diagnosis-form, .diagnosis-step, .diagnosis-evidence-row { grid-template-columns: 1fr; }
+    .diagnosis-evidence-row time { text-align: left; }
 }
 
 /* ============ 实时顶栏 ============ */

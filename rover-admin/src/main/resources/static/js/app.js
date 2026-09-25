@@ -14,6 +14,7 @@ createApp({
             {},
             P.shared.data(),
             P.dashboard.data(),
+            P.diagnosis.data(),
             P.traces.data(),
             P.routes.data(),
             P.instances.data(),
@@ -26,6 +27,7 @@ createApp({
         {},
         P.shared.computed,
         P.dashboard.computed,
+        P.diagnosis.computed,
         P.traces.computed,
         P.routes.computed,
         P.instances.computed,
@@ -44,6 +46,7 @@ createApp({
         this._resizeHandler = () => this.resizeCharts();
         this._visibilityHandler = () => {
             if (!document.hidden && this.page === 'dashboard') this.fetchLive();
+            if (!document.hidden && this.page === 'diagnosis' && this.diagnosisTask && !this.diagnosisTerminal) this.fetchDiagnosis();
         };
         window.addEventListener('resize', this._resizeHandler);
         document.addEventListener('visibilitychange', this._visibilityHandler);
@@ -61,6 +64,7 @@ createApp({
         {},
         P.shared.methods,
         P.dashboard.methods,
+        P.diagnosis.methods,
         P.traces.methods,
         P.routes.methods,
         P.instances.methods,

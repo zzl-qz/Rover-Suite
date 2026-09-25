@@ -7,6 +7,22 @@ spring:
   http:
     converters:
       preferred-json-mapper: jackson2
+  ai:
+    model:
+      chat: ${ROVER_AGENT_MODEL_CHAT:none}
+      embedding: none
+    openai:
+      api-key: ${ROVER_AGENT_API_KEY:}
+      base-url: ${ROVER_AGENT_BASE_URL:https://api.openai.com}
+      timeout: 30s
+      max-retries: 0
+      chat:
+        model: ${ROVER_AGENT_MODEL:gpt-5-mini}
+        parallel-tool-calls: false
+    tools:
+      limits:
+        max-calls-per-tool-default: 2
+        max-total-tool-calls: 6
 
 # Admin 只调组件管理口，自己不持有真实配置
 rover:

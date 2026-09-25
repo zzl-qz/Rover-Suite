@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.rover</groupId>
+        <artifactId>rover-suite-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>rover-agent-runtime</artifactId>
+    <name>rover-agent-runtime</name>
+    <description>Ops Agent 运行层：Spring AI 模型解读 + Spring AI Alibaba Graph 调查编排 + 任务生命周期</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <!-- 父工程的 spring-boot 3.2.0 供 Gateway / Nameserver 使用；
+             运行层与 rover-admin 同处 Spring AI 2.0.x 线，因此在本模块内覆盖版本边界。 -->
+        <agent.spring-boot.version>4.1.1</agent.spring-boot.version>
+        <spring-ai.version>2.0.1</spring-ai.version>
+        <spring-ai-alibaba.version>2.0.0-M1.1</spring-ai-alibaba.version>
+        <!-- 父工程为 Gateway / Nameserver 声明了 JUnit 5.10.1 与 SLF4J 2.0.9，
+             这里覆盖这两个属性：运行层的测试与日志版本必须与 rover-admin 同处 Boot 4.1.1 线。 -->
+        <junit.version>6.0.3</junit.version>
+        <slf4j.version>2.0.18</slf4j.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${agent.spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.rover</groupId>
+            <artifactId>rover-agent-core</artifactId>
+        </dependency>
+        <!-- 只需要 IoC 容器，不引 spring-boot：运行层不负责进程启动与配置绑定。 -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+        </dependency>
+        <!-- @PreDestroy：运行层自己管理调查线程池的关闭。 -->
+        <dependency>
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+        </dependency>
+        <!-- ChatClient / ChatModel / @Tool：模型解读所需的最小 Spring AI 依赖。 -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-client-chat</artifactId>
+        </dependency>
+        <!-- StateGraph 调查编排。 -->
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-graph-core</artifactId>
+            <version>${spring-ai-alibaba.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

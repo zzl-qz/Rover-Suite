@@ -19,6 +19,14 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | GET | `/api/traces?traceId=&path=&slow=` | Gateway 请求链路记录及筛选 |
 | GET | `/api/configs` | Gateway/Nameserver 配置元数据 |
 | POST | `/api/configs` | 更新一个配置项 |
+| POST | `/api/agent/diagnoses` | 创建只读诊断任务；请求体为 `{"path":"/api/demo/tt","question":"为什么失败？"}` |
+| GET | `/api/agent/diagnoses/{taskId}` | 查询任务状态、采集与解读步骤、结论及证据 |
+
+诊断任务状态为 `PENDING`、`RUNNING`、`COMPLETED` 或 `FAILED`。结果包含 `summary`、`confidence`、
+带来源和采集时间的 `evidence`、`limitations`，以及假设验证 `hypotheses`：每条含 `id`、`statement`、
+`status`、`detail`、`sources`，其中 `status` 为 `CONFIRMED`、`REJECTED` 或 `UNKNOWN`，分别表示该假设
+被确认、排除或证据不足无法验证。配置模型后还会包含可选的 `aiAnalysis`。诊断全程只读，不会修改路由或配置；
+任务存于 Admin 内存，重启后不可查询。
 
 ## 请求示例
 

@@ -54,6 +54,7 @@ Open Admin at <http://127.0.0.1:9090>. See the [Docker Compose demo](deploy/dock
 - **Mixed-language registration:** Java services can use the Starter; Node.js, Python, Go, PHP, and C++ can register through the HTTP+JSON API.
 - **Runtime visibility:** Admin shows routes, instances, recent events, sampled request traces, metrics, and hot-reloadable settings.
 - **Extension points without a heavy platform:** Java SPI filters and load-balancers cover common customization without introducing a full service mesh.
+- **Ops agent (preview):** Rover Ops Agent runs read-only fault investigation over Gateway and Nameserver runtime data and returns a conclusion, evidence sources, and collection timestamps; see [Rover Ops Agent](docs-public/ops-agent.md) for positioning and boundaries.
 
 ## What It Solves
 
@@ -103,6 +104,7 @@ Rover-Suite is for small teams running multiple monoliths, side services, or mix
 | Deploy, harden, and go live | [Production Deployment](docs-public/production-deployment.md) · [Small-team go-live](docs-public/small-team-go-live.md) · [Docker Compose](deploy/docker/README.md) |
 | Troubleshoot and benchmark | [Troubleshooting](docs-public/troubleshooting.md) · [Benchmark Guide](docs-public/benchmark-guide.md) · [Performance Report](docs-public/performance-report.md) |
 | Change source code or maintain docs | [Development Guide](docs-public/development-guide.md) · [Release Checklist](docs-public/release-checklist.md) |
+| Understand the ops agent positioning | [Rover Ops Agent](docs-public/ops-agent.md) |
 
 See [docs-public/README.md](docs-public/README.md) for the complete English/Chinese index.
 
@@ -114,6 +116,8 @@ See [docs-public/README.md](docs-public/README.md) for the complete English/Chin
 | `rover-nameserver-*` | Nameserver core, process, client, and Starter |
 | `rover-gateway-*` | Gateway core, process, and optional Nacos adapter |
 | `rover-admin` | Optional runtime management console |
+| `rover-agent-core` | Ops Agent domain and rules layer (domain objects, read-only ports, neutral snapshots); no Spring / Jackson |
+| `rover-agent-runtime` | Ops Agent runtime: Spring AI + StateGraph orchestration, task lifecycle, model interpretation |
 | `rover-gateway-test` | Demo backend and test frontend; verification only |
 | `docs-public` | Public English/Chinese documentation shipped with the source |
 

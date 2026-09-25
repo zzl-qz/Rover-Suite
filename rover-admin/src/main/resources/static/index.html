@@ -396,6 +396,92 @@
                 </div>
             </section>
 
+            <!-- ================= 智能诊断 ================= -->
+            <section v-if="page === 'diagnosis'" class="page">
+                <div class="card">
+                    <div class="card-head">
+                        <h2>发起诊断</h2>
+                        <span class="card-hint">读取路由、注册实例、指标和追踪的现有数据；不会向业务路径发起请求</span>
+                    </div>
+                    <form class="diagnosis-form" @submit.prevent="submitDiagnosis">
+                        <div class="field">
+                            <label for="diagnosis-path">请求路径</label>
+                            <input id="diagnosis-path" v-model="diagnosisForm.path" placeholder="/api/demo/tt" required>
+                        </div>
+                        <div class="field">
+                            <label for="diagnosis-question">诊断问题</label>
+                            <input id="diagnosis-question" v-model="diagnosisForm.question" placeholder="这个路径为什么调用失败？" required>
+                        </div>
+                        <button class="btn primary" type="submit" :disabled="diagnosisSubmitting || diagnosisFetching || (diagnosisTask && !diagnosisTerminal)">
+                            {{ diagnosisSubmitting ? '提交中...' : '开始诊断' }}
+                        </button>
+                    </form>
+                </div>
+
+                <div v-if="diagnosisError" class="banner warn">{{ diagnosisError }}</div>
+                <div v-if="!diagnosisTask" class="empty">暂无诊断任务。输入路径和问题后开始。</div>
+
+                <div v-if="diagnosisTask" class="card">
+                    <div class="card-head">
+                        <h2>采集与解读步骤</h2>
+                        <span class="badge" :class="diagnosisStatusBadge(diagnosisTask.status)">{{ diagnosisStatusLabel(diagnosisTask.status) }}</span>
+                        <span class="card-hint ml-auto">任务 {{ diagnosisTask.taskId }} · {{ fmtTime(diagnosisTask.createdAtMillis) }}</span>
+                    </div>
+                    <div class="diagnosis-target">
+                        <code>{{ diagnosisTask.path }}</code>
+                        <span>{{ diagnosisTask.question }}</span>
+                    </div>
+                    <div v-if="diagnosisTask.steps && diagnosisTask.steps.length" class="diagnosis-steps">
+                        <div v-for="(step, index) in diagnosisTask.steps" :key="index" class="diagnosis-step">
+                            <span class="diagnosis-step-num">{{ index + 1 }}</span>
+                            <strong>{{ step.name }}</strong>
+                            <span class="badge" :class="diagnosisStatusBadge(step.status)">{{ diagnosisStatusLabel(step.status) }}</span>
+                            <span class="muted">{{ step.detail }}</span>
+                        </div>
+                    </div>
+                    <div v-else-if="!diagnosisTerminal" class="muted">等待诊断步骤...</div>
+                    <div v-if="diagnosisTask.error" class="banner warn diagnosis-task-error">{{ diagnosisTask.error }}</div>
+                </div>
+
+                <div v-if="diagnosisTask && diagnosisTask.result" class="card">
+                    <div class="card-head">
+                        <h2>诊断结论</h2>
+                        <span class="card-hint">置信度：{{ diagnosisConfidenceLabel(diagnosisTask.result.confidence) }}</span>
+                        <span v-if="diagnosisTask.completedAtMillis" class="card-hint ml-auto">完成于 {{ fmtTime(diagnosisTask.completedAtMillis) }}</span>
+                    </div>
+                    <p class="diagnosis-summary">{{ diagnosisTask.result.summary }}</p>
+                    <h3>调查过程</h3>
+                    <div v-if="diagnosisTask.result.hypotheses && diagnosisTask.result.hypotheses.length" class="diagnosis-steps">
+                        <div v-for="(item, index) in diagnosisTask.result.hypotheses" :key="index" class="diagnosis-step">
+                            <span class="diagnosis-step-num">{{ item.id }}</span>
+                            <strong>{{ item.statement }}</strong>
+                            <span class="badge" :class="diagnosisHypothesisBadge(item.status)">{{ diagnosisHypothesisLabel(item.status) }}</span>
+                            <span class="muted">{{ item.detail }}</span>
+                            <span v-if="item.sources && item.sources.length" class="muted">依据 {{ item.sources.join('、') }}</span>
+                        </div>
+                    </div>
+                    <div v-else class="empty slim">暂无假设验证明细</div>
+                    <h3>证据</h3>
+                    <div v-if="!diagnosisTask.result.evidence || !diagnosisTask.result.evidence.length" class="empty slim">暂无可用证据</div>
+                    <div v-else class="diagnosis-evidence">
+                        <div v-for="(item, index) in diagnosisTask.result.evidence" :key="index" class="diagnosis-evidence-row">
+                            <code>{{ item.source }}</code>
+                            <span>{{ item.detail }}</span>
+                            <time class="muted">{{ fmtTime(item.observedAtMillis) }}</time>
+                        </div>
+                    </div>
+                    <div v-if="diagnosisTask.result.limitations && diagnosisTask.result.limitations.length" class="diagnosis-limitations">
+                        <h3>判断范围</h3>
+                        <ul><li v-for="(item, index) in diagnosisTask.result.limitations" :key="index">{{ item }}</li></ul>
+                    </div>
+                </div>
+
+                <div v-if="diagnosisTask && diagnosisTask.result && diagnosisTask.result.aiAnalysis" class="card">
+                    <div class="card-head"><h2>AI 解读</h2></div>
+                    <p class="diagnosis-ai">{{ diagnosisTask.result.aiAnalysis }}</p>
+                </div>
+            </section>
+
             <!-- ================= 请求追踪 ================= -->
             <section v-if="page === 'traces'" class="page">
                 <div class="card">
@@ -631,6 +717,7 @@
 <script src="/js/formatters.js"></script>
 <script src="/js/pages/shared.js"></script>
 <script src="/js/pages/dashboard.js"></script>
+<script src="/js/pages/diagnosis.js"></script>
 <script src="/js/pages/traces.js"></script>
 <script src="/js/pages/routes.js"></script>
 <script src="/js/pages/instances.js"></script>

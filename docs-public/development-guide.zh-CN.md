@@ -48,6 +48,8 @@ mvn clean install -DskipTests
 | [`rover-gateway-core`](../rover-gateway-core/) | Netty Server、路由、Filter、代理、发现、负载均衡、运行时状态 |
 | [`rover-gateway-bootstrap`](../rover-gateway-bootstrap/) | Gateway YAML 映射与可执行进程装配 |
 | [`rover-admin`](../rover-admin/) | 可选 UI/Server，通过 HTTP 调用管理 API，不依赖两个 core 模块 |
+| [`rover-agent-core`](../rover-agent-core/) | Ops Agent 领域与规则层：领域对象、只读端口、中立快照与诊断规则，不依赖 Spring / Jackson |
+| [`rover-agent-runtime`](../rover-agent-runtime/) | Ops Agent 运行层：Spring AI + StateGraph 编排、任务生命周期、模型解读；由 `rover-admin` 装配 |
 | [`rover-gateway-adapter-nacos`](../rover-gateway-adapter-nacos/) | 可选 Nacos 服务发现适配器 |
 | [`rover-gateway-test/backend`](../rover-gateway-test/backend/) | Spring Boot Starter 接入示例 |
 

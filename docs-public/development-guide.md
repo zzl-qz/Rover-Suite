@@ -51,6 +51,8 @@ See [Quick Start](./quick-start.md) for the runnable end-to-end path.
 | [`rover-gateway-core`](../rover-gateway-core/) | Netty server, routes, filters, proxy, discovery, load balancing, runtime state |
 | [`rover-gateway-bootstrap`](../rover-gateway-bootstrap/) | Gateway YAML mapping and executable assembly |
 | [`rover-admin`](../rover-admin/) | Optional UI/server that calls management APIs over HTTP; it does not depend on either core module |
+| [`rover-agent-core`](../rover-agent-core/) | Ops Agent domain and rules layer: domain objects, read-only ports, neutral snapshots, diagnosis rules; no Spring / Jackson |
+| [`rover-agent-runtime`](../rover-agent-runtime/) | Ops Agent runtime: Spring AI + StateGraph orchestration, task lifecycle, model interpretation; wired by `rover-admin` |
 | [`rover-gateway-adapter-nacos`](../rover-gateway-adapter-nacos/) | Optional Nacos service-discovery adapter |
 | [`rover-gateway-test/backend`](../rover-gateway-test/backend/) | Spring Boot Starter integration example |
 
