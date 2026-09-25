@@ -24,6 +24,18 @@ mvn -pl rover-admin spring-boot:run
 | 实例管理 | 查看 Nameserver 注册实例及健康状态 |
 | 最近事件 | 查看注册、注销、推送和剔除事件 |
 | 配置管理 | 修改支持热更新的 Gateway/Nameserver 配置 |
+| 智能诊断 | 只读采集路由、实例、指标和追踪证据，展示假设验证过程与结论，可选 AI 解读 |
+
+智能诊断页在未配置模型时也能工作，直接给出规则诊断（含假设验证与证据）。如需 AI 解读，启动 Admin 前设置以下环境变量：
+
+| 变量 | 取值 |
+| --- | --- |
+| `ROVER_AGENT_MODEL_CHAT` | `openai` |
+| `ROVER_AGENT_API_KEY` | 所选 OpenAI 兼容服务的密钥 |
+| `ROVER_AGENT_BASE_URL` | 服务地址；该服务要求时需带 `/v1` |
+| `ROVER_AGENT_MODEL` | 该服务支持且支持工具调用的模型名 |
+
+密钥不要写入仓库。诊断任务存于 Admin 内存，重启后消失。Agent 只读取管理快照，不会向业务路径发请求，也不会修改路由和配置。
 
 ## 页面速览
 

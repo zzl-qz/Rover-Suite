@@ -372,13 +372,19 @@ flowchart TB
     ST --> DM["rover-demo"]
     CM --> AD["rover-admin"]
 
+    AC["rover-agent-core"]
+    AR["rover-agent-runtime"]
+
+    AC --> AR
+    AR --> AD
+
     classDef shared fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:2px;
     classDef core fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:1.5px;
     classDef app fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
     classDef experimental fill:#FFF7ED,stroke:#F97316,color:#7C2D12,stroke-width:1.5px;
     class CM shared;
-    class NC,NK,GC core;
-    class ST,NS,GB,DM,AD app;
+    class NC,NK,GC,AC core;
+    class ST,NS,GB,DM,AD,AR app;
     class NA experimental;
 ```
 
@@ -388,6 +394,9 @@ flowchart TB
 - `*-core` 模块保存业务逻辑。
 - `*-bootstrap` 模块是进程入口。
 - `rover-admin` 是通过 HTTP 调用管理 API 的可选控制台，编译时不依赖 Nameserver 或 Gateway core 模块。
+- `rover-agent-core` 是 Ops Agent 的领域与规则层（领域对象、只读端口、中立快照），不依赖 Spring / Jackson / Spring AI。
+- `rover-agent-runtime` 承载 Spring AI 与 Spring AI Alibaba Graph 编排；只被 `rover-admin` 依赖，当前与 Admin 同一 JVM 运行。
+  详见 [Rover Ops Agent](ops-agent.zh-CN.md#61-代码布局与模块边界)。
 - `rover-gateway-adapter-nacos` 当前是可选的 Nacos 服务发现适配器，可通过 Maven `nacos` profile 打包。
 - 跨语言 Registrar 示例位于 [`examples/http-registration/`](../examples/http-registration/README.md)。
 

@@ -54,6 +54,7 @@ Admin 地址：<http://127.0.0.1:9090>。停止、验收脚本和生产安全提
 - **混合语言接入：** Java 服务可用 Starter，Node.js、Python、Go、PHP、C++ 可通过 HTTP+JSON API 注册。
 - **运行态可观察：** Admin 提供路由、实例、最近事件、请求追踪、指标和可热更新配置视图。
 - **轻量扩展：** Java SPI Filter / LoadBalancer 覆盖常见定制场景，不必一上来引入完整服务网格。
+- **运维 Agent（预览）：** Rover Ops Agent 基于 Gateway 与 Nameserver 的运行态数据做只读故障调查，输出结论、证据来源和采集时间；定位与边界见 [Rover Ops Agent](docs-public/ops-agent.zh-CN.md)。
 
 ## 解决什么问题
 
@@ -103,6 +104,7 @@ Rover-Suite 面向多单体、旁路服务和混合语言服务逐渐变多的�
 | 部署、加固和上线 | [生产部署](docs-public/production-deployment.zh-CN.md) · [小团队上线 10 条](docs-public/small-team-go-live.zh-CN.md) · [Docker Compose](deploy/docker/README.md) |
 | 排查问题和验证性能 | [故障排查](docs-public/troubleshooting.zh-CN.md) · [性能测试指南](docs-public/benchmark-guide.zh-CN.md) · [性能报告](docs-public/performance-report.zh-CN.md) |
 | 修改源码或维护公开文档 | [二次开发指南](docs-public/development-guide.zh-CN.md) · [发布前检查清单](docs-public/release-checklist.zh-CN.md) |
+| 了解运维 Agent 的定位与边界 | [Rover Ops Agent](docs-public/ops-agent.zh-CN.md) |
 
 完整的中英文索引见 [docs-public/README.md](docs-public/README.md)。
 
@@ -114,6 +116,8 @@ Rover-Suite 面向多单体、旁路服务和混合语言服务逐渐变多的�
 | `rover-nameserver-*` | Nameserver 核心、进程、客户端和 Starter |
 | `rover-gateway-*` | Gateway 核心、进程和可选 Nacos 适配器 |
 | `rover-admin` | 可选运行时管理控制台 |
+| `rover-agent-core` | Ops Agent 领域与规则层（领域对象、只读端口、中立快照），不依赖 Spring / Jackson |
+| `rover-agent-runtime` | Ops Agent 运行层：Spring AI + StateGraph 编排、任务生命周期、模型解读 |
 | `rover-gateway-test` | Demo 后端与测试前端，仅用于验证 |
 | `docs-public` | 随源码发布的中英文公开文档 |
 

@@ -21,6 +21,8 @@
         <module>rover-gateway-core</module>
         <module>rover-gateway-bootstrap</module>
         <module>rover-gateway-adapter-nacos</module>
+        <module>rover-agent-core</module>
+        <module>rover-agent-runtime</module>
         <module>rover-admin</module>
         <module>rover-gateway-test/backend</module>
     </modules>
@@ -185,6 +187,16 @@
             <dependency>
                 <groupId>com.rover</groupId>
                 <artifactId>rover-gateway-adapter-nacos</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.rover</groupId>
+                <artifactId>rover-agent-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.rover</groupId>
+                <artifactId>rover-agent-runtime</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

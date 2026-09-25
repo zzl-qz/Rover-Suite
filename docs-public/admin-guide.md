@@ -17,6 +17,21 @@ Default URL: `http://127.0.0.1:9090/`. In production, copy
 configuration and set the Gateway/Nameserver management URLs and a non-empty
 `rover.admin.admin-token`.
 
+The read-only diagnosis page works with route and instance snapshots even when
+no model is configured. To enable AI explanations, set these environment
+variables before starting Admin:
+
+| Variable | Value |
+| --- | --- |
+| `ROVER_AGENT_MODEL_CHAT` | `openai` |
+| `ROVER_AGENT_API_KEY` | API key for the selected OpenAI-compatible service |
+| `ROVER_AGENT_BASE_URL` | Service base URL; include `/v1` when that service requires it |
+| `ROVER_AGENT_MODEL` | Model name supported by that service and tool calling |
+
+Keep the key outside the repository. Diagnosis tasks are held in Admin memory
+and disappear after restart. The Agent only reads management snapshots; it
+does not send requests to business paths or change routes and configuration.
+
 ## Pages
 
 | Page | Purpose |
@@ -27,6 +42,7 @@ configuration and set the Gateway/Nameserver management URLs and a non-empty
 | Instances | Registered Nameserver instances and health |
 | Recent events | Registration, removal, health and push events |
 | Configuration | Runtime Gateway/Nameserver settings |
+| Diagnosis | Hypothesis-based read-only investigation over route, instance, metric, and trace evidence, with an optional AI explanation |
 
 ## Screenshots and quick orientation
 

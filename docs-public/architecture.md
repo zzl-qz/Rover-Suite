@@ -397,13 +397,19 @@ flowchart TB
     ST --> DM["rover-demo"]
     CM --> AD["rover-admin"]
 
+    AC["rover-agent-core"]
+    AR["rover-agent-runtime"]
+
+    AC --> AR
+    AR --> AD
+
     classDef shared fill:#F8FAFC,stroke:#64748B,color:#0F172A,stroke-width:2px;
-    classDef core fill:#EAF4FF,stroke:#2563EB,color:#172554,stroke-width:1.5px;
-    classDef app fill:#ECFDF5,stroke:#10B981,color:#064E3B,stroke-width:1.5px;
-    classDef experimental fill:#FFF7ED,stroke:#F97316,color:#7C2D12,stroke-width:1.5px;
+    classDef core fill:#EAF4FF,stroke:#2563EB,color:#172554;stroke-width:1.5px;
+    classDef app fill:#ECFDF5,stroke:#10B981,color:#064E3B;stroke-width:1.5px;
+    classDef experimental fill:#FFF7ED,stroke:#F97316,color:#7C2D12;stroke-width:1.5px;
     class CM shared;
-    class NC,NK,GC core;
-    class ST,NS,GB,DM,AD app;
+    class NC,NK,GC,AC core;
+    class ST,NS,GB,DM,AD,AR app;
     class NA experimental;
 ```
 
@@ -414,6 +420,11 @@ Conventions:
 - `*-bootstrap` modules are process entry points.
 - `rover-admin` is an optional console that calls management APIs over HTTP; it does not compile against the
   Nameserver or Gateway core modules.
+- `rover-agent-core` is the Ops Agent domain and rules layer (domain objects, read-only ports, neutral snapshots); it
+  depends on neither Spring, Jackson, nor Spring AI.
+- `rover-agent-runtime` carries the Spring AI and Spring AI Alibaba Graph orchestration; only `rover-admin` depends on
+  it, and both currently run in the same JVM. See
+  [Rover Ops Agent](ops-agent.md#61-code-layout-and-module-boundaries).
 - `rover-gateway-adapter-nacos` is an optional Nacos service-discovery adapter, included with the `nacos` Maven profile.
 - Cross-language Registrar examples live under [`examples/http-registration/`](../examples/http-registration/README.md).
 

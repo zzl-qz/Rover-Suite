@@ -7,6 +7,7 @@ window.RoverAdminPages.shared = {
             page: 'dashboard',
             nav: [
                 { id: 'dashboard', label: '仪表盘', icon: ICONS.dashboard },
+                { id: 'diagnosis', label: '智能诊断', icon: ICONS.diagnosis },
                 { id: 'traces', label: '请求追踪', icon: ICONS.traces },
                 { id: 'routes', label: '路由管理', icon: ICONS.routes },
                 { id: 'instances', label: '实例管理', icon: ICONS.instances },
@@ -36,6 +37,7 @@ window.RoverAdminPages.shared = {
         pageSubtitle() {
             return {
                 dashboard: '数字看不懂就悬停；顶栏 1m/5m 决定「近窗」多长',
+                diagnosis: '输入路径和问题，查看只读诊断结论与证据',
                 traces: '点一行在表内展开阶段耗时',
                 routes: '路由规则热更新与落盘',
                 instances: 'Nameserver 注册实例',
@@ -124,6 +126,7 @@ window.RoverAdminPages.shared = {
                     await this.fetchOverview();
                 }
                 if (this.page === 'traces') await this.fetchTraces();
+                if (this.page === 'diagnosis' && this.diagnosisTask) await this.fetchDiagnosis();
                 if (this.page === 'routes') await this.fetchRoutes();
                 if (this.page === 'instances') await this.fetchInstances();
                 if (this.page === 'events') await this.fetchEvents();
@@ -135,6 +138,7 @@ window.RoverAdminPages.shared = {
         pollCurrentPage() {
             if (document.hidden) return;
             if (this.page === 'traces') this.fetchTraces();
+            if (this.page === 'diagnosis' && this.diagnosisTask && !this.diagnosisTerminal) this.fetchDiagnosis();
             if (this.page === 'instances') this.fetchInstances();
             if (this.page === 'events') this.fetchEvents();
         },

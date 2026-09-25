@@ -21,6 +21,11 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <admin.spring-boot.version>4.1.1</admin.spring-boot.version>
+        <spring-ai.version>2.0.1</spring-ai.version>
+        <spring-ai-alibaba.version>2.0.0-M1.1</spring-ai-alibaba.version>
+        <junit.version>6.0.3</junit.version>
+        <netty.version>4.2.17.Final</netty.version>
+        <slf4j.version>2.0.18</slf4j.version>
     </properties>
 
     <dependencyManagement>
@@ -32,6 +37,13 @@
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -40,6 +52,11 @@
             <groupId>com.rover</groupId>
             <artifactId>rover-common</artifactId>
         </dependency>
+        <!-- Agent 运行层（Spring AI 2.0.x 线，与本模块同版本边界）；领域层由运行层传递可见 -->
+        <dependency>
+            <groupId>com.rover</groupId>
+            <artifactId>rover-agent-runtime</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -47,6 +64,15 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-jackson2</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.alibaba.cloud.ai</groupId>
+            <artifactId>spring-ai-alibaba-graph-core</artifactId>
+            <version>${spring-ai-alibaba.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
