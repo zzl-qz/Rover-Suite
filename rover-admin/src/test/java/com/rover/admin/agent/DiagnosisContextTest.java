@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -64,7 +65,9 @@ class DiagnosisContextTest {
                 JsonNodeFactory.instance.objectNode().put("sampleRate", 1.0)
                         .set("traces", JsonNodeFactory.instance.arrayNode()));
 
+        // 走真实过滤器链：安全链在测试配置下不启用登录，但 CSRF 依然生效，写请求必须带令牌。
         String created = mockMvc.perform(post("/api/agent/diagnoses")
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"path\":\"/api/demo/tt\",\"question\":\"为什么失败？\"}"))
                 .andExpect(status().isAccepted()).andReturn().getResponse().getContentAsString();

@@ -35,7 +35,7 @@ class AdminConfigControllerWebTest {
         mockMvc.perform(get("/index.html"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("<title>Rover Admin</title>")))
-                .andExpect(content().string(containsString("/js/pages/diagnosis.js")));
+                .andExpect(content().string(containsString("/js/pages/workbench.js")));
     }
 
     @Test

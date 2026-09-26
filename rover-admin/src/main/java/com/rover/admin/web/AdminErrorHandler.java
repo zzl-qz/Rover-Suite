@@ -27,6 +27,16 @@ public class AdminErrorHandler {
         return response(HttpStatus.NOT_FOUND, "资源不存在");
     }
 
+    /**
+     * Admin 自身的状态问题（如模型配置落盘失败）：这不是下游故障，
+     * 必须把原因告诉操作者，否则无从排查。
+     */
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, Object>> invalidState(IllegalStateException ex) {
+        log.warn("Admin 本地状态异常", ex);
+        return response(HttpStatus.BAD_REQUEST, ex.getMessage() == null ? "操作无法完成" : ex.getMessage());
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> serverError(Exception ex) {
         log.error("Admin 请求处理失败", ex);

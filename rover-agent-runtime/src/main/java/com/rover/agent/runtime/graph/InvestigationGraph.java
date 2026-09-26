@@ -16,7 +16,9 @@ import com.rover.agent.core.investigation.Findings;
 import com.rover.agent.core.investigation.FindingsInput;
 import com.rover.agent.core.investigation.InvestigationRules;
 import com.rover.agent.core.investigation.RouteMatcher;
+import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Evidence;
+import com.rover.agent.core.model.EvidenceType;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
@@ -30,6 +32,7 @@ import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -44,8 +47,8 @@ import org.slf4j.LoggerFactory;
  * Nameserver 时，实例数据才对本次路由有判定价值，否则跳过实例采集直接进入指标与追踪。
  * 具体数据由 {@code com.rover.agent.core.port} 的只读端口提供，本类不做任何数据解析，也不产生写操作。
  *
- * 每次调查构建一个图实例：运行状态会被框架序列化，因此步骤上报口不能放进图状态，
- * 只能由节点闭包持有。
+ * 每次调查构建一个图实例：运行状态会被框架序列化，因此步骤上报口与证据列表都不能放进图状态，
+ * 只能由本实例持有（{@code invoke} 回读的状态里，记录内部的嵌套集合与枚举会退化成 Map / List）。
  */
 public final class InvestigationGraph {
 
@@ -68,13 +71,19 @@ public final class InvestigationGraph {
     private static final String STEP_TRACE = "读取追踪";
     private static final String STEP_SYNTHESIS = "调查推理";
 
+    private static final String SOURCE_ROUTES = "Gateway 路由表";
+    private static final String SOURCE_OVERVIEW = "Gateway 概览";
+    private static final String SOURCE_INSTANCES = "Nameserver 实例注册表";
+    private static final String SOURCE_METRICS = "Gateway 实时指标";
+    private static final String SOURCE_TRACES = "Gateway 抽样追踪";
+
+    private static final String TASK_ID = "taskId";
     private static final String PATH = "path";
     private static final String ROUTE = "route";
     private static final String ROUTE_READ = "routeRead";
     private static final String DISCOVERY = "discovery";
     private static final String INSTANCES = "instances";
     private static final String TRACES = "traces";
-    private static final String EVIDENCE = "evidence";
     private static final String LIMITATIONS = "limitations";
 
     private final RouteReadPort routes;
@@ -83,6 +92,7 @@ public final class InvestigationGraph {
     private final TraceReadPort traces;
     private final StepSink sink;
     private final CompiledGraph graph;
+    private final List<Evidence> collectedEvidence = Collections.synchronizedList(new ArrayList<>());
 
     /**
      * 结论由 synthesise 节点直接产出，不放进图状态再回读：{@code invoke} 返回的状态会被框架
@@ -101,11 +111,11 @@ public final class InvestigationGraph {
         this.graph = compile();
     }
 
-    /** 执行一次只读调查，返回结论、证据与判断边界。 */
-    public InvestigationOutcome investigate(String path) {
+    /** 执行一次只读调查，返回结论、证据与判断边界；证据与步骤都归属 {@code taskId}。 */
+    public InvestigationOutcome investigate(String taskId, String path) {
         OverAllState state;
         try {
-            state = graph.invoke(Map.of(PATH, path)).orElseThrow(
+            state = graph.invoke(Map.of(TASK_ID, taskId, PATH, path)).orElseThrow(
                     () -> new IllegalStateException("调查图未返回状态"));
         } catch (Exception ex) {
             throw new IllegalStateException("调查图执行失败", ex);
@@ -114,7 +124,7 @@ public final class InvestigationGraph {
         if (findings == null) {
             throw new IllegalStateException("调查图未产出结论");
         }
-        return new InvestigationOutcome(findings, readList(state, EVIDENCE), readList(state, LIMITATIONS));
+        return new InvestigationOutcome(findings, List.copyOf(collectedEvidence), readList(state, LIMITATIONS));
     }
 
     private CompiledGraph compile() {
@@ -141,13 +151,13 @@ public final class InvestigationGraph {
     private static KeyStrategyFactory keyStrategies() {
         return () -> {
             Map<String, KeyStrategy> strategies = new HashMap<>();
+            strategies.put(TASK_ID, new ReplaceStrategy());
             strategies.put(PATH, new ReplaceStrategy());
             strategies.put(ROUTE, new ReplaceStrategy());
             strategies.put(ROUTE_READ, new ReplaceStrategy());
             strategies.put(DISCOVERY, new ReplaceStrategy());
             strategies.put(INSTANCES, new ReplaceStrategy());
             strategies.put(TRACES, new ReplaceStrategy());
-            strategies.put(EVIDENCE, new AppendStrategy());
             strategies.put(LIMITATIONS, new AppendStrategy());
             return strategies;
         };
@@ -165,21 +175,22 @@ public final class InvestigationGraph {
 
     private Map<String, Object> collectRoute(OverAllState state) {
         String path = state.value(PATH, "");
+        String taskId = state.value(TASK_ID, "");
         Map<String, Object> updates = new HashMap<>();
-        List<Evidence> evidence = new ArrayList<>();
         List<String> limitations = new ArrayList<>();
         RouteSnapshot route = null;
         boolean routeRead = false;
         try {
             route = RouteMatcher.match(routes.routes(), path);
             EvidenceNarration narration = EvidenceNarrator.route(route);
-            sink.step(STEP_ROUTE, StepStatus.COMPLETED, narration.detail());
-            evidence.add(new Evidence("/api/routes", System.currentTimeMillis(), narration.detail()));
+            sink.step(AgentStepType.ROUTE_INVESTIGATION, STEP_ROUTE, StepStatus.COMPLETED, narration.detail());
+            collectedEvidence.add(Evidence.of(taskId, EvidenceType.ROUTE, SOURCE_ROUTES, "路由匹配",
+                    narration.detail(), "/api/routes", System.currentTimeMillis()));
             limitations.addAll(narration.limitations());
             routeRead = true;
         } catch (Exception ex) {
             log.warn("Agent 读取路由失败", ex);
-            sink.step(STEP_ROUTE, StepStatus.FAILED, "Gateway 路由数据不可用");
+            sink.step(AgentStepType.ROUTE_INVESTIGATION, STEP_ROUTE, StepStatus.FAILED, "Gateway 路由数据不可用");
             limitations.add(EvidenceNarrator.routeUnavailable());
         }
         DiscoveryMode discovery = DiscoveryMode.UNKNOWN;
@@ -189,78 +200,80 @@ public final class InvestigationGraph {
             log.warn("Agent 读取服务发现模式失败", ex);
         }
         EvidenceNarration discoveryNarration = EvidenceNarrator.discoveryMode(discovery);
-        evidence.add(new Evidence("/api/overview", System.currentTimeMillis(), discoveryNarration.detail()));
+        collectedEvidence.add(Evidence.of(taskId, EvidenceType.ROUTE, SOURCE_OVERVIEW, "服务发现模式",
+                discoveryNarration.detail(), "/api/overview", System.currentTimeMillis()));
         limitations.addAll(discoveryNarration.limitations());
         updates.put(ROUTE, route);
         updates.put(ROUTE_READ, routeRead);
         updates.put(DISCOVERY, discovery);
-        updates.put(EVIDENCE, evidence);
         updates.put(LIMITATIONS, limitations);
         return updates;
     }
 
     private Map<String, Object> collectInstances(OverAllState state) {
+        String taskId = state.value(TASK_ID, "");
         Map<String, Object> updates = new HashMap<>();
-        List<Evidence> evidence = new ArrayList<>();
         List<String> limitations = new ArrayList<>();
         try {
             List<InstanceSnapshot> snapshot = instances.instances();
             EvidenceNarration narration = EvidenceNarrator.instances(
                     snapshot, state.<RouteSnapshot>value(ROUTE).orElse(null));
-            sink.step(STEP_INSTANCE, StepStatus.COMPLETED, narration.detail());
-            evidence.add(new Evidence("/api/instances", System.currentTimeMillis(), narration.detail()));
+            sink.step(AgentStepType.INSTANCE_INVESTIGATION, STEP_INSTANCE, StepStatus.COMPLETED, narration.detail());
+            collectedEvidence.add(Evidence.of(taskId, EvidenceType.INSTANCE, SOURCE_INSTANCES, "实例健康",
+                    narration.detail(), "/api/instances", System.currentTimeMillis()));
             limitations.addAll(narration.limitations());
             updates.put(INSTANCES, snapshot);
         } catch (Exception ex) {
             log.warn("Agent 读取实例失败", ex);
-            sink.step(STEP_INSTANCE, StepStatus.FAILED, "Nameserver 实例数据不可用");
+            sink.step(AgentStepType.INSTANCE_INVESTIGATION, STEP_INSTANCE, StepStatus.FAILED,
+                    "Nameserver 实例数据不可用");
             limitations.add(EvidenceNarrator.instancesUnavailable());
         }
-        updates.put(EVIDENCE, evidence);
         updates.put(LIMITATIONS, limitations);
         return updates;
     }
 
     private Map<String, Object> collectMetrics(OverAllState state) {
+        String taskId = state.value(TASK_ID, "");
         Map<String, Object> updates = new HashMap<>();
-        List<Evidence> evidence = new ArrayList<>();
         List<String> limitations = new ArrayList<>();
         try {
             GatewayMetricSnapshot metric = metrics.gatewayWindow(METRIC_WINDOW_SECONDS);
             EvidenceNarration narration = EvidenceNarrator.metrics(metric);
-            sink.step(STEP_METRICS, StepStatus.COMPLETED, narration.detail());
-            evidence.add(new Evidence("/api/live?range=" + METRIC_WINDOW_SECONDS,
-                    System.currentTimeMillis(), narration.detail()));
+            sink.step(AgentStepType.METRIC_INVESTIGATION, STEP_METRICS, StepStatus.COMPLETED, narration.detail());
+            collectedEvidence.add(Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "最近一分钟流量",
+                    narration.detail(), "/api/live?range=" + METRIC_WINDOW_SECONDS, System.currentTimeMillis()));
             limitations.addAll(narration.limitations());
         } catch (Exception ex) {
             log.warn("Agent 读取指标失败", ex);
-            sink.step(STEP_METRICS, StepStatus.FAILED, "Gateway 实时指标不可用");
+            sink.step(AgentStepType.METRIC_INVESTIGATION, STEP_METRICS, StepStatus.FAILED,
+                    "Gateway 实时指标不可用");
             limitations.add(EvidenceNarrator.metricsUnavailable());
         }
-        updates.put(EVIDENCE, evidence);
         updates.put(LIMITATIONS, limitations);
         return updates;
     }
 
     private Map<String, Object> collectTraces(OverAllState state) {
         String path = state.value(PATH, "");
+        String taskId = state.value(TASK_ID, "");
         Map<String, Object> updates = new HashMap<>();
-        List<Evidence> evidence = new ArrayList<>();
         List<String> limitations = new ArrayList<>();
         try {
             TraceSnapshot snapshot = traces.byPath(path);
             EvidenceNarration narration = EvidenceNarrator.traces(snapshot, path);
-            sink.step(STEP_TRACE, StepStatus.COMPLETED, narration.detail());
-            evidence.add(new Evidence("/api/traces?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8),
-                    System.currentTimeMillis(), narration.detail()));
+            sink.step(AgentStepType.TRACE_INVESTIGATION, STEP_TRACE, StepStatus.COMPLETED, narration.detail());
+            collectedEvidence.add(Evidence.of(taskId, EvidenceType.TRACE, SOURCE_TRACES, "路径追踪记录",
+                    narration.detail(), "/api/traces?path=" + URLEncoder.encode(path, StandardCharsets.UTF_8),
+                    System.currentTimeMillis()));
             limitations.addAll(narration.limitations());
             updates.put(TRACES, snapshot);
         } catch (Exception ex) {
             log.warn("Agent 读取追踪失败", ex);
-            sink.step(STEP_TRACE, StepStatus.FAILED, "Gateway 追踪数据不可用");
+            sink.step(AgentStepType.TRACE_INVESTIGATION, STEP_TRACE, StepStatus.FAILED,
+                    "Gateway 追踪数据不可用");
             limitations.add(EvidenceNarrator.tracesUnavailable());
         }
-        updates.put(EVIDENCE, evidence);
         updates.put(LIMITATIONS, limitations);
         return updates;
     }
@@ -275,7 +288,8 @@ public final class InvestigationGraph {
                 state.<List<InstanceSnapshot>>value(INSTANCES).orElse(null),
                 state.<TraceSnapshot>value(TRACES).orElse(null));
         Findings findings = InvestigationRules.evaluate(input);
-        sink.step(STEP_SYNTHESIS, StepStatus.COMPLETED, InvestigationRules.describeVerdicts(findings.hypotheses()));
+        sink.step(AgentStepType.DIAGNOSIS, STEP_SYNTHESIS, StepStatus.COMPLETED,
+                InvestigationRules.describeVerdicts(findings.hypotheses()));
         this.producedFindings = findings;
         return Map.of();
     }

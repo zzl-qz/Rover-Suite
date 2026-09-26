@@ -54,7 +54,7 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 Agent 能查询 Route、Instance、Metrics、Trace、Events 等运行态数据，全程只读。
 
-**状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）会采集路由、实例、指标、追踪四类快照，返回结论、证据来源和采集时间。
+**状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）由 `AgentOrchestrator` 驱动，采集路由、实例、指标、追踪四类快照，返回结论、证据来源和采集时间。
 
 ### Level B：Reason（调查 + 推理）
 
@@ -100,7 +100,8 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
             Action Plan
 ```
 
-- **用户主动发起：** 在 Admin 诊断页输入路径和问题，提交只读诊断任务。**已实现。**
+- **用户主动发起：** 在 Admin「Agent 工作台」用一句话发起调查（如「为什么 /api/demo/tt 调用失败？」），
+  可在折叠的「高级上下文」里手工指定 route / service / instance 与时间范围；追问沿用当前事件。**已实现。**
 - **事件 / 告警触发：** 由 Alert 或 Gateway 事件自动创建 Incident 并启动调查。**规划中。**
 
 ## 6. 架构取向
@@ -144,23 +145,27 @@ rover-agent-core（纯 Java：领域对象、只读端口、中立快照、诊�
 
 | 模块 | 包 | 职责 |
 | :--- | :--- | :--- |
-| `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView |
+| `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget |
 | | `com.rover.agent.core.snapshot` | 中立只读快照：RouteSnapshot / InstanceSnapshot / GatewayMetricSnapshot / TraceSnapshot / DiscoveryMode |
 | | `com.rover.agent.core.port` | 只读端口：RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort；数据不可用抛 SnapshotUnavailableException |
+| | `com.rover.agent.core.repository` | 存储接口：AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository（内存 / 持久化实现可替换） |
+| | `com.rover.agent.core.context` | AgentContextManager（最近 N 条消息 + 当前事件 + 结构化目标 + 关键证据）、TargetResolver / ResourceTarget（显式指定 → 现有路由与实例 → 模型辅助 → 澄清） |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules（纯函数，可脱离框架单测） |
-| `rover-agent-runtime` | `com.rover.agent.runtime.graph` | StateGraph 定义、节点实现、条件边、结论合成 |
-| | `com.rover.agent.runtime.task` | 任务生命周期、Session / Incident 登记（内存、有界） |
+| `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator（应用入口：上下文 → 目标 → 事件 → 任务 → 调查）、InvestigationService（任务生命周期） |
+| | `com.rover.agent.runtime.graph` | StateGraph 定义、节点实现、条件边、结论合成 |
+| | `com.rover.agent.runtime.task` | 任务生命周期、Session / Incident 登记（走存储接口，当前为内存、有界） |
+| | `com.rover.agent.runtime.repository` | 4 个线程安全内存实现（重启即失），后续接持久化时替换 |
 | | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型 |
 | | `com.rover.agent.runtime.llm` | ModelExplainer：模型解读与未读证据时的拒绝策略 |
 | `rover-admin` | `com.rover.admin.agent.adapter` | 4 个只读适配器：AdminConfigService → 端口，不触发任何写操作 |
-| | `com.rover.admin.agent` | DiagnosisController（接口契约）+ AgentCompositionConfiguration（组合根） |
+| | `com.rover.admin.agent` | AgentController（会话 / 消息 / 任务 / 事件契约）+ DiagnosisController（旧入口，兼容转发）+ 组合根 |
 
 **边界规则：**
 
 - `rover-agent-core` 不依赖 Spring / Jackson / Spring AI：Admin 管理口的 JSON 形状只在 `rover-admin` 的适配器里解析，
   核心规则用中立快照表达，因此可以直接单测，将来换数据源也不必改核心。
 - 只读是结构性的：端口接口只有读方法，运行层拿不到 `saveRoute / deleteRoute / updateConfig`。
-- Spring AI 与 Graph 依赖集中在 `rover-agent-runtime`；Admin 只做装配与 HTTP 契约，便于后续把 Agent 挪到独立进程。
+- Spring AI 与 Graph 依赖只出现在 `rover-agent-runtime` 与 `rover-admin` 两个模块；Admin 侧负责模型配置装配，便于后续把 Agent 挪到独立进程。
 - 父工程 `spring-boot.version` 保持 3.2.0 不变：`rover-agent-runtime` 与 `rover-admin` 各自在模块内导入
   Spring Boot 4.1.1 与 Spring AI 2.0.1 BOM，互不影响。
 
@@ -172,9 +177,10 @@ Session（一次连续对话）─┬─ Incident（一个被调查的问题，�
                                                               └── Hypothesis（假设：确认 / 排除 / 无法验证）
 ```
 
-当前每次提交会开启一个 Session，并创建一条 `USER` 来源的 Incident，Task 挂在 Incident 之下；
-TaskView 会带上 `sessionId` / `incidentId`。Session 与 Incident 目前只保留在内存中，
-连续的追问式调查（如「那昨天呢？」）属于下一步，暂未实现。
+当前每次提问都会落到一个 Session 之下：新建 Session 时会创建一条 `USER` 来源的 Incident，Task 挂在 Incident 之下；
+TaskView 会带上 `sessionId` / `incidentId`。**连续追问已经可用**：同一个会话里的后续消息会带上最近 N 条消息、
+当前事件、当前结构化调查对象与该事件的关键证据；目标一致时沿用当前事件，解析出明确的新对象时才另开事件，
+解析不出对象时回澄清而不是猜。Session 与 Incident 目前只保留在内存中，**重启即清空**。
 
 后续 Level B / Level C 所需的 tool 治理、审批策略与事件接入会在此基础上继续拆分子包，避免为未实现的模块预建空壳。
 
@@ -182,25 +188,32 @@ TaskView 会带上 `sessionId` / `incidentId`。Session 与 Incident 目前只�
 
 **已实现：**
 
-- Admin 诊断页 + `POST /api/agent/diagnoses`、`GET /api/agent/diagnoses/{taskId}`。
+- Admin「Agent 工作台」+ 会话式接口：`POST/GET /api/agent/sessions`、`GET /api/agent/sessions/{sessionId}`、`POST /api/agent/sessions/{sessionId}/messages`、`GET /api/agent/tasks/{taskId}`、`GET /api/agent/incidents/{incidentId}`；
+  旧入口 `POST /api/agent/diagnoses` 与 `GET /api/agent/diagnoses/{taskId}`（含 SSE 解读流）保留兼容，内部转发给同一套编排。
+- 多轮追问：AgentContextManager 装配「最近 N 条消息（`rover.agent.context.recent-message-limit`，默认 8）+ 当前事件 + 结构化目标 + 关键证据」；
+  TargetResolver 按「显式指定 → 现有路由与实例数据 → 模型辅助 → 澄清」解析对象，解析不出时不猜、不建任务。
+- 单一编排入口 `AgentOrchestrator`：Controller 不再直接编排 route/metrics/chatClient 调用，只做参数校验与结果映射。
+- 存储已抽象成 4 个 Repository 接口，当前只有线程安全内存实现，**重启即清空**；业务代码不直接依赖 Map。
+- 用户身份一律取自后端认证上下文（`Authentication.getName()`），请求体不接受前端提交的 `userId`；会话、任务与事件按身份过滤。
 - 只读采集路由、实例、指标、追踪，产出结论、置信度、证据来源、采集时间和局限说明。
 - 已拆成 `rover-agent-core` / `rover-agent-runtime` / `rover-admin` 三层，依赖单向；只读由端口结构保证。
 - 调查链由 Spring AI Alibaba StateGraph 编排，条件边可跳过对当前路由无判定价值的采集分支。
 - 假设驱动结论：逐条确认或排除候选故障原因，每条假设标注状态（确认 / 排除 / 无法验证）、说明与证据来源。
 - 诊断全程只读，不修改路由与配置。
-- 模型未配置或调用失败时降级为规则诊断，并明确标注证据不足。
-- 模型通过限定的只读快照工具参与解释，工具由应用执行，模型不直连管理接口；未读取必要证据时不采信模型结论。
+- 控制台「模型配置」页可填写 OpenAI 兼容服务，保存即生效、无需重启 Admin；环境变量 `ROVER_AGENT_MODEL_CHAT` / `ROVER_AGENT_API_KEY` / `ROVER_AGENT_BASE_URL` / `ROVER_AGENT_MODEL` 只在首次启动、尚无模型配置文件时用于播种，之后以页面保存的配置为准。页面另支持连接测试（不保存）与验证已生效配置（`POST /api/model/verify` 回带生效版本号 `buildId` 与生效时间，可证明生效的正是刚保存的配置）。
+- 模型未配置或不可用时，诊断自动退化为纯规则诊断（`aiAnalysis` 为 null），采集与编排不受影响，并明确标注证据不足。
+- 模型通过限定的只读快照工具参与解释，工具由应用执行，模型不直连管理接口；未读取必要证据时不采信模型结论。本次实际调用过的工具会写进「AI 解读」步骤的结果说明，解释依据可追溯到具体快照。
+- 「AI 解读」边生成边推送：`ModelExplainer` 用流式调用把增量交给任务，Admin 通过 SSE 实时下发；最终全文仍落回任务结果，前端断线由轮询兜底。采集与规则判定是阻塞的 Graph 链路，不参与流式。
 - 每次提交会开启 Session 并创建 `USER` 来源的 Incident；任务与步骤状态存于 Admin 内存，重启后不可查询。
 
 **规划中（尚未实现，不要按已实现理解）：**
 
-- 连续追问式调查（Session / Incident 持久化，Lite ↔ Standard 存储模式）。
+- 会话 / 事件 / 任务的持久化（Lite ↔ Standard 存储模式）：Redis 缓存与短期上下文、MySQL 承载任务与审计；当前只有内存实现。
 - 告警 / 事件接入与自动调查。
 - 模型侧动态选择工具、调查计划随证据自我调整。
 - Graph checkpoint 恢复与 interrupt 人工审批。
 - 日志、变更记录、SOP / Runbook 检索（RAG）。
 - 写操作、审批流、审计与执行后验证。
-- 登录鉴权。
 
 ## 8. 与数据分析类 Agent 的区别
 
@@ -219,6 +232,6 @@ TaskView 会带上 `sessionId` / `incidentId`。Session 与 Incident 目前只�
 
 ## 9. 相关文档
 
-- [Admin 使用手册](./admin-guide.zh-CN.md)：诊断页使用方式与模型配置环境变量
-- [Admin API](./admin-api.zh-CN.md)：诊断任务接口契约
+- [Admin 使用手册](./admin-guide.zh-CN.md)：Agent 工作台使用方式与控制台模型配置
+- [Admin API](./admin-api.zh-CN.md)：会话 / 事件 / 调查任务接口契约
 - [架构与权衡](./architecture.zh-CN.md)：Gateway 与 Nameserver 的既有设计

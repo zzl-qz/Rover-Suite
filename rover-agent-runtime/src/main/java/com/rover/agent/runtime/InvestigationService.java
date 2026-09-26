@@ -1,8 +1,10 @@
 package com.rover.agent.runtime;
 
+import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
 import com.rover.agent.core.model.InvestigationReport;
+import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TaskView;
@@ -13,6 +15,7 @@ import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.runtime.graph.InvestigationGraph;
 import com.rover.agent.runtime.graph.InvestigationOutcome;
 import com.rover.agent.runtime.llm.ModelExplainer;
+import com.rover.agent.runtime.task.AnalysisStreamListener;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTask;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
@@ -66,29 +69,36 @@ public final class InvestigationService {
         String target = validatePath(path);
         String asked = validateQuestion(question);
         Session session = incidents.openSession();
-        Incident incident = incidents.openIncident(session.sessionId(), IncidentOrigin.USER, target);
-        InvestigationTask task = registerTask(session, incident, target, asked);
+        Incident incident = incidents.openIncident(session.sessionId(), IncidentOrigin.USER,
+                ResourceTarget.route(target));
+        try {
+            return start(session.sessionId(), incident, target, ResourceTarget.route(target), asked);
+        } catch (RejectedExecutionException ex) {
+            rollback(incident, session);
+            throw ex;
+        }
+    }
+
+    /**
+     * 在已有会话与事件下启动一次调查：登记任务、挂到事件上、提交执行。
+     *
+     * 这是「启动一次调查」的唯一入口——会话与事件由调用方（编排层）负责解析与创建，
+     * 本类只负责调查任务的登记、执行与结论产出。登记或提交被拒时抛
+     * {@link RejectedExecutionException}，此时不会留下未执行的任务，事件与会话的清理由调用方决定。
+     */
+    public TaskView start(String sessionId, Incident incident, String path, ResourceTarget target, String question) {
+        InvestigationTask task = tasks.register(sessionId, incident.incidentId(), path, target, question);
         incidents.attachTask(incident.incidentId(), task.taskId());
         try {
             tasks.execute(() -> run(task));
         } catch (RejectedExecutionException ex) {
             tasks.discard(task.taskId());
-            rollback(incident, session);
             throw ex;
         }
         return task.view();
     }
 
-    /** 登记任务；容量已满被拒时回滚本次会话与事件，避免留下没有任务的孤立记录。 */
-    private InvestigationTask registerTask(Session session, Incident incident, String target, String asked) {
-        try {
-            return tasks.register(session.sessionId(), incident.incidentId(), target, asked);
-        } catch (RejectedExecutionException ex) {
-            rollback(incident, session);
-            throw ex;
-        }
-    }
-
+    /** 撤销未成功提交的调查所留下的会话与事件。 */
     private void rollback(Incident incident, Session session) {
         incidents.removeIncident(incident.incidentId());
         incidents.removeSession(session.sessionId());
@@ -98,39 +108,74 @@ public final class InvestigationService {
         return tasks.get(taskId);
     }
 
+    /**
+     * 订阅某任务的「AI 解读」增量（供 SSE 实时展示）；任务不存在时返回 false，由调用方回 404。
+     * 已完成解读的任务会先补发全文再立即结束，因此晚连上的客户端不会看到空白。
+     */
+    public boolean subscribeAnalysis(String taskId, AnalysisStreamListener listener) {
+        InvestigationTask task = tasks.find(taskId);
+        if (task == null) {
+            return false;
+        }
+        task.subscribeAnalysis(listener);
+        return true;
+    }
+
+    /** 退订解读增量：客户端断开、超时或出错时调用。 */
+    public void unsubscribeAnalysis(String taskId, AnalysisStreamListener listener) {
+        InvestigationTask task = tasks.find(taskId);
+        if (task != null) {
+            task.unsubscribeAnalysis(listener);
+        }
+    }
+
     private void run(InvestigationTask task) {
         task.start();
         try {
             InvestigationGraph graph = new InvestigationGraph(routes, instances, metrics, traces, task::step);
-            InvestigationOutcome outcome = graph.investigate(task.path());
+            InvestigationOutcome outcome = graph.investigate(task.taskId(), task.path());
             InvestigationReport report = new InvestigationReport(
                     outcome.findings().summary(), outcome.findings().confidence(), outcome.evidence(),
                     outcome.limitations(), outcome.findings().hypotheses(), null);
             report = explain(task, report, outcome);
             task.complete(report);
+            // 结论回写到事件：事件因此成为「一个问题的多次调查」的聚合点，追问时能继承最新结论。
+            incidents.summarise(task.incidentId(), report.summary());
         } catch (Exception ex) {
             log.error("Agent 诊断任务异常", ex);
             task.fail("诊断任务执行失败");
+        } finally {
+            // 关闭解读流放在任务进入终态之后：订阅者收到结束通知时回读任务，一定拿到最终结论。
+            task.closeAnalysis();
         }
     }
 
     private InvestigationReport explain(InvestigationTask task, InvestigationReport report,
                                         InvestigationOutcome outcome) {
-        if (!explainer.available()) {
+        if (!explainer.configured()) {
             return withoutAnalysis(report, AI_NOT_CONFIGURED);
         }
-        try {
-            task.step(STEP_AI, StepStatus.RUNNING, AI_RUNNING);
-            String analysis = explainer.explain(task.path(), task.question(), outcome.evidence(),
-                    outcome.findings().hypotheses());
-            task.step(STEP_AI, StepStatus.COMPLETED, AI_COMPLETED);
-            return new InvestigationReport(report.summary(), report.confidence(), report.evidence(),
-                    report.limitations(), report.hypotheses(), analysis.trim());
-        } catch (Exception ex) {
-            log.warn("Agent 模型解读失败", ex);
-            task.step(STEP_AI, StepStatus.FAILED, AI_FAILED);
+        if (!explainer.available()) {
             return withoutAnalysis(report, AI_UNAVAILABLE);
         }
+        try {
+            task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.RUNNING, AI_RUNNING);
+            ModelExplainer.Explanation explanation = explainer.explainStreaming(task.path(), task.question(),
+                    outcome.evidence(), outcome.findings().hypotheses(), task::appendAnalysis);
+            // 步骤里带上模型实际读过的工具：解释的依据可追溯到具体快照，而不是一句「已生成解释」。
+            task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.COMPLETED, completedDetail(explanation.tools()));
+            return new InvestigationReport(report.summary(), report.confidence(), report.evidence(),
+                    report.limitations(), report.hypotheses(), explanation.text().trim());
+        } catch (Exception ex) {
+            log.warn("Agent 模型解读失败", ex);
+            task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.FAILED, AI_FAILED);
+            return withoutAnalysis(report, AI_UNAVAILABLE);
+        }
+    }
+
+    /** 解读成功的结果说明：如实列出模型调用过的只读工具。 */
+    private static String completedDetail(List<String> tools) {
+        return tools.isEmpty() ? AI_COMPLETED : AI_COMPLETED + "，调用只读工具：" + String.join("、", tools);
     }
 
     private static InvestigationReport withoutAnalysis(InvestigationReport report, String limitation) {

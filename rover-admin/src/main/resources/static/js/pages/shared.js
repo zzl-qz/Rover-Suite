@@ -7,18 +7,20 @@ window.RoverAdminPages.shared = {
             page: 'dashboard',
             nav: [
                 { id: 'dashboard', label: '仪表盘', icon: ICONS.dashboard },
-                { id: 'diagnosis', label: '智能诊断', icon: ICONS.diagnosis },
+                { id: 'workbench', label: 'Agent 工作台', icon: ICONS.workbench },
                 { id: 'traces', label: '请求追踪', icon: ICONS.traces },
                 { id: 'routes', label: '路由管理', icon: ICONS.routes },
                 { id: 'instances', label: '实例管理', icon: ICONS.instances },
                 { id: 'events', label: '最近事件', icon: ICONS.events },
                 { id: 'configs', label: '配置管理', icon: ICONS.configs },
+                { id: 'model', label: '模型配置', icon: ICONS.model },
             ],
             loading: false,
             updatedAt: 0,
             envOpen: true,
             discoveryType: 'UNKNOWN',
             status: { gateway: null, nameserver: null },
+            auth: null,
             metricsError: null,
             selfcheck: null,
             toasts: [],
@@ -37,12 +39,13 @@ window.RoverAdminPages.shared = {
         pageSubtitle() {
             return {
                 dashboard: '数字看不懂就悬停；顶栏 1m/5m 决定「近窗」多长',
-                diagnosis: '输入路径和问题，查看只读诊断结论与证据',
+                workbench: '多轮追问的调查工作台；会话与任务存在内存，重启即清空',
                 traces: '点一行在表内展开阶段耗时',
                 routes: '路由规则热更新与落盘',
                 instances: 'Nameserver 注册实例',
                 events: '可按类型/服务筛选，分页看；最多缓存 200 条',
                 configs: '按组件改运行时配置，脏了才保存',
+                model: '配置模型服务；保存即生效，密钥加密落盘',
             }[this.page] || '';
         },
         liveState() {
@@ -96,6 +99,10 @@ window.RoverAdminPages.shared = {
         },
         healthyCount() { return this.instances.filter(i => i.healthy).length; },
         unhealthyCount() { return this.instances.filter(i => !i.healthy).length; },
+        authEnabled() { return Boolean(this.auth && this.auth.authEnabled); },
+        authUser() { return (this.auth && this.auth.username) ? this.auth.username : ''; },
+        /** 未配口令时控制台全开放：这是不安全状态，必须在页面上看得见。 */
+        authOpenWarning() { return Boolean(this.auth && !this.auth.authEnabled); },
     },
 
     methods: {
@@ -126,11 +133,12 @@ window.RoverAdminPages.shared = {
                     await this.fetchOverview();
                 }
                 if (this.page === 'traces') await this.fetchTraces();
-                if (this.page === 'diagnosis' && this.diagnosisTask) await this.fetchDiagnosis();
+                if (this.page === 'workbench') await this.wbRefresh();
                 if (this.page === 'routes') await this.fetchRoutes();
                 if (this.page === 'instances') await this.fetchInstances();
                 if (this.page === 'events') await this.fetchEvents();
                 if (this.page === 'configs') await this.fetchConfigs();
+                if (this.page === 'model') await this.fetchModelConfig();
             } finally {
                 this.loading = false;
             }
@@ -138,7 +146,7 @@ window.RoverAdminPages.shared = {
         pollCurrentPage() {
             if (document.hidden) return;
             if (this.page === 'traces') this.fetchTraces();
-            if (this.page === 'diagnosis' && this.diagnosisTask && !this.diagnosisTerminal) this.fetchDiagnosis();
+            if (this.page === 'workbench') this.wbPollSession();
             if (this.page === 'instances') this.fetchInstances();
             if (this.page === 'events') this.fetchEvents();
         },
@@ -151,6 +159,17 @@ window.RoverAdminPages.shared = {
             } catch (e) {
                 // overview 失败不影响 live
             }
+        },
+        /** 登录态与 CSRF 令牌：启动时问一次；未启用鉴权时页面据此显示提示条。 */
+        async fetchAuthStatus() {
+            try {
+                this.auth = await RoverAdminApi.api('/api/auth/status');
+            } catch (e) {
+                this.auth = null;
+            }
+        },
+        async logout() {
+            await RoverAdminApi.logout();
         },
     },
 };

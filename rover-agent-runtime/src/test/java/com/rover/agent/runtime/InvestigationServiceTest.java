@@ -1,6 +1,7 @@
 package com.rover.agent.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -15,6 +16,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.rover.agent.core.model.Hypothesis;
+import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
@@ -26,9 +28,12 @@ import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
+import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ModelExplainer;
+import com.rover.agent.runtime.task.AnalysisStreamListener;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
@@ -41,9 +46,10 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.tool.ToolCallback;
+import reactor.core.publisher.Flux;
 
 /** 调查用例的场景级验证：只读端口输入 → 步骤、证据、假设结论与降级行为。 */
 class InvestigationServiceTest {
@@ -54,23 +60,18 @@ class InvestigationServiceTest {
     private TraceReadPort traces;
     private IncidentRegistry incidentRegistry;
     private InvestigationTaskRegistry taskRegistry;
-    private ObjectProvider<ChatModel> models;
-    private ObjectProvider<ChatClient.Builder> builders;
     private InvestigationService investigations;
 
     @BeforeEach
-    @SuppressWarnings("unchecked")
     void setup() {
         routes = mock(RouteReadPort.class);
         instances = mock(InstanceReadPort.class);
         metrics = mock(MetricReadPort.class);
         traces = mock(TraceReadPort.class);
-        models = mock(ObjectProvider.class);
-        builders = mock(ObjectProvider.class);
         incidentRegistry = new IncidentRegistry();
         taskRegistry = new InvestigationTaskRegistry();
         investigations = new InvestigationService(routes, instances, metrics, traces, incidentRegistry, taskRegistry,
-                new ModelExplainer(models, builders));
+                new ModelExplainer(TestGateway.notConfigured()));
         when(routes.discoveryMode()).thenReturn(DiscoveryMode.NAMESERVER);
         when(metrics.gatewayWindow(anyInt())).thenReturn(new GatewayMetricSnapshot(0, 0, 0, 1L));
         when(traces.byPath(anyString())).thenReturn(new TraceSnapshot(true, 1.0, List.of(), 1L));
@@ -93,14 +94,17 @@ class InvestigationServiceTest {
         assertEquals("COMPLETED", task.status().name());
         assertEquals("MEDIUM", task.result().confidence().name());
         assertTrue(task.result().summary().contains("demo / 11"));
-        assertTrue(task.result().evidence().stream().anyMatch(item -> item.source().equals("/api/routes")));
-        assertTrue(task.result().evidence().stream().anyMatch(item -> item.source().equals("/api/instances")));
+        assertTrue(task.result().evidence().stream().anyMatch(item -> item.rawReference().equals("/api/routes")));
+        assertTrue(task.result().evidence().stream().anyMatch(item -> item.rawReference().equals("/api/instances")));
         // 提问会开启会话与事件，任务挂在事件下：连续追问与处置复核才有聚合点。
         assertNotNull(task.sessionId());
         assertNotNull(task.incidentId());
         assertTrue(incidentRegistry.incident(task.incidentId()).orElseThrow().taskIds().contains(task.taskId()));
         assertEquals(task.sessionId(), incidentRegistry.incident(task.incidentId()).orElseThrow().sessionId());
         assertTrue(incidentRegistry.session(task.sessionId()).isPresent());
+        // 结论产出后回写事件：摘要与状态是追问与处置复核时的聚合口径。
+        assertEquals(task.result().summary(), incidentRegistry.incident(task.incidentId()).orElseThrow().summary());
+        assertEquals("RESOLVED", incidentRegistry.incident(task.incidentId()).orElseThrow().status().name());
     }
 
     @Test
@@ -184,7 +188,7 @@ class InvestigationServiceTest {
         TaskView similar = await(investigations.submit("/api/hello", "为什么失败？").taskId());
         assertEquals("MEDIUM", similar.result().confidence().name());
         assertTrue(similar.result().evidence().stream()
-                .anyMatch(item -> item.detail().contains("精确路径匹配追踪 0 条")));
+                .anyMatch(item -> item.summary().contains("精确路径匹配追踪 0 条")));
 
         when(traces.byPath(anyString())).thenReturn(new TraceSnapshot(true, 1.0, List.of(
                 new TraceRow("t2", "/api/hello", 503, System.currentTimeMillis())), 1L));
@@ -223,17 +227,45 @@ class InvestigationServiceTest {
     }
 
     @Test
+    void reportsNotConfiguredWhenNoModelIsPresent() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
+        when(instances.instances()).thenReturn(List.of());
+
+        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+
+        assertEquals("COMPLETED", task.status().name());
+        assertNull(task.result().aiAnalysis());
+        // 未配置模型：不得谎报"不可用"，也不能出现 AI 解读步骤。
+        assertTrue(task.result().limitations().stream().anyMatch(item -> item.contains("尚未配置模型")));
+        assertTrue(task.steps().stream().noneMatch(step -> step.name().equals("AI 解读")));
+    }
+
+    @Test
+    void reportsUnavailableWhenModelIsConfiguredButNotBuilt() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
+        when(instances.instances()).thenReturn(List.of());
+        useModel(new ModelExplainer(TestGateway.configuredButUnavailable()));
+
+        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+
+        assertEquals("COMPLETED", task.status().name());
+        assertNull(task.result().aiAnalysis());
+        // 配置了但构建失败：必须被看见，措辞与"尚未配置"区分。
+        assertTrue(task.result().limitations().stream().anyMatch(item -> item.contains("模型暂时不可用")));
+        assertTrue(task.result().limitations().stream().noneMatch(item -> item.contains("尚未配置模型")));
+    }
+
+    @Test
     void modelMustReadSnapshotToolsBeforeServingExplanation() throws Exception {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
         when(instances.instances()).thenReturn(List.of());
         ChatModel model = mock(ChatModel.class);
-        when(model.getOptions()).thenReturn(ChatOptions.builder().build());
-        when(models.getIfAvailable()).thenReturn(model);
-        when(builders.getObject()).thenReturn(ChatClient.builder(model));
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        useModel(new ModelExplainer(TestGateway.of(model)));
         // Spring AI 2.x：工具调用循环在真实 ChatModel 内部执行，mock 无法触发；
-        // 模型直接返回未读取任何快照的答案，正好验证 guard：不得采信未读取证据的解释。
-        when(model.call(any(Prompt.class))).thenReturn(
-                new ChatResponse(List.of(new Generation(new AssistantMessage("AI 解释（未读取证据）")))));
+        // 模型拿到了工具却一个都没读，正好验证 guard：不得采信未读取证据的解释。
+        when(model.stream(any(Prompt.class))).thenReturn(Flux.just(
+                new ChatResponse(List.of(new Generation(new AssistantMessage("AI 解释（未读取证据）"))))));
 
         TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
 
@@ -246,11 +278,60 @@ class InvestigationServiceTest {
     }
 
     @Test
+    void pushesExplanationDeltasToSubscribersAndKeepsTheSameFinalText() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
+        when(instances.instances()).thenReturn(List.of());
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        useModel(new ModelExplainer(TestGateway.of(model)));
+        CountDownLatch subscribed = new CountDownLatch(1);
+        when(model.stream(any(Prompt.class))).thenAnswer(invocation -> {
+            // 等订阅者挂上再出增量：否则连上太晚只会走"补发整段"，测不到增量路径
+            subscribed.await();
+            readAllTools(invocation.getArgument(0));
+            return Flux.just(response("先看路由"), response("，再看实例"));
+        });
+
+        TaskView submitted = investigations.submit("/api/hello", "为什么失败？");
+        RecordingListener listener = new RecordingListener();
+        assertTrue(investigations.subscribeAnalysis(submitted.taskId(), listener));
+        subscribed.countDown();
+        TaskView task = await(submitted.taskId());
+
+        // 增量拼接结果与落库文本逐字一致，且订阅者一定收到结束通知。
+        assertEquals("先看路由，再看实例", task.result().aiAnalysis());
+        assertEquals(List.of("snapshot:", "delta:先看路由", "delta:，再看实例", "complete"), listener.events());
+        // 步骤说明如实记录模型读过的工具：「解释了」必须能追到「读了哪几份快照」。
+        assertTrue(task.steps().stream().anyMatch(step -> "AI 解读".equals(step.name())
+                && step.outputSummary() != null && step.outputSummary().contains("调用只读工具：")
+                && step.outputSummary().contains("路由快照")));
+    }
+
+    @Test
+    void lateSubscriberOfFinishedTaskGetsReplayAndImmediateEnd() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
+        when(instances.instances()).thenReturn(List.of());
+        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+
+        RecordingListener listener = new RecordingListener();
+        assertFalse(investigations.subscribeAnalysis("missing-task", listener));
+        // 未配置模型：没有增量，但必须立刻结束，不能让前端 SSE 连接悬着等超时。
+        assertTrue(investigations.subscribeAnalysis(task.taskId(), listener));
+        assertEquals(List.of("snapshot:", "complete"), listener.events());
+    }
+
+    /** 换入不同的模型端口，复用同一组只读端口桩。 */
+    private void useModel(ModelExplainer modelExplainer) {
+        this.investigations = new InvestigationService(routes, instances, metrics, traces, incidentRegistry,
+                taskRegistry, modelExplainer);
+    }
+
+    @Test
     void rejectedSubmitRollsBackItsSessionAndIncident() throws Exception {
         IncidentRegistry registry = spy(new IncidentRegistry());
         InvestigationTaskRegistry busy = new InvestigationTaskRegistry();
         InvestigationService service = new InvestigationService(routes, instances, metrics, traces, registry, busy,
-                new ModelExplainer(models, builders));
+                new ModelExplainer(TestGateway.notConfigured()));
         CountDownLatch release = new CountDownLatch(1);
         when(routes.routes()).thenAnswer(invocation -> {
             release.await();
@@ -281,12 +362,12 @@ class InvestigationServiceTest {
         IncidentRegistry registry = spy(new IncidentRegistry());
         InvestigationTaskRegistry full = new InvestigationTaskRegistry();
         InvestigationService service = new InvestigationService(routes, instances, metrics, traces, registry, full,
-                new ModelExplainer(models, builders));
+                new ModelExplainer(TestGateway.notConfigured()));
         try {
             // 用未结束的任务占满登记容量：这些任务不会被执行，也不会被淘汰，submit 将在登记阶段被拒。
             while (true) {
                 try {
-                    full.register("session-x", "incident-x", "/api/hello", "预占容量");
+                    full.register("session-x", "incident-x", "/api/hello", ResourceTarget.route("/api/hello"), "预占容量");
                 } catch (RejectedExecutionException ex) {
                     break;
                 }
@@ -310,6 +391,49 @@ class InvestigationServiceTest {
                 .orElseThrow(() -> new AssertionError("缺少假设 " + id));
     }
 
+    /** 一段模型增量：流式下每次只承载一小段文本。 */
+    private static ChatResponse response(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    /**
+     * 替身模型"读一遍"提示词里挂的全部快照工具：guard 只认工具调用记录，不看答案本身。
+     * 工具回调只有进了提示词才读得到，所以替身的 getOptions() 必须是 ToolCallingChatOptions
+     * （真实模型用的 OpenAiChatOptions 本身就实现了它）。
+     */
+    private static void readAllTools(Prompt prompt) {
+        if (prompt.getOptions() instanceof ToolCallingChatOptions options) {
+            for (ToolCallback callback : options.getToolCallbacks()) {
+                callback.call("{}");
+            }
+        }
+    }
+
+    /** 记录订阅到的事件，形如 snapshot:、delta:片段、complete。 */
+    private static final class RecordingListener implements AnalysisStreamListener {
+
+        private final List<String> events = new ArrayList<>();
+
+        @Override
+        public void onSnapshot(String text) {
+            events.add("snapshot:" + text);
+        }
+
+        @Override
+        public void onDelta(String chunk) {
+            events.add("delta:" + chunk);
+        }
+
+        @Override
+        public void onComplete() {
+            events.add("complete");
+        }
+
+        private List<String> events() {
+            return List.copyOf(events);
+        }
+    }
+
     private static RouteSnapshot route(String prefix, String serviceName, String group) {
         return new RouteSnapshot("id-" + prefix, prefix, serviceName, group, "", 1L);
     }
@@ -325,5 +449,52 @@ class InvestigationServiceTest {
             Thread.sleep(10);
         } while (System.currentTimeMillis() < deadline);
         throw new AssertionError("诊断任务未完成");
+    }
+
+    /** 只覆盖三态语义的模型端口替身，不含任何服务商细节。 */
+    private static final class TestGateway implements ChatModelGateway {
+
+        private final boolean configured;
+        private final ChatClient client;
+
+        private TestGateway(boolean configured, ChatClient client) {
+            this.configured = configured;
+            this.client = client;
+        }
+
+        static TestGateway notConfigured() {
+            return new TestGateway(false, null);
+        }
+
+        static TestGateway configuredButUnavailable() {
+            return new TestGateway(true, null);
+        }
+
+        static TestGateway of(ChatModel model) {
+            return new TestGateway(true, ChatClient.builder(model).build());
+        }
+
+        @Override
+        public boolean configured() {
+            return configured;
+        }
+
+        @Override
+        public boolean available() {
+            return configured && client != null;
+        }
+
+        @Override
+        public ChatClient chatClient() {
+            if (client == null) {
+                throw new IllegalStateException("模型未就绪");
+            }
+            return client;
+        }
+
+        @Override
+        public String description() {
+            return configured ? "测试模型 @ local" : "未配置模型";
+        }
     }
 }

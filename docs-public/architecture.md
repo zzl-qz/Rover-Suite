@@ -425,6 +425,16 @@ Conventions:
 - `rover-agent-runtime` carries the Spring AI and Spring AI Alibaba Graph orchestration; only `rover-admin` depends on
   it, and both currently run in the same JVM. See
   [Rover Ops Agent](ops-agent.md#61-code-layout-and-module-boundaries).
+- The `rover-agent-runtime` execution layer depends only on the port `ChatModelGateway`
+  (`com.rover.agent.runtime.llm.ChatModelGateway`, default implementation `NoopChatModelGateway`). The Admin side
+  provides the OpenAI-compatible adapter `AdminChatModelGateway` (hot-swap, three states) plus `ModelConfigStore`,
+  `SecretCipher`, and `ModelPresets`. Spring AI dependencies appear only in the `rover-agent-runtime` and `rover-admin`
+  modules.
+- Admin console authentication: `AdminSecurityConfiguration` provides the `SecurityFilterChain`; the login rate-limit
+  filter `LoginAttemptGuardFilter` is inserted before `UsernamePasswordAuthenticationFilter`; login-state queries live
+  in `AdminAuthController`; logout is handled by Spring Security's `LogoutFilter`.
+- The dependency direction is unchanged: `rover-admin` → `rover-agent-runtime` → `rover-agent-core` (core is plain
+  Java, no Spring, no Jackson).
 - `rover-gateway-adapter-nacos` is an optional Nacos service-discovery adapter, included with the `nacos` Maven profile.
 - Cross-language Registrar examples live under [`examples/http-registration/`](../examples/http-registration/README.md).
 

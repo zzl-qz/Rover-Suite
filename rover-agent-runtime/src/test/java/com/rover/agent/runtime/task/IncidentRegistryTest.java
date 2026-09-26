@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
+import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
+import com.rover.agent.core.model.TargetType;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
@@ -17,14 +19,18 @@ class IncidentRegistryTest {
         IncidentRegistry registry = new IncidentRegistry();
 
         Session session = registry.openSession();
-        Incident incident = registry.openIncident(session.sessionId(), IncidentOrigin.USER, "/api/demo/tt");
+        Incident incident = registry.openIncident(session.sessionId(), IncidentOrigin.USER,
+                ResourceTarget.route("/api/demo/tt"));
         registry.attachTask(incident.incidentId(), "task-1");
 
-        assertEquals("/api/demo/tt", incident.targetPath());
+        assertEquals(TargetType.ROUTE, incident.target().type());
+        assertEquals("/api/demo/tt", incident.target().value());
         assertEquals(IncidentOrigin.USER, incident.origin());
         assertEquals(session.sessionId(), incident.sessionId());
         assertEquals(java.util.List.of("task-1"), registry.incident(incident.incidentId()).orElseThrow().taskIds());
         assertTrue(registry.session(session.sessionId()).orElseThrow().incidentIds().contains(incident.incidentId()));
+        // 新开的事件即成为会话的当前事件：连续追问默认落到它上面。
+        assertEquals(incident.incidentId(), registry.session(session.sessionId()).orElseThrow().activeIncidentId());
     }
 
     @Test
@@ -50,7 +56,8 @@ class IncidentRegistryTest {
     void removedIncidentDetachesFromItsSession() {
         IncidentRegistry registry = new IncidentRegistry();
         Session session = registry.openSession();
-        Incident incident = registry.openIncident(session.sessionId(), IncidentOrigin.USER, "/api/demo/tt");
+        Incident incident = registry.openIncident(session.sessionId(), IncidentOrigin.USER,
+                ResourceTarget.route("/api/demo/tt"));
 
         registry.removeIncident(incident.incidentId());
 

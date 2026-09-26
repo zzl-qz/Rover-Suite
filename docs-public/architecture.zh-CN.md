@@ -397,6 +397,12 @@ flowchart TB
 - `rover-agent-core` 是 Ops Agent 的领域与规则层（领域对象、只读端口、中立快照），不依赖 Spring / Jackson / Spring AI。
 - `rover-agent-runtime` 承载 Spring AI 与 Spring AI Alibaba Graph 编排；只被 `rover-admin` 依赖，当前与 Admin 同一 JVM 运行。
   详见 [Rover Ops Agent](ops-agent.zh-CN.md#61-代码布局与模块边界)。
+- `rover-agent-runtime` 的运行层只依赖端口 `ChatModelGateway`（`com.rover.agent.runtime.llm.ChatModelGateway`，默认实现 `NoopChatModelGateway`）；
+  Admin 侧提供 OpenAI 兼容适配器 `AdminChatModelGateway`（热切换、三态），以及 `ModelConfigStore`、`SecretCipher`、`ModelPresets`。
+  Spring AI 依赖只出现在 `rover-agent-runtime` 与 `rover-admin` 两个模块。
+- Admin 控制台鉴权：`AdminSecurityConfiguration` 提供 `SecurityFilterChain`；登录限流过滤器 `LoginAttemptGuardFilter`
+  插在 `UsernamePasswordAuthenticationFilter` 之前；登录态查询在 `AdminAuthController`；登出由 Spring Security 的 `LogoutFilter` 处理。
+- 依赖方向保持单向：`rover-admin` → `rover-agent-runtime` → `rover-agent-core`（core 是纯 Java，无 Spring、无 Jackson）。
 - `rover-gateway-adapter-nacos` 当前是可选的 Nacos 服务发现适配器，可通过 Maven `nacos` profile 打包。
 - 跨语言 Registrar 示例位于 [`examples/http-registration/`](../examples/http-registration/README.md)。
 

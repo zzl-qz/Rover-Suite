@@ -25,11 +25,31 @@ Health probe: `GET /_manage/health` → `{"status":"UP","component":"..."}`
 | `server.port` | `9090` | Admin HTTP port | Restart |
 | `rover.admin.gateway-url` | `http://127.0.0.1:80` | Gateway management base URL | Restart |
 | `rover.admin.nameserver-manage-url` | `http://127.0.0.1:8889` | Nameserver management base URL | Restart |
-| `rover.admin.admin-token` | empty | `X-Rover-Admin-Token` sent to downstream components | Restart |
+| `rover.admin.admin-token` | empty | `X-Rover-Admin-Token` sent to downstream components; unrelated to console sign-in | Restart |
+| `rover.admin.auth.username` | `admin` | Console sign-in username; env `ROVER_ADMIN_USERNAME` | Restart |
+| `rover.admin.auth.password-hash` | empty | BCrypt hash of the password; **takes precedence over the plaintext**; env `ROVER_ADMIN_PASSWORD_HASH` | Restart |
+| `rover.admin.auth.password` | empty | Plaintext password, hashed into memory at startup (startup WARN recommends `password-hash`); env `ROVER_ADMIN_PASSWORD` | Restart |
+| `rover.admin.auth.max-login-failures` | `5` | Failed sign-ins allowed per source within the window; env `ROVER_ADMIN_MAX_LOGIN_FAILURES` | Restart |
+| `rover.admin.auth.failure-window-seconds` | `600` | Failure-counting window in seconds; env `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | Restart |
+| `rover.admin.model.config-file` | empty = `config/admin-model.properties` under the working directory | Model config file path (UTF-8 properties, holds the `api-key-enc` ciphertext); an empty config is created on startup when the file is missing, and the whole `config/` directory is gitignored; env `ROVER_ADMIN_MODEL_CONFIG_FILE` | Restart |
+| `rover.admin.model.master-key` | empty | Base64 that decodes to 32 bytes is used directly as the AES key; otherwise a password is run through PBKDF2-HMAC-SHA256 (65536 rounds); env `ROVER_ADMIN_MASTER_KEY` | Restart |
+| `rover.admin.model.master-key-file` | empty = `master.key` next to the config file | Master key file; a 32-byte random master key is generated and persisted on first encryption; env `ROVER_ADMIN_MASTER_KEY_FILE` | Restart |
+| `server.servlet.session.timeout` | `30m` | Console session timeout | Restart |
+| `server.servlet.session.cookie.name` | `ROVERADMIN_SESSION` | Session cookie name | Restart |
+| `server.servlet.session.cookie.http-only` | `true` | Session cookie is HTTP-only | Restart |
+| `server.servlet.session.cookie.same-site` | `Strict` | Session cookie SameSite policy | Restart |
 
-Admin does not store business configuration and does not add authentication to
-`/api/*` by itself. Protect `server.port` with network ACLs, a reverse proxy or
-a VPN in production.
+`rover.admin.admin-token` is only sent as `X-Rover-Admin-Token` when Admin calls
+Gateway/Nameserver; it is unrelated to console sign-in.
+
+Console pages and all of `/api/*` are protected by Spring Security: when not
+signed in, pages redirect to `/login.html` and `/api/*` returns `401`. With both
+`password-hash` and `password` empty, **sign-in is disabled** and this is for
+loopback debugging only: startup logs a WARN, the console shows a hint banner,
+and `GET /api/auth/status` returns `authEnabled:false`. Configure one of the two
+on real hosts (prefer `password-hash`) and still protect `server.port` with
+network ACLs, a reverse proxy or a VPN. The session cookie is `ROVERADMIN_SESSION`
+(HttpOnly, SameSite=Strict) with a timeout taken from `server.servlet.session.timeout`.
 
 ## Gateway startup configuration
 

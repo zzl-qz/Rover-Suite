@@ -14,12 +14,13 @@ createApp({
             {},
             P.shared.data(),
             P.dashboard.data(),
-            P.diagnosis.data(),
+            P.workbench.data(),
             P.traces.data(),
             P.routes.data(),
             P.instances.data(),
             P.events.data(),
             P.configs.data(),
+            P.model.data(),
         );
     },
 
@@ -27,16 +28,18 @@ createApp({
         {},
         P.shared.computed,
         P.dashboard.computed,
-        P.diagnosis.computed,
+        P.workbench.computed,
         P.traces.computed,
         P.routes.computed,
         P.instances.computed,
         P.events.computed,
         P.configs.computed,
+        P.model.computed,
     ),
 
     mounted() {
         this.$nextTick(() => this.initCharts());
+        this.fetchAuthStatus();
         this.fetchOverview();
         this.fetchLive();
         // live 只服务仪表盘可视时；其它页靠 overview 探活，避免观察税随页面/标签页空转
@@ -46,7 +49,7 @@ createApp({
         this._resizeHandler = () => this.resizeCharts();
         this._visibilityHandler = () => {
             if (!document.hidden && this.page === 'dashboard') this.fetchLive();
-            if (!document.hidden && this.page === 'diagnosis' && this.diagnosisTask && !this.diagnosisTerminal) this.fetchDiagnosis();
+            if (!document.hidden && this.page === 'workbench') this.wbPollSession();
         };
         window.addEventListener('resize', this._resizeHandler);
         document.addEventListener('visibilitychange', this._visibilityHandler);
@@ -64,11 +67,12 @@ createApp({
         {},
         P.shared.methods,
         P.dashboard.methods,
-        P.diagnosis.methods,
+        P.workbench.methods,
         P.traces.methods,
         P.routes.methods,
         P.instances.methods,
         P.events.methods,
         P.configs.methods,
+        P.model.methods,
     ),
 }).mount('#app');

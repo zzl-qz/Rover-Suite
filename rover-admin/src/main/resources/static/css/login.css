@@ -1,0 +1,56 @@
+/* 登录页：复用 app.css 的字体与配色变量，只补一张独立卡片，不引 Vue。 */
+.login-body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 24px;
+}
+
+.login-shell {
+    display: grid;
+    grid-template-columns: 200px minmax(0, 360px);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+}
+
+.login-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 24px 20px;
+    background: var(--sidebar-bg);
+    color: #d7ddd4;
+    border-radius: var(--radius) 0 0 var(--radius);
+}
+
+.login-brand-name { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+.login-brand-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--sidebar-text);
+    letter-spacing: 0.04em;
+}
+
+.login-panel { padding: 24px 26px 20px; }
+
+.login-title { margin: 0 0 4px; font-size: 17px; letter-spacing: -0.01em; }
+.login-hint { margin: 0 0 16px; color: var(--muted); font-size: 12.5px; }
+
+.login-form .field { margin-bottom: 12px; }
+.login-submit { width: 100%; padding: 9px 12px; margin-top: 4px; }
+
+.login-foot {
+    margin: 18px 0 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+}
+
+/* 窄屏：品牌栏压成一行标题，卡片单列 */
+@media (max-width: 620px) {
+    .login-shell { grid-template-columns: 1fr; }
+    .login-brand { border-radius: var(--radius) var(--radius) 0 0; }
+}

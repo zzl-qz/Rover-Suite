@@ -15,4 +15,16 @@ public final class AdminApiPaths {
     public static final String EVENTS = "/events";
     public static final String TRACES = "/traces";
     public static final String CONFIGS = "/configs";
+
+    /** 当前登录态与 CSRF 令牌下发。 */
+    public static final String AUTH_STATUS = "/auth/status";
+    /** 登出。 */
+    public static final String LOGOUT = "/logout";
+
+    /** 模型配置读写。 */
+    public static final String MODEL_CONFIG = "/model/config";
+    /** 用提交的候选值做连接测试，不落盘。 */
+    public static final String MODEL_TEST = "/model/test";
+    /** 对当前已生效的配置做效果验证。 */
+    public static final String MODEL_VERIFY = "/model/verify";
 }

@@ -6,12 +6,12 @@ dependency-reduced-pom.xml
 *.jar.original
 *.war.original
 
-# ===== 本地启动配置与运行时覆盖（可含密钥，不入库）=====
-config/rover-gateway.yml
-config/rover-nameserver.yml
-config/routes.overlay.json
-config/gateway-runtime.overlay.json
-config/nameserver-runtime.overlay.json
+# ===== 本地运行时配置（可含密钥，不入库）=====
+# 整个目录忽略：Gateway / Nameserver 的本地配置、覆盖文件，以及 Admin 的模型配置
+# config/admin-model.properties（含 api-key-enc 密文）与 config/master.key。
+# 程序在文件缺失时会自动创建，因此新克隆的仓库不需要它。
+# 如需入库示例配置，用 !config/xxx.example.yml 单独放行。
+config/
 
 # ===== 日志文件 =====
 *.log
@@ -84,6 +84,7 @@ backups/
 *.orig
 .attach_*
 .vscode-server/
+.trae/
 
 # ===== Node / 前端依赖（勿入库）=====
 node_modules/

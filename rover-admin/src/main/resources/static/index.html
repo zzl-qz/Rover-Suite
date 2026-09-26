@@ -56,6 +56,10 @@
                 <span class="discovery-pill" v-if="discoveryType && discoveryType !== 'UNKNOWN'">
                     <span class="dot ok"></span>{{ discoveryType }}
                 </span>
+                <span class="user-chip" v-if="authEnabled" :title="'已登录：' + (authUser || 'admin')">
+                    <span class="dot ok"></span>{{ authUser || '已登录' }}
+                </span>
+                <button class="btn ghost" v-if="authEnabled" @click="logout">登出</button>
                 <button class="btn ghost" @click="refreshAll" :disabled="loading">
                     {{ loading ? '刷新中...' : '刷新' }}
                 </button>
@@ -63,6 +67,11 @@
         </header>
 
         <main class="content">
+            <div v-if="authOpenWarning" class="banner warn">
+                <strong>未启用登录鉴权</strong>
+                <span>控制台当前对所有来源开放，仅限本机调试。</span>
+                <span class="banner-hint">在服务端设置 <code>ROVER_ADMIN_PASSWORD_HASH</code> 后重启 Admin 即可启用登录。</span>
+            </div>
             <!-- ================= 仪表盘 ================= -->
             <section v-if="page === 'dashboard'" class="page">
                 <div v-if="metricsError" class="banner warn">
@@ -396,89 +405,283 @@
                 </div>
             </section>
 
-            <!-- ================= 智能诊断 ================= -->
-            <section v-if="page === 'diagnosis'" class="page">
-                <div class="card">
-                    <div class="card-head">
-                        <h2>发起诊断</h2>
-                        <span class="card-hint">读取路由、注册实例、指标和追踪的现有数据；不会向业务路径发起请求</span>
-                    </div>
-                    <form class="diagnosis-form" @submit.prevent="submitDiagnosis">
-                        <div class="field">
-                            <label for="diagnosis-path">请求路径</label>
-                            <input id="diagnosis-path" v-model="diagnosisForm.path" placeholder="/api/demo/tt" required>
-                        </div>
-                        <div class="field">
-                            <label for="diagnosis-question">诊断问题</label>
-                            <input id="diagnosis-question" v-model="diagnosisForm.question" placeholder="这个路径为什么调用失败？" required>
-                        </div>
-                        <button class="btn primary" type="submit" :disabled="diagnosisSubmitting || diagnosisFetching || (diagnosisTask && !diagnosisTerminal)">
-                            {{ diagnosisSubmitting ? '提交中...' : '开始诊断' }}
-                        </button>
-                    </form>
-                </div>
+            <!-- ================= Agent 工作台 ================= -->
+            <section v-if="page === 'workbench'" class="page">
+                <div v-if="wbError" class="banner warn">{{ wbError }}</div>
 
-                <div v-if="diagnosisError" class="banner warn">{{ diagnosisError }}</div>
-                <div v-if="!diagnosisTask" class="empty">暂无诊断任务。输入路径和问题后开始。</div>
-
-                <div v-if="diagnosisTask" class="card">
-                    <div class="card-head">
-                        <h2>采集与解读步骤</h2>
-                        <span class="badge" :class="diagnosisStatusBadge(diagnosisTask.status)">{{ diagnosisStatusLabel(diagnosisTask.status) }}</span>
-                        <span class="card-hint ml-auto">任务 {{ diagnosisTask.taskId }} · {{ fmtTime(diagnosisTask.createdAtMillis) }}</span>
-                    </div>
-                    <div class="diagnosis-target">
-                        <code>{{ diagnosisTask.path }}</code>
-                        <span>{{ diagnosisTask.question }}</span>
-                    </div>
-                    <div v-if="diagnosisTask.steps && diagnosisTask.steps.length" class="diagnosis-steps">
-                        <div v-for="(step, index) in diagnosisTask.steps" :key="index" class="diagnosis-step">
-                            <span class="diagnosis-step-num">{{ index + 1 }}</span>
-                            <strong>{{ step.name }}</strong>
-                            <span class="badge" :class="diagnosisStatusBadge(step.status)">{{ diagnosisStatusLabel(step.status) }}</span>
-                            <span class="muted">{{ step.detail }}</span>
+                <div class="wb-grid">
+                    <!-- 左栏：会话列表 -->
+                    <div class="wb-col">
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>会话</h2>
+                                <button class="btn mini ml-auto" @click="wbNewSession" :disabled="wbSending">新建会话</button>
+                            </div>
+                            <div class="banner tip slim">
+                                <span>会话与调查任务都存在内存里，Admin 重启后清空。</span>
+                            </div>
+                            <div v-if="!wbSessions.length" class="empty slim">
+                                还没有会话。
+                                <div class="empty-hint">直接提问会自动开一个会话。</div>
+                            </div>
+                            <div v-else class="wb-sessions">
+                                <template v-for="group in wbSessionGroups" :key="group.key">
+                                    <div class="wb-group-title">{{ group.label }}</div>
+                                    <button v-for="s in group.items" :key="s.sessionId"
+                                            class="wb-session"
+                                            :class="{ on: s.sessionId === wbActiveSessionId }"
+                                            @click="wbSwitchSession(s.sessionId)">
+                                        <span class="wb-session-title">{{ s.title || '未命名会话' }}</span>
+                                        <span class="wb-session-meta">{{ fmtTime(wbSessionAt(s)) }}</span>
+                                        <span class="wb-session-meta">{{ (s.incidentIds || []).length }} 个事件</span>
+                                    </button>
+                                </template>
+                            </div>
                         </div>
                     </div>
-                    <div v-else-if="!diagnosisTerminal" class="muted">等待诊断步骤...</div>
-                    <div v-if="diagnosisTask.error" class="banner warn diagnosis-task-error">{{ diagnosisTask.error }}</div>
-                </div>
 
-                <div v-if="diagnosisTask && diagnosisTask.result" class="card">
-                    <div class="card-head">
-                        <h2>诊断结论</h2>
-                        <span class="card-hint">置信度：{{ diagnosisConfidenceLabel(diagnosisTask.result.confidence) }}</span>
-                        <span v-if="diagnosisTask.completedAtMillis" class="card-hint ml-auto">完成于 {{ fmtTime(diagnosisTask.completedAtMillis) }}</span>
-                    </div>
-                    <p class="diagnosis-summary">{{ diagnosisTask.result.summary }}</p>
-                    <h3>调查过程</h3>
-                    <div v-if="diagnosisTask.result.hypotheses && diagnosisTask.result.hypotheses.length" class="diagnosis-steps">
-                        <div v-for="(item, index) in diagnosisTask.result.hypotheses" :key="index" class="diagnosis-step">
-                            <span class="diagnosis-step-num">{{ item.id }}</span>
-                            <strong>{{ item.statement }}</strong>
-                            <span class="badge" :class="diagnosisHypothesisBadge(item.status)">{{ diagnosisHypothesisLabel(item.status) }}</span>
-                            <span class="muted">{{ item.detail }}</span>
-                            <span v-if="item.sources && item.sources.length" class="muted">依据 {{ item.sources.join('、') }}</span>
+                    <!-- 中栏：对话与调查 -->
+                    <div class="wb-col">
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>对话</h2>
+                                <span v-if="wbLoading" class="card-hint">加载中...</span>
+                                <span v-if="wbSession" class="card-hint ml-auto">会话 {{ wbSession.sessionId }}</span>
+                            </div>
+
+                            <div v-if="!wbActiveSessionId" class="empty">
+                                直接提问就会新开一个会话，也可以在左边选择或新建会话。
+                                <div class="empty-hint">同一个会话里的目标与结论会跨多轮保留，可以直接追问「为什么没有实例？」「那昨天呢？」。</div>
+                            </div>
+                            <div v-else-if="!wbTurns.length" class="empty">
+                                这个会话还没有提问。
+                                <div class="empty-hint">例如：<code>为什么 /api/demo/tt 调用失败？</code> 或 <code>order-service 为什么一直失败？</code></div>
+                            </div>
+                            <div v-else class="wb-turns">
+                                <template v-for="turn in wbTurns" :key="turn.key">
+                                    <div v-if="turn.kind === 'message'" class="wb-msg"
+                                         :class="turn.message.role === 'USER' ? 'user' : 'agent'">
+                                        <div class="wb-msg-head">
+                                            <strong>{{ turn.message.role === 'USER' ? '你' : (turn.message.role === 'AGENT' ? 'Agent' : '系统') }}</strong>
+                                            <span>{{ fmtTime(turn.message.createdAtMillis) }}</span>
+                                        </div>
+                                        <div class="wb-msg-body">{{ turn.message.content }}</div>
+                                    </div>
+
+                                    <div v-else class="wb-task">
+                                        <div class="wb-task-head">
+                                            <strong>调查任务</strong>
+                                            <span class="badge" :class="wbStatusBadge(turn.task.status)">{{ wbStatusLabel(turn.task.status) }}</span>
+                                            <span class="card-hint">{{ fmtTime(turn.task.createdAtMillis) }}</span>
+                                            <code>{{ turn.task.taskId }}</code>
+                                        </div>
+                                        <div class="diagnosis-target">
+                                            <code>{{ turn.task.target && turn.task.target.value ? turn.task.target.value : turn.task.path }}</code>
+                                            <span class="muted">调查对象</span>
+                                        </div>
+                                        <div class="wb-progress">
+                                            <span v-for="stage in wbProgress(turn.task)" :key="stage.type"
+                                                  class="wb-stage" :class="stage.state" :title="stage.title">
+                                                <span class="wb-stage-mark">{{ stage.mark }}</span>{{ stage.label }}
+                                            </span>
+                                        </div>
+                                        <div v-if="turn.task.error" class="banner warn diagnosis-task-error">{{ turn.task.error }}</div>
+                                        <div v-if="turn.task.result" class="wb-result">
+                                            <p class="diagnosis-summary">{{ turn.task.result.summary }}</p>
+                                            <div class="card-hint">
+                                                置信度：{{ wbConfidenceLabel(turn.task.result.confidence) }}
+                                                <span v-if="turn.task.completedAtMillis"> · 完成于 {{ fmtTime(turn.task.completedAtMillis) }}</span>
+                                            </div>
+                                            <div v-if="wbUncertainties(turn.task).length" class="wb-uncertain">
+                                                <span class="badge warn">{{ wbUncertainties(turn.task).length }} 项判断仍无法验证</span>
+                                                <span class="muted">{{ wbUncertaintyText(turn.task) }}</span>
+                                            </div>
+                                        </div>
+                                        <div v-if="wbAnalysisText(turn.task)" class="wb-ai">
+                                            <h4>AI 解读
+                                                <span v-if="wbStreaming && wbStreamTaskId === turn.task.taskId" class="card-hint">实时生成中...</span>
+                                            </h4>
+                                            <p class="diagnosis-ai">{{ wbAnalysisText(turn.task) }}</p>
+                                        </div>
+                                        <div v-if="turn.task.result || (turn.task.steps && turn.task.steps.length)" class="wb-detail-toggle">
+                                            <button class="btn ghost mini" @click="wbToggleDetail(turn.task.taskId)">
+                                                {{ wbDetailOpen[turn.task.taskId] ? '收起调查详情' : '查看调查详情' }}
+                                            </button>
+                                        </div>
+
+                                        <div v-if="wbDetailOpen[turn.task.taskId]" class="wb-detail">
+                                            <h4>执行步骤</h4>
+                                            <div v-if="!(turn.task.steps && turn.task.steps.length)" class="empty slim">暂无步骤记录</div>
+                                            <div v-else>
+                                                <div v-for="(step, index) in turn.task.steps" :key="step.stepId || index" class="diagnosis-step">
+                                                    <span class="diagnosis-step-num">{{ index + 1 }}</span>
+                                                    <strong>{{ step.name }}</strong>
+                                                    <span class="badge" :class="wbStepTone(step.status)">{{ wbStatusLabel(step.status) }}</span>
+                                                    <span class="muted">{{ step.error || step.outputSummary || step.inputSummary || '-' }}</span>
+                                                </div>
+                                            </div>
+
+                                            <h4>调查过程</h4>
+                                            <div v-if="turn.task.result && turn.task.result.hypotheses && turn.task.result.hypotheses.length">
+                                                <div v-for="(item, index) in turn.task.result.hypotheses" :key="item.id || index" class="diagnosis-step">
+                                                    <span class="diagnosis-step-num">{{ item.id }}</span>
+                                                    <strong>{{ item.statement }}</strong>
+                                                    <span class="badge" :class="wbHypothesisBadge(item.status)">{{ wbHypothesisLabel(item.status) }}</span>
+                                                    <span class="muted">{{ item.detail }}
+                                                        <span v-if="item.sources && item.sources.length"> · 依据 {{ item.sources.join('、') }}</span>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div v-else class="empty slim">暂无假设验证明细</div>
+
+                                            <h4>证据</h4>
+                                            <div v-if="!turn.task.result || !turn.task.result.evidence || !turn.task.result.evidence.length" class="empty slim">暂无可用证据</div>
+                                            <div v-else class="wb-evidence">
+                                                <div v-for="(item, index) in turn.task.result.evidence" :key="item.evidenceId || index" class="wb-evidence-row">
+                                                    <span class="badge comp">{{ wbEvidenceTypeLabel(item.type) }}</span>
+                                                    <div class="wb-evidence-body">
+                                                        <strong>{{ item.title }}</strong>
+                                                        <div class="muted">{{ item.summary }}</div>
+                                                        <div class="muted wb-evidence-ref">
+                                                            <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div v-if="turn.task.result && turn.task.result.limitations && turn.task.result.limitations.length" class="diagnosis-limitations">
+                                                <h4>判断范围</h4>
+                                                <ul><li v-for="(item, index) in turn.task.result.limitations" :key="index">{{ item }}</li></ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+
+                            <div v-if="wbHint" class="banner tip wb-hint">
+                                <strong>需要补充调查对象</strong>
+                                <span>{{ wbHint }}</span>
+                            </div>
+
+                            <form class="wb-form" @submit.prevent="wbSend">
+                                <textarea v-model="wbInput" rows="2" :disabled="wbSending"
+                                          placeholder="为什么 /api/demo/tt 调用失败？"></textarea>
+                                <div class="wb-form-actions">
+                                    <button class="btn ghost mini" type="button" @click="wbContextOpen = !wbContextOpen">
+                                        {{ wbContextOpen ? '收起高级上下文' : '高级上下文（可选）' }}
+                                    </button>
+                                    <span class="card-hint">不填时按问题文本自动解析调查对象，解析不出会先问你</span>
+                                    <button class="btn primary ml-auto" type="submit" :disabled="wbSending || !wbInput.trim()">
+                                        {{ wbSending ? '提交中...' : '发送' }}
+                                    </button>
+                                </div>
+                                <div v-if="wbContextOpen" class="wb-ctx">
+                                    <div class="field">
+                                        <label>请求路径 route</label>
+                                        <input v-model="wbContext.path" placeholder="/api/demo/tt">
+                                    </div>
+                                    <div class="field">
+                                        <label>服务 service</label>
+                                        <input v-model="wbContext.service" placeholder="demo-service">
+                                    </div>
+                                    <div class="field">
+                                        <label>实例 instance</label>
+                                        <input v-model="wbContext.instance" placeholder="127.0.0.1:8081">
+                                    </div>
+                                    <div class="field">
+                                        <label>时间范围起点</label>
+                                        <input type="datetime-local" v-model="wbContext.from">
+                                    </div>
+                                    <div class="field">
+                                        <label>时间范围终点</label>
+                                        <input type="datetime-local" v-model="wbContext.to">
+                                    </div>
+                                    <div class="wb-ctx-note muted">
+                                        三类对象按「路径 → 服务 → 实例」取第一个填了的那个；时间范围要么都填、要么都不填，
+                                        留空表示按各数据源的默认窗口取数。
+                                    </div>
+                                </div>
+                            </form>
                         </div>
                     </div>
-                    <div v-else class="empty slim">暂无假设验证明细</div>
-                    <h3>证据</h3>
-                    <div v-if="!diagnosisTask.result.evidence || !diagnosisTask.result.evidence.length" class="empty slim">暂无可用证据</div>
-                    <div v-else class="diagnosis-evidence">
-                        <div v-for="(item, index) in diagnosisTask.result.evidence" :key="index" class="diagnosis-evidence-row">
-                            <code>{{ item.source }}</code>
-                            <span>{{ item.detail }}</span>
-                            <time class="muted">{{ fmtTime(item.observedAtMillis) }}</time>
+
+                    <!-- 右栏：事件上下文 -->
+                    <div class="wb-col">
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>当前事件</h2>
+                                <span v-if="wbActiveIncident" class="badge ml-auto"
+                                      :class="wbIncidentBadge(wbActiveIncident.status)">{{ wbIncidentStatusLabel(wbActiveIncident.status) }}</span>
+                            </div>
+                            <div v-if="!wbActiveIncident" class="empty slim">
+                                还没有进行中的调查。
+                                <div class="empty-hint">在中间提一个问题就会登记一个事件。</div>
+                            </div>
+                            <template v-else>
+                                <div class="wb-kv">
+                                    <div class="wide"><span>标题</span><b>{{ wbActiveIncident.title || '-' }}</b></div>
+                                    <div><span>对象类型</span><b>{{ wbTargetTypeLabel(wbActiveIncident.target.type) }}</b></div>
+                                    <div><span>严重度</span><b>{{ wbSeverityLabel(wbActiveIncident.severity) }}</b></div>
+                                    <div class="wide"><span>对象取值</span><b><code>{{ wbActiveIncident.target.value || '(未确定)' }}</code></b></div>
+                                    <div><span>时间范围</span><b>{{ wbTimeRangeText(wbActiveIncident.timeRange) }}</b></div>
+                                    <div><span>来源</span><b>{{ wbOriginLabel(wbActiveIncident.origin) }}</b></div>
+                                    <div><span>调查次数</span><b>{{ (wbActiveIncident.taskIds || []).length }}</b></div>
+                                    <div><span>最近更新</span><b>{{ fmtTime(wbActiveIncident.updatedAtMillis) }}</b></div>
+                                </div>
+                                <div class="wb-note muted">
+                                    对象只有「类型 + 取值」两项：路由填请求路径、服务填服务名、实例填 ip:port，
+                                    因此这里不单列 Route / Service / Instance 三个字段。
+                                </div>
+                            </template>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>当前诊断</h2>
+                                <span v-if="wbLatestResultTask" class="card-hint ml-auto">{{ fmtTime(wbLatestResultTask.completedAtMillis) }}</span>
+                            </div>
+                            <div v-if="!wbLatestResultTask" class="empty slim">
+                                本事件还没有结论。
+                                <div class="empty-hint">调查完成后这里会显示最近一次的结论摘要。</div>
+                            </div>
+                            <template v-else>
+                                <p class="diagnosis-summary">{{ wbLatestResultTask.result.summary }}</p>
+                                <div class="card-hint">置信度：{{ wbConfidenceLabel(wbLatestResultTask.result.confidence) }}</div>
+                                <div v-if="wbUncertainties(wbLatestResultTask).length" class="wb-uncertain">
+                                    <span class="badge warn">{{ wbUncertainties(wbLatestResultTask).length }} 项判断仍无法验证</span>
+                                    <span class="muted">{{ wbUncertaintyText(wbLatestResultTask) }}</span>
+                                </div>
+                                <div v-if="wbLatestResultTask.result.limitations && wbLatestResultTask.result.limitations.length" class="diagnosis-limitations">
+                                    <h3>判断范围</h3>
+                                    <ul><li v-for="(item, index) in wbLatestResultTask.result.limitations" :key="index">{{ item }}</li></ul>
+                                </div>
+                            </template>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>证据</h2>
+                                <span v-if="wbLatestResultTask" class="card-hint ml-auto">
+                                    最近一次调查，{{ (wbLatestResultTask.result.evidence || []).length }} 条
+                                </span>
+                            </div>
+                            <div v-if="!wbLatestResultTask || !(wbLatestResultTask.result.evidence || []).length" class="empty slim">
+                                还没有可用证据。
+                            </div>
+                            <div v-else class="wb-evidence">
+                                <div v-for="(item, index) in wbLatestResultTask.result.evidence" :key="item.evidenceId || index" class="wb-evidence-row">
+                                    <span class="badge comp">{{ wbEvidenceTypeLabel(item.type) }}</span>
+                                    <div class="wb-evidence-body">
+                                        <strong>{{ item.title }}</strong>
+                                        <div class="muted">{{ item.summary }}</div>
+                                        <div class="muted wb-evidence-ref">
+                                            <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                    <div v-if="diagnosisTask.result.limitations && diagnosisTask.result.limitations.length" class="diagnosis-limitations">
-                        <h3>判断范围</h3>
-                        <ul><li v-for="(item, index) in diagnosisTask.result.limitations" :key="index">{{ item }}</li></ul>
-                    </div>
-                </div>
-
-                <div v-if="diagnosisTask && diagnosisTask.result && diagnosisTask.result.aiAnalysis" class="card">
-                    <div class="card-head"><h2>AI 解读</h2></div>
-                    <p class="diagnosis-ai">{{ diagnosisTask.result.aiAnalysis }}</p>
                 </div>
             </section>
 
@@ -636,14 +839,15 @@
                                 <div v-else-if="isNumberConfig(c)" class="num-wrap">
                                     <input type="number" v-model="c.value" :step="numberStep(c)" :min="numberMin(c)" :max="numberMax(c)">
                                     <span class="unit">{{ numberUnit(c) }}</span>
-                                    <div class="chips" v-if="configQuickOptions(c).length">
-                                        <button type="button" v-for="opt in configQuickOptions(c)" :key="opt"
-                                                class="chip-btn" :class="{ on: String(c.value) === String(opt) }"
-                                                @click="c.value = opt">{{ configChipLabel(c, opt) }}</button>
-                                    </div>
                                 </div>
                                 <input v-else v-model="c.value" class="text-input"
                                        :type="c.sensitive ? 'password' : 'text'">
+                                <!-- 常用值单独一行：塞在输入框右边会被挤窄折成参差的两截，行高也跟着乱 -->
+                                <div class="chips" v-if="isNumberConfig(c) && configQuickOptions(c).length">
+                                    <button type="button" v-for="opt in configQuickOptions(c)" :key="opt"
+                                            class="chip-btn" :class="{ on: String(c.value) === String(opt) }"
+                                            @click="c.value = opt">{{ configChipLabel(c, opt) }}</button>
+                                </div>
                                 <div class="config-actions" v-if="isDirty(c)">
                                     <button class="btn mini primary" @click="updateConfig(c)" :disabled="configBusyKey === c.key">
                                         {{ configBusyKey === c.key ? '保存中' : '保存' }}
@@ -652,6 +856,158 @@
                                 </div>
                             </div>
                             <span v-else class="bad">{{ c.description }}</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= 模型配置 ================= -->
+            <section v-if="page === 'model'" class="page">
+                <div v-if="modelError" class="banner warn">{{ modelError }}</div>
+
+                <div class="card">
+                    <div class="card-head model-head">
+                        <h2>模型服务</h2>
+                        <span class="card-hint">OpenAI 兼容接口；保存后立即生效，不用重启 Admin，密钥对称加密后落盘</span>
+                        <label class="switch ml-auto">
+                            <input type="checkbox" v-model="modelForm.enabled">
+                            <span class="slider"></span>
+                            <em>{{ modelForm.enabled ? '模型解读已开启' : '模型解读已关闭' }}</em>
+                        </label>
+                        <span class="badge" :class="modelStateBadge">{{ modelStateLabel }}</span>
+                    </div>
+
+                    <div v-if="modelConfig && modelConfig.masterKeyState === 'MISMATCH'" class="banner warn">
+                        <strong>密钥无法解密</strong>
+                        <span>已存的 API Key 用当前主密钥解不开（通常是 master.key 变了），请重新填写并保存。</span>
+                    </div>
+
+                    <div class="model-form">
+                        <div class="field">
+                            <label>快捷预设</label>
+                            <select v-model="modelPresetIndex" class="nice-select" @change="applyModelPreset">
+                                <option value="">— 选一个预设（选定后仍可改） —</option>
+                                <option v-for="(p, i) in modelPresets" :key="p.label" :value="String(i)">
+                                    {{ p.label }} · {{ p.model }}
+                                </option>
+                            </select>
+                        </div>
+                        <div class="field wide">
+                            <label>服务地址 baseUrl</label>
+                            <input v-model="modelForm.baseUrl" placeholder="https://api.deepseek.com">
+                        </div>
+                        <div class="field">
+                            <label>模型名</label>
+                            <input v-model="modelForm.model" placeholder="deepseek-chat">
+                        </div>
+                        <div class="field">
+                            <label>API Key</label>
+                            <input v-model="modelForm.apiKey" type="password" autocomplete="new-password"
+                                   :placeholder="modelConfig && modelConfig.apiKeyMasked ? '已保存，留空表示不改' : '本地无鉴权模型可留空'">
+                        </div>
+                        <div class="field timeout">
+                            <label>单次调用超时</label>
+                            <div class="num-wrap">
+                                <input type="number" v-model="modelForm.timeoutSeconds" min="1" max="300" step="1">
+                                <span class="unit">秒</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="model-actions">
+                        <button class="btn primary" @click="saveModelConfig" :disabled="modelSaving">
+                            {{ modelSaving ? '保存中...' : '保存并生效' }}
+                        </button>
+                        <button class="btn ghost" @click="testModelConfig"
+                                :disabled="modelTesting || !modelForm.baseUrl || !modelForm.model">
+                            {{ modelTesting ? '测试中...' : '测试连接（不保存）' }}
+                        </button>
+                        <button class="btn ghost" @click="verifyModelConfig" :disabled="modelVerifying">
+                            {{ modelVerifying ? '验证中...' : '验证已生效配置' }}
+                        </button>
+                        <button class="btn ghost" v-if="modelConfig && modelConfig.apiKeyMasked"
+                                :class="{ on: modelClearKey }" @click="modelClearKey = !modelClearKey">
+                            {{ modelClearKey ? '取消清除密钥' : '清除已存密钥' }}
+                        </button>
+                        <span class="card-hint ml-auto" v-if="modelDirty">有未保存的改动</span>
+                    </div>
+                    <div class="model-key-hint muted">{{ modelKeyHint }}</div>
+                </div>
+
+                <div class="model-grid">
+                    <div class="card">
+                        <div class="card-head">
+                            <h2>生效状态</h2>
+                            <span class="card-hint">Admin 进程内实际的构建结果</span>
+                        </div>
+                        <div v-if="!modelConfig" class="empty slim">尚未读取到配置。</div>
+                        <div v-else class="model-kv">
+                            <div><span>已配置</span><b>{{ modelConfig.configured ? '是' : '否' }}</b></div>
+                            <div><span>当前可用</span>
+                                <b :class="modelAvailable ? 'ok-text' : 'bad-text'">{{ modelAvailable ? '可用' : '不可用' }}</b>
+                            </div>
+                            <div><span>生效与已存</span>
+                                <b :class="modelConfig.applied ? '' : 'warn-text'">{{ modelConfig.applied ? '一致' : '不一致' }}</b>
+                            </div>
+                            <div><span>配置来源</span><b>{{ modelSourceLabel }}</b></div>
+                            <div><span>生效描述</span><b>{{ modelConfig.description || '-' }}</b></div>
+                            <div><span>生效版本</span><b>{{ modelConfig.buildId ? ('#' + modelConfig.buildId) : '-' }}</b></div>
+                            <div><span>生效时间</span><b>{{ modelAppliedAtText() }}</b></div>
+                            <div><span>密钥</span>
+                                <b>{{ modelConfig.apiKeyReadable
+                                    ? (modelConfig.apiKeyMasked ? '已保存（加密）' : '未设置（按无鉴权调用）')
+                                    : '无法解密' }}</b>
+                            </div>
+                            <div class="wide"><span>配置文件</span><b><code>{{ modelConfig.configFile }}</code></b></div>
+                            <div class="wide" v-if="modelConfig.lastError">
+                                <span>最近错误</span><b class="bad-text">{{ modelConfig.lastError }}</b>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="model-side">
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>连接测试</h2>
+                                <span class="card-hint">用表单里的值跑一次；不落盘、不影响已生效配置</span>
+                            </div>
+                            <div v-if="!modelTestResult" class="empty slim">点「测试连接（不保存）」后在这里看结果。</div>
+                            <div v-else class="probe-box" :class="modelTestResult.ok ? 'ok' : 'bad'">
+                                <div class="probe-head">
+                                    <span class="badge" :class="modelTestResult.ok ? 'ok' : 'bad'">
+                                        {{ modelTestResult.ok ? '连接正常' : modelErrorLabel(modelTestResult.errorCode) }}
+                                    </span>
+                                    <span class="muted">{{ modelTestResult.model || '-' }} @ {{ modelTestResult.baseUrlHost || '-' }}</span>
+                                    <span class="muted ml-auto">{{ modelTestResult.latencyMs >= 0 ? modelTestResult.latencyMs + 'ms' : '未计时' }}</span>
+                                </div>
+                                <p class="probe-message">{{ modelTestResult.message }}</p>
+                                <p class="muted" v-if="!modelTestResult.ok && modelErrorAdvice(modelTestResult.errorCode)">
+                                    {{ modelErrorAdvice(modelTestResult.errorCode) }}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>效果验证</h2>
+                                <span class="card-hint">对「当前已生效」的配置再跑一次，用来证明生效的正是刚保存的配置</span>
+                            </div>
+                            <div v-if="!modelVerifyResult" class="empty slim">点「验证已生效配置」后在这里看结果。</div>
+                            <div v-else class="probe-box" :class="modelVerifyResult.ok ? 'ok' : 'bad'">
+                                <div class="probe-head">
+                                    <span class="badge" :class="modelVerifyResult.ok ? 'ok' : 'bad'">
+                                        {{ modelVerifyResult.ok ? '生效配置可用' : modelErrorLabel(modelVerifyResult.errorCode) }}
+                                    </span>
+                                    <span class="muted">{{ modelVerifyResult.model || '-' }} @ {{ modelVerifyResult.baseUrlHost || '-' }}</span>
+                                    <span class="muted ml-auto" v-if="modelVerifyResult.buildId">
+                                        #{{ modelVerifyResult.buildId }}
+                                    </span>
+                                </div>
+                                <p class="probe-message">{{ modelVerifyResult.message }}</p>
+                                <p class="muted" v-if="!modelVerifyResult.ok && modelErrorAdvice(modelVerifyResult.errorCode)">
+                                    {{ modelErrorAdvice(modelVerifyResult.errorCode) }}
+                                </p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -717,12 +1073,13 @@
 <script src="/js/formatters.js"></script>
 <script src="/js/pages/shared.js"></script>
 <script src="/js/pages/dashboard.js"></script>
-<script src="/js/pages/diagnosis.js"></script>
+<script src="/js/pages/workbench.js"></script>
 <script src="/js/pages/traces.js"></script>
 <script src="/js/pages/routes.js"></script>
 <script src="/js/pages/instances.js"></script>
 <script src="/js/pages/events.js"></script>
 <script src="/js/pages/configs.js"></script>
+<script src="/js/pages/model.js"></script>
 <script src="/js/app.js"></script>
 </body>
 </html>
