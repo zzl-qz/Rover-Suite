@@ -58,8 +58,8 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 The agent queries Route, Instance, Metrics, Trace, and Events runtime data. Read-only.
 
-**Status: implemented.** `InvestigationService` (in `rover-agent-runtime`) collects route, instance, metric, and trace snapshots and returns a
-conclusion, evidence sources, and collection timestamps.
+**Status: implemented.** `InvestigationService` (in `rover-agent-runtime`), driven by `AgentOrchestrator`, collects
+route, instance, metric, and trace snapshots and returns a conclusion, evidence sources, and collection timestamps.
 
 ### Level B: Reason
 
@@ -103,10 +103,10 @@ Engineer-initiated (implemented)     Event / alert triggered (planned)
             Action Plan
 ```
 
-- **Engineer-initiated:** enter a path and question on the Admin diagnosis page and submit a read-only diagnosis task.
-  **Implemented.**
-- **Event / alert triggered:** an alert or gateway event creates an incident and starts the investigation automatically.
-  **Planned.**
+- **Engineer-initiated:** ask in one sentence on the Admin Agent Workbench (e.g. "why does /api/demo/tt fail?"), with an
+  optional collapsible "advanced context" for route / service / instance and a time range; follow-ups reuse the active
+  incident. **Implemented.**
+- **Alert / event initiated:** an Alert or Gateway event creates an Incident and starts the investigation automatically. **Planned.**
 
 ## 6. Architecture choices
 
@@ -153,16 +153,20 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 
 | Module | Package | Responsibility |
 | :--- | :--- | :--- |
-| `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView |
+| `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget |
 | | `com.rover.agent.core.snapshot` | Neutral read-only snapshots: RouteSnapshot / InstanceSnapshot / GatewayMetricSnapshot / TraceSnapshot / DiscoveryMode |
 | | `com.rover.agent.core.port` | Read-only ports: RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort; unavailable data raises SnapshotUnavailableException |
+| | `com.rover.agent.core.repository` | Storage interfaces: AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository (in-memory or persistent implementations are swappable) |
+| | `com.rover.agent.core.context` | AgentContextManager (N most recent messages + active incident + structured target + key evidence); TargetResolver / ResourceTarget (explicit input → existing routes and instances → model assistance → clarification) |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules (pure functions, unit-testable without the framework) |
-| `rover-agent-runtime` | `com.rover.agent.runtime.graph` | StateGraph definition, nodes, conditional edge, conclusion synthesis |
-| | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (in-memory, bounded) |
+| `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator (application entry: context → target → incident → task → investigation); InvestigationService (task lifecycle) |
+| | `com.rover.agent.runtime.graph` | StateGraph definition, nodes, conditional edge, conclusion synthesis |
+| | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces; in-memory and bounded today) |
+| | `com.rover.agent.runtime.repository` | Four thread-safe in-memory implementations (lost on restart), replaced when persistence lands |
 | | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model |
 | | `com.rover.agent.runtime.llm` | ModelExplainer: model interpretation and rejection when required evidence was not read |
 | `rover-admin` | `com.rover.admin.agent.adapter` | Four read-only adapters: AdminConfigService → ports, never triggering a write |
-| | `com.rover.admin.agent` | DiagnosisController (HTTP contract) + AgentCompositionConfiguration (composition root) |
+| | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + DiagnosisController (legacy entry, forwarded) + composition root |
 
 **Boundary rules:**
 
@@ -171,8 +175,8 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
   unit-testable and data-source agnostic.
 - Read-only is structural: the port interfaces only expose read methods, so the runtime cannot reach
   `saveRoute / deleteRoute / updateConfig`.
-- Spring AI and Graph dependencies are confined to `rover-agent-runtime`; Admin only wires beans and owns the HTTP
-  contract, so the agent can later move to its own process.
+- Spring AI and Graph dependencies appear only in the `rover-agent-runtime` and `rover-admin` modules; Admin also owns
+  the model-configuration wiring, so the agent can later move to its own process.
 - The parent `spring-boot.version` stays at 3.2.0: `rover-agent-runtime` and `rover-admin` each import the
   Spring Boot 4.1.1 and Spring AI 2.0.1 BOMs inside their own module.
 
@@ -185,9 +189,12 @@ Session (one continuous conversation) ─┬─ Incident (one problem under inve
                                                                       └── Hypothesis (confirmed / eliminated / unverifiable)
 ```
 
-Today each submission opens one Session, creates a `USER`-origin Incident, and attaches the Task to that Incident;
-the TaskView carries `sessionId` / `incidentId`. Session and Incident currently live in memory only, so follow-up
-investigations ("what about yesterday?") are the next step and are not implemented yet.
+Today every question lands under a Session: creating a Session also creates a `USER`-origin Incident, and the Task hangs
+off that Incident; the TaskView carries `sessionId` / `incidentId`. **Follow-up questions work now**: later messages in a
+session carry the N most recent messages, the active incident, the current structured target, and that incident's key
+evidence; the active incident is reused when the target matches, a new incident opens only when a clearly different
+target is resolved, and a clarification is returned rather than a guess when nothing can be resolved. Session and
+Incident live in memory only, so **everything is lost on restart**.
 
 Tool governance, approval policy, and event ingestion for Levels B and C will be split into further sub-packages as
 they are built, rather than scaffolding empty modules now.
@@ -196,7 +203,21 @@ they are built, rather than scaffolding empty modules now.
 
 **Implemented:**
 
-- Admin diagnosis page plus `POST /api/agent/diagnoses` and `GET /api/agent/diagnoses/{taskId}`.
+- Admin Agent Workbench plus the conversational API: `POST/GET /api/agent/sessions`,
+  `GET /api/agent/sessions/{sessionId}`, `POST /api/agent/sessions/{sessionId}/messages`,
+  `GET /api/agent/tasks/{taskId}`, `GET /api/agent/incidents/{incidentId}`. The legacy `POST /api/agent/diagnoses`
+  and `GET /api/agent/diagnoses/{taskId}` (including the SSE interpretation stream) stay compatible and forward
+  internally to the same orchestration.
+- Multi-turn follow-ups: AgentContextManager assembles "N most recent messages
+  (`rover.agent.context.recent-message-limit`, default 8) + active incident + structured target + key evidence";
+  TargetResolver resolves the object as "explicit input → existing routes and instances → model assistance →
+  clarification" and never guesses — it creates no task when it cannot resolve one.
+- A single orchestration entry point, `AgentOrchestrator`: controllers no longer orchestrate route/metrics/chatClient
+  calls themselves, only validate input and map results.
+- Storage is abstracted behind four repository interfaces with thread-safe in-memory implementations only, so
+  **everything is lost on restart**; business code does not depend on maps directly.
+- User identity always comes from the backend authentication context (`Authentication.getName()`) and a `userId` in the
+  request body is never accepted; sessions, tasks, and incidents are filtered by that identity.
 - Read-only collection of routes, instances, metrics, and traces, producing a conclusion, confidence, evidence sources,
   collection timestamps, and limitations.
 - Split into `rover-agent-core` / `rover-agent-runtime` / `rover-admin` with one-way dependencies; read-only access is
@@ -206,21 +227,31 @@ they are built, rather than scaffolding empty modules now.
 - Hypothesis-driven conclusions: candidate causes are confirmed or eliminated one by one, each with its status
   (confirmed / eliminated / unverifiable), explanation, and evidence sources.
 - Diagnosis is strictly read-only; it never changes routes or configuration.
-- When no model is configured or the model call fails, it degrades to rule-based diagnosis and states the missing evidence.
+- The console Model Config page accepts an OpenAI-compatible service and takes effect on save with no Admin restart;
+  the `ROVER_AGENT_MODEL_CHAT` / `ROVER_AGENT_API_KEY` / `ROVER_AGENT_BASE_URL` / `ROVER_AGENT_MODEL` environment
+  variables only seed the first startup when no model config file exists yet, after which the saved file wins. The page
+  also offers a connection test (without saving) and a verification of the active config (`POST /api/model/verify`
+  returns the active `buildId` and applied-at time, proving the active config is the one just saved).
+- When no model is configured or the model is unavailable, diagnosis automatically degrades to pure rule-based
+  diagnosis (`aiAnalysis` is null); collection and orchestration are unaffected, and the missing evidence is stated.
 - The model participates through restricted read-only snapshot tools executed by the application; it never calls
-  management APIs directly, and its answer is rejected when required evidence was not read.
-- Task state lives in Admin memory and is gone after restart. Each submission opens a Session and creates a
+  management APIs directly, and its answer is rejected when required evidence was not read. The tools it actually
+  called are recorded in the result text of the "AI interpretation" step, so the reasoning traces back to snapshots.
+- The AI interpretation is pushed as it is generated: `ModelExplainer` streams chunks to the task and Admin relays
+  them over SSE. The final full text still lands in the task result, and polling covers dropped connections.
+  Collection and rule verdicts are a blocking Graph chain and are not streamed.
+- Task state lives in Admin memory and is gone after restart. Every question opens a Session and creates a
   `USER`-origin Incident.
 
 **Planned (not implemented):**
 
-- Follow-up investigations in the same Session (persisted Session / Incident, Lite ↔ Standard storage modes).
+- Persistence for sessions / incidents / tasks (Lite ↔ Standard storage modes): Redis for caching and short-term
+  context, MySQL for tasks and audit; only in-memory implementations exist today.
 - Alert / event ingestion with automatic investigation.
 - Model-side dynamic tool selection and investigation plans that adapt as evidence arrives.
 - Graph checkpoint recovery and interrupt-based human approval.
 - Log, change-history, and SOP / Runbook retrieval (RAG).
 - Write actions, approval flow, audit, and post-execution verification.
-- Login authentication.
 
 ## 8. Difference from data-analytics agents
 
@@ -240,6 +271,6 @@ multi-agents — but their product goals are entirely different.
 
 ## 9. Related documents
 
-- [Admin User Guide](./admin-guide.md): diagnosis page usage and model configuration environment variables
+- [Admin User Guide](./admin-guide.md): Agent Workbench usage and console model configuration
 - [Admin API](./admin-api.md): diagnosis task API contract
 - [Architecture](./architecture.md): existing Gateway and Nameserver design

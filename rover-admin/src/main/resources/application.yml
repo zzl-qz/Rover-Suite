@@ -1,5 +1,12 @@
 server:
   port: 9090
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        name: ROVERADMIN_SESSION
+        http-only: true
+        same-site: strict
 
 spring:
   application:
@@ -26,9 +33,29 @@ spring:
 
 # Admin 只调组件管理口，自己不持有真实配置
 rover:
+  agent:
+    context:
+      # 上下文窗口：每次提问最多带上最近多少条会话消息；历史不会被无限制发给模型
+      recent-message-limit: ${ROVER_AGENT_CONTEXT_MESSAGE_LIMIT:8}
   admin:
     gateway-url: http://127.0.0.1:80
     nameserver-manage-url: http://127.0.0.1:8889
     # 管理口鉴权 token：非空时，Admin 调用 Gateway/Nameserver 管理口会带上 X-Rover-Admin-Token
     # 需与 Gateway / Nameserver 的 adminToken 一致；留空=对端也不鉴权（仅本机调试）
     admin-token: ""
+    model:
+      # 模型配置落盘位置；留空用工作目录下的 config/admin-model.properties
+      # （整个 config/ 已在 .gitignore 中，文件缺失时启动自动创建空配置）
+      config-file: ${ROVER_ADMIN_MODEL_CONFIG_FILE:}
+      # 主密钥：base64 的 32 字节直接使用，否则按口令 PBKDF2 派生；留空则用主密钥文件
+      master-key: ${ROVER_ADMIN_MASTER_KEY:}
+      master-key-file: ${ROVER_ADMIN_MASTER_KEY_FILE:}
+    auth:
+      # 控制台登录口令：留空 = 不启用登录（仅本机调试），启动会打 WARN 且页面显示提示条。
+      # 生产环境请设置 password-hash（BCrypt），或用 password 传明文由启动期哈希，二者取 hash。
+      username: ${ROVER_ADMIN_USERNAME:}
+      password-hash: ${ROVER_ADMIN_PASSWORD_HASH:}
+      password: ${ROVER_ADMIN_PASSWORD:}
+      # 同一来源在窗口内的连续登录失败上限，超出后该来源短时间不再受理登录
+      max-login-failures: ${ROVER_ADMIN_MAX_LOGIN_FAILURES:5}
+      failure-window-seconds: ${ROVER_ADMIN_FAILURE_WINDOW_SECONDS:600}

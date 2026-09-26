@@ -24,9 +24,14 @@ mvn -pl rover-admin spring-boot:run
 | 实例管理 | 查看 Nameserver 注册实例及健康状态 |
 | 最近事件 | 查看注册、注销、推送和剔除事件 |
 | 配置管理 | 修改支持热更新的 Gateway/Nameserver 配置 |
-| 智能诊断 | 只读采集路由、实例、指标和追踪证据，展示假设验证过程与结论，可选 AI 解读 |
+| Agent 工作台 | 三栏工作台：左侧会话列表、中间多轮对话与调查进度、右侧当前事件上下文；只读采集路由、实例、指标和追踪证据，展示假设验证过程与结论，可选 AI 解读（实时流式显示） |
 
-智能诊断页在未配置模型时也能工作，直接给出规则诊断（含假设验证与证据）。如需 AI 解读，启动 Admin 前设置以下环境变量：
+Agent 工作台主输入框只要求用自然语言描述问题（如「为什么 /api/demo/tt 调用失败？」），
+不再强制先填路径；「高级上下文」折叠区可以手工指定 route / service / instance 与时间范围，全部可选。
+同一个会话里的后续提问会作为追问落在当前事件上（「为什么没有实例？」「那昨天呢？」），
+目标发生变化时才另开事件。会话、事件、任务与消息当前只存在 Admin 内存里，**重启即清空**，页面左侧有明确提示。
+
+工作台在未配置模型时也能工作，直接给出规则诊断（含假设验证与证据）。如需 AI 解读，可设置以下环境变量：
 
 | 变量 | 取值 |
 | --- | --- |
@@ -35,7 +40,96 @@ mvn -pl rover-admin spring-boot:run
 | `ROVER_AGENT_BASE_URL` | 服务地址；该服务要求时需带 `/v1` |
 | `ROVER_AGENT_MODEL` | 该服务支持且支持工具调用的模型名 |
 
-密钥不要写入仓库。诊断任务存于 Admin 内存，重启后消失。Agent 只读取管理快照，不会向业务路径发请求，也不会修改路由和配置。
+这些环境变量现在只作为**首次启动播种**：仅在还没有模型配置文件时生效。在「模型配置」页保存过一次之后就以文件为准，
+再改这些环境变量也不会覆盖文件。既有启动方式仍然可用，不算失效；长期使用建议改用「模型配置」页（见下文）。
+
+密钥不要写入仓库。调查任务与工作台会话存于 Admin 内存，重启后消失。Agent 只读取管理快照，不会向业务路径发请求，也不会修改路由和配置。
+
+配置模型后，工作台里调查卡片的「AI 解读」会边生成边显示（控制台用 SSE 订阅增量，卡片上显示「实时生成中...」；
+连接断开时不影响调查，页面轮询会把最终全文补齐）。解读结束后以任务结果里的 `aiAnalysis` 为准；模型不可用或
+未配置时该区块不出现，只展示规则诊断。调查卡片可展开「查看调查详情」查看每一步的执行情况、调查过程与结构化证据。
+
+## 首次登录
+
+配好口令后，控制台页面和全部 `/api/*` 都需要登录。启用登录的优先级如下：
+
+- 配置 `password-hash`（`ROVER_ADMIN_PASSWORD_HASH`）最优先，填写 BCrypt 哈希。
+- 明文 `password`（`ROVER_ADMIN_PASSWORD`）仅限本机使用，启动时会 WARN 建议改用 `password-hash`。
+- 两项都留空时控制台**不启用鉴权**，仅限回环地址；启动会 WARN，页面顶栏会显示提示条。
+
+生成 BCrypt 哈希（两种输出 `$2y$` / `$2b$` 都能被校验）：
+
+```bash
+htpasswd -bnBC 10 "" '你的口令' | tr -d ':\n'
+python -c "import bcrypt;print(bcrypt.hashpw(b'你的口令',bcrypt.gensalt(10)).decode())"
+```
+
+第一条适用于 Linux/macOS/Git Bash/WSL，第二条需要 `pip install bcrypt`。
+
+| 变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `ROVER_ADMIN_USERNAME` | `admin` | 控制台登录用户名 |
+| `ROVER_ADMIN_PASSWORD_HASH` | 空 | 口令的 BCrypt 哈希，优先于明文 |
+| `ROVER_ADMIN_PASSWORD` | 空 | 明文口令，启动期哈希进内存；启动会 WARN |
+| `ROVER_ADMIN_MAX_LOGIN_FAILURES` | `5` | 窗口内同一来源允许的失败次数上限 |
+| `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | `600` | 失败计数的窗口时长，单位秒 |
+
+其他行为：
+
+- 登录页：`/login.html`；会话超时 30 分钟。
+- 登出只认 `POST /api/logout`（GET 登出无法被 CSRF 保护，故不支持）。
+- 同一来源连续失败达到上限后，`POST /login` 直接回 `429`。
+
+Windows 上没有 POSIX 文件权限，可用下面命令去掉继承权限并只授予当前用户，加固模型配置文件：
+
+```
+icacls "<file>" /inheritance:r /grant:r "%USERNAME%:F"
+```
+
+## 模型配置
+
+入口是控制台左侧导航「模型配置」。表单是"预设下拉 + 自定义输入"：选择预设后仍可手动修改服务地址和模型名。
+
+四个按钮：
+
+- **保存并生效**：保存配置并立即替换客户端，**无需重启 Admin**。
+- **测试连接（不保存）**：用表单当前候选值探活，不落盘、不影响已生效配置，固定 8 秒超时。
+- **验证已生效配置**：对当前已生效的配置再跑一次连接测试。
+- **清除已存密钥**：清除已保存的 API Key。
+
+密钥处理：API Key 留空 = 不改动已存密钥；只有点「清除已存密钥」或在保存时传 `clearApiKey:true` 才会清除。
+
+**如何证明不重启即生效**：保存后「生效状态」卡的"生效版本 #N"与"生效时间"会变化；也可以调用 `POST /api/model/verify`
+拿到 `buildId`，确认生效的正是刚保存的配置。构建失败时会保留上一个可用客户端，并在 `lastError` 里给出原因。
+
+存储与备份：
+
+- 模型配置文件（`ROVER_ADMIN_MODEL_CONFIG_FILE`，默认工作目录下的 `config/admin-model.properties`）保存非密钥字段，
+  其中 `api-key-enc` 是 AES-256-GCM 密文。它和 Gateway / Nameserver 的本地运行时配置放在同一个 `config/` 目录里，
+  随项目一起维护与备份；整个 `config/` 已在 `.gitignore` 中，文件缺失时启动会自动创建一个空配置。
+- 主密钥文件（`ROVER_ADMIN_MASTER_KEY_FILE`，默认与模型配置文件同级的 `master.key`）在首次加密时自动生成。
+- 密钥与主密钥文件必须**分开备份**：放在一起等于没加密。
+- Windows 上没有 POSIX 文件权限，机密性来自 AES-GCM 加密而不是文件模式；建议用
+  `icacls "<file>" /inheritance:r /grant:r "%USERNAME%:F"` 加固（启动日志会打印两条加固命令）。
+
+| 变量 | 默认值 | 含义 |
+| --- | --- | --- |
+| `ROVER_ADMIN_MODEL_CONFIG_FILE` | 工作目录下 `config/admin-model.properties` | 模型配置文件路径 |
+| `ROVER_ADMIN_MASTER_KEY` | 空 | base64 解出 32 字节则直接用作 AES 密钥，否则按口令用 PBKDF2-HMAC-SHA256（65536 轮）派生 |
+| `ROVER_ADMIN_MASTER_KEY_FILE` | 与配置文件同级的 `master.key` | 主密钥文件；首次加密时自动生成 32 字节随机主密钥并落盘 |
+
+内置预设（选预设后仍可手改）：
+
+| 预设 | 服务地址 | 模型名 |
+| --- | --- | --- |
+| OpenAI | `https://api.openai.com` | `gpt-4o-mini` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
+| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| 智谱 | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-air` |
+| 本地 Ollama | `http://127.0.0.1:11434/v1` | `qwen2.5:7b` |
+| 本地 vLLM | `http://127.0.0.1:8000/v1` | `Qwen2.5-7B-Instruct` |
+
+页面还包含三张状态卡：生效状态、连接测试、效果验证。
 
 ## 页面速览
 

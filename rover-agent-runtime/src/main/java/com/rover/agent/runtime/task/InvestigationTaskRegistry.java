@@ -1,6 +1,10 @@
 package com.rover.agent.runtime.task;
 
+import com.rover.agent.core.model.ResourceTarget;
+import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.repository.AgentTaskRepository;
+import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
 import jakarta.annotation.PreDestroy;
 import java.util.Comparator;
 import java.util.Map;
@@ -14,15 +18,20 @@ import java.util.concurrent.TimeUnit;
 /**
  * 调查任务登记与并发执行。
  *
- * 任务只保留在当前进程：数量超过上限时先淘汰最早的已结束任务，仍在执行的任务不淘汰；
- * 淘汰后仍满则拒绝新任务，由调用方转成「任务繁忙」。
+ * 任务记录写入 {@link AgentTaskRepository}（当前为内存实现，重启即失），它才是任务快照的真相来源；
+ * 本类另外持有的只是在当前进程里仍在执行的任务——线程池与解读增量订阅者天生无法持久化，
+ * 重启后自然消失。
+ *
+ * 任务数量超过上限时先淘汰最早的已结束任务，仍在执行的任务不淘汰；淘汰后仍满则拒绝新任务，
+ * 由调用方转成「任务繁忙」。
  */
 public final class InvestigationTaskRegistry {
 
     private static final int MAX_TASKS = 100;
     private static final int WORKER_THREADS = 2;
 
-    private final Map<String, InvestigationTask> tasks = new ConcurrentHashMap<>();
+    private final AgentTaskRepository records;
+    private final Map<String, InvestigationTask> executing = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor workers = new ThreadPoolExecutor(
             WORKER_THREADS, WORKER_THREADS, 0, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(16), runnable -> {
                 Thread thread = new Thread(runnable, "rover-agent-diagnosis");
@@ -30,15 +39,26 @@ public final class InvestigationTaskRegistry {
                 return thread;
             });
 
+    /** 当前阶段的内存实现；接入持久化后由组合根注入具体实现。 */
+    public InvestigationTaskRegistry() {
+        this(new InMemoryAgentTaskRepository(MAX_TASKS));
+    }
+
+    public InvestigationTaskRegistry(AgentTaskRepository records) {
+        this.records = records;
+    }
+
     /** 登记一个新任务；已达上限时抛 {@link RejectedExecutionException}。 */
-    public InvestigationTask register(String sessionId, String incidentId, String path, String question) {
+    public InvestigationTask register(String sessionId, String incidentId, String path, ResourceTarget target,
+                                      String question) {
         evictOldestTerminal();
-        if (tasks.size() >= MAX_TASKS) {
+        if (records.listAll().size() >= MAX_TASKS) {
             throw new RejectedExecutionException("诊断任务已满");
         }
-        InvestigationTask task = new InvestigationTask(
-                UUID.randomUUID().toString(), sessionId, incidentId, path, question);
-        tasks.put(task.taskId(), task);
+        InvestigationTask task = new InvestigationTask(UUID.randomUUID().toString(), sessionId, incidentId,
+                path, target, question, records::save);
+        executing.put(task.taskId(), task);
+        records.save(task.view());
         return task;
     }
 
@@ -49,12 +69,17 @@ public final class InvestigationTaskRegistry {
 
     /** 任务执行提交失败时回滚登记，避免留下永远 PENDING 的任务。 */
     public void discard(String taskId) {
-        tasks.remove(taskId);
+        executing.remove(taskId);
+        records.remove(taskId);
     }
 
     public TaskView get(String taskId) {
-        InvestigationTask task = tasks.get(taskId);
-        return task == null ? null : task.view();
+        return records.find(taskId).orElse(null);
+    }
+
+    /** 取任务运行态：解读增量订阅需要直接挂到任务上；对外视图仍走 {@link #get(String)}。 */
+    public InvestigationTask find(String taskId) {
+        return executing.get(taskId);
     }
 
     @PreDestroy
@@ -63,11 +88,15 @@ public final class InvestigationTaskRegistry {
     }
 
     private void evictOldestTerminal() {
-        if (tasks.size() < MAX_TASKS) {
+        if (records.listAll().size() < MAX_TASKS) {
             return;
         }
-        tasks.values().stream().filter(InvestigationTask::terminal)
-                .min(Comparator.comparingLong(InvestigationTask::createdAtMillis))
-                .ifPresent(oldest -> tasks.remove(oldest.taskId(), oldest));
+        records.listAll().stream()
+                .filter(view -> view.status() == TaskStatus.COMPLETED || view.status() == TaskStatus.FAILED)
+                .min(Comparator.comparingLong(TaskView::createdAtMillis))
+                .ifPresent(oldest -> {
+                    records.remove(oldest.taskId());
+                    executing.remove(oldest.taskId());
+                });
     }
 }

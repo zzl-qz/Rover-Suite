@@ -17,9 +17,16 @@ Default URL: `http://127.0.0.1:9090/`. In production, copy
 configuration and set the Gateway/Nameserver management URLs and a non-empty
 `rover.admin.admin-token`.
 
-The read-only diagnosis page works with route and instance snapshots even when
-no model is configured. To enable AI explanations, set these environment
-variables before starting Admin:
+The Agent Workbench is a three-column layout: the session list on the left, the multi-turn conversation and
+investigation progress in the middle, and the active incident context on the right. The main input is a single natural
+language box (e.g. "why does /api/demo/tt fail?"); the collapsible "advanced context" lets you pin route / service /
+instance and a time range, all optional. Later questions in the same session are treated as follow-ups on the active
+incident ("why are there no instances?", "what about yesterday?"), and a new incident opens only when the target
+changes. Sessions, incidents, tasks, and messages currently live in Admin memory only — **everything is lost on
+restart**, which the left column states explicitly.
+
+The workbench works with route and instance snapshots even when no model is configured. To enable AI explanations,
+set these environment variables:
 
 | Variable | Value |
 | --- | --- |
@@ -28,9 +35,135 @@ variables before starting Admin:
 | `ROVER_AGENT_BASE_URL` | Service base URL; include `/v1` when that service requires it |
 | `ROVER_AGENT_MODEL` | Model name supported by that service and tool calling |
 
-Keep the key outside the repository. Diagnosis tasks are held in Admin memory
-and disappear after restart. The Agent only reads management snapshots; it
-does not send requests to business paths or change routes and configuration.
+These environment variables now act only as **first-boot seeding**: they apply
+only while no model configuration file exists. Once you have saved from the
+Model configuration page, the file wins and later changes to these variables do
+not overwrite it. The existing startup method still works and is not deprecated,
+but the Model configuration page (below) is the recommended long-term path.
+
+Keep the key outside the repository. Investigations and workbench sessions are
+held in Admin memory and disappear after restart. The Agent only reads management
+snapshots; it does not send requests to business paths or change routes and
+configuration.
+
+Once a model is configured, the "AI interpretation" section of an investigation
+card in the workbench fills in as the text is generated (the console subscribes
+to deltas over SSE and shows "generating live..."; a dropped connection does not
+affect the investigation, and polling fills in the final text). When generation
+finishes, `aiAnalysis` in the task result is authoritative. If the model is
+unavailable or not configured the section does not appear and only the rule-based
+diagnosis is shown. Expanding "view investigation details" on the card shows each
+step, the investigation trail, and the structured evidence.
+
+## First login
+
+Once a credential is configured, both the console pages and all `/api/*`
+endpoints require login. Enable login in this priority order:
+
+- Set `password-hash` (`ROVER_ADMIN_PASSWORD_HASH`) to a BCrypt hash. This has
+  the highest priority.
+- Set the plaintext `password` (`ROVER_ADMIN_PASSWORD`) only for local use;
+  startup logs a WARN recommending `password-hash`.
+- If both are empty, the console does **not** require authentication, which is
+  only acceptable on loopback: startup logs a WARN and the page header shows a
+  banner.
+
+Generate a BCrypt hash (both `$2y$` and `$2b$` output verify):
+
+```bash
+htpasswd -bnBC 10 "" 'your-password' | tr -d ':\n'
+python -c "import bcrypt;print(bcrypt.hashpw(b'your-password',bcrypt.gensalt(10)).decode())"
+```
+
+The first command works on Linux/macOS/Git Bash/WSL; the second needs
+`pip install bcrypt`.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ROVER_ADMIN_USERNAME` | `admin` | Console login user name |
+| `ROVER_ADMIN_PASSWORD_HASH` | empty | BCrypt hash of the password, takes priority over plaintext |
+| `ROVER_ADMIN_PASSWORD` | empty | Plaintext password, hashed into memory at startup; startup logs a WARN |
+| `ROVER_ADMIN_MAX_LOGIN_FAILURES` | `5` | Failed logins allowed per source within the window |
+| `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | `600` | Failure-counting window, in seconds |
+
+Other behavior:
+
+- Login page: `/login.html`; session timeout is 30 minutes.
+- Logout is `POST /api/logout` only (a GET logout cannot be CSRF-protected, so
+  it is not supported).
+- After the failure limit is reached from one source, `POST /login` returns `429`.
+
+Windows has no POSIX file permissions, so you can harden the model
+configuration file by removing inherited permissions and granting only the
+current user:
+
+```
+icacls "<file>" /inheritance:r /grant:r "%USERNAME%:F"
+```
+
+## Model configuration
+
+The entry point is the "Model configuration" item in the console's left
+navigation. The form combines a preset dropdown with free-text fields: after
+choosing a preset you can still edit the base URL and model name.
+
+The four buttons:
+
+- **Save and apply**: saves the configuration and swaps in the new client
+  immediately; **no Admin restart is needed**.
+- **Test connection (no save)**: probes connectivity with the current form
+  values; nothing is written and the active configuration is untouched, with a
+  fixed 8-second timeout.
+- **Verify active configuration**: runs the connectivity test again against the
+  configuration currently in effect.
+- **Clear stored key**: removes the stored API key.
+
+Key handling: leaving the API Key field empty keeps the stored key; it is
+cleared only by **Clear stored key** or by sending `clearApiKey:true` when
+saving.
+
+**Proving it took effect without a restart**: after saving, the "effective
+version #N" and "effective time" on the **Effective status** card change; you
+can also call `POST /api/model/verify` and read `buildId` to confirm that the
+configuration in effect is the one you just saved. If building the client
+fails, the previous working client is kept and the reason is reported in
+`lastError`.
+
+Storage and backup:
+
+- The model configuration file (`ROVER_ADMIN_MODEL_CONFIG_FILE`, default
+  `config/admin-model.properties` under the working directory) holds the non-secret fields;
+  its `api-key-enc` field is AES-256-GCM ciphertext. It sits in the same `config/` directory as the
+  Gateway / Nameserver local runtime configs, so it is maintained and backed up with the project;
+  the whole `config/` directory is gitignored and an empty config is created on startup when missing.
+- The master key file (`ROVER_ADMIN_MASTER_KEY_FILE`, default `master.key` next
+  to the configuration file) is generated automatically on first encryption.
+- Back up the key and the master key file **separately**: keeping them together
+  is the same as not encrypting.
+- Windows has no POSIX file permissions, so confidentiality comes from AES-GCM
+  encryption rather than file mode. Hardening with
+  `icacls "<file>" /inheritance:r /grant:r "%USERNAME%:F"` is recommended
+  (startup logs print two hardening commands).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ROVER_ADMIN_MODEL_CONFIG_FILE` | `config/admin-model.properties` under the working directory | Model configuration file path |
+| `ROVER_ADMIN_MASTER_KEY` | empty | A base64 value that decodes to 32 bytes is used directly as the AES key; otherwise it is treated as a passphrase and derived with PBKDF2-HMAC-SHA256 (65536 rounds) |
+| `ROVER_ADMIN_MASTER_KEY_FILE` | `master.key` next to the configuration file | Master key file; a 32-byte random key is written on first encryption |
+
+Built-in presets (still editable after selection):
+
+| Preset | Base URL | Model |
+| --- | --- | --- |
+| OpenAI | `https://api.openai.com` | `gpt-4o-mini` |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
+| Alibaba Cloud Bailian | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
+| Zhipu | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-air` |
+| Local Ollama | `http://127.0.0.1:11434/v1` | `qwen2.5:7b` |
+| Local vLLM | `http://127.0.0.1:8000/v1` | `Qwen2.5-7B-Instruct` |
+
+The page also shows three status cards: effective status, connection test and
+effect verification.
 
 ## Pages
 
@@ -42,7 +175,7 @@ does not send requests to business paths or change routes and configuration.
 | Instances | Registered Nameserver instances and health |
 | Recent events | Registration, removal, health and push events |
 | Configuration | Runtime Gateway/Nameserver settings |
-| Diagnosis | Hypothesis-based read-only investigation over route, instance, metric, and trace evidence, with an optional AI explanation |
+| Diagnosis | Hypothesis-based read-only investigation over route, instance, metric, and trace evidence, with an optional streamed-live AI explanation |
 
 ## Screenshots and quick orientation
 

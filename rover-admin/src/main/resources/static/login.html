@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 · Rover Admin</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/css/app.css">
+    <link rel="stylesheet" href="/css/login.css">
+</head>
+<body class="login-body">
+<main class="login-shell">
+    <section class="login-brand">
+        <div class="brand-mark">R</div>
+        <div>
+            <div class="login-brand-name">Rover</div>
+            <div class="login-brand-sub">Admin Console</div>
+        </div>
+    </section>
+
+    <section class="login-panel">
+        <h1 class="login-title">登录控制台</h1>
+        <p class="login-hint">这里可以改动网关路由与配置，请确认操作者身份。</p>
+
+        <div class="banner danger" id="errorBanner" hidden>
+            <strong>用户名或口令不正确</strong>
+            <span id="errorDetail"></span>
+        </div>
+        <div class="banner warn" id="openBanner" hidden>
+            <strong>未启用登录鉴权</strong>
+            <span>当前控制台对所有来源开放，仅限本机调试。</span>
+            <a class="btn ghost" href="/">进入控制台</a>
+        </div>
+
+        <form class="login-form" id="loginForm" method="post" action="/login" hidden>
+            <div class="field">
+                <label for="username">用户名</label>
+                <input id="username" name="username" type="text" autocomplete="username"
+                       autocapitalize="off" spellcheck="false" required autofocus>
+            </div>
+            <div class="field">
+                <label for="password">口令</label>
+                <input id="password" name="password" type="password" autocomplete="current-password" required>
+            </div>
+            <button class="btn primary login-submit" id="submitBtn" type="submit">登录</button>
+        </form>
+
+        <p class="login-foot">
+            忘记口令时，请运维在服务端设置 <code>ROVER_ADMIN_PASSWORD_HASH</code> 后重启 Admin。
+        </p>
+    </section>
+</main>
+<script src="/js/login.js"></script>
+</body>
+</html>

@@ -22,10 +22,27 @@
 | `server.port` | `9090` | Admin HTTP 端口 | 重启 |
 | `rover.admin.gateway-url` | `http://127.0.0.1:80` | Gateway 管理口基地址 | 重启 |
 | `rover.admin.nameserver-manage-url` | `http://127.0.0.1:8889` | Nameserver 管理口基地址 | 重启 |
-| `rover.admin.admin-token` | 空 | Admin 调用下游时发送的 `X-Rover-Admin-Token` | 重启 |
+| `rover.admin.admin-token` | 空 | Admin 调用下游时发送的 `X-Rover-Admin-Token`；与登录鉴权无关 | 重启 |
+| `rover.admin.auth.username` | `admin` | 控制台登录用户名；环境变量 `ROVER_ADMIN_USERNAME` | 重启 |
+| `rover.admin.auth.password-hash` | 空 | 口令的 BCrypt 哈希；**优先于明文**；环境变量 `ROVER_ADMIN_PASSWORD_HASH` | 重启 |
+| `rover.admin.auth.password` | 空 | 明文口令，启动期哈希进内存，启动会 WARN 建议改用 `password-hash`；环境变量 `ROVER_ADMIN_PASSWORD` | 重启 |
+| `rover.admin.auth.max-login-failures` | `5` | 失败窗口内同一来源允许的失败次数上限；环境变量 `ROVER_ADMIN_MAX_LOGIN_FAILURES` | 重启 |
+| `rover.admin.auth.failure-window-seconds` | `600` | 失败计数窗口时长（秒）；环境变量 `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | 重启 |
+| `rover.admin.model.config-file` | 空 = 工作目录下 `config/admin-model.properties` | 模型配置文件路径（UTF-8 properties，含 `api-key-enc` 密文）；文件缺失时启动自动创建空配置，整个 `config/` 已在 `.gitignore` 中；环境变量 `ROVER_ADMIN_MODEL_CONFIG_FILE` | 重启 |
+| `rover.admin.model.master-key` | 空 | base64 解出 32 字节则直接用作 AES 密钥，否则按口令 PBKDF2-HMAC-SHA256（65536 轮）派生；环境变量 `ROVER_ADMIN_MASTER_KEY` | 重启 |
+| `rover.admin.model.master-key-file` | 空 = 配置文件同级 `master.key` | 主密钥文件；首次加密时自动生成 32 字节随机主密钥并落盘；环境变量 `ROVER_ADMIN_MASTER_KEY_FILE` | 重启 |
+| `server.servlet.session.timeout` | `30m` | 控制台会话超时 | 重启 |
+| `server.servlet.session.cookie.name` | `ROVERADMIN_SESSION` | 会话 Cookie 名 | 重启 |
+| `server.servlet.session.cookie.http-only` | `true` | 会话 Cookie 仅 HTTP 可用 | 重启 |
+| `server.servlet.session.cookie.same-site` | `Strict` | 会话 Cookie 的 SameSite 策略 | 重启 |
 
-Admin 本身默认不持有业务配置，也不为 `/api/*` 自动增加登录认证；生产环境需要通过网络 ACL、反向代理或 VPN 保护
-`server.port`。
+`rover.admin.admin-token` 只在 Admin 调用 Gateway/Nameserver 时作为 `X-Rover-Admin-Token` 发送，与登录鉴权无关。
+
+控制台页面与全部 `/api/*` 由 Spring Security 保护：未登录时页面 302 跳 `/login.html`，`/api/*` 回 `401`。当
+`password-hash` 与 `password` 两项都留空时**不启用登录**，仅限本机调试：启动会 WARN，页面顶栏显示提示条，
+`GET /api/auth/status` 回 `authEnabled:false`。生产环境应配置其中一项（推荐 `password-hash`），并继续用网络 ACL、
+反向代理或 VPN 保护 `server.port`。会话 Cookie 为 `ROVERADMIN_SESSION`（HttpOnly、SameSite=Strict），超时取
+`server.servlet.session.timeout`。
 
 ## Gateway 启动配置
 
