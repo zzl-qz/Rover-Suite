@@ -26,6 +26,11 @@ public final class NoopChatModelGateway implements ChatModelGateway {
     }
 
     @Override
+    public ChatClient chatClient(int timeoutSeconds) {
+        throw new IllegalStateException("尚未配置模型");
+    }
+
+    @Override
     public String description() {
         return "未配置模型";
     }

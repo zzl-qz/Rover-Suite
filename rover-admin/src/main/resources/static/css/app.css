@@ -509,8 +509,21 @@ code {
 }
 
 /* ============ Agent 工作台 ============ */
-.wb-grid { display: grid; grid-template-columns: 250px minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
-.wb-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* 工作台是一扇「应用窗口」：整页不滚，三栏各自滚动。
+   高度靠 .main-window 这条 flex 链撑满视口，不写死顶栏像素——换字号、加提示条都不会错位。 */
+.main-window { height: 100vh; overflow: hidden; }
+.main-window > .content { display: flex; flex-direction: column; min-height: 0; }
+.main-window .page { flex: 1; min-height: 0; }
+.wb-grid {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr) 320px;
+    gap: 16px;
+    align-items: stretch;
+    flex: 1;
+    min-height: 0;
+}
+.wb-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; min-height: 0; overflow-y: auto; }
+.wb-col-chat { overflow: hidden; }
 
 .wb-sessions { display: flex; flex-direction: column; gap: 4px; }
 .wb-group-title { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; margin: 10px 0 4px; }
@@ -533,33 +546,189 @@ code {
 .wb-session-title { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
 .wb-session-meta { font-size: 11px; color: var(--muted); font-family: var(--mono); }
 
-.wb-turns { display: flex; flex-direction: column; gap: 12px; }
-.wb-msg { border-left: 3px solid var(--line); padding: 6px 0 6px 12px; }
-.wb-msg.user { border-left-color: var(--accent); }
-.wb-msg.agent { border-left-color: var(--lamp); }
-.wb-msg-head { display: flex; align-items: baseline; gap: 8px; font-size: 11.5px; color: var(--muted); margin-bottom: 3px; }
-.wb-msg-body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; }
+/* ---- IM 式对话窗口：头部固定 / 消息区滚动 / 输入区固定在底部 ---- */
+.card.wb-chat { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 0; overflow: hidden; }
 
-.wb-task {
+.wb-chat-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.wb-chat-ident { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wb-chat-ident strong { font-size: 13.5px; }
+.wb-chat-state { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
+/* 状态点沿用控制台的方形指示灯口径；「在线」是常态，也必须真的看得见颜色 */
+.wb-chat-state .dot { width: 6px; height: 6px; background: var(--ok); }
+.wb-chat-state.busy { color: var(--warn); }
+.wb-chat-state.busy .dot { background: var(--lamp); animation: wb-pulse 1.1s ease-in-out infinite; }
+
+.wb-chat-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 16px 16px 12px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
+}
+
+/* 「回到最新」：往上翻历史时贴在消息区底部，与 IM 一致 */
+.wb-jump {
+    position: sticky;
+    bottom: 4px;
+    align-self: center;
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 12px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--card);
+    color: var(--ink);
+    cursor: pointer;
+}
+.wb-jump:hover { border-color: var(--accent); background: var(--accent-soft); }
+.wb-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 空态：一句身份说明 + 可以直接点的示例问题 */
+.wb-welcome { margin: auto 0; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px 12px; text-align: center; color: var(--muted); }
+.wb-welcome h3 { margin: 0; font-size: 16px; color: var(--ink); }
+.wb-welcome p { margin: 0; max-width: 460px; font-size: 12.5px; line-height: 1.6; }
+.wb-examples { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.wb-example {
+    font: inherit;
+    font-size: 12.5px;
+    padding: 5px 10px;
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    background: var(--wash);
-    padding: 12px 14px;
+    background: var(--card);
+    color: var(--ink);
+    cursor: pointer;
 }
-.wb-task-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.wb-task-head strong { font-size: 13px; }
-/* 任务 ID 很长，单独占一行右对齐，避免和状态、时间挤在一起反复折行 */
-.wb-task-head code {
-    flex-basis: 100%;
-    text-align: right;
-    font-size: 11px;
+.wb-example:hover { border-color: var(--accent); background: var(--accent-soft); }
+.wb-example:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* 头像：Agent 用注册表同色的字母牌，用户用中性字牌 */
+.wb-avatar {
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+}
+.wb-avatar.agent { background: var(--accent); color: #f4f5f2; }
+.wb-avatar.user { background: var(--wash); color: var(--muted); border: 1px solid var(--line); }
+.wb-avatar.big { width: 40px; height: 40px; flex-basis: 40px; font-size: 16px; }
+
+/* 消息气泡：Agent 靠左、用户靠右，与 IM 一致 */
+.wb-turn { display: flex; flex-direction: column; gap: 3px; max-width: 100%; }
+.wb-turn.user { align-items: flex-end; }
+.wb-turn.agent { align-items: flex-start; }
+.wb-turn.system { align-items: center; }
+.wb-bubble-row { display: flex; align-items: flex-start; gap: 8px; max-width: min(76%, 640px); }
+.wb-bubble {
+    /* 宽度上限放在这一行上：百分比只有对着「有确定宽度的父级」才算数，
+       放在气泡上会随着父级 shrink-to-fit 一起缩水，短消息也会被折行；
+       640px 的绝对上限则让 Agent 答案气泡不随整列拉长，读起来才像一条回复 */
+    max-width: min(100%, 640px);
+    min-width: 0;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--card);
+    font-size: 13.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+.wb-bubble.user { background: var(--accent-soft); border-color: #c6d2bd; }
+.wb-meta { padding: 0 2px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.wb-system { padding: 3px 8px; border-radius: var(--radius-sm); background: var(--wash); color: var(--muted); font-size: 11.5px; }
+.wb-day { display: flex; justify-content: center; }
+.wb-day span {
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    background: var(--wash);
     color: var(--muted);
-    background: transparent;
+    font-family: var(--mono);
+    font-size: 11px;
+}
+
+/* 「正在处理」：三个跳动的点，与流式解读共用同一套节奏 */
+.wb-typing { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.wb-typing-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--muted); animation: wb-typing 1.1s ease-in-out infinite; }
+.wb-typing-dot:nth-of-type(2) { animation-delay: 0.15s; }
+.wb-typing-dot:nth-of-type(3) { animation-delay: 0.3s; }
+@keyframes wb-typing {
+    0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+    30% { opacity: 1; transform: translateY(-2px); }
+}
+@keyframes wb-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+}
+
+/* 流式解读：光标闪烁 + 呼吸状态点，明确「还在写」而不是写完了 */
+.wb-stream-flag { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; font-size: 11.5px; font-weight: 400; color: var(--warn); }
+.wb-stream-flag .dot { width: 6px; height: 6px; background: var(--lamp); animation: wb-pulse 1.1s ease-in-out infinite; }
+.wb-caret { display: inline-block; width: 7px; height: 13px; margin-left: 2px; vertical-align: -2px; background: var(--accent); animation: wb-pulse 0.9s ease-in-out infinite; }
+
+/* Agent 的一条回答：过程条与答案正文同属这条消息，共用一个头像（伪元素给出），不再各占一条 */
+.wb-turn.wb-answer { position: relative; padding-left: 34px; }
+.wb-answer::before {
+    content: "R";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    background: var(--accent);
+    color: #f4f5f2;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+}
+/* 过程条：贴在答案上方的一条可展开记录，展开后才是步骤 / 假设 / 证据 / AI 解读 */
+.wb-process {
+    align-self: stretch;
+    margin-bottom: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--card);
     padding: 0;
 }
+/* 过程条：默认只有这一行——和主流 Agent 一样，过程收起来，答案只留气泡那一条 */
+.wb-task-toggle {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+    width: 100%;
+    padding: 10px 14px 8px;
+    border: 0;
+    border-radius: var(--radius);
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.wb-task-toggle:hover { background: var(--wash); }
+.wb-task-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wb-task-toggle > strong { font-size: 13px; }
+.wb-task-toggle .card-hint:last-child { margin-left: auto; }
+.wb-task-caret { font-family: var(--mono); font-size: 11px; color: var(--muted); display: inline-block; transition: transform 0.15s; }
+.wb-task-caret.open { transform: rotate(90deg); color: var(--ink); }
+/* 展开态：真实调查过程（步骤 / 假设 / 证据 / AI 解读）都在这里 */
+.wb-task-body { display: flex; flex-direction: column; gap: 10px; padding: 0 14px 12px; }
+
+.wb-task-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wb-task-head strong { font-size: 13px; }
 
 .wb-progress { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12.5px; }
 .wb-stage { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
@@ -571,19 +740,32 @@ code {
 .wb-result { border-top: 1px solid var(--line); padding-top: 8px; }
 /* 不确定判断要在默认视图看得见，不能只藏在折叠的「调查详情」里 */
 .wb-uncertain { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.wb-intent-reason { overflow-wrap: anywhere; }
+
+/* 调查计划：每一步都写清「为什么查这个」，执行过的能力就地打勾 */
+.wb-plan { display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.wb-plan-step { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.wb-plan-step .muted { overflow-wrap: anywhere; }
+.wb-plan-mark { font-family: var(--mono); color: var(--muted); }
+.wb-plan-mark.done { color: var(--ok); }
+
+/* 处置计划：默认就标明「仅生成计划、不执行」，字段与后端 ActionPlan 一一对应 */
+.wb-action-plan { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.wb-action-plan .banner { margin: 0; }
+.wb-action-plan .wb-kv b { white-space: pre-wrap; }
+
 .wb-ai { border-top: 1px dashed var(--line); padding-top: 8px; }
-.wb-detail-toggle { display: flex; }
 .wb-detail { display: flex; flex-direction: column; border-top: 1px dashed var(--line); padding-top: 2px; }
 .wb-detail h4 { margin: 12px 0 4px; font-size: 12.5px; letter-spacing: 0.03em; color: var(--muted); }
 
-.wb-hint { margin: 14px 0 0; }
+/* 输入区贴着窗口底部：提示与输入框都在消息区之外，不随消息滚动 */
+.wb-hint { margin: 0; border-radius: 0; border-left: 0; border-right: 0; border-top: 0; }
 .wb-form {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px solid var(--line);
+    padding: 12px 14px 14px;
+    background: var(--card);
 }
 .wb-form textarea {
     width: 100%;
@@ -638,9 +820,14 @@ code {
 
 /* ============ 响应式 ============ */
 @media (max-width: 1240px) {
-    /* 三栏放不下时：会话列表 + 对话并排，事件上下文整行落到下面 */
-    .wb-grid { grid-template-columns: 220px minmax(0, 1fr); }
+    /* 三栏放不下时：会话列表 + 对话并排，事件上下文整行落到下面；页面恢复滚动，对话窗口改为固定高度 */
+    .main-window { height: auto; overflow: visible; }
+    .main-window > .content { display: block; }
+    .wb-grid { grid-template-columns: 220px minmax(0, 1fr); flex: none; }
     .wb-grid > .wb-col:last-child { grid-column: 1 / -1; }
+    .wb-col { overflow-y: visible; }
+    .wb-col-chat { overflow: hidden; }
+    .card.wb-chat { height: 68vh; min-height: 440px; }
 }
 
 @media (max-width: 1100px) {
@@ -664,6 +851,8 @@ code {
     .topbar { padding: 14px 16px; flex-direction: column; align-items: flex-start; gap: 8px; }
     .diagnosis-step, .wb-ctx, .wb-grid { grid-template-columns: 1fr; }
     .wb-grid > .wb-col:last-child { grid-column: auto; }
+    /* 单列堆叠时对话排在最前：窄屏该先看到对话，而不是会话列表 */
+    .wb-col-chat { order: -1; }
     .model-form, .model-grid { grid-template-columns: 1fr; }
     .model-form .field.wide { grid-column: auto; }
     .model-form .field.timeout .num-wrap input { width: 100%; }

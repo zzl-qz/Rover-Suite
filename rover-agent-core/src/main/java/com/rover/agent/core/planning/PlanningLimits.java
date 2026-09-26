@@ -1,0 +1,25 @@
+package com.rover.agent.core.planning;
+
+/**
+ * 规划限制：动态调查的硬边界，由代码执行，不依赖模型自觉。
+ *
+ * 三个限制分别封住三种失控方式：无限重规划（{@code maxRounds}）、无限调工具（{@code maxToolCalls}）、
+ * 单轮计划无限膨胀（{@code maxPlanSteps}）。Dynamic Planning 不等于无限 ReAct。
+ *
+ * @param maxRounds    最多规划轮数
+ * @param maxToolCalls 最多能力调用次数
+ * @param maxPlanSteps 单轮计划最多步骤数
+ */
+public record PlanningLimits(int maxRounds, int maxToolCalls, int maxPlanSteps) {
+
+    public PlanningLimits {
+        if (maxRounds <= 0 || maxToolCalls <= 0 || maxPlanSteps <= 0) {
+            throw new IllegalArgumentException("规划限制必须为正数");
+        }
+    }
+
+    /** 本阶段默认限制：3 轮 / 10 次能力调用 / 单轮 6 步。 */
+    public static PlanningLimits defaults() {
+        return new PlanningLimits(3, 10, 6);
+    }
+}

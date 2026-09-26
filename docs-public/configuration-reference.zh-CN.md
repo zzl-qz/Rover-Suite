@@ -60,9 +60,13 @@
 | `rover.agent.execution.queue-capacity` | `16` | 执行队列容量（1~1000）；队列满时提交回 `429`，不使用无界队列 | 重启 |
 | `rover.agent.execution.task-capacity` | `200` | 任务登记容量（1~10000）；已结束的任务可被保留策略淘汰，执行中的任务不会被丢 | 重启 |
 | `rover.agent.context.recent-message-limit` | `8` | 追问时带上的最近消息条数 | 重启 |
+| `rover.agent.planning.max-rounds` | `3` | 单次动态调查最多规划轮数（>0）；触顶后停止采集并如实记录判断边界 | 重启 |
+| `rover.agent.planning.max-tool-calls` | `10` | 单次调查最多只读能力调用次数（>0）；触顶后不再发起任何调用，未执行的步骤如实上报 | 重启 |
+| `rover.agent.planning.max-plan-steps` | `6` | 单轮计划最多步骤数（>0）；超出部分由计划校验截断，未登记的写能力一律被丢弃 | 重启 |
+| `rover.agent.llm.quick-timeout-seconds` | `10` | 意图识别 / 目标解析 / 调查规划这类"失败也能兜底"的小调用等待上限（秒，`0`=用模型配置里的超时）；只在超时后重试一次，「AI 解读」不受影响 | 重启 |
 | `rover.agent.metrics.enabled` | `true` | Agent 运行指标总开关；`false` 为应急降级，不注册任何 Meter，业务逻辑不变 | 重启 |
 
-三个执行参数越界时启动直接失败，让配置错误在启动期暴露，而不是运行期表现为「任务莫名被拒」。
+三个执行参数与三个规划限制越界时启动直接失败，让配置错误在启动期暴露，而不是运行期表现为「任务莫名被拒」或「调查提前收尾」。
 
 指标口径（前缀 `rover.agent.`，写在宿主进程的同一个 `MeterRegistry` 上）：`task.submitted` / `task.completed` /
 `task.failed` / `task.rejected` 为计数，`task.active` / `task.queue.size` / `sse.connections` 为当前值，

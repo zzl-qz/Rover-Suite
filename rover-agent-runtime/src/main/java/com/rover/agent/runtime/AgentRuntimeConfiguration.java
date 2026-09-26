@@ -1,8 +1,17 @@
 package com.rover.agent.runtime;
 
+import com.rover.agent.core.capability.CapabilityExecutor;
+import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.context.AgentContextManager;
 import com.rover.agent.core.context.TargetInterpreter;
 import com.rover.agent.core.context.TargetResolver;
+import com.rover.agent.core.intent.IntentClassifier;
+import com.rover.agent.core.intent.IntentInterpreter;
+import com.rover.agent.core.intent.IntentService;
+import com.rover.agent.core.planning.InvestigationPlanner;
+import com.rover.agent.core.planning.PlanValidator;
+import com.rover.agent.core.planning.PlanningLimits;
+import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
@@ -12,11 +21,14 @@ import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.runtime.llm.ChatModelGateway;
+import com.rover.agent.runtime.llm.LlmIntentInterpreter;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.llm.ModelTargetInterpreter;
 import com.rover.agent.runtime.llm.NoopChatModelGateway;
+import com.rover.agent.runtime.llm.SpringAiJsonCompletion;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
+import com.rover.agent.runtime.planning.LlmInvestigationPlanner;
 import com.rover.agent.runtime.repository.InMemoryAgentMessageRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
@@ -127,16 +139,84 @@ public class AgentRuntimeConfiguration {
         return new ModelExplainer(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics);
     }
 
-    /** 规则解析不出对象时的模型辅助；模型未配置时退化为不推断。 */
+    /**
+     * 规则解析不出对象时的模型辅助；模型未配置时退化为不推断。
+     *
+     * 目标解析与意图识别一样是"失败就兜底"的廉价调用，用 {@code rover.agent.llm.quick-timeout-seconds}
+     * 收紧等待上限，避免一次网络卡顿让用户等满模型配置里的超时。
+     */
     @Bean
-    public TargetInterpreter agentTargetInterpreter(ObjectProvider<ChatModelGateway> chatModelGateways) {
-        return new ModelTargetInterpreter(chatModelGateways.getIfAvailable(NoopChatModelGateway::new));
+    public TargetInterpreter agentTargetInterpreter(ObjectProvider<ChatModelGateway> chatModelGateways,
+                                                    @Value("${rover.agent.llm.quick-timeout-seconds:10}")
+                                                    int quickTimeoutSeconds) {
+        return new ModelTargetInterpreter(chatModelGateways.getIfAvailable(NoopChatModelGateway::new),
+                quickTimeoutSeconds);
     }
 
     @Bean
     public TargetResolver agentTargetResolver(RouteReadPort routeReadPort, InstanceReadPort instanceReadPort,
                                               TargetInterpreter agentTargetInterpreter) {
         return new TargetResolver(routeReadPort, instanceReadPort, agentTargetInterpreter);
+    }
+
+    /** 能力注册表：能力清单、规划可选集合与执行映射共用同一份，避免口径分叉。 */
+    @Bean
+    public CapabilityRegistry agentCapabilityRegistry() {
+        return CapabilityRegistry.standard();
+    }
+
+    /** 只读能力执行器：模型与生产数据之间唯一的执行口，所有取数都经过它。 */
+    @Bean
+    public CapabilityExecutor agentCapabilityExecutor(RouteReadPort routeReadPort, InstanceReadPort instanceReadPort,
+                                                     MetricReadPort metricReadPort, TraceReadPort traceReadPort,
+                                                     CapabilityRegistry agentCapabilityRegistry) {
+        return new CapabilityExecutor(routeReadPort, instanceReadPort, metricReadPort, traceReadPort,
+                agentCapabilityRegistry);
+    }
+
+    /**
+     * 规划限制：动态调查的硬边界，由代码执行而不是提示词。
+     *
+     * 参数越界时装配直接失败（{@link PlanningLimits} 构造器校验），配置错误必须早暴露。
+     */
+    @Bean
+    public PlanningLimits agentPlanningLimits(@Value("${rover.agent.planning.max-rounds:3}") int maxRounds,
+                                             @Value("${rover.agent.planning.max-tool-calls:10}") int maxToolCalls,
+                                             @Value("${rover.agent.planning.max-plan-steps:6}") int maxPlanSteps) {
+        return new PlanningLimits(maxRounds, maxToolCalls, maxPlanSteps);
+    }
+
+    /** 意图解释器：模型只补「规则说不清」的场合，输出取值受限，越界一律丢弃。 */
+    @Bean
+    public IntentInterpreter agentIntentInterpreter(ObjectProvider<ChatModelGateway> chatModelGateways,
+                                                    AgentMetrics agentMetrics,
+                                                    @Value("${rover.agent.llm.quick-timeout-seconds:10}")
+                                                    int quickTimeoutSeconds) {
+        return new LlmIntentInterpreter(new SpringAiJsonCompletion(
+                chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics, "意图识别",
+                quickTimeoutSeconds));
+    }
+
+    @Bean
+    public IntentService agentIntentService(IntentInterpreter agentIntentInterpreter) {
+        return new IntentService(agentIntentInterpreter, new IntentClassifier());
+    }
+
+    /** 调查规划器：确定性规则打底，模型只提出候选，越界步骤由 {@link PlanValidator} 丢弃。 */
+    @Bean
+    public InvestigationPlanner agentInvestigationPlanner(CapabilityRegistry agentCapabilityRegistry,
+                                                         ObjectProvider<ChatModelGateway> chatModelGateways,
+                                                         AgentMetrics agentMetrics,
+                                                         @Value("${rover.agent.llm.quick-timeout-seconds:10}")
+                                                         int quickTimeoutSeconds) {
+        return new LlmInvestigationPlanner(new RuleBasedPlanner(agentCapabilityRegistry),
+                new SpringAiJsonCompletion(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics,
+                        "调查规划", quickTimeoutSeconds), agentCapabilityRegistry);
+    }
+
+    @Bean
+    public PlanValidator agentPlanValidator(CapabilityRegistry agentCapabilityRegistry, PlanningLimits planningLimits) {
+        return new PlanValidator(agentCapabilityRegistry, planningLimits);
     }
 
     @Bean
@@ -153,18 +233,38 @@ public class AgentRuntimeConfiguration {
     }
 
     @Bean
-    public InvestigationService agentInvestigationService(RouteReadPort routeReadPort,
-                                                          InstanceReadPort instanceReadPort,
-                                                          MetricReadPort metricReadPort,
-                                                          TraceReadPort traceReadPort,
-                                                          IncidentRegistry agentIncidentRegistry,
+    public InvestigationService agentInvestigationService(IncidentRegistry agentIncidentRegistry,
                                                           InvestigationTaskRegistry agentTaskRegistry,
-                                                          ModelExplainer agentModelExplainer) {
-        return new InvestigationService(routeReadPort, instanceReadPort, metricReadPort, traceReadPort,
-                agentIncidentRegistry, agentTaskRegistry, agentModelExplainer);
+                                                          ModelExplainer agentModelExplainer,
+                                                          InvestigationPlanner agentInvestigationPlanner,
+                                                          PlanValidator agentPlanValidator,
+                                                          CapabilityExecutor agentCapabilityExecutor,
+                                                          PlanningLimits agentPlanningLimits) {
+        return new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
+                agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits);
     }
 
-    /** Agent 应用入口：会话/事件/消息/目标解析/任务启动的编排都在这里，HTTP 层只做契约映射。 */
+    /** 状态查询：单一只读能力直接回答，不规划、不跑调查。 */
+    @Bean
+    public QueryStateService agentQueryStateService(CapabilityExecutor agentCapabilityExecutor) {
+        return new QueryStateService(agentCapabilityExecutor);
+    }
+
+    /** 解释用例：能力清单来自注册表，结论解释复用会话里已有的调查结论。 */
+    @Bean
+    public ExplainService agentExplainService(CapabilityRegistry agentCapabilityRegistry,
+                                              IncidentRegistry agentIncidentRegistry,
+                                              AgentTaskRepository agentTaskRepository) {
+        return new ExplainService(agentCapabilityRegistry, agentIncidentRegistry, agentTaskRepository);
+    }
+
+    /** 处置计划：只读预检后产出不可执行的计划，本阶段不执行任何写操作。 */
+    @Bean
+    public ActionPlanService agentActionPlanService(CapabilityExecutor agentCapabilityExecutor) {
+        return new ActionPlanService(agentCapabilityExecutor);
+    }
+
+    /** Agent 应用入口：意图/目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */
     @Bean
     public AgentOrchestrator agentOrchestrator(AgentSessionRepository agentSessionRepository,
                                                IncidentRepository agentIncidentRepository,
@@ -174,9 +274,14 @@ public class AgentRuntimeConfiguration {
                                                AgentContextManager agentContextManager,
                                                TargetResolver agentTargetResolver,
                                                InvestigationService agentInvestigationService,
-                                               WorkspaceRetention agentWorkspaceRetention) {
+                                               WorkspaceRetention agentWorkspaceRetention,
+                                               IntentService agentIntentService,
+                                               QueryStateService agentQueryStateService,
+                                               ExplainService agentExplainService,
+                                               ActionPlanService agentActionPlanService) {
         return new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
                 agentTaskRepository, agentIncidentRegistry, agentContextManager, agentTargetResolver,
-                agentInvestigationService, agentWorkspaceRetention);
+                agentInvestigationService, agentWorkspaceRetention, agentIntentService, agentQueryStateService,
+                agentExplainService, agentActionPlanService);
     }
 }

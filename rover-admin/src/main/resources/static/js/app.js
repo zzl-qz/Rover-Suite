@@ -37,6 +37,9 @@ createApp({
         P.model.computed,
     ),
 
+    // 目前只有工作台需要 watch（对话窗口的自动滚动）；其余页面按需再往这里加。
+    watch: Object.assign({}, P.workbench.watch),
+
     mounted() {
         this.$nextTick(() => this.initCharts());
         this.fetchAuthStatus();

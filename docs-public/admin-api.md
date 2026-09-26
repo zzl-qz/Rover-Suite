@@ -59,13 +59,29 @@ count as running and does not hold the session's concurrency slot; the question 
 Diagnosis is read-only: it never changes routes or configuration. Tasks live in Admin memory and
 cannot be queried after a restart.
 
+Since P2 a task snapshot is no longer always a fault investigation. `GET /api/agent/tasks/{taskId}` and SSE
+snapshots carry `taskType` (`QUERY` / `INVESTIGATION` / `EXPLAIN` / `ACTION_PLAN` / `UNSUPPORTED`), `intent`
+(`intent`, `confidence`, `reason`, `targetHint`, `requestedAction`), `plan` (`goal`, `hypotheses`, `steps`;
+each step has `capability`, `reason`, `target`, `required`), `executedCapabilities` (capabilities actually
+called or skipped on facts), and `actionPlan` (the proposed remediation plan). The same sentence takes
+different shapes by intent: a state query calls exactly one read-only capability and opens no incident; a
+capability question is answered from the capability registry without target resolution; an action request
+only produces a human-reviewable plan and executes nothing; unsupported requests (scheduled inspection, etc.)
+state the boundary instead of running an empty investigation. An `actionPlan` carries `actionType`,
+`riskLevel`, `currentState`, `desiredState`, `expectedImpact`, `verificationPlan`, `rollbackPlan`, and
+`blockedReason`; `executable` is always `false`, and `blockedReason` states "plan only, nothing is executed".
+
 The task event stream `GET /api/agent/tasks/{taskId}/events` serves every structured event of a task as
 `text/event-stream`: the SSE event name is the event type and the data is the full event envelope
 (`eventId`, `taskId`, `type`, `timestampMillis`, `payload`). On connect it replays one `SNAPSHOT`
 (task view + interpretation text produced so far + `coveredEventId`), then pushes increments such as
 `TASK_STARTED`, `STEP_STARTED`, `STEP_COMPLETED`, `STEP_FAILED`, `EVIDENCE_ADDED`, `ANALYSIS_DELTA`, and
 `CLARIFICATION_REQUIRED`; it finishes and closes once the task reaches a terminal state
-(`TASK_COMPLETED`/`TASK_FAILED`/`TASK_CANCELLED`) or stops at the clarification point. `GET /api/agent/tasks/{taskId}`
+(`TASK_COMPLETED`/`TASK_FAILED`/`TASK_CANCELLED`) or stops at the clarification point. Intent decisions,
+investigation plans, capability progress, and action plans are results rather than process logs: they are
+pushed as full `SNAPSHOT` events (overwrite semantics), so a client joining late or reconnecting can always
+reconstruct "which intent was recognized, what the plan was, what actually ran, and what the action plan is".
+`GET /api/agent/tasks/{taskId}`
 remains the source of truth: everything an event carries must be queryable there, and lost events or dropped
 connections never affect the investigation. The connection idles out after 180 seconds; a reconnect replays the
 snapshot, so nothing is lost. An unknown, no-longer-observable, or not-owned task returns `404`.
@@ -106,7 +122,24 @@ never blocked by model calls. Progress is observed through `GET /api/agent/tasks
 - When the target cannot be determined nothing is guessed and no incident is opened: the task stops at
   `WAITING_INPUT`, `clarification` holds the question to answer, and that question is also written to the
   session as an agent message; the session's next task continues once the user replies (this stage does not
-  resume the same task in place).
+  resume the same task in place). **Only fault investigations clarify for a missing target**: capability
+  questions and global metric queries never require a resource target.
+
+Supported phrasings and where they land (all triggered by one natural-language sentence):
+
+| Example | Where it lands |
+| --- | --- |
+| `网关 QPS 多少？` | State query: one `GATEWAY_METRICS_QUERY` call, answers window requests and 5xx; no incident, no investigation |
+| `order-service 几个健康实例？` | State query: one `INSTANCE_QUERY` call, healthy-instance count of the resolved service |
+| `/api/demo/tt 命中了哪条路由？` | State query: one `ROUTE_QUERY` call, answers the matched route facts |
+| `为什么 /api/demo/tt 调用失败？` | Fault investigation: dynamic plan (route → instances → metrics → traces) over read-only capabilities, hypothesis verdicts |
+| `你能做什么？` | Explanation: `CapabilityRegistry` lists real capabilities and the not-yet-available ones; no target resolution. `你是谁` / `介绍一下你自己` are equivalent |
+| `你好` / unclear chat | Fallback: no path clarification; a self-introduction plus the same registry-backed capability list, showing how to ask |
+| `把 order-03 摘掉` | Action plan: read-only precheck + non-executable `ActionPlan`, `executable=false` |
+| `每天 9 点自动巡检并发邮件` | Unsupported: states "scheduled inspection is not available"; no investigation |
+
+Planning limits (rounds / capability calls / steps per round) are documented in `configuration-reference`;
+when a limit is reached the limitation is written into `limitations` and skipped steps are reported honestly.
 
 ### Workbench aggregate
 

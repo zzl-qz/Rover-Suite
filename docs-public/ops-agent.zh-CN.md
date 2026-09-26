@@ -45,7 +45,7 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 | :--- | :--- | :--- |
 | Detect（发现异常） | 监控 / 告警系统，以及后续的事件接入 | 规划中 |
 | Investigate → Diagnose（调查与诊断） | **Agent 的核心价值** | 进行中（只读调查链已用 Graph 编排，含假设验证） |
-| Recommend（处置建议） | Agent | 进行中 |
+| Recommend（处置建议） | Agent | 进行中（已能生成不可执行的处置计划） |
 | Approve / Execute / Verify（审批、受控执行、验证） | Agent，需配套治理层 | 规划中 |
 
 ## 4. 能力分级
@@ -69,8 +69,11 @@ Agent 能制定调查计划、动态选择工具、关联多条证据、排除�
 采样与缓冲意味着「没采到」既不能证明没有请求，也不能排除同段时间内曾返回 503；近期 503 只在真正采到时才判为
 「确认」，且只陈述观察到该路径返回 503，不推断该状态码由上游还是 Gateway 产生。证据里的追踪统计与判定共用同一个
 五分钟窗口，缓冲区中更早的记录只单独说明条数、不计入判定，避免出现「证据里列着 503、结论说没采到」的自相矛盾。
-尚未实现的是模型侧动态选择工具、
-调查计划随证据自我调整，以及基于根因生成 Action Plan。
+
+动态能力选择与随证据调整的调查计划已经落地：编排层先判定意图，再按能力注册表选择只读能力，由规划器产出计划、由执行器执行、
+由评估节点按证据决定「继续规划 / 澄清 / 出结论」；规划轮数、能力调用次数与计划步数三条硬边界由代码执行而不是提示词，
+触顶即停止采集并在结论中如实说明。处置请求只会产出不可执行的处置计划（`executable` 恒为 `false`），
+执行留给 Level C。
 
 ### Level C：Act（执行）
 
@@ -85,20 +88,27 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
         │                              │
         └──────────┬───────────────────┘
                    ↓
+        意图判定（Intent）
+                   │
+     ┌─────────────┼──────────────┬──────────────┬─────────────┐
+     ↓             ↓              ↓              ↓             ↓
+  QUERY_STATE  INVESTIGATE     EXPLAIN     ACTION_REQUEST  未开放请求
+（少量只读能力） （动态调查）   （能力说明）  （不可执行计划） （如实回复）
+                   ↓
              Incident Task
                    ↓
-          Investigation（调查编排：StateGraph）
+   调查编排（StateGraph）：PLAN → EXECUTE → EVALUATE（按证据循环，触顶停止）
                    ↓
-   collectRoute ──条件边──→ collectInstances（仅当命中动态服务且为 Nameserver 发现时）
-                   ↓
-        collectMetrics → collectTraces → synthesise（假设确认 / 排除 → 结论）
+   synthesise（假设确认 / 排除 / 无法验证 → 结论）
                    ↓
    Events / Logs / Change / SOP（规划中）
                    ↓
              Root Cause
                    ↓
-            Action Plan
+            Action Plan（当前只生成、不执行）
 ```
+
+状态查询、能力说明与处置计划不创建事件，只有故障调查才落到 Incident 之下。
 
 - **用户主动发起：** 在 Admin「Agent 工作台」用一句话发起调查（如「为什么 /api/demo/tt 调用失败？」），
   可在折叠的「高级上下文」里手工指定 route / service / instance 与时间范围；追问沿用当前事件。**已实现。**
@@ -117,14 +127,19 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
 只读调查链已经是一个 StateGraph：
 
 ```text
-START → collectRoute ──条件边──→ collectInstances ─┐
-                └────（跳过）───────────────────→ collectMetrics → collectTraces → synthesise → END
+START → plan ──有可执行步骤──→ execute（逐条执行只读能力）→ evaluate ──证据足够──→ synthesise → END
+          │                                                    │
+          └──本轮无可执行步骤───────────────────────────────────┤
+                                                               ├──证据不足且未触顶──→ 回到 plan（下一轮）
+                                                               └──目标不明────────→ clarify → END
 ```
 
-- 节点只负责采集事实并写入共享状态，事实在节点间传递，不在方法内互相调用。
-- 条件边按「路由是否命中 + 是否动态服务 + 服务发现模式是否为 Nameserver」决定是否跳过实例采集：
-  这三类情况下实例数据对本次路由没有判定价值，跳过可减少无意义调用与误导性证据。
-- 证据与局限用 `AppendStrategy` 累积，事实快照用 `ReplaceStrategy` 覆盖，避免节点间副作用。
+- 状态里只放标量（轮数、能力调用次数、本轮是否有可执行步骤、走向判定）；证据、证据局限、计划与结论放在图实例字段里，
+  不从框架返回的状态回读。
+- 规划只从能力注册表里选「已接入的只读能力」，执行器是唯一的取数口：越界的候选步骤被直接丢弃并记录局限，
+  不出现无法执行或越权的步骤。
+- 循环边界由代码执行而不是提示词：`rover.agent.planning.max-rounds`（默认 3）、`max-tool-calls`（默认 10）、
+  `max-plan-steps`（默认 6）；触顶时停止采集，并在结论与步骤说明里如实标注「已达到规划上限」。
 - 每次调查构建一个图实例：`invoke()` 返回的状态是框架的序列化快照，记录内部的嵌套集合与枚举在回读时会退化成
   `Map` / `List`（节点执行期间读写正常）。因此结论由 `synthesise` 节点直接产出、步骤上报口由节点闭包持有，
   二者都不从返回状态回读。
@@ -145,18 +160,22 @@ rover-agent-core（纯 Java：领域对象、只读端口、中立快照、诊�
 
 | 模块 | 包 | 职责 |
 | :--- | :--- | :--- |
-| `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget |
+| `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget / AgentIntent / IntentDecision / TaskType / ActionPlan |
 | | `com.rover.agent.core.snapshot` | 中立只读快照：RouteSnapshot / InstanceSnapshot / GatewayMetricSnapshot / TraceSnapshot / DiscoveryMode |
 | | `com.rover.agent.core.port` | 只读端口：RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort；数据不可用抛 SnapshotUnavailableException |
 | | `com.rover.agent.core.repository` | 存储接口：AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository（内存 / 持久化实现可替换） |
 | | `com.rover.agent.core.context` | AgentContextManager（最近 N 条消息 + 当前事件 + 结构化目标 + 关键证据）、TargetResolver / ResourceTarget（显式指定 → 现有路由与实例 → 模型辅助 → 澄清） |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules（纯函数，可脱离框架单测） |
-| `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator（应用入口：上下文 → 目标 → 事件 → 任务 → 调查）、InvestigationService（任务生命周期） |
-| | `com.rover.agent.runtime.graph` | StateGraph 定义、节点实现、条件边、结论合成 |
+| | `com.rover.agent.core.intent` | IntentClassifier / IntentDecision / IntentService：意图识别与取值约束（越界取值一律丢弃） |
+| | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult：能力清单与唯一的只读执行口 |
+| | `com.rover.agent.core.planning` | InvestigationPlanner / InvestigationPlan / PlannedStep / PlanValidator / PlanningLimits / RuleBasedPlanner：计划生成、越界丢弃与硬边界 |
+| `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator（应用入口：上下文 → 意图 → 目标 → 任务 → 分流执行）、InvestigationService（调查任务生命周期）、QueryStateService / ExplainService / ActionPlanService（状态查询、能力说明、处置计划） |
+| | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph：plan / execute / evaluate / clarify / synthesise 节点与循环条件边、结论合成 |
+| | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner：规则打底 + 模型候选，越界步骤由 PlanValidator 丢弃 |
 | | `com.rover.agent.runtime.task` | 任务生命周期、Session / Incident 登记（走存储接口，当前为内存、有界） |
 | | `com.rover.agent.runtime.repository` | 4 个线程安全内存实现（重启即失），后续接持久化时替换 |
 | | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型 |
-| | `com.rover.agent.runtime.llm` | ModelExplainer：模型解读与未读证据时的拒绝策略 |
+| | `com.rover.agent.runtime.llm` | ModelExplainer（路由与实例快照预读进提示词，指标 / 追踪按需经只读工具）、LlmIntentInterpreter / SpringAiJsonCompletion（意图与计划候选的受限 JSON 输出） |
 | `rover-admin` | `com.rover.admin.agent.adapter` | 4 个只读适配器：AdminConfigService → 端口，不触发任何写操作 |
 | | `com.rover.admin.agent` | AgentController（会话 / 消息 / 任务 / 事件契约）+ DiagnosisController（旧入口，兼容转发）+ 组合根 |
 
@@ -177,12 +196,12 @@ Session（一次连续对话）─┬─ Incident（一个被调查的问题，�
                                                               └── Hypothesis（假设：确认 / 排除 / 无法验证）
 ```
 
-当前每次提问都会落到一个 Session 之下：新建 Session 时会创建一条 `USER` 来源的 Incident，Task 挂在 Incident 之下；
-TaskView 会带上 `sessionId` / `incidentId`。**连续追问已经可用**：同一个会话里的后续消息会带上最近 N 条消息、
+每次提问都会落到一个 Session 之下；只有故障调查（INVESTIGATION）才会创建一条 `USER` 来源的 Incident 并把 Task 挂在它之下，
+状态查询 / 能力说明 / 处置计划等轻量任务不建事件（TaskView 的 `incidentId` 为空）。**连续追问已经可用**：同一个会话里的后续消息会带上最近 N 条消息、
 当前事件、当前结构化调查对象与该事件的关键证据；目标一致时沿用当前事件，解析出明确的新对象时才另开事件，
-解析不出对象时回澄清而不是猜。Session 与 Incident 目前只保留在内存中，**重启即清空**。
+解析不出对象时回澄清而不是猜（只有故障调查会因目标不明而澄清，能力说明类问题不走目标解析）。Session 与 Incident 目前只保留在内存中，**重启即清空**。
 
-后续 Level B / Level C 所需的 tool 治理、审批策略与事件接入会在此基础上继续拆分子包，避免为未实现的模块预建空壳。
+后续 Level C 所需的审批策略与事件接入会在此基础上继续拆分子包，避免为未实现的模块预建空壳。
 
 ## 7. 当前实现程度（与代码保持一致）
 
@@ -197,20 +216,26 @@ TaskView 会带上 `sessionId` / `incidentId`。**连续追问已经可用**：�
 - 用户身份一律取自后端认证上下文（`Authentication.getName()`），请求体不接受前端提交的 `userId`；会话、任务与事件按身份过滤。
 - 只读采集路由、实例、指标、追踪，产出结论、置信度、证据来源、采集时间和局限说明。
 - 已拆成 `rover-agent-core` / `rover-agent-runtime` / `rover-admin` 三层，依赖单向；只读由端口结构保证。
-- 调查链由 Spring AI Alibaba StateGraph 编排，条件边可跳过对当前路由无判定价值的采集分支。
+- 意图识别与分流：消息先判定意图（`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` / `ACTION_REQUEST` / 未开放的 `CREATE_INSPECTION`、`KNOWLEDGE_QUERY`），
+  再按需解析资源对象；状态查询只调少量只读能力直接回答，能力说明问题按注册表返回真实能力清单，未开放的请求如实回复而不硬走调查；
+  识别不出意图时先看问题里有没有可解析对象，没有就回一段自我介绍与能力清单，不向用户追问「请给出请求路径」。
+- 能力注册表与只读执行器：可用能力（路由 / 实例 / 网关指标 / 追踪查询）统一登记为 READ_ONLY 能力，规划只能从中选择，
+  执行器是模型与生产数据之间唯一的取数口；未接入数据适配器的能力标记为不可选，处置类请求只生成不可执行的处置计划（`executable` 恒为 `false`）。
+- 调查链由 Spring AI Alibaba StateGraph 编排：调查计划由规划器产出（规则打底、模型只提候选，越界步骤被丢弃），
+  按「PLAN → EXECUTE → EVALUATE」循环推进，评估节点按证据决定继续规划、澄清还是出结论，触顶（`rover.agent.planning.*`）时停止并在结论中标注。
 - 假设驱动结论：逐条确认或排除候选故障原因，每条假设标注状态（确认 / 排除 / 无法验证）、说明与证据来源。
 - 诊断全程只读，不修改路由与配置。
 - 控制台「模型配置」页可填写 OpenAI 兼容服务，保存即生效、无需重启 Admin；环境变量 `ROVER_AGENT_MODEL_CHAT` / `ROVER_AGENT_API_KEY` / `ROVER_AGENT_BASE_URL` / `ROVER_AGENT_MODEL` 只在首次启动、尚无模型配置文件时用于播种，之后以页面保存的配置为准。页面另支持连接测试（不保存）与验证已生效配置（`POST /api/model/verify` 回带生效版本号 `buildId` 与生效时间，可证明生效的正是刚保存的配置）。
 - 模型未配置或不可用时，诊断自动退化为纯规则诊断（`aiAnalysis` 为 null），采集与编排不受影响，并明确标注证据不足。
+- 意图识别、目标解析与调查规划这类"失败也能兜底"的小调用按 `rover.agent.llm.quick-timeout-seconds`（默认 10 秒）收紧等待上限，且只在超时后重试一次：偶发的网络卡顿能自愈，自愈不了就尽快走确定性兜底。「AI 解读」是流式长调用，不受影响，仍用模型配置里的超时。
 - 模型参与解释的证据全部来自只读快照，模型不直连管理接口：路由与实例这两份最小依据由运行时预读后写进提示词，指标与追踪按需经只读工具读取（工具由应用执行）。「AI 解读」步骤的结果说明会区分「运行时预读快照」与「模型另调工具」，解释依据可追溯到具体快照。
 - 「AI 解读」边生成边推送：`ModelExplainer` 用流式调用把增量交给任务，Admin 通过 SSE 实时下发；最终全文仍落回任务结果，前端断线由轮询兜底。采集与规则判定是阻塞的 Graph 链路，不参与流式。
-- 每次提交会开启 Session 并创建 `USER` 来源的 Incident；任务与步骤状态存于 Admin 内存，重启后不可查询。
+- 每次提交会开启 Session，但只有故障调查才创建 `USER` 来源的 Incident；任务与步骤状态存于 Admin 内存，重启后不可查询。
 
 **规划中（尚未实现，不要按已实现理解）：**
 
 - 会话 / 事件 / 任务的持久化（Lite ↔ Standard 存储模式）：Redis 缓存与短期上下文、MySQL 承载任务与审计；当前只有内存实现。
 - 告警 / 事件接入与自动调查。
-- 模型侧动态选择工具、调查计划随证据自我调整。
 - Graph checkpoint 恢复与 interrupt 人工审批。
 - 日志、变更记录、SOP / Runbook 检索（RAG）。
 - 写操作、审批流、审计与执行后验证。

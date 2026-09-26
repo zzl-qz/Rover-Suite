@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.rover.agent.core.capability.CapabilityExecutor;
+import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.context.AgentContextManager;
 import com.rover.agent.core.context.AgentRequestOptions;
 import com.rover.agent.core.context.TargetInterpreter;
@@ -15,6 +17,7 @@ import com.rover.agent.core.event.TaskEvent;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.event.TaskSnapshot;
+import com.rover.agent.core.intent.IntentService;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
@@ -87,20 +90,8 @@ class AgentOrchestratorTest {
             }
         };
         instancePort = () -> List.of(new InstanceSnapshot("demo-service", "", "10.0.0.7", 8080, true));
-        MetricReadPort metricPort = windowSeconds -> {
-            throw new SnapshotUnavailableException("测试桩未提供指标");
-        };
-        TraceReadPort tracePort = path -> {
-            throw new SnapshotUnavailableException("测试桩未提供追踪");
-        };
 
-        InvestigationService investigations = new InvestigationService(routePort, instancePort, metricPort,
-                tracePort, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
-        AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routePort,
-                instancePort, 8);
-        TargetResolver targets = new TargetResolver(routePort, instancePort, TargetInterpreter.none());
-        orchestrator = new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts, targets,
-                investigations, retention);
+        orchestrator = buildOrchestrator(routePort);
     }
 
     @AfterEach
@@ -320,6 +311,11 @@ class AgentOrchestratorTest {
 
     /** 用阻塞的只读端口重建编排链：用于制造「任务正在执行」的并发现场。 */
     private void rebuildWithRoutes(RouteReadPort routes) {
+        orchestrator = buildOrchestrator(routes);
+    }
+
+    /** 按给定路由端口装配完整编排链（意图 → 目标 → 事件 → 调查 / 查询 / 解释 / 处置计划）。 */
+    private AgentOrchestrator buildOrchestrator(RouteReadPort routes) {
         MetricReadPort metricPort = windowSeconds -> {
             throw new SnapshotUnavailableException("测试桩未提供指标");
         };
@@ -331,8 +327,12 @@ class AgentOrchestratorTest {
                 tracePort, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instancePort, 8);
-        orchestrator = new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
-                new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention);
+        CapabilityRegistry capabilities = CapabilityRegistry.standard();
+        CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort, capabilities);
+        return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
+                new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
+                new IntentService(), new QueryStateService(executor),
+                new ExplainService(capabilities, registry, records), new ActionPlanService(executor));
     }
 
     private TaskView submit(Session session, String userId, String message) {

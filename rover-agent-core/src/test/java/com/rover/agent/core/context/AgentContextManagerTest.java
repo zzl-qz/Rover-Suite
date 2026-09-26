@@ -180,6 +180,13 @@ class AgentContextManagerTest {
         }
 
         @Override
+        public List<Session> findByUserId(String userId) {
+            return values.values().stream()
+                    .filter(session -> java.util.Objects.equals(session.userId(), userId))
+                    .toList();
+        }
+
+        @Override
         public List<Session> listAll() {
             return List.copyOf(values.values());
         }
@@ -210,8 +217,27 @@ class AgentContextManagerTest {
         }
 
         @Override
-        public void removeBySession(String sessionId) {
-            values.removeIf(message -> message.sessionId().equals(sessionId));
+        public List<AgentMessage> listAll() {
+            return List.copyOf(values);
+        }
+
+        @Override
+        public Optional<AgentMessage> oldest() {
+            return values.isEmpty() ? Optional.empty() : Optional.of(values.get(0));
+        }
+
+        @Override
+        public void remove(String messageId) {
+            values.removeIf(message -> message.messageId().equals(messageId));
+        }
+
+        @Override
+        public int removeBySession(String sessionId) {
+            List<AgentMessage> matched = values.stream()
+                    .filter(message -> message.sessionId().equals(sessionId))
+                    .toList();
+            values.removeAll(matched);
+            return matched.size();
         }
     }
 
@@ -262,6 +288,16 @@ class AgentContextManagerTest {
         public void remove(String incidentId) {
             values.remove(incidentId);
         }
+
+        @Override
+        public int removeBySession(String sessionId) {
+            List<String> ids = values.values().stream()
+                    .filter(incident -> incident.sessionId().equals(sessionId))
+                    .map(Incident::incidentId)
+                    .toList();
+            ids.forEach(values::remove);
+            return ids.size();
+        }
     }
 
     private static final class FakeTasks implements AgentTaskRepository {
@@ -291,6 +327,20 @@ class AgentContextManagerTest {
         }
 
         @Override
+        public List<TaskView> findBySessionId(String sessionId) {
+            return values.values().stream()
+                    .filter(view -> sessionId.equals(view.sessionId()))
+                    .toList();
+        }
+
+        @Override
+        public List<TaskView> findByIncidentId(String incidentId) {
+            return values.values().stream()
+                    .filter(view -> java.util.Objects.equals(view.incidentId(), incidentId))
+                    .toList();
+        }
+
+        @Override
         public List<TaskView> recentBySession(String sessionId, int limit) {
             return values.values().stream()
                     .filter(view -> sessionId.equals(view.sessionId()))
@@ -302,6 +352,26 @@ class AgentContextManagerTest {
         @Override
         public void remove(String taskId) {
             values.remove(taskId);
+        }
+
+        @Override
+        public int removeBySession(String sessionId) {
+            List<String> ids = values.values().stream()
+                    .filter(view -> sessionId.equals(view.sessionId()))
+                    .map(TaskView::taskId)
+                    .toList();
+            ids.forEach(values::remove);
+            return ids.size();
+        }
+
+        @Override
+        public int removeByIncident(String incidentId) {
+            List<String> ids = values.values().stream()
+                    .filter(view -> java.util.Objects.equals(view.incidentId(), incidentId))
+                    .map(TaskView::taskId)
+                    .toList();
+            ids.forEach(values::remove);
+            return ids.size();
         }
     }
 }

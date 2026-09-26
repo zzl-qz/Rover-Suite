@@ -7,6 +7,8 @@ import jakarta.annotation.PostConstruct;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +39,8 @@ public class AdminChatModelGateway implements ChatModelGateway {
     private volatile ModelSettings applied = ModelSettings.none();
     private volatile ChatClient client;
     private volatile String lastError;
+    /** 场景超时客户端按超时秒数缓存；配置每次成功生效时整体换新，避免复用旧配置建出的客户端。 */
+    private volatile Map<Integer, ChatClient> sceneClients = new ConcurrentHashMap<>();
     private final AtomicLong buildSequence = new AtomicLong();
     private volatile long buildId;
     private volatile Instant appliedAt;
@@ -62,12 +66,14 @@ public class AdminChatModelGateway implements ChatModelGateway {
         if (!candidate.configured()) {
             this.applied = candidate;
             this.client = null;
+            this.sceneClients = new ConcurrentHashMap<>();
             this.lastError = null;
             return;
         }
         if (candidate.keyState() == ModelSettings.KeyState.UNREADABLE) {
             this.applied = candidate;
             this.client = null;
+            this.sceneClients = new ConcurrentHashMap<>();
             this.lastError = "API 密钥无法解密，请重新填写";
             log.warn("模型 API 密钥无法解密，模型停用");
             return;
@@ -76,6 +82,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
             ChatClient built = build(candidate);
             this.applied = candidate;
             this.client = built;
+            this.sceneClients = new ConcurrentHashMap<>();
             this.lastError = null;
             this.buildId = buildSequence.incrementAndGet();
             this.appliedAt = Instant.now();
@@ -103,6 +110,30 @@ public class AdminChatModelGateway implements ChatModelGateway {
             throw new IllegalStateException(lastError != null ? "模型不可用：" + lastError : "模型未就绪");
         }
         return current;
+    }
+
+    /**
+     * 按场景超时上限取客户端：只收紧不放宽，请求值不小于配置超时时直接返回当前客户端。
+     *
+     * 更短的上限才另建一个客户端并缓存下来（同一场景的下一次调用直接复用），
+     * 因此这条路径不会每次调用都新建模型对象。
+     */
+    @Override
+    public ChatClient chatClient(int timeoutSeconds) {
+        ChatClient current = chatClient();
+        ModelSettings settings = applied;
+        int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
+        if (timeoutSeconds <= 0 || timeoutSeconds >= configured) {
+            return current;
+        }
+        Map<Integer, ChatClient> cache = sceneClients;
+        ChatClient cached = cache.get(timeoutSeconds);
+        if (cached != null) {
+            return cached;
+        }
+        ChatClient scene = transientClient(settings, timeoutSeconds);
+        cache.put(timeoutSeconds, scene);
+        return scene;
     }
 
     @Override
@@ -134,13 +165,15 @@ public class AdminChatModelGateway implements ChatModelGateway {
     }
 
     /**
-     * 用候选项建一个一次性客户端做连通性测试：不落盘，也不改动当前生效配置。
+     * 用一份配置建一个覆写超时的客户端：不落盘，也不改动当前生效配置。
      *
-     * @param timeoutSeconds 探测用的超时；覆盖候选项里的值，避免页面等了半分钟才报错
+     * 页面连通性测试与运行层的场景超时客户端都走这里。
+     *
+     * @param timeoutSeconds 覆写的超时；越界值按 {@link ModelSettings#clampTimeout(int)} 收敛
      */
-    public ChatClient transientClient(ModelSettings candidate, int timeoutSeconds) {
-        return build(new ModelSettings(candidate.enabled(), candidate.baseUrl(), candidate.apiKey(), candidate.model(),
-                ModelSettings.clampTimeout(timeoutSeconds), candidate.source(), candidate.keyState()));
+    public ChatClient transientClient(ModelSettings settings, int timeoutSeconds) {
+        return build(new ModelSettings(settings.enabled(), settings.baseUrl(), settings.apiKey(), settings.model(),
+                ModelSettings.clampTimeout(timeoutSeconds), settings.source(), settings.keyState()));
     }
 
     /** 构建客户端；构建不成功必须抛异常，由 {@link #apply(ModelSettings)} 决定是否保留上一个可用客户端。 */

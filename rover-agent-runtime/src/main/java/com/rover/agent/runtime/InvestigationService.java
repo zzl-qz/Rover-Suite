@@ -1,5 +1,7 @@
 package com.rover.agent.runtime;
 
+import com.rover.agent.core.capability.CapabilityExecutor;
+import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.model.AgentStepType;
@@ -10,11 +12,15 @@ import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.planning.InvestigationPlanner;
+import com.rover.agent.core.planning.PlanValidator;
+import com.rover.agent.core.planning.PlanningLimits;
+import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
-import com.rover.agent.runtime.graph.InvestigationGraph;
+import com.rover.agent.runtime.graph.DynamicInvestigationGraph;
 import com.rover.agent.runtime.graph.InvestigationOutcome;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.task.IncidentRegistry;
@@ -43,6 +49,9 @@ public final class InvestigationService {
     private static final int MAX_PATH_LENGTH = 512;
     private static final int MAX_QUESTION_LENGTH = 1000;
 
+    /** 默认能力注册表：纯数据且不可变，默认装配与规划器共用同一份，避免口径分叉。 */
+    private static final CapabilityRegistry STANDARD_CAPABILITIES = CapabilityRegistry.standard();
+
     private static final String STEP_AI = "AI 解读";
     private static final String AI_RUNNING = "根据只读快照与调查结论生成解释";
     private static final String AI_COMPLETED = "已生成解释";
@@ -50,24 +59,46 @@ public final class InvestigationService {
     private static final String AI_UNAVAILABLE = "模型暂时不可用，当前展示规则诊断。";
     private static final String AI_NOT_CONFIGURED = "尚未配置模型，当前展示规则诊断。";
 
-    private final RouteReadPort routes;
-    private final InstanceReadPort instances;
-    private final MetricReadPort metrics;
-    private final TraceReadPort traces;
     private final IncidentRegistry incidents;
     private final InvestigationTaskRegistry tasks;
     private final ModelExplainer explainer;
+    private final InvestigationPlanner planner;
+    private final PlanValidator validator;
+    private final CapabilityExecutor executor;
+    private final PlanningLimits limits;
 
+    /**
+     * 默认装配：确定性规划器 + 标准能力注册表 + 默认规划上限。
+     *
+     * 未显式注入规划组件的调用方（旧入口与既有测试）走这里，行为与固定调查链一致：
+     * 计划顺序仍是路由 → 实例 → 指标 → 追踪，只是改由动态图按同样的边界执行。
+     */
     public InvestigationService(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                                 TraceReadPort traces, IncidentRegistry incidents, InvestigationTaskRegistry tasks,
                                 ModelExplainer explainer) {
-        this.routes = routes;
-        this.instances = instances;
-        this.metrics = metrics;
-        this.traces = traces;
+        this(incidents, tasks, explainer,
+                new RuleBasedPlanner(STANDARD_CAPABILITIES),
+                new PlanValidator(STANDARD_CAPABILITIES, PlanningLimits.defaults()),
+                new CapabilityExecutor(routes, instances, metrics, traces, STANDARD_CAPABILITIES),
+                PlanningLimits.defaults());
+    }
+
+    /**
+     * 完整装配：由配置层注入规划器（可含模型建议）、计划校验器、能力执行器与规划上限。
+     *
+     * 只读端口不在这里出现：取数统一经 {@link CapabilityExecutor}，本服务不再各自持有端口，
+     * 避免出现「图走执行器、服务又直连端口」的两套取数口径。
+     */
+    public InvestigationService(IncidentRegistry incidents, InvestigationTaskRegistry tasks,
+                                ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
+                                CapabilityExecutor executor, PlanningLimits limits) {
         this.incidents = incidents;
         this.tasks = tasks;
         this.explainer = explainer;
+        this.planner = planner;
+        this.validator = validator;
+        this.executor = executor;
+        this.limits = limits == null ? PlanningLimits.defaults() : limits;
     }
 
     /** 旧入口：新建会话与事件后提交一次「目标已确定」的调查。 */
@@ -118,8 +149,15 @@ public final class InvestigationService {
     public void run(InvestigationTask task) {
         task.start();
         try {
-            InvestigationGraph graph = new InvestigationGraph(routes, instances, metrics, traces, task::step);
-            InvestigationOutcome outcome = graph.investigate(task.taskId(), task.path());
+            DynamicInvestigationGraph graph =
+                    new DynamicInvestigationGraph(planner, validator, executor, limits, task);
+            InvestigationOutcome outcome = graph.investigate(task.taskId(), task.path(), task.question(),
+                    task.target(), task.intent());
+            if (outcome.needsClarification()) {
+                // 规划认为继续调查缺少必要信息：停在澄清点，而不是硬凑一个没有依据的结论。
+                task.waitForInput(outcome.clarification());
+                return;
+            }
             InvestigationReport report = new InvestigationReport(
                     outcome.findings().summary(), outcome.findings().confidence(), outcome.evidence(),
                     outcome.limitations(), outcome.findings().hypotheses(), null);

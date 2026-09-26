@@ -438,9 +438,17 @@ class InvestigationServiceTest {
 
         private List<String> notes() {
             List<String> notes = new ArrayList<>();
+            boolean snapshotRecorded = false;
             for (TaskEvent event : events) {
                 switch (event.type()) {
-                    case SNAPSHOT -> notes.add("snapshot:" + ((TaskSnapshot) event.payload()).analysis());
+                    case SNAPSHOT -> {
+                        // 意图 / 计划 / 能力进展也会发全量快照（覆盖语义）：这里只记订阅后的第一条，
+                        // 后续快照不产生新文本，与前端「快照覆盖、增量追加」的消费方式一致。
+                        if (!snapshotRecorded) {
+                            notes.add("snapshot:" + ((TaskSnapshot) event.payload()).analysis());
+                            snapshotRecorded = true;
+                        }
+                    }
                     case ANALYSIS_DELTA -> notes.add("delta:" + text(event));
                     default -> {
                         if (event.type().terminal()) {
@@ -531,6 +539,11 @@ class InvestigationServiceTest {
                 throw new IllegalStateException("模型未就绪");
             }
             return client;
+        }
+
+        @Override
+        public ChatClient chatClient(int timeoutSeconds) {
+            return chatClient();
         }
 
         @Override

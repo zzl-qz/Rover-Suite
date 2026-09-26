@@ -37,23 +37,50 @@ public final class EvidenceNarrator {
 
     /** 实例快照的证据表述；有目标路由时额外给出该目标的健康实例数。 */
     public static EvidenceNarration instances(List<InstanceSnapshot> instances, RouteSnapshot route) {
+        String service = route == null ? "" : text(route.serviceName());
+        String group = route == null ? "" : text(route.group());
+        return instances(instances, service, group);
+    }
+
+    /**
+     * 实例快照的证据表述（按服务/分组口径）。
+     *
+     * 能力执行器不持有路由对象（能力之间彼此独立），因此这里以服务名与分组作为口径入参，
+     * 与按路由对象取数的重载共用同一份表述逻辑。
+     */
+    public static EvidenceNarration instances(List<InstanceSnapshot> instances, String serviceName, String group) {
         List<InstanceSnapshot> rows = instances == null ? List.of() : instances;
         String sample = rows.stream().limit(5)
                 .map(item -> text(item.serviceName()) + "/" + groupLabel(item.group()) + "@" + text(item.host())
                         + ":" + item.port() + "(" + (item.healthy() ? "健康" : "不健康") + ")")
                 .reduce((left, right) -> left + "、" + right).orElse("无");
-        if (route == null || text(route.serviceName()).isBlank()) {
+        String service = text(serviceName);
+        String groupName = text(group);
+        if (service.isBlank()) {
             return new EvidenceNarration("注册实例共 " + rows.size() + " 个；样本：" + sample, List.of());
         }
-        String service = text(route.serviceName());
-        String group = text(route.group());
-        long healthy = rows.stream()
+        long healthy = healthyCount(rows, service, groupName);
+        return new EvidenceNarration("目标 " + service + "/" + routeGroupLabel(groupName) + " 的健康实例 " + healthy
+                + " 个；注册实例共 " + rows.size() + " 个；样本：" + sample, List.of());
+    }
+
+    /**
+     * 指定服务与分组的健康实例数：状态查询与调查证据共用同一份计数口径。
+     *
+     * {@code group} 为空表示不限分组（路由未指定分组时即此语义）。
+     */
+    public static long healthyCount(List<InstanceSnapshot> instances, String serviceName, String group) {
+        List<InstanceSnapshot> rows = instances == null ? List.of() : instances;
+        String service = text(serviceName);
+        String groupName = text(group);
+        if (service.isBlank()) {
+            return 0;
+        }
+        return rows.stream()
                 .filter(item -> service.equals(text(item.serviceName())))
-                .filter(item -> group.isBlank() || group.equals(text(item.group())))
+                .filter(item -> groupName.isBlank() || groupName.equals(text(item.group())))
                 .filter(InstanceSnapshot::healthy)
                 .count();
-        return new EvidenceNarration("目标 " + service + "/" + routeGroupLabel(group) + " 的健康实例 " + healthy
-                + " 个；注册实例共 " + rows.size() + " 个；样本：" + sample, List.of());
     }
 
     /** 指标快照的证据表述。 */
