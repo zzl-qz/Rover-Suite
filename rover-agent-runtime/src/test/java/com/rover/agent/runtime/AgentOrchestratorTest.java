@@ -4,18 +4,24 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.context.AgentContextManager;
 import com.rover.agent.core.context.AgentRequestOptions;
 import com.rover.agent.core.context.TargetInterpreter;
 import com.rover.agent.core.context.TargetResolver;
+import com.rover.agent.core.event.TaskEvent;
+import com.rover.agent.core.event.TaskEventSubscription;
+import com.rover.agent.core.event.TaskEventType;
+import com.rover.agent.core.event.TaskSnapshot;
 import com.rover.agent.core.model.AgentMessage;
-import com.rover.agent.core.model.AgentResponse;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TargetType;
+import com.rover.agent.core.model.TaskStatus;
+import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
@@ -32,7 +38,12 @@ import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
 import com.rover.agent.runtime.repository.InMemoryIncidentRepository;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
+import com.rover.agent.runtime.task.SessionTaskRunningException;
+import com.rover.agent.runtime.task.WorkspaceRetention;
 import java.util.List;
+import java.util.Optional;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,19 +55,27 @@ class AgentOrchestratorTest {
     private static final RouteSnapshot PAY_ROUTE = new RouteSnapshot("r2", "/api/pay", "payment-service", "",
             "", 1L);
 
+    private InMemoryAgentMessageRepository messages;
+    private InMemoryAgentTaskRepository records;
+    private InMemoryAgentSessionRepository sessions;
+    private InMemoryIncidentRepository incidents;
+    private RouteReadPort routePort;
+    private InstanceReadPort instancePort;
     private InvestigationTaskRegistry tasks;
+    private WorkspaceRetention retention;
     private AgentOrchestrator orchestrator;
 
     @BeforeEach
     void setUp() {
-        InMemoryAgentSessionRepository sessions = new InMemoryAgentSessionRepository(50);
-        InMemoryIncidentRepository incidents = new InMemoryIncidentRepository(50);
-        InMemoryAgentMessageRepository messages = new InMemoryAgentMessageRepository(200);
-        InMemoryAgentTaskRepository records = new InMemoryAgentTaskRepository(50);
-        IncidentRegistry registry = new IncidentRegistry(sessions, incidents);
+        sessions = new InMemoryAgentSessionRepository(50);
+        incidents = new InMemoryIncidentRepository(50);
+        messages = new InMemoryAgentMessageRepository(200);
+        records = new InMemoryAgentTaskRepository(50);
         tasks = new InvestigationTaskRegistry(records);
+        retention = new WorkspaceRetention(sessions, incidents, messages, tasks, 50, 50, 200);
+        IncidentRegistry registry = new IncidentRegistry(sessions, incidents, retention);
 
-        RouteReadPort routePort = new RouteReadPort() {
+        routePort = new RouteReadPort() {
             @Override
             public List<RouteSnapshot> routes() {
                 return List.of(DEMO_ROUTE, PAY_ROUTE);
@@ -67,8 +86,7 @@ class AgentOrchestratorTest {
                 return DiscoveryMode.NAMESERVER;
             }
         };
-        InstanceReadPort instancePort = () -> List.of(new InstanceSnapshot("demo-service", "", "10.0.0.7", 8080,
-                true));
+        instancePort = () -> List.of(new InstanceSnapshot("demo-service", "", "10.0.0.7", 8080, true));
         MetricReadPort metricPort = windowSeconds -> {
             throw new SnapshotUnavailableException("测试桩未提供指标");
         };
@@ -82,7 +100,7 @@ class AgentOrchestratorTest {
                 instancePort, 8);
         TargetResolver targets = new TargetResolver(routePort, instancePort, TargetInterpreter.none());
         orchestrator = new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts, targets,
-                investigations);
+                investigations, retention);
     }
 
     @AfterEach
@@ -91,59 +109,122 @@ class AgentOrchestratorTest {
     }
 
     @Test
-    void followUpQuestionReusesActiveIncidentAndTarget() {
+    void submitReturnsPendingTaskWithoutWaitingForResolution() throws Exception {
         Session session = orchestrator.startSession("admin");
 
-        AgentResponse first = send(session, "admin", "为什么 /api/demo/tt 调用失败？");
-        AgentResponse second = send(session, "admin", "为什么没有实例？");
+        long startedAt = System.currentTimeMillis();
+        TaskView submitted = submit(session, "admin", "为什么 /api/demo/tt 调用失败？");
+        long elapsed = System.currentTimeMillis() - startedAt;
 
-        assertNotNull(first.task());
-        assertNotNull(second.task());
+        // 提交即返回：目标解析与调查都在 Worker 里，Servlet 线程不会被管理口 HTTP 或模型调用拖住。
+        assertTrue(submitted.status() == TaskStatus.PENDING || submitted.status() == TaskStatus.RUNNING,
+                "提交返回时任务应仍在执行或待执行，实际为 " + submitted.status());
+        assertFalse(elapsed > 1000, "提交不应等待目标解析，实际耗时 " + elapsed + "ms");
+
+        TaskView finished = await(submitted.taskId());
+        assertEquals(TaskStatus.COMPLETED, finished.status());
+        assertEquals("/api/demo/tt", finished.path());
+    }
+
+    @Test
+    void followUpQuestionReusesActiveIncidentAndTarget() throws Exception {
+        Session session = orchestrator.startSession("admin");
+
+        TaskView first = submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
+        TaskView second = submitAndAwait(session, "admin", "为什么没有实例？");
+
+        assertNotNull(first.incidentId());
         // 第二轮没有提到任何对象，沿用同一事件与同一取数路径，而不是当成新问题。
-        assertEquals(first.incident().incidentId(), second.incident().incidentId());
-        assertEquals("/api/demo/tt", second.task().path());
-        assertEquals(ResourceTarget.route("/api/demo/tt"), second.task().target());
-        assertFalse(first.needsClarification());
-        assertTrue(second.reply().content().startsWith("已继续调查"));
+        assertEquals(first.incidentId(), second.incidentId());
+        assertEquals("/api/demo/tt", second.path());
+        assertEquals(ResourceTarget.route("/api/demo/tt"), second.target());
+        assertEquals(TaskStatus.COMPLETED, second.status());
+        // 第二轮回复的措辞是「已继续调查」，与「已开始调查」区分。
+        assertTrue(agentReplies(session.sessionId()).get(1).content().startsWith("已继续调查"));
     }
 
     @Test
-    void namingAnotherTargetOpensNewIncident() {
+    void namingAnotherTargetOpensNewIncident() throws Exception {
         Session session = orchestrator.startSession("admin");
-        AgentResponse first = send(session, "admin", "为什么 /api/demo/tt 调用失败？");
+        TaskView first = submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
 
-        AgentResponse second = send(session, "admin", "payment-service 为什么这么慢？");
+        TaskView second = submitAndAwait(session, "admin", "payment-service 为什么这么慢？");
 
-        assertNotNull(second.incident());
-        assertTrue(second.incident().incidentId() != null
-                && !second.incident().incidentId().equals(first.incident().incidentId()));
-        assertEquals(ResourceTarget.service("payment-service"), second.task().target());
-        assertEquals("/api/pay", second.task().path());
+        assertNotNull(second.incidentId());
+        assertFalse(first.incidentId().equals(second.incidentId()));
+        assertEquals(ResourceTarget.service("payment-service"), second.target());
+        assertEquals("/api/pay", second.path());
     }
 
     @Test
-    void messageWithoutResolvableTargetAsksForClarificationAndCreatesNoTask() {
+    void unresolvableTargetWaitsForInputAndDoesNotBlockTheSession() throws Exception {
         Session session = orchestrator.startSession("admin");
 
-        AgentResponse response = send(session, "admin", "帮我看看最近有没有问题");
+        TaskView waiting = submitAndAwait(session, "admin", "帮我看看最近有没有问题");
 
-        assertTrue(response.needsClarification());
-        assertNull(response.task());
-        assertNull(response.incident());
-        assertTrue(response.clarification().contains("请求路径"));
-        assertEquals(2, orchestrator.conversation(session.sessionId(), "admin").size());
+        // 目标解析不出对象时任务停在 WAITING_INPUT 并带上澄清提问，而不是不建任务地同步拒绝。
+        assertEquals(TaskStatus.WAITING_INPUT, waiting.status());
+        assertNull(waiting.incidentId());
+        assertTrue(waiting.clarification().contains("请求路径"));
+        List<AgentMessage> conversation = orchestrator.conversation(session.sessionId(), "admin");
+        assertEquals(2, conversation.size());
+        assertEquals(MessageRole.USER, conversation.get(0).role());
+        assertEquals(waiting.taskId(), conversation.get(0).relatedTaskId());
+        assertEquals(MessageRole.AGENT, conversation.get(1).role());
+        assertEquals(waiting.taskId(), conversation.get(1).relatedTaskId());
+        // WAITING_INPUT 不占会话并发位：用户可以立刻补充信息，不会被 409 挡住。
+        TaskView second = submitAndAwait(session, "admin", "还是看看 /api/demo/tt 吧");
+        assertEquals(TaskStatus.COMPLETED, second.status());
     }
 
     @Test
-    void conversationIsRecordedInOrderWithBothRoles() {
+    void secondMessageWhileRunningIsRejectedWithSessionTaskRunning() throws Exception {
+        Session session = orchestrator.startSession("admin");
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch started = new CountDownLatch(1);
+        RouteReadPort blocked = new RouteReadPort() {
+            @Override
+            public List<RouteSnapshot> routes() {
+                started.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                }
+                return List.of(DEMO_ROUTE, PAY_ROUTE);
+            }
+
+            @Override
+            public DiscoveryMode discoveryMode() {
+                return DiscoveryMode.NAMESERVER;
+            }
+        };
+        rebuildWithRoutes(blocked);
+        TaskView running = submit(session, "admin", "为什么 /api/demo/tt 调用失败？");
+        started.await();
+
+        SessionTaskRunningException ex = assertThrows(SessionTaskRunningException.class,
+                () -> submit(session, "admin", "再问一个 /api/pay 的问题"));
+
+        // 冲突响应带运行中任务 ID，前端据此定位到那张任务卡；且不会再登记第二个任务。
+        assertEquals(running.taskId(), ex.runningTaskId());
+        assertEquals(1, records.listAll().size());
+        release.countDown();
+        await(running.taskId());
+    }
+
+    @Test
+    void conversationIsRecordedInOrderWithBothRoles() throws Exception {
         Session session = orchestrator.startSession("admin");
 
-        send(session, "admin", "为什么 /api/demo/tt 调用失败？");
+        TaskView task = submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
 
         List<AgentMessage> conversation = orchestrator.conversation(session.sessionId(), "admin");
         assertEquals(2, conversation.size());
         assertEquals(MessageRole.USER, conversation.get(0).role());
         assertEquals(MessageRole.AGENT, conversation.get(1).role());
+        assertEquals(task.taskId(), conversation.get(0).relatedTaskId());
+        assertEquals(task.taskId(), conversation.get(1).relatedTaskId());
         // 首次提问生成会话标题，供会话列表展示。
         assertEquals("为什么 /api/demo/tt 调用失败？", orchestrator.session(session.sessionId(), "admin")
                 .orElseThrow().title());
@@ -155,43 +236,141 @@ class AgentOrchestratorTest {
 
         assertTrue(orchestrator.session(session.sessionId(), "other").isEmpty());
         assertTrue(orchestrator.sessions("other").isEmpty());
-        assertTrue(orchestrator.send(session.sessionId(), "other", "为什么 /api/demo/tt 失败？",
+        assertTrue(orchestrator.submit(session.sessionId(), "other", "为什么 /api/demo/tt 失败？",
                 AgentRequestOptions.none()).isEmpty());
         assertEquals(1, orchestrator.sessions("admin").size());
     }
 
     @Test
-    void taskLookupRespectsSessionOwnership() {
+    void taskLookupRespectsSessionOwnership() throws Exception {
         Session session = orchestrator.startSession("admin");
-        String taskId = send(session, "admin", "为什么 /api/demo/tt 调用失败？").task().taskId();
+        TaskView task = submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
 
-        assertTrue(orchestrator.task(taskId, "admin").isPresent());
-        assertTrue(orchestrator.task(taskId, "other").isEmpty());
+        assertTrue(orchestrator.task(task.taskId(), "admin").isPresent());
+        assertTrue(orchestrator.task(task.taskId(), "other").isEmpty());
+    }
+
+    /** 聚合视图一次取齐会话、对话、事件与最近任务，任务按创建时间倒序且受 limit 约束。 */
+    @Test
+    void workspaceAggregatesSessionAndIsScopedToOwner() throws Exception {
+        Session session = orchestrator.startSession("admin");
+        TaskView first = submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
+        TaskView second = submitAndAwait(session, "admin", "payment-service 为什么这么慢？");
+
+        AgentOrchestrator.Workspace workspace = orchestrator.workspace(session.sessionId(), "admin", 1)
+                .orElseThrow();
+
+        assertEquals(session.sessionId(), workspace.session().sessionId());
+        assertEquals(4, workspace.messages().size());
+        assertEquals(2, workspace.incidents().size());
+        // limit 之外的旧任务不在聚合里，最新的排在最前。
+        assertEquals(List.of(second.taskId()), workspace.tasks().stream().map(TaskView::taskId).toList());
+        // 当前事件随最后一次提问切换：追问的第二轮问的是 payment-service。
+        assertEquals(second.incidentId(), workspace.activeIncident().incidentId());
+        assertTrue(orchestrator.workspace(session.sessionId(), "other", 20).isEmpty(),
+                "别人的会话不该被聚合出来");
+        assertFalse(first.taskId().equals(second.taskId()));
+    }
+
+    /** 事件订阅与任务详情共用同一套归属判定：换个用户或换个任务 ID 都拿不到订阅。 */
+    @Test
+    void eventSubscriptionRespectsTaskOwnership() throws Exception {
+        Session session = orchestrator.startSession("admin");
+        TaskView task = submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
+
+        List<TaskEvent> received = new CopyOnWriteArrayList<>();
+        assertTrue(orchestrator.subscribeEvents(task.taskId(), "other", received::add).isEmpty());
+        assertTrue(orchestrator.subscribeEvents("missing", "admin", received::add).isEmpty());
+        assertTrue(received.isEmpty(), "未通过归属校验的订阅不该收到任何事件");
+
+        TaskEventSubscription subscription =
+                orchestrator.subscribeEvents(task.taskId(), "admin", received::add).orElseThrow();
+        // 任务已结束：晚订阅先拿到快照，再拿到终态事件，这条流自然收尾而不是悬着等超时。
+        awaitEvents(received, 2);
+        subscription.cancel();
+
+        assertEquals(TaskEventType.SNAPSHOT, received.get(0).type());
+        assertEquals(TaskStatus.COMPLETED, ((TaskSnapshot) received.get(0).payload()).task().status());
+        assertEquals(TaskEventType.TASK_COMPLETED, received.get(1).type());
+        assertEquals(task.taskId(), received.get(1).taskId());
     }
 
     @Test
-    void explicitAdvancedTargetIsUsedWhenQuestionNamesNothing() {
+    void explicitAdvancedTargetIsUsedWhenQuestionNamesNothing() throws Exception {
         Session session = orchestrator.startSession("admin");
 
-        AgentResponse response = orchestrator.send(session.sessionId(), "admin", "它到底是哪里出了问题？",
+        TaskView submitted = orchestrator.submit(session.sessionId(), "admin", "它到底是哪里出了问题？",
                 new AgentRequestOptions(ResourceTarget.service("demo-service"),
                         com.rover.agent.core.model.TimeRange.unspecified())).orElseThrow();
+        TaskView task = await(submitted.taskId());
 
-        assertEquals(TargetType.SERVICE, response.task().target().type());
-        assertEquals("/api/demo/tt", response.task().path());
+        assertEquals(TargetType.SERVICE, task.target().type());
+        assertEquals("/api/demo/tt", task.path());
     }
 
     @Test
-    void oneShotKeepsSingleInvestigationShape() {
-        AgentResponse response = orchestrator.oneShot(null, ResourceTarget.route("/api/demo/tt"), "为什么失败？");
+    void oneShotKeepsSingleInvestigationShape() throws Exception {
+        TaskView submitted = orchestrator.oneShot(null, ResourceTarget.route("/api/demo/tt"), "为什么失败？");
+        TaskView task = await(submitted.taskId());
 
-        assertNotNull(response.task());
-        assertEquals(ResourceTarget.route("/api/demo/tt"), response.task().target());
+        assertEquals(ResourceTarget.route("/api/demo/tt"), task.target());
         // 旧入口不带用户身份：会话同样没有归属，未启用登录时才可访问。
-        assertNull(response.session().userId());
+        assertNull(orchestrator.session(task.sessionId(), null).orElseThrow().userId());
     }
 
-    private AgentResponse send(Session session, String userId, String message) {
-        return orchestrator.send(session.sessionId(), userId, message, AgentRequestOptions.none()).orElseThrow();
+    /** 用阻塞的只读端口重建编排链：用于制造「任务正在执行」的并发现场。 */
+    private void rebuildWithRoutes(RouteReadPort routes) {
+        MetricReadPort metricPort = windowSeconds -> {
+            throw new SnapshotUnavailableException("测试桩未提供指标");
+        };
+        TraceReadPort tracePort = path -> {
+            throw new SnapshotUnavailableException("测试桩未提供追踪");
+        };
+        IncidentRegistry registry = new IncidentRegistry(sessions, incidents, retention);
+        InvestigationService investigations = new InvestigationService(routes, instancePort, metricPort,
+                tracePort, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
+        AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
+                instancePort, 8);
+        orchestrator = new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
+                new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention);
+    }
+
+    private TaskView submit(Session session, String userId, String message) {
+        return orchestrator.submit(session.sessionId(), userId, message, AgentRequestOptions.none()).orElseThrow();
+    }
+
+    private TaskView submitAndAwait(Session session, String userId, String message) throws InterruptedException {
+        return await(submit(session, userId, message).taskId());
+    }
+
+    /** 会话里的 Agent 回复，按发生顺序。 */
+    private List<AgentMessage> agentReplies(String sessionId) {
+        return messages.bySession(sessionId).stream()
+                .filter(message -> message.role() == MessageRole.AGENT)
+                .toList();
+    }
+
+    /** 等待任务离开执行态（PENDING / RUNNING），返回最终快照。 */
+    private TaskView await(String taskId) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        TaskView task;
+        do {
+            Optional<TaskView> found = records.find(taskId);
+            task = found.orElseThrow(() -> new AssertionError("任务已被淘汰：" + taskId));
+            if (!task.status().active()) {
+                return task;
+            }
+            Thread.sleep(10);
+        } while (System.currentTimeMillis() < deadline);
+        throw new AssertionError("调查任务未结束，当前状态 " + task.status());
+    }
+
+    /** 等待订阅者收到至少 {@code count} 条事件；事件在独立派发线程上投递，所以这里只能等。 */
+    private static void awaitEvents(List<TaskEvent> received, int count) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (received.size() < count && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10);
+        }
+        assertEquals(count, received.size(), "未在超时前收到事件：" + received);
     }
 }

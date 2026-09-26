@@ -1,5 +1,7 @@
 package com.rover.agent.runtime;
 
+import com.rover.agent.core.event.TaskEventSubscriber;
+import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
@@ -15,18 +17,22 @@ import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.runtime.graph.InvestigationGraph;
 import com.rover.agent.runtime.graph.InvestigationOutcome;
 import com.rover.agent.runtime.llm.ModelExplainer;
-import com.rover.agent.runtime.task.AnalysisStreamListener;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTask;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.RejectedExecutionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 只读故障调查用例入口：接收问题、开启会话与事件、登记并异步执行调查任务。
+ * 只读故障调查用例入口：登记调查任务并执行「调查图 + 模型解读」的完整闭环。
+ *
+ * 提交与执行是分开的：{@link #register} 只登记 PENDING 任务（不阻塞调用线程），
+ * {@link #run} 在 Agent Worker 线程里执行调查。目标解析（把自然语言问题落到调查对象）属于编排层，
+ * 由编排层解析完成后调用 {@link #run}。
  *
  * 调查事实全部来自 {@code com.rover.agent.core.port} 的只读端口；模型只做解读，
  * 不可用时降级为规则诊断。任务状态只保留在当前进程，重启后不可查询。
@@ -64,7 +70,7 @@ public final class InvestigationService {
         this.explainer = explainer;
     }
 
-    /** 提交一次主动调查：开启会话与事件，登记并异步执行任务。 */
+    /** 旧入口：新建会话与事件后提交一次「目标已确定」的调查。 */
     public TaskView submit(String path, String question) {
         String target = validatePath(path);
         String asked = validateQuestion(question);
@@ -72,7 +78,11 @@ public final class InvestigationService {
         Incident incident = incidents.openIncident(session.sessionId(), IncidentOrigin.USER,
                 ResourceTarget.route(target));
         try {
-            return start(session.sessionId(), incident, target, ResourceTarget.route(target), asked);
+            InvestigationTask task = register(session.sessionId(), asked);
+            task.bind(incident.incidentId(), target, ResourceTarget.route(target));
+            incidents.attachTask(incident.incidentId(), task.taskId());
+            tasks.execute(() -> run(task));
+            return task.view();
         } catch (RejectedExecutionException ex) {
             rollback(incident, session);
             throw ex;
@@ -80,56 +90,32 @@ public final class InvestigationService {
     }
 
     /**
-     * 在已有会话与事件下启动一次调查：登记任务、挂到事件上、提交执行。
+     * 登记一个待执行的调查任务：只落 PENDING 快照，不解析目标、不发起任何阻塞调用。
      *
-     * 这是「启动一次调查」的唯一入口——会话与事件由调用方（编排层）负责解析与创建，
-     * 本类只负责调查任务的登记、执行与结论产出。登记或提交被拒时抛
-     * {@link RejectedExecutionException}，此时不会留下未执行的任务，事件与会话的清理由调用方决定。
+     * @throws com.rover.agent.runtime.task.SessionTaskRunningException 同会话已有仍在执行的任务
+     * @throws RejectedExecutionException                                任务登记容量已满
      */
-    public TaskView start(String sessionId, Incident incident, String path, ResourceTarget target, String question) {
-        InvestigationTask task = tasks.register(sessionId, incident.incidentId(), path, target, question);
-        incidents.attachTask(incident.incidentId(), task.taskId());
-        try {
-            tasks.execute(() -> run(task));
-        } catch (RejectedExecutionException ex) {
-            tasks.discard(task.taskId());
-            throw ex;
-        }
-        return task.view();
+    public InvestigationTask register(String sessionId, String question) {
+        return tasks.register(sessionId, question);
     }
 
-    /** 撤销未成功提交的调查所留下的会话与事件。 */
-    private void rollback(Incident incident, Session session) {
-        incidents.removeIncident(incident.incidentId());
-        incidents.removeSession(session.sessionId());
+    /** 提交执行；队列满时抛 {@link RejectedExecutionException}，调用方应回滚登记并回 429。 */
+    public void execute(Runnable runnable) {
+        tasks.execute(runnable);
     }
 
-    public TaskView get(String taskId) {
-        return tasks.get(taskId);
+    /** 提交执行失败时回滚登记，避免留下永远 PENDING 的任务。 */
+    public void discard(String taskId) {
+        tasks.discard(taskId);
     }
 
     /**
-     * 订阅某任务的「AI 解读」增量（供 SSE 实时展示）；任务不存在时返回 false，由调用方回 404。
-     * 已完成解读的任务会先补发全文再立即结束，因此晚连上的客户端不会看到空白。
+     * 执行一次已解析目标的调查：调查图 → 规则结论 → 模型解读 → 结论回写事件。
+     *
+     * 调用前必须已通过 {@code task.bind(...)} 绑定事件、取数路径与结构化目标。
+     * 本方法只在 Agent Worker 线程里调用，绝不占用 Servlet 请求线程。
      */
-    public boolean subscribeAnalysis(String taskId, AnalysisStreamListener listener) {
-        InvestigationTask task = tasks.find(taskId);
-        if (task == null) {
-            return false;
-        }
-        task.subscribeAnalysis(listener);
-        return true;
-    }
-
-    /** 退订解读增量：客户端断开、超时或出错时调用。 */
-    public void unsubscribeAnalysis(String taskId, AnalysisStreamListener listener) {
-        InvestigationTask task = tasks.find(taskId);
-        if (task != null) {
-            task.unsubscribeAnalysis(listener);
-        }
-    }
-
-    private void run(InvestigationTask task) {
+    public void run(InvestigationTask task) {
         task.start();
         try {
             InvestigationGraph graph = new InvestigationGraph(routes, instances, metrics, traces, task::step);
@@ -144,10 +130,29 @@ public final class InvestigationService {
         } catch (Exception ex) {
             log.error("Agent 诊断任务异常", ex);
             task.fail("诊断任务执行失败");
-        } finally {
-            // 关闭解读流放在任务进入终态之后：订阅者收到结束通知时回读任务，一定拿到最终结论。
-            task.closeAnalysis();
         }
+    }
+
+    /** 撤销未成功提交的调查所留下的会话与事件。 */
+    private void rollback(Incident incident, Session session) {
+        incidents.removeIncident(incident.incidentId());
+        incidents.removeSession(session.sessionId());
+    }
+
+    public TaskView get(String taskId) {
+        return tasks.get(taskId);
+    }
+
+    /**
+     * 订阅某任务的事件流（供 SSE 展示）；任务不在执行登记表里时返回空，由调用方回 404。
+     *
+     * 订阅成功后先补发一份全量快照（状态 + 已产生的解读文本），再按增量投递；
+     * 因此晚连上、掉队重连的客户端都不会看到空白或重复内容。事件写往订阅者队列是非阻塞的，
+     * 客户端断开只影响它自己这条订阅。
+     */
+    public Optional<TaskEventSubscription> subscribeEvents(String taskId, TaskEventSubscriber subscriber) {
+        InvestigationTask task = tasks.find(taskId);
+        return task == null ? Optional.empty() : Optional.of(task.subscribe(subscriber));
     }
 
     private InvestigationReport explain(InvestigationTask task, InvestigationReport report,

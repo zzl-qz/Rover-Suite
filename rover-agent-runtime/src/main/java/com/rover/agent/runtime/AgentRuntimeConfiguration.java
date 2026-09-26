@@ -15,12 +15,18 @@ import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.llm.ModelTargetInterpreter;
 import com.rover.agent.runtime.llm.NoopChatModelGateway;
+import com.rover.agent.runtime.metrics.AgentMetrics;
+import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import com.rover.agent.runtime.repository.InMemoryAgentMessageRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
 import com.rover.agent.runtime.repository.InMemoryIncidentRepository;
+import com.rover.agent.runtime.task.AgentExecutionSettings;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
+import com.rover.agent.runtime.task.TaskEventBus;
+import com.rover.agent.runtime.task.WorkspaceRetention;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -64,20 +70,61 @@ public class AgentRuntimeConfiguration {
         return new InMemoryAgentTaskRepository(TASK_CAPACITY);
     }
 
+    /**
+     * 运行指标端口：宿主提供且仅提供一个 {@link MeterRegistry}、且未显式关闭时才启用。
+     *
+     * 未提供注册表（运行层脱离 Admin 单独复用）或 {@code rover.agent.metrics.enabled=false}（应急降级）
+     * 时退化为空实现，调用方不做任何分支。指标只读注册表、不导出：不引 Actuator、不接 Prometheus。
+     */
+    @Bean
+    public AgentMetrics agentMetrics(ObjectProvider<MeterRegistry> meterRegistries,
+                                     @Value("${rover.agent.metrics.enabled:true}") boolean enabled) {
+        MeterRegistry registry = meterRegistries.getIfAvailable();
+        if (!enabled || registry == null) {
+            return AgentMetrics.NOOP;
+        }
+        return new MicrometerAgentMetrics(registry);
+    }
+
+    /**
+     * 存储保留策略：内存容量的"丢谁"决策集中在这里。
+     *
+     * 容量常量与各仓储共用同一批定义，避免"仓储 200、清理按 100 做"这类口径错位。
+     */
+    @Bean
+    public WorkspaceRetention agentWorkspaceRetention(AgentSessionRepository agentSessionRepository,
+                                                      IncidentRepository agentIncidentRepository,
+                                                      AgentMessageRepository agentMessageRepository,
+                                                      InvestigationTaskRegistry agentTaskRegistry) {
+        return new WorkspaceRetention(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
+                agentTaskRegistry, SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY);
+    }
+
     @Bean
     public IncidentRegistry agentIncidentRegistry(AgentSessionRepository agentSessionRepository,
-                                                  IncidentRepository agentIncidentRepository) {
-        return new IncidentRegistry(agentSessionRepository, agentIncidentRepository);
+                                                  IncidentRepository agentIncidentRepository,
+                                                  WorkspaceRetention agentWorkspaceRetention) {
+        return new IncidentRegistry(agentSessionRepository, agentIncidentRepository, agentWorkspaceRetention);
     }
 
     @Bean
-    public InvestigationTaskRegistry agentTaskRegistry(AgentTaskRepository agentTaskRepository) {
-        return new InvestigationTaskRegistry(agentTaskRepository);
+    public InvestigationTaskRegistry agentTaskRegistry(AgentTaskRepository agentTaskRepository,
+                                                       @Value("${rover.agent.execution.worker-threads:2}")
+                                                       int workerThreads,
+                                                       @Value("${rover.agent.execution.queue-capacity:16}")
+                                                       int queueCapacity,
+                                                       @Value("${rover.agent.execution.task-capacity:200}")
+                                                       int taskCapacity,
+                                                       AgentMetrics agentMetrics) {
+        // 参数越界时在装配阶段直接失败：配置错误必须早暴露，而不是运行期以「任务莫名被拒」出现。
+        AgentExecutionSettings settings = new AgentExecutionSettings(workerThreads, queueCapacity, taskCapacity);
+        return new InvestigationTaskRegistry(agentTaskRepository, settings, new TaskEventBus(), agentMetrics);
     }
 
     @Bean
-    public ModelExplainer agentModelExplainer(ObjectProvider<ChatModelGateway> chatModelGateways) {
-        return new ModelExplainer(chatModelGateways.getIfAvailable(NoopChatModelGateway::new));
+    public ModelExplainer agentModelExplainer(ObjectProvider<ChatModelGateway> chatModelGateways,
+                                              AgentMetrics agentMetrics) {
+        return new ModelExplainer(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics);
     }
 
     /** 规则解析不出对象时的模型辅助；模型未配置时退化为不推断。 */
@@ -126,9 +173,10 @@ public class AgentRuntimeConfiguration {
                                                IncidentRegistry agentIncidentRegistry,
                                                AgentContextManager agentContextManager,
                                                TargetResolver agentTargetResolver,
-                                               InvestigationService agentInvestigationService) {
+                                               InvestigationService agentInvestigationService,
+                                               WorkspaceRetention agentWorkspaceRetention) {
         return new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
                 agentTaskRepository, agentIncidentRegistry, agentContextManager, agentTargetResolver,
-                agentInvestigationService);
+                agentInvestigationService, agentWorkspaceRetention);
     }
 }

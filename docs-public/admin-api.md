@@ -32,12 +32,14 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | GET | `/api/agent/sessions` | Sessions owned by the current user |
 | POST | `/api/agent/sessions` | Create a session; body `{"title":"..."}`, title optional |
 | GET | `/api/agent/sessions/{sessionId}` | Session detail: session + conversation + active incident |
-| POST | `/api/agent/sessions/{sessionId}/messages` | Send a message (a new question or a follow-up on the active incident) |
+| GET | `/api/agent/sessions/{sessionId}/workspace` | Workbench aggregate: session + conversation + incidents + recent tasks (`limit` default 20, max 100) |
+| POST | `/api/agent/sessions/{sessionId}/messages` | Send a message (a new question or a follow-up on the active incident); `202` returns a task handle |
 | GET | `/api/agent/tasks/{taskId}` | Task detail: steps, evidence, conclusion |
+| GET | `/api/agent/tasks/{taskId}/events` | Task event stream (SSE): replay `SNAPSHOT`, then push structured events |
 | GET | `/api/agent/incidents/{incidentId}` | Incident detail: target, time range, latest conclusion |
-| POST | `/api/agent/diagnoses` | **Deprecated**: one-shot diagnosis; forwarded internally to the agent orchestrator. Body `{"path":"/api/demo/tt","question":"why does it fail?"}` |
-| GET | `/api/agent/diagnoses/{taskId}` | Query task status, collection and interpretation steps, conclusion, evidence |
-| GET | `/api/agent/diagnoses/{taskId}/stream` | Subscribe to "AI interpretation" deltas (SSE): replay `snapshot`, then `delta`, then a final `end` |
+| POST | `/api/agent/diagnoses` | **Deprecated**: one-shot diagnosis; use `POST /api/agent/sessions/{sessionId}/messages` |
+| GET | `/api/agent/diagnoses/{taskId}` | **Deprecated**: use `GET /api/agent/tasks/{taskId}` (same ownership checks) |
+| GET | `/api/agent/diagnoses/{taskId}/stream` | **Deprecated**: use `GET /api/agent/tasks/{taskId}/events` |
 | GET | `/api/auth/status` | Sign-in state and CSRF token; public |
 | POST | `/login` | Form sign-in (`username`, `password`, `_csrf`); on success 302 to `redirect` or `/`, on failure 302 to `/login.html?error=1` |
 | POST | `/api/logout` | Sign out; returns 200. POST only |
@@ -46,22 +48,29 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | POST | `/api/model/test` | Connectivity test with the submitted candidate values; nothing is persisted |
 | POST | `/api/model/verify` | Effect verification against the currently applied configuration |
 
-Diagnosis tasks are `PENDING`, `RUNNING`, `COMPLETED`, or `FAILED`. Results contain `summary`,
+Diagnosis tasks are `PENDING`, `RUNNING`, `WAITING_INPUT`, `COMPLETED`, or `FAILED` (`CANCELLED` is
+reserved by the protocol but has no entry point yet). `WAITING_INPUT` means the target could not be
+determined from the question and session context: the task stops at the clarification point, which does not
+count as running and does not hold the session's concurrency slot; the question to answer is in the task's
+`clarification` field, and the session's next task continues once the user replies. Results contain `summary`,
 `confidence`, `evidence` with source and collection time, `limitations`, and hypothesis checks
 `hypotheses` (each with `id`, `statement`, `status`, `detail`, `sources`, where `status` is
 `CONFIRMED`, `REJECTED`, or `UNKNOWN`), plus an optional `aiAnalysis` once a model is configured.
 Diagnosis is read-only: it never changes routes or configuration. Tasks live in Admin memory and
 cannot be queried after a restart.
 
-The AI interpretation is an optional live output. `GET /api/agent/diagnoses/{taskId}/stream` serves it
-as `text/event-stream`: on connect it replays the text produced so far as `snapshot` (possibly empty,
-which is how a reconnecting client aligns its prefix), then streams deltas as `delta`, and sends one
-final `end` before closing; an unknown task returns `404`. The stream carries interpretation text only —
-task status and collection steps still come from `GET /api/agent/diagnoses/{taskId}`. The connection
-idles out after 180 seconds; neither a timeout nor a dropped connection affects the investigation, and a
-reconnect replays the full text, so nothing is lost. When no model is configured or the model is
-unavailable the task degrades directly and the subscriber gets an empty snapshot followed immediately by
-`end`.
+The task event stream `GET /api/agent/tasks/{taskId}/events` serves every structured event of a task as
+`text/event-stream`: the SSE event name is the event type and the data is the full event envelope
+(`eventId`, `taskId`, `type`, `timestampMillis`, `payload`). On connect it replays one `SNAPSHOT`
+(task view + interpretation text produced so far + `coveredEventId`), then pushes increments such as
+`TASK_STARTED`, `STEP_STARTED`, `STEP_COMPLETED`, `STEP_FAILED`, `EVIDENCE_ADDED`, `ANALYSIS_DELTA`, and
+`CLARIFICATION_REQUIRED`; it finishes and closes once the task reaches a terminal state
+(`TASK_COMPLETED`/`TASK_FAILED`/`TASK_CANCELLED`) or stops at the clarification point. `GET /api/agent/tasks/{taskId}`
+remains the source of truth: everything an event carries must be queryable there, and lost events or dropped
+connections never affect the investigation. The connection idles out after 180 seconds; a reconnect replays the
+snapshot, so nothing is lost. An unknown, no-longer-observable, or not-owned task returns `404`.
+The legacy `GET /api/agent/diagnoses/{taskId}/stream` still works (it emits only the textual
+`snapshot`/`delta`/`end` events) but is deprecated.
 
 ## Agent Workbench API
 
@@ -85,12 +94,27 @@ endpoints below.
 | `path` / `service` / `instance` | Optional manual target from the collapsible "advanced context"; mutually exclusive, priority path > service > instance |
 | `fromMillis` / `toMillis` | Optional time range (epoch millis); either both or neither, as a valid closed interval, otherwise `400` |
 
-The response is an `AgentResponse`: `session`, `incident`, `task`, `reply`, `clarification`. `task` and
-`clarification` are mutually exclusive — either an investigation has started (`task` non-null) or the target
-could not be determined and the user must supply more detail (`clarification` non-null, in which case nothing
-is guessed and no task is created). `reply` is the agent message already written to the session and can be
-appended to the conversation directly. A full task queue returns `429` with
-`{"message":"调查任务繁忙，请稍后再试"}`.
+The response is `202 Accepted` + `{"sessionId":...,"taskId":...,"status":"PENDING"}`: submission only
+validates and registers; target resolution and investigation run on a background worker, so this endpoint is
+never blocked by model calls. Progress is observed through `GET /api/agent/tasks/{taskId}` and the task event stream.
+
+- A task already running in the same session returns `409` +
+  `{"code":"SESSION_TASK_RUNNING","message":...,"taskId":"<running task>"}`: one session allows only one
+  active investigation at a time.
+- A full task capacity or execution queue returns `429` +
+  `{"code":"TASK_BUSY","message":"调查任务繁忙，请稍后再试"}`.
+- When the target cannot be determined nothing is guessed and no incident is opened: the task stops at
+  `WAITING_INPUT`, `clarification` holds the question to answer, and that question is also written to the
+  session as an agent message; the session's next task continues once the user replies (this stage does not
+  resume the same task in place).
+
+### Workbench aggregate
+
+`GET /api/agent/sessions/{sessionId}/workspace?limit=20` returns
+`{"session":...,"messages":[...],"incidents":[...],"tasks":[...],"activeIncident":...}` in one call, so the
+front end does not issue one request per task. `limit` only caps the number of tasks (default 20, max 100) and
+`tasks` is ordered newest first; full task detail is still fetched on demand from `GET /api/agent/tasks/{taskId}`.
+A session owned by someone else returns `404`.
 
 ### Context and follow-ups
 
@@ -101,8 +125,8 @@ instances?", "what about yesterday?", or "just that service from before" stay on
 reuse is **same target ⇒ reuse the active incident** (an explicit time range in the request updates that
 incident's range); a clearly different target opens a new incident and makes it the session's active one.
 When no new target can be resolved, reusing the active incident's target is conversation continuity rather
-than guessing; `clarification` is returned only when there is genuinely nothing to inherit, and no task is
-created in that case. An incident's `summary` and `status` aggregate the latest round: attaching a new
+than guessing; only when there is genuinely nothing to inherit does the task stop at `WAITING_INPUT` for the
+user to supply details, without opening an incident or starting an investigation. An incident's `summary` and `status` aggregate the latest round: attaching a new
 investigation moves it to `INVESTIGATING`, producing a conclusion moves it to `RESOLVED` and updates the summary.
 
 An empty `message`, or one longer than 1000 characters, returns `400`.
@@ -123,19 +147,20 @@ lookups are filtered by that identity, so by default a user sees only their own 
 sessionId=$(curl -s -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
   -d '{}' http://127.0.0.1:9090/api/agent/sessions | sed -E 's/.*"sessionId":"([^"]*)".*/\1/')
 
-# Ask (natural language)
-curl -s -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
+# Ask (natural language); 202 returns {"sessionId":...,"taskId":...,"status":"PENDING"}
+taskId=$(curl -s -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
   -d '{"message":"why does /api/demo/tt fail?"}' \
-  "http://127.0.0.1:9090/api/agent/sessions/$sessionId/messages"
+  "http://127.0.0.1:9090/api/agent/sessions/$sessionId/messages" | sed -E 's/.*"taskId":"([^"]*)".*/\1/')
 
 # Follow up (reuses the active incident; a time range may be supplied)
 curl -s -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
   -d '{"message":"what about yesterday?","fromMillis":1735689600000,"toMillis":1735776000000}' \
   "http://127.0.0.1:9090/api/agent/sessions/$sessionId/messages"
 
-# Session detail / task detail
-curl -s -b "$jar" "http://127.0.0.1:9090/api/agent/sessions/$sessionId"
+# Workbench aggregate / task detail / task event stream
+curl -s -b "$jar" "http://127.0.0.1:9090/api/agent/sessions/$sessionId/workspace"
 curl -s -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>"
+curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 ```
 
 ## Request examples
@@ -186,7 +211,7 @@ Route bodies must match the Gateway route model. For configuration updates `comp
   `GET /api/auth/status` as the authoritative value). A successful sign-in changes the session id.
 - Sign-out is `POST /api/logout` only: a GET sign-out cannot be CSRF protected, so a malicious page
   could use the browser to kick the operator offline.
-- The SSE endpoint `GET /api/agent/diagnoses/{taskId}/stream` also returns `401` when not signed in. A
+- The SSE endpoint `GET /api/agent/tasks/{taskId}/events` also returns `401` when not signed in. A
   browser `EventSource` cannot attach custom headers, so it authenticates with the session cookie only;
   the endpoint is a GET and needs no CSRF header, and the connection dies with the session on sign-out.
 
@@ -202,11 +227,11 @@ token=$(curl -s -b "$jar" -c "$jar" http://127.0.0.1:9090/api/auth/status | sed 
 curl -s -b "$jar" -H "X-XSRF-TOKEN: $token" http://127.0.0.1:9090/api/model/config
 ```
 
-Subscribe to a task's AI interpretation deltas (`-N` disables curl buffering so chunks arrive live;
+Subscribe to a task's event stream (`-N` disables curl buffering so chunks arrive live;
 without a session this returns `401`):
 
 ```bash
-curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/diagnoses/<taskId>/stream"
+curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 ```
 
 ## Model configuration API

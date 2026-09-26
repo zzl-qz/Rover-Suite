@@ -32,6 +32,7 @@ import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -145,7 +146,8 @@ class AgentContextManagerTest {
         InvestigationReport report = new InvestigationReport("结论", Confidence.MEDIUM, evidence, List.of(),
                 List.of(), null);
         return new TaskView(taskId, "session", incidentId, TaskStatus.COMPLETED, null, "/api/demo/tt",
-                ResourceTarget.route("/api/demo/tt"), "问题", createdAt, createdAt + 1, List.of(), report, null);
+                ResourceTarget.route("/api/demo/tt"), "问题", createdAt, createdAt + 1, List.of(), report, null,
+                null);
     }
 
     private static final class FakeSessions implements AgentSessionRepository {
@@ -277,8 +279,24 @@ class AgentContextManagerTest {
         }
 
         @Override
+        public Optional<TaskView> findActiveBySessionId(String sessionId) {
+            return values.values().stream()
+                    .filter(view -> sessionId.equals(view.sessionId()) && view.status().active())
+                    .findFirst();
+        }
+
+        @Override
         public List<TaskView> listAll() {
             return List.copyOf(values.values());
+        }
+
+        @Override
+        public List<TaskView> recentBySession(String sessionId, int limit) {
+            return values.values().stream()
+                    .filter(view -> sessionId.equals(view.sessionId()))
+                    .sorted(Comparator.comparingLong(TaskView::createdAtMillis).reversed())
+                    .limit(Math.max(limit, 0))
+                    .toList();
         }
 
         @Override

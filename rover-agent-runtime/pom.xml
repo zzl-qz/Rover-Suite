@@ -60,6 +60,11 @@
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
         </dependency>
+        <!-- 运行指标：只用 micrometer-core 的 MeterRegistry 抽象，不引 actuator、不接 Prometheus。 -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
         <!-- @PreDestroy：运行层自己管理调查线程池的关闭。 -->
         <dependency>
             <groupId>jakarta.annotation</groupId>

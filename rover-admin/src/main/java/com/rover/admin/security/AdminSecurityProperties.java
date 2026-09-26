@@ -26,6 +26,14 @@ public class AdminSecurityProperties {
     /** 登录失败计数窗口，单位为秒。 */
     private int failureWindowSeconds = 600;
 
+    /**
+     * 是否信任 {@code X-Forwarded-For}（默认 false）。
+     *
+     * 只有部署在可信反向代理（本机 Nginx 等）之后才应打开：应用直接暴露时，
+     * 任何人都能自带这个头伪造来源地址，从而绕过按来源的登录失败限流。
+     */
+    private boolean trustForwardedHeaders = false;
+
     /** 是否启用登录鉴权：只有确实提供了口令才算启用。 */
     public boolean isEnabled() {
         return hasText(passwordHash) || hasText(password);
@@ -74,6 +82,14 @@ public class AdminSecurityProperties {
 
     public void setFailureWindowSeconds(int failureWindowSeconds) {
         this.failureWindowSeconds = failureWindowSeconds;
+    }
+
+    public boolean isTrustForwardedHeaders() {
+        return trustForwardedHeaders;
+    }
+
+    public void setTrustForwardedHeaders(boolean trustForwardedHeaders) {
+        this.trustForwardedHeaders = trustForwardedHeaders;
     }
 
     private static boolean hasText(String value) {

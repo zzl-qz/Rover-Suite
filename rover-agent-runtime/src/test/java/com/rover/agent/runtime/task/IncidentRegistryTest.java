@@ -1,7 +1,7 @@
 package com.rover.agent.runtime.task;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.Incident;
@@ -9,7 +9,7 @@ import com.rover.agent.core.model.IncidentOrigin;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TargetType;
-import java.util.List;
+import com.rover.agent.runtime.repository.StoreCapacityExceededException;
 import org.junit.jupiter.api.Test;
 
 class IncidentRegistryTest {
@@ -34,14 +34,17 @@ class IncidentRegistryTest {
     }
 
     @Test
-    void incidentAndSessionCountsAreBounded() {
+    void sessionStoreRejectsWhenFullInsteadOfEvictingSilently() {
         IncidentRegistry registry = new IncidentRegistry();
         Session first = registry.openSession();
-        for (int i = 0; i < 150; i++) {
+        for (int i = 1; i < 100; i++) {
             registry.openSession();
         }
 
-        assertFalse(registry.session(first.sessionId()).isPresent());
+        // 满则拒绝写入，不静默淘汰：清理谁、要不要连子记录一起清，由保留策略决定
+        // （生产装配见 WorkspaceRetention；本类不带保留策略，因此这里看到的是拒绝语义）。
+        assertThrows(StoreCapacityExceededException.class, registry::openSession);
+        assertTrue(registry.session(first.sessionId()).isPresent(), "已登记的会话不应被悄悄丢掉");
     }
 
     @Test

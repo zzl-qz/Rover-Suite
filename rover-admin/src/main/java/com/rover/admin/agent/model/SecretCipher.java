@@ -25,10 +25,13 @@ import org.springframework.stereotype.Component;
  *
  * 主密钥解析顺序：显式配置（环境变量 {@code ROVER_ADMIN_MASTER_KEY} 或
  * {@code rover.admin.model.master-key}，base64 解出 32 字节则直接用，否则按口令 PBKDF2 派生）
- * → 主密钥文件 → 首次加密时随机生成并写入主密钥文件。
+ * → 主密钥文件 → 首次加密时随机生成并写入主密钥文件（开发环境免配置，这条路径保留）。
  *
  * 这只是"落盘静态保护"，不是 KMS：主密钥文件必须与模型配置文件**分开备份**，
- * 两者放在一起等于没有加密。Windows 没有 POSIX 权限，机密性靠加密而不是文件模式。
+ * 两者放在一起等于没有加密。因此当主密钥文件仍落在默认的同目录时，启动阶段会输出
+ * SECURITY WARNING——生产环境应改用环境变量或 {@code master-key-file} 指向独立目录
+ * （判定见 {@link AdminModelProperties#isMasterKeyIsolated()}）。
+ * Windows 没有 POSIX 权限，机密性靠加密而不是文件模式。
  */
 @Component
 public class SecretCipher {
@@ -51,12 +54,26 @@ public class SecretCipher {
     /** 容器装配用；另一个构造器留给测试直接指定主密钥与文件位置。 */
     @Autowired
     public SecretCipher(AdminModelProperties properties) {
-        this(properties.getMasterKey(), properties.masterKeyPath());
+        this(properties.resolveMasterKey(), properties.masterKeyPath(), properties.isMasterKeyIsolated());
     }
 
+    /** 主密钥显式给出的场景（测试与定制装配）：不存在"同目录"问题。 */
     public SecretCipher(String configuredKey, Path masterKeyFile) {
+        this(configuredKey, masterKeyFile, true);
+    }
+
+    /**
+     * @param masterKeyIsolated 主密钥是否与模型配置文件隔离存放；为 false 时输出安全告警
+     */
+    public SecretCipher(String configuredKey, Path masterKeyFile, boolean masterKeyIsolated) {
         this.configuredKey = configuredKey;
         this.masterKeyFile = masterKeyFile;
+        if (!masterKeyIsolated) {
+            // 只报警不回退：开发环境继续可用，生产部署时这条日志就是整改依据。
+            log.warn("[SECURITY WARNING] 主密钥与模型配置使用同一目录，密文可被一并拷走，等同于未加密：{}。"
+                            + "生产环境请设置环境变量 {}，或用 rover.admin.model.master-key-file 指向独立目录。",
+                    masterKeyFile, AdminModelProperties.MASTER_KEY_ENV);
+        }
     }
 
     /** 加密；没有主密钥时首次生成并落盘。主密钥写不出去会抛异常，让保存失败可见。 */

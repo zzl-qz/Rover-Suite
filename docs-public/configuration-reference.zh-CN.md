@@ -28,6 +28,7 @@
 | `rover.admin.auth.password` | 空 | 明文口令，启动期哈希进内存，启动会 WARN 建议改用 `password-hash`；环境变量 `ROVER_ADMIN_PASSWORD` | 重启 |
 | `rover.admin.auth.max-login-failures` | `5` | 失败窗口内同一来源允许的失败次数上限；环境变量 `ROVER_ADMIN_MAX_LOGIN_FAILURES` | 重启 |
 | `rover.admin.auth.failure-window-seconds` | `600` | 失败计数窗口时长（秒）；环境变量 `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | 重启 |
+| `rover.admin.auth.trust-forwarded-headers` | `false` | 登录限流的来源判定：默认只认 TCP 对端 `remoteAddr`；显式开启后才取 `X-Forwarded-For` 第一段。只有 Admin 确实部署在可信反向代理后面时才开启，否则伪造请求头即可绕过失败次数限制 | 重启 |
 | `rover.admin.model.config-file` | 空 = 工作目录下 `config/admin-model.properties` | 模型配置文件路径（UTF-8 properties，含 `api-key-enc` 密文）；文件缺失时启动自动创建空配置，整个 `config/` 已在 `.gitignore` 中；环境变量 `ROVER_ADMIN_MODEL_CONFIG_FILE` | 重启 |
 | `rover.admin.model.master-key` | 空 | base64 解出 32 字节则直接用作 AES 密钥，否则按口令 PBKDF2-HMAC-SHA256（65536 轮）派生；环境变量 `ROVER_ADMIN_MASTER_KEY` | 重启 |
 | `rover.admin.model.master-key-file` | 空 = 配置文件同级 `master.key` | 主密钥文件；首次加密时自动生成 32 字节随机主密钥并落盘；环境变量 `ROVER_ADMIN_MASTER_KEY_FILE` | 重启 |
@@ -43,6 +44,30 @@
 `GET /api/auth/status` 回 `authEnabled:false`。生产环境应配置其中一项（推荐 `password-hash`），并继续用网络 ACL、
 反向代理或 VPN 保护 `server.port`。会话 Cookie 为 `ROVERADMIN_SESSION`（HttpOnly、SameSite=Strict），超时取
 `server.servlet.session.timeout`。
+
+### 主密钥隔离与启动告警
+
+`api-key-enc` 的密文强度取决于主密钥是否与配置分开保存：默认 `master.key` 与 `admin-model.properties` 同目录，
+拷走目录就能连密文一起解密，等同于未加密。此时启动打一条 `[SECURITY WARNING]`（不阻断启动，也不取消自动生成机制）。
+生产环境二选一即可：设置环境变量 `ROVER_ADMIN_MASTER_KEY`（或 `rover.admin.model.master-key`），
+或用 `rover.admin.model.master-key-file` 把主密钥指到独立目录/独立挂载卷。密钥、明文口令与密文都不会进日志或响应。
+
+## Agent Workbench 配置
+
+| 配置 | 默认值 | 说明 | 生效方式 |
+| --- | --- | --- | --- |
+| `rover.agent.execution.worker-threads` | `2` | 调查工作线程数（1~32）；模型与只读端口的阻塞调用只占这些线程，不阻塞 Servlet 请求线程 | 重启 |
+| `rover.agent.execution.queue-capacity` | `16` | 执行队列容量（1~1000）；队列满时提交回 `429`，不使用无界队列 | 重启 |
+| `rover.agent.execution.task-capacity` | `200` | 任务登记容量（1~10000）；已结束的任务可被保留策略淘汰，执行中的任务不会被丢 | 重启 |
+| `rover.agent.context.recent-message-limit` | `8` | 追问时带上的最近消息条数 | 重启 |
+| `rover.agent.metrics.enabled` | `true` | Agent 运行指标总开关；`false` 为应急降级，不注册任何 Meter，业务逻辑不变 | 重启 |
+
+三个执行参数越界时启动直接失败，让配置错误在启动期暴露，而不是运行期表现为「任务莫名被拒」。
+
+指标口径（前缀 `rover.agent.`，写在宿主进程的同一个 `MeterRegistry` 上）：`task.submitted` / `task.completed` /
+`task.failed` / `task.rejected` 为计数，`task.active` / `task.queue.size` / `sse.connections` 为当前值，
+`task.duration`（标签 `status`）与 `model.duration` / `model.error`（标签 `model`）为耗时与失败数。
+标签只允许 `status`、`reason`、`model` 三种有限取值，模型名会规范化并截断，不引入标签基数风险。
 
 ## Gateway 启动配置
 

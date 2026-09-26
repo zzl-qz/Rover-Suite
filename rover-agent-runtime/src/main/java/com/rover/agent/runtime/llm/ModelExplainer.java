@@ -3,6 +3,7 @@ package com.rover.agent.runtime.llm;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.Hypothesis;
 import com.rover.agent.core.model.Verdict;
+import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.tool.SnapshotTools;
 import java.util.List;
 import java.util.Map;
@@ -26,9 +27,16 @@ public final class ModelExplainer {
             + "用简洁中文给出原因和下一步人工检查建议。";
 
     private final ChatModelGateway gateway;
+    private final AgentMetrics metrics;
 
+    /** 不关心指标的构造入口（如宿主未提供注册表）：指标端口退化为空实现。 */
     public ModelExplainer(ChatModelGateway gateway) {
+        this(gateway, AgentMetrics.NOOP);
+    }
+
+    public ModelExplainer(ChatModelGateway gateway, AgentMetrics metrics) {
         this.gateway = gateway == null ? new NoopChatModelGateway() : gateway;
+        this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
     }
 
     /** 是否已配置模型（不代表当前可用）。 */
@@ -62,19 +70,28 @@ public final class ModelExplainer {
         SnapshotTools tools = new SnapshotTools(evidence);
         Map<String, String> core = tools.coreSnapshots();
         StringBuilder answer = new StringBuilder();
-        gateway.chatClient().prompt()
-                .system(SYSTEM_PROMPT)
-                .user("请求路径：" + path + "\n用户问题：" + question + describeHypotheses(hypotheses)
-                        + describeSnapshots(core))
-                .tools(tools)
-                .stream()
-                .content()
-                .doOnNext(chunk -> collect(answer, chunk, onDelta))
-                .blockLast();
-        if (answer.isEmpty()) {
-            throw new IllegalStateException("模型没有返回解释");
+        long startedAt = System.nanoTime();
+        boolean failed = true;
+        try {
+            gateway.chatClient().prompt()
+                    .system(SYSTEM_PROMPT)
+                    .user("请求路径：" + path + "\n用户问题：" + question + describeHypotheses(hypotheses)
+                            + describeSnapshots(core))
+                    .tools(tools)
+                    .stream()
+                    .content()
+                    .doOnNext(chunk -> collect(answer, chunk, onDelta))
+                    .blockLast();
+            if (answer.isEmpty()) {
+                throw new IllegalStateException("模型没有返回解释");
+            }
+            failed = false;
+            return new Explanation(answer.toString(), List.copyOf(core.keySet()), tools.calledTools());
+        } finally {
+            // 只上报耗时与成败，不记提示词与回答：指标里不出现业务内容，也不出现密钥。
+            metrics.modelCall(gateway.description(), Math.max(0L, (System.nanoTime() - startedAt) / 1_000_000L),
+                    failed);
         }
-        return new Explanation(answer.toString(), List.copyOf(core.keySet()), tools.calledTools());
     }
 
     /** 累积一段增量并转发；超出上限的部分直接丢弃，保证推送内容与最终文本逐字一致。 */

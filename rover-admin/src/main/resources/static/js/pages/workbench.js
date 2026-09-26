@@ -2,11 +2,26 @@
  * Agent 工作台：把「一次路径诊断」升级成带会话上下文的连续调查。
  *
  * 三栏：左栏会话列表（内存存储，重启即清空），中栏对话与调查进度，右栏当前事件上下文。
- * 数据全部来自 Agent 接口——会话详情给出消息与当前事件，任务详情给出步骤/证据/结论；
- * 「AI 解读」增量走 SSE，任务状态仍由轮询兜底，断线不影响调查本身。
+ * 数据来源分两条：会话的展示数据一次取自聚合接口 workspace（会话 + 对话 + 事件 + 最近任务），
+ * 任务卡上的步骤、状态与解读由「任务事件流」实时推送——轮询只做断线、刷新与后台恢复时的兜底。
  *
  * 用户身份由后端认证上下文决定，这里不提交也不展示 userId。
  */
+
+/** 聚合接口一次取回的任务条数：更早的历史任务不在时间线里，避免把整个会话搬进页面。 */
+const WB_TASK_LIMIT = 50;
+
+/** 事件流重连退避：1s → 2s → 4s → 8s，上限 15s；收到快照即视为连接已恢复并重置。 */
+const WB_STREAM_RETRY_MIN_MILLIS = 1000;
+const WB_STREAM_RETRY_MAX_MILLIS = 15000;
+
+/** 任务事件类型：事件名就是类型，数据是完整信封（eventId / type / timestampMillis / payload）。 */
+const WB_EVENT_TYPES = [
+    'SNAPSHOT', 'TASK_CREATED', 'TASK_STARTED', 'STEP_STARTED', 'STEP_COMPLETED', 'STEP_FAILED',
+    'EVIDENCE_ADDED', 'ANALYSIS_DELTA', 'CLARIFICATION_REQUIRED', 'TASK_COMPLETED', 'TASK_FAILED',
+    'TASK_CANCELLED',
+];
+
 window.RoverAdminPages = window.RoverAdminPages || {};
 window.RoverAdminPages.workbench = {
     data() {
@@ -19,7 +34,6 @@ window.RoverAdminPages.workbench = {
             wbIncidents: {},
             wbTasks: {},
             wbError: null,
-            wbHint: null,
             wbLoading: false,
             wbInput: '',
             wbContext: { path: '', service: '', instance: '', from: '', to: '' },
@@ -27,7 +41,7 @@ window.RoverAdminPages.workbench = {
             wbSending: false,
             wbDetailOpen: {},
             wbStreamTaskId: '',
-            wbStreamText: '',
+            wbStreamTexts: {},
             wbStreaming: false,
         };
     },
@@ -57,7 +71,6 @@ window.RoverAdminPages.workbench = {
          * 中栏时间线：会话消息与事件下的调查任务按时间归并。
          *
          * 同一毫秒内先消息后任务卡片（提问 → 回复 → 调查进度），因此每轮问答的卡片都紧跟在它后面。
-         * 任务字段只在任务详情里，所以这里只拼接已经取到的任务。
          */
         wbTurns() {
             const turns = [];
@@ -91,6 +104,14 @@ window.RoverAdminPages.workbench = {
             if (!tasks.length) return null;
             return tasks.reduce((best, task) => (task.createdAtMillis >= best.createdAtMillis ? task : best));
         },
+
+        /** 需要补充信息的任务：最近的澄清提问显示在输入框上方（可能有多次提问留在会话里）。 */
+        wbHint() {
+            const waiting = Object.values(this.wbTasks).filter(task => task && task.clarification);
+            if (!waiting.length) return null;
+            return waiting.reduce((best, task) => (task.createdAtMillis >= best.createdAtMillis ? task : best))
+                .clarification;
+        },
     },
 
     methods: {
@@ -109,7 +130,7 @@ window.RoverAdminPages.workbench = {
             this.wbActiveIncident = null;
             this.wbIncidents = {};
             this.wbTasks = {};
-            this.wbHint = null;
+            this.wbStreamTexts = {};
         },
 
         async wbLoadSessions() {
@@ -152,51 +173,37 @@ window.RoverAdminPages.workbench = {
             this.wbActiveIncident = null;
             this.wbIncidents = {};
             this.wbTasks = {};
+            this.wbStreamTexts = {};
             this.wbDetailOpen = {};
-            this.wbHint = null;
             this.wbError = null;
             await this.wbLoadSession(sessionId);
         },
 
         /**
-         * 载入一个会话的全部展示数据。
+         * 载入一个会话的展示数据：一次聚合取齐会话、对话、事件与最近任务。
          *
-         * 会话详情只带当前事件，所以再按会话的 incidentIds 补齐其它事件，才能把历史调查的任务卡片
-         * 一起留在对话里。数量受会话自身的事件数限制（内存实现上限 100），代价可接受。
+         * 之前是「会话详情 → 逐个事件 → 逐个任务」的 N+1 请求，随历史增长会越来越慢；
+         * 聚合接口同时给出事件列表与最近若干条任务，中栏时间线与右栏事实都从这一份数据来。
          */
         async wbLoadSession(sessionId) {
             if (!sessionId) return;
             this.wbLoading = true;
             try {
-                const detail = await RoverAdminApi.api('/api/agent/sessions/' + encodeURIComponent(sessionId));
+                const workspace = await RoverAdminApi.api('/api/agent/sessions/' + encodeURIComponent(sessionId)
+                    + '/workspace?limit=' + WB_TASK_LIMIT);
                 if (this.wbActiveSessionId !== sessionId) return;
-                this.wbSession = detail.session || null;
-                this.wbMessages = detail.messages || [];
-                this.wbActiveIncident = detail.activeIncident || null;
-                const incidentIds = (this.wbSession && this.wbSession.incidentIds) || [];
-                const loaded = await Promise.all(incidentIds.map((incidentId) => {
-                    if (this.wbActiveIncident && incidentId === this.wbActiveIncident.incidentId) {
-                        return Promise.resolve(this.wbActiveIncident);
-                    }
-                    return RoverAdminApi.api('/api/agent/incidents/' + encodeURIComponent(incidentId))
-                        .catch(() => null);
-                }));
-                if (this.wbActiveSessionId !== sessionId) return;
+                this.wbSession = workspace.session || null;
+                this.wbMessages = workspace.messages || [];
+                this.wbActiveIncident = workspace.activeIncident || null;
                 const incidents = {};
-                loaded.filter(Boolean).forEach((incident) => { incidents[incident.incidentId] = incident; });
+                (workspace.incidents || []).forEach((incident) => { incidents[incident.incidentId] = incident; });
                 if (this.wbActiveIncident) incidents[this.wbActiveIncident.incidentId] = this.wbActiveIncident;
                 this.wbIncidents = incidents;
-                const taskIds = [];
-                Object.values(incidents).forEach((incident) => (incident.taskIds || []).forEach((taskId) => {
-                    if (!taskIds.includes(taskId)) taskIds.push(taskId);
-                }));
-                const fetched = await Promise.all(taskIds.map(taskId =>
-                    RoverAdminApi.api('/api/agent/tasks/' + encodeURIComponent(taskId)).catch(() => null)));
-                if (this.wbActiveSessionId !== sessionId) return;
                 const tasks = {};
-                fetched.filter(Boolean).forEach((task) => { tasks[task.taskId] = task; });
+                (workspace.tasks || []).forEach((task) => { tasks[task.taskId] = task; });
                 this.wbTasks = tasks;
                 this.wbError = null;
+                this.wbFollowRunningTask();
             } catch (e) {
                 if (this.wbActiveSessionId === sessionId) {
                     this.wbError = '加载会话失败：' + e.message;
@@ -206,10 +213,33 @@ window.RoverAdminPages.workbench = {
             }
         },
 
-        /** 轮询未结束的调查任务；会话消息只在提问时变化，不必跟着轮询。 */
+        /** 取一次任务快照：断线对齐、终态收尾与 409 复用已有任务卡都靠它。 */
+        async wbReloadTask(taskId) {
+            const task = await RoverAdminApi.api('/api/agent/tasks/' + encodeURIComponent(taskId))
+                .catch(() => null);
+            if (task) this.wbMergeTask(task);
+            return task;
+        },
+
+        /** 载入会话后自动接上在跑任务的事件流：刷新页面、切回会话都能继续实时看进度。 */
+        wbFollowRunningTask() {
+            // 已连上、或正在退避等待重连时不重复开流：否则每次兜底轮询都会把退避冲掉。
+            if (this._wbStream || this._wbStreamTimer || typeof EventSource === 'undefined') return;
+            const running = Object.values(this.wbTasks)
+                .filter(task => task && !this.wbTaskSettled(task.status))
+                .sort((a, b) => b.createdAtMillis - a.createdAtMillis);
+            if (running.length) this.wbOpenStream(running[0].taskId);
+        },
+
+        /**
+         * 轮询兜底：SSE 正常时不轮询，只在「首次打开 / 刷新 / 断线 / 超时 / 后台标签恢复」时取一次快照。
+         *
+         * 任务状态、步骤与解读都已由任务事件流实时推送，固定 3 秒轮询全部在跑任务只是多余的观察税。
+         */
         async wbPollSession() {
+            if (!this.wbActiveSessionId || this._wbStream) return;
             const ids = Object.values(this.wbTasks)
-                .filter(task => task && !this.wbTaskTerminal(task.status))
+                .filter(task => task && !this.wbTaskSettled(task.status))
                 .map(task => task.taskId);
             if (!ids.length) return;
             const fetched = await Promise.all(ids.map(taskId =>
@@ -224,8 +254,9 @@ window.RoverAdminPages.workbench = {
                 tasks[task.taskId] = task;
             });
             this.wbTasks = tasks;
-            // 任务刚结束：事件摘要与状态在服务端已更新，重新载入才能让右栏跟上。
+            // 任务刚结束：事件摘要与当前结论在服务端已更新，重新载入才能让右栏跟上。
             if (justFinished && this.wbActiveSessionId) await this.wbLoadSession(this.wbActiveSessionId);
+            else this.wbFollowRunningTask();
         },
 
         async wbSend() {
@@ -235,7 +266,6 @@ window.RoverAdminPages.workbench = {
             if (extra === null) return;
             this.wbSending = true;
             this.wbError = null;
-            this.wbHint = null;
             try {
                 // 没有会话时直接提问：先开一个空会话再发，主入口就是这一个输入框。
                 let sessionId = this.wbActiveSessionId;
@@ -243,6 +273,7 @@ window.RoverAdminPages.workbench = {
                     sessionId = await this.wbCreateSession();
                     this.wbActiveSessionId = sessionId;
                 }
+                // 202 只给任务句柄：目标解析与调查在 Agent Worker 里，进度靠任务事件流观察。
                 const response = await RoverAdminApi.api(
                     '/api/agent/sessions/' + encodeURIComponent(sessionId) + '/messages',
                     {
@@ -251,12 +282,21 @@ window.RoverAdminPages.workbench = {
                         body: JSON.stringify(Object.assign({ message }, extra)),
                     });
                 this.wbInput = '';
-                if (response && response.clarification) this.wbHint = response.clarification;
                 await this.wbLoadSession(sessionId);
                 this.wbLoadSessions();
-                if (response && response.task) this.wbOpenStream(response.task.taskId);
+                if (response && response.taskId) this.wbOpenStream(response.taskId);
             } catch (e) {
-                this.wbError = '提问失败：' + e.message;
+                if (e.status === 409) {
+                    // 同会话已有执行中的任务：复用那张任务卡并接上它的事件流，而不是再开一张。
+                    this.wbError = e.message;
+                    const runningTaskId = e.body && e.body.taskId;
+                    if (runningTaskId) {
+                        await this.wbReloadTask(runningTaskId);
+                        this.wbOpenStream(runningTaskId);
+                    }
+                } else {
+                    this.wbError = '提问失败：' + e.message;
+                }
             } finally {
                 this.wbSending = false;
             }
@@ -291,73 +331,215 @@ window.RoverAdminPages.workbench = {
         },
 
         /**
-         * 订阅「AI 解读」增量：只把模型输出实时贴到页面上。
-         * 步骤与任务状态仍由轮询兜底，所以断开只是看不到实时文字，不影响调查本身。
+         * 订阅任务事件流：事件名是事件类型，数据是完整信封。
+         *
+         * 步骤、状态与解读都从这条流实时落到任务卡上，不再等下一次轮询；右栏结论与证据在
+         * 终态事件后刷新一次即可。断线由 {@link #wbStreamFailed} 按指数退避重连。
          */
         wbOpenStream(taskId) {
-            if (typeof EventSource === 'undefined') return;
-            this.wbCloseStream();
-            const source = new EventSource('/api/agent/diagnoses/' + encodeURIComponent(taskId) + '/stream');
+            if (!taskId || typeof EventSource === 'undefined') return;
+            this.wbDetachStream();
+            const source = new EventSource('/api/agent/tasks/' + encodeURIComponent(taskId) + '/events');
             this._wbStream = source;
+            this._wbStreamTaskId = taskId;
             this.wbStreamTaskId = taskId;
-            this.wbStreamText = '';
             this.wbStreaming = true;
-            source.addEventListener('snapshot', (event) => {
-                if (this.wbStreamTaskId === taskId) this.wbStreamText = event.data;
+            WB_EVENT_TYPES.forEach((type) => {
+                source.addEventListener(type, (event) => this.wbApplyEvent(taskId, type, event));
             });
-            source.addEventListener('delta', (event) => {
-                if (this.wbStreamTaskId === taskId) this.wbStreamText += event.data;
-            });
-            source.addEventListener('end', () => {
-                this.wbCloseStream();
-                this.wbPollSession();
-                this.wbLoadSession(this.wbActiveSessionId);
-            });
-            source.addEventListener('error', () => this.wbCloseStream());
+            source.onerror = () => this.wbStreamFailed(taskId);
         },
 
-        wbCloseStream() {
+        /** 只断开当前连接与待重连定时器，不动退避计数（重连路径要用它累加）。 */
+        wbDetachStream() {
+            if (this._wbStreamTimer) {
+                clearTimeout(this._wbStreamTimer);
+                this._wbStreamTimer = null;
+            }
             if (this._wbStream) {
                 this._wbStream.close();
                 this._wbStream = null;
             }
+            this._wbStreamTaskId = '';
             this.wbStreaming = false;
         },
 
-        /** 任务卡片的解读文本：结束后以落库全文为准，生成中看流式增量。 */
+        /** 主动关闭订阅：切换会话、任务收尾与离开工作台都走这里，退避计数一并归零。 */
+        wbCloseStream() {
+            this.wbDetachStream();
+            this._wbStreamAttempt = 0;
+        },
+
+        /**
+         * 把一条任务事件落到页面上：快照覆盖全量、增量追加解读、步骤就地合并，终态收尾。
+         *
+         * 快照优先于增量：重连后先按快照对齐全量，再接着收增量，不重复也不遗漏。
+         */
+        wbApplyEvent(taskId, type, event) {
+            let envelope = null;
+            try {
+                envelope = JSON.parse(event.data);
+            } catch (e) {
+                return;
+            }
+            const payload = envelope && envelope.payload;
+            if (!payload) return;
+            if (type === 'SNAPSHOT') {
+                // 能收到快照说明这条连接是通的：重置退避，下次断线仍从 1s 起步。
+                this._wbStreamAttempt = 0;
+                this.wbMergeTask(payload.task);
+                if (typeof payload.analysis === 'string') {
+                    this.wbStreamTexts = Object.assign({}, this.wbStreamTexts, { [taskId]: payload.analysis });
+                }
+                return;
+            }
+            if (type === 'ANALYSIS_DELTA' && typeof payload.text === 'string') {
+                const current = this.wbStreamTexts[taskId] || '';
+                this.wbStreamTexts = Object.assign({}, this.wbStreamTexts, { [taskId]: current + payload.text });
+                return;
+            }
+            if (type === 'TASK_CREATED' || type === 'TASK_STARTED') {
+                this.wbMergeTask(Object.assign({}, this.wbTasks[taskId], { status: payload.status }));
+                return;
+            }
+            if (type === 'STEP_STARTED' || type === 'STEP_COMPLETED' || type === 'STEP_FAILED') {
+                this.wbMergeStep(taskId, payload.step, type);
+                return;
+            }
+            if (type === 'CLARIFICATION_REQUIRED') {
+                // 停在澄清点：任务不再产出事件，卡片上直接展示要用户补什么。
+                this.wbMergeTask(Object.assign({}, this.wbTasks[taskId], {
+                    status: 'WAITING_INPUT',
+                    clarification: payload.clarification,
+                }));
+                this.wbFinishStream();
+                return;
+            }
+            if (type === 'TASK_FAILED') {
+                this.wbMergeTask(Object.assign({}, this.wbTasks[taskId], {
+                    status: 'FAILED',
+                    error: payload.error,
+                }));
+                this.wbFinishStream();
+                return;
+            }
+            if (type === 'TASK_COMPLETED' || type === 'TASK_CANCELLED') {
+                this.wbMergeTask(Object.assign({}, this.wbTasks[taskId], { status: payload.status }));
+                this.wbFinishStream();
+            }
+            // EVIDENCE_ADDED 紧随 TASK_COMPLETED：证据与结论在同一份快照里，收尾时一次取齐。
+        },
+
+        /** 任务卡上的最小合并：只替换这一条任务，其它任务不动。 */
+        wbMergeTask(task) {
+            if (!task || !task.taskId) return;
+            this.wbTasks = Object.assign({}, this.wbTasks, { [task.taskId]: task });
+        },
+
+        /** 把事件里的步骤合并进任务卡：同一 stepId 就地覆盖，同一阶段不会出现两行。 */
+        wbMergeStep(taskId, step, type) {
+            if (!step) return;
+            const task = this.wbTasks[taskId];
+            if (!task) return;
+            const steps = (task.steps || []).filter(item => item.stepId !== step.stepId);
+            steps.push(step);
+            this.wbMergeTask(Object.assign({}, task, {
+                steps,
+                status: task.status === 'PENDING' ? 'RUNNING' : task.status,
+                currentStage: step.type || task.currentStage,
+            }));
+        },
+
+        /**
+         * 流断开或超时：先取一次任务快照对齐，任务仍在执行时按指数退避重连。
+         *
+         * 不立即重连也不轮询替代：EventSource 默认会自己重连，那样会在服务端故障时打成一串请求，
+         * 这里改为显式退避（1s → 2s → 4s → 8s，上限 15s），收到快照即视为恢复。
+         */
+        wbStreamFailed(taskId) {
+            const sessionId = this.wbActiveSessionId;
+            if (!sessionId || this._wbStreamTaskId !== taskId) return;
+            this.wbDetachStream();
+            this.wbReloadTask(taskId).then((task) => {
+                if (!task || this.wbActiveSessionId !== sessionId || this.wbTaskSettled(task.status)) return;
+                const attempt = (this._wbStreamAttempt || 0) + 1;
+                this._wbStreamAttempt = attempt;
+                const delay = Math.min(WB_STREAM_RETRY_MIN_MILLIS * Math.pow(2, attempt - 1),
+                    WB_STREAM_RETRY_MAX_MILLIS);
+                this._wbStreamTimer = setTimeout(() => {
+                    this._wbStreamTimer = null;
+                    if (this.wbActiveSessionId === sessionId) this.wbOpenStream(taskId);
+                }, delay);
+            }).catch(() => { /* 快照都取不到：等下一次兜底轮询或用户手动刷新 */ });
+        },
+
+        /** 任务收尾：断开订阅，重新取一次聚合视图，让结论、证据与事件状态一起跟上。 */
+        wbFinishStream() {
+            const sessionId = this.wbActiveSessionId;
+            this.wbCloseStream();
+            this.wbLoadSessions();
+            if (sessionId) this.wbLoadSession(sessionId);
+        },
+
+        /** 任务卡上的解读文本：落库全文优先（终态后以它为准），生成中显示流式增量。 */
         wbAnalysisText(task) {
             const final = task && task.result && task.result.aiAnalysis;
             if (final) return final;
-            if (this.wbStreaming && task && this.wbStreamTaskId === task.taskId) return this.wbStreamText;
-            return '';
+            return (task && this.wbStreamTexts[task.taskId]) || '';
         },
 
         wbTaskTerminal(status) {
             return ['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
         },
 
-        /** 固定四阶段进度：按步骤的真实状态打勾，未上报的阶段如实显示为未执行。 */
-        wbProgress(task) {
-            const stages = [
-                { type: 'ROUTE_INVESTIGATION', label: '读取路由' },
-                { type: 'INSTANCE_INVESTIGATION', label: '读取实例' },
-                { type: 'METRIC_INVESTIGATION', label: '读取指标' },
-                { type: 'TRACE_INVESTIGATION', label: '读取追踪' },
-            ];
+        /** 已定型、不会再自己变化的任务：终态之外，等你补充信息的澄清点也算。 */
+        wbTaskSettled(status) {
+            return this.wbTaskTerminal(status) || status === 'WAITING_INPUT';
+        },
+
+        /**
+         * 任务卡上的步骤：完全按后端上报的 steps 展示，后端没执行的阶段不凭空构造。
+         *
+         * 之前页面上写死「路由 → 实例 → 指标 → 追踪」四阶段，Graph 每加一个节点都要改前端；
+         * 现在只用 type / name / status 渲染，新增节点时前端不用动。
+         */
+        wbSteps(task) {
+            return ((task && task.steps) || []).map((step) => ({
+                key: step.stepId,
+                label: step.name || this.wbStepTypeLabel(step.type),
+                mark: { COMPLETED: '✓', FAILED: '!', RUNNING: '●' }[step.status] || '○',
+                state: { COMPLETED: 'done', FAILED: 'failed', RUNNING: 'running' }[step.status] || 'pending',
+                title: step.error || step.outputSummary || step.inputSummary || '',
+            }));
+        },
+
+        /** 当前阶段：最后一个执行中的步骤，没有就取最后上报的那一步。 */
+        wbCurrentStage(task) {
             const steps = (task && task.steps) || [];
-            return stages.map((stage) => {
-                const step = [...steps].reverse().find(item => item.type === stage.type);
-                if (!step) {
-                    return { type: stage.type, label: stage.label, state: 'pending', mark: '○', title: '该阶段未执行' };
-                }
-                if (step.status === 'COMPLETED') {
-                    return { type: stage.type, label: stage.label, state: 'done', mark: '✓', title: step.outputSummary || '' };
-                }
-                if (step.status === 'FAILED') {
-                    return { type: stage.type, label: stage.label, state: 'failed', mark: '!', title: step.error || '该阶段失败' };
-                }
-                return { type: stage.type, label: stage.label, state: 'running', mark: '●', title: step.inputSummary || '' };
-            });
+            const running = steps.filter(step => step.status === 'RUNNING').pop();
+            const step = running || steps[steps.length - 1];
+            if (!step) return task && task.status === 'PENDING' ? '等待执行' : '';
+            return step.name || this.wbStepTypeLabel(step.type);
+        },
+
+        /** 步骤类型的中文名：只在后端没给 step.name 时兜底，不参与任何流程判断。 */
+        wbStepTypeLabel(type) {
+            return {
+                TARGET_RESOLUTION: '目标解析',
+                ROUTE_INVESTIGATION: '读取路由',
+                INSTANCE_INVESTIGATION: '读取实例',
+                METRIC_INVESTIGATION: '读取指标',
+                TRACE_INVESTIGATION: '读取追踪',
+                DIAGNOSIS: '生成结论',
+                AI_EXPLANATION: 'AI 解读',
+            }[type] || type || '步骤';
+        },
+
+        /** 被调查对象：目标解析完成前路径为空，如实显示待解析而不是伪造一个对象。 */
+        wbTargetText(task) {
+            const target = task && task.target;
+            if (target && target.value) return target.value;
+            return (task && task.path) || '';
         },
 
         wbToggleDetail(taskId) {
@@ -370,12 +552,15 @@ window.RoverAdminPages.workbench = {
 
         wbStatusLabel(status) {
             return {
-                PENDING: '排队中', RUNNING: '调查中', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消',
+                PENDING: '排队中', RUNNING: '调查中', WAITING_INPUT: '待补充', COMPLETED: '已完成',
+                FAILED: '失败', CANCELLED: '已取消',
             }[status] || status || '等待中';
         },
 
         wbStatusBadge(status) {
-            return { COMPLETED: 'ok', FAILED: 'bad', CANCELLED: 'warn', RUNNING: 'warn' }[status] || 'comp';
+            return {
+                COMPLETED: 'ok', FAILED: 'bad', CANCELLED: 'warn', RUNNING: 'warn', WAITING_INPUT: 'warn',
+            }[status] || 'comp';
         },
 
         wbIncidentStatusLabel(status) {

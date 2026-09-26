@@ -472,19 +472,25 @@
                                         <div class="wb-task-head">
                                             <strong>调查任务</strong>
                                             <span class="badge" :class="wbStatusBadge(turn.task.status)">{{ wbStatusLabel(turn.task.status) }}</span>
+                                            <span v-if="wbCurrentStage(turn.task)" class="card-hint">当前阶段：{{ wbCurrentStage(turn.task) }}</span>
                                             <span class="card-hint">{{ fmtTime(turn.task.createdAtMillis) }}</span>
                                             <code>{{ turn.task.taskId }}</code>
                                         </div>
                                         <div class="diagnosis-target">
-                                            <code>{{ turn.task.target && turn.task.target.value ? turn.task.target.value : turn.task.path }}</code>
+                                            <code>{{ wbTargetText(turn.task) || '待解析' }}</code>
                                             <span class="muted">调查对象</span>
                                         </div>
-                                        <div class="wb-progress">
-                                            <span v-for="stage in wbProgress(turn.task)" :key="stage.type"
+                                        <div v-if="turn.task.clarification" class="banner tip diagnosis-task-error">
+                                            <strong>需要补充调查对象</strong>
+                                            <span>{{ turn.task.clarification }}</span>
+                                        </div>
+                                        <div v-if="wbSteps(turn.task).length" class="wb-progress">
+                                            <span v-for="stage in wbSteps(turn.task)" :key="stage.key"
                                                   class="wb-stage" :class="stage.state" :title="stage.title">
                                                 <span class="wb-stage-mark">{{ stage.mark }}</span>{{ stage.label }}
                                             </span>
                                         </div>
+                                        <div v-else class="card-hint">尚未上报执行步骤。</div>
                                         <div v-if="turn.task.error" class="banner warn diagnosis-task-error">{{ turn.task.error }}</div>
                                         <div v-if="turn.task.result" class="wb-result">
                                             <p class="diagnosis-summary">{{ turn.task.result.summary }}</p>

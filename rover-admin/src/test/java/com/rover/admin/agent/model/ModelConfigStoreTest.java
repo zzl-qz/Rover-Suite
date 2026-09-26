@@ -50,6 +50,24 @@ class ModelConfigStoreTest {
         assertEquals(properties.configFilePath().resolveSibling("master.key"), properties.masterKeyPath());
     }
 
+    /**
+     * 主密钥隔离判定：默认"与配置文件同目录"只适合开发环境，生产部署应改成环境变量或独立目录。
+     * 判定本身驱动启动期的安全告警，因此这里断言的正是"什么情况算没隔离"。
+     */
+    @Test
+    void masterKeyCountsAsIsolatedOnlyWhenProvidedExplicitlyOrKeptElsewhere() {
+        assertFalse(new AdminModelProperties().isMasterKeyIsolated(),
+                "默认主密钥文件与模型配置同目录，应判定为未隔离");
+
+        AdminModelProperties separateDirectory = new AdminModelProperties();
+        separateDirectory.setMasterKeyFile(tempDir.resolve("secrets").resolve("master.key").toString());
+        assertTrue(separateDirectory.isMasterKeyIsolated(), "主密钥被指到独立目录时算隔离");
+
+        AdminModelProperties explicitKey = new AdminModelProperties();
+        explicitKey.setMasterKey("correct-horse-battery-staple");
+        assertTrue(explicitKey.isMasterKeyIsolated(), "显式提供主密钥时不存在同目录问题");
+    }
+
     @Test
     void reportsNothingConfiguredWhenTheChatModelIsOff() {
         ModelConfigStore store = store(environment("none", "https://api.openai.com", "", "gpt-5-mini"));

@@ -1,11 +1,13 @@
 package com.rover.admin.agent;
 
-import com.rover.agent.core.model.AgentResponse;
+import com.rover.agent.core.event.TaskEvent;
+import com.rover.agent.core.event.TaskEventSubscriber;
+import com.rover.agent.core.event.TaskEventSubscription;
+import com.rover.agent.core.event.TaskEventType;
+import com.rover.agent.core.event.TaskSnapshot;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.runtime.AgentOrchestrator;
-import com.rover.agent.runtime.InvestigationService;
-import com.rover.agent.runtime.task.AnalysisStreamListener;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.RejectedExecutionException;
@@ -23,11 +25,13 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * 诊断任务接口：保留给仍按「请求路径 + 问题」提交的旧前端，以及任务详情与 AI 解读增量订阅。
+ * 诊断任务接口：整体已废弃，仅为仍按「请求路径 + 问题」提交的旧前端保留兼容。
  *
- * 提交动作（{@code POST}）已废弃并内部转发给 {@link AgentOrchestrator}，与 Agent Workbench 的会话入口
- * 共用同一条编排链路，本层不再直接调用调查服务；两个只读接口行为与响应体保持不变。
+ * <p>三个入口都转发给 {@link AgentOrchestrator}，与 Agent Workbench 共用同一条编排链路与同一套归属校验：
+ * 任务详情对应 {@code GET /api/agent/tasks/{taskId}}，增量订阅对应 {@code GET /api/agent/tasks/{taskId}/events}。
+ * 响应体形状保持不变，前端改到新端点即可，本类不再直接调用调查服务。
  */
+@Deprecated
 @RestController
 @RequestMapping("/api/agent/diagnoses")
 public class DiagnosisController {
@@ -42,11 +46,9 @@ public class DiagnosisController {
             new MediaType(MediaType.TEXT_PLAIN, StandardCharsets.UTF_8);
 
     private final AgentOrchestrator agent;
-    private final InvestigationService investigations;
 
-    public DiagnosisController(AgentOrchestrator agent, InvestigationService investigations) {
+    public DiagnosisController(AgentOrchestrator agent) {
         this.agent = agent;
-        this.investigations = investigations;
     }
 
     /** @deprecated 请改用 {@code POST /api/agent/sessions/{sessionId}/messages}。 */
@@ -56,78 +58,118 @@ public class DiagnosisController {
         try {
             String path = request == null ? null : request.path();
             String question = request == null ? null : request.question();
-            AgentResponse response = agent.oneShot(user(authentication), routeTarget(path), question);
-            return ResponseEntity.accepted().body(response.task());
+            TaskView task = agent.oneShot(user(authentication), routeTarget(path), question);
+            return ResponseEntity.accepted().body(task);
         } catch (RejectedExecutionException ex) {
             return ResponseEntity.status(429).body(Map.of("message", "诊断任务繁忙，请稍后再试"));
         }
     }
 
+    /** @deprecated 请改用 {@code GET /api/agent/tasks/{taskId}}；两者归属校验一致，不属于当前用户的任务返回 404。 */
+    @Deprecated
     @GetMapping("/{taskId}")
-    public ResponseEntity<TaskView> get(@PathVariable String taskId) {
-        TaskView task = investigations.get(taskId);
-        return task == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(task);
+    public ResponseEntity<TaskView> get(@PathVariable String taskId, Authentication authentication) {
+        return agent.task(taskId, user(authentication)).map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /**
      * 订阅「AI 解读」的增量：先补发已产生的全文（snapshot），随后按增量推送（delta），最后推一次 end。
+     *
+     * <p>本类只把运行层的事件翻译成旧版 SSE 字段；发送发生在事件总线的派发线程上，
+     * 不在任务锁里做客户端网络 IO，慢客户端也不会拖慢模型调用与调查执行。
      * 只推解读文本，步骤与任务状态仍由 {@code GET /{taskId}} 轮询兜底，前端断开后不影响调查执行。
+     *
+     * @deprecated 请改用 {@code GET /api/agent/tasks/{taskId}/events}：它推送全部结构化事件
+     *     （事件名即事件类型、数据是完整信封），前端不必再靠轮询补齐步骤与状态。
      */
+    @Deprecated
     @GetMapping(path = "/{taskId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<SseEmitter> stream(@PathVariable String taskId) {
+    public ResponseEntity<SseEmitter> stream(@PathVariable String taskId, Authentication authentication) {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
-        AnalysisStreamListener listener = new SseAnalysisListener(emitter);
-        Runnable detach = () -> investigations.unsubscribeAnalysis(taskId, listener);
-        emitter.onCompletion(detach);
-        emitter.onError(error -> detach.run());
+        AnalysisSseSubscriber subscriber = new AnalysisSseSubscriber(emitter);
+        emitter.onCompletion(subscriber::cancel);
+        emitter.onError(error -> subscriber.cancel());
         emitter.onTimeout(() -> {
-            detach.run();
+            subscriber.cancel();
             emitter.complete();
         });
-        if (!investigations.subscribeAnalysis(taskId, listener)) {
+        TaskEventSubscription subscription =
+                agent.subscribeEvents(taskId, user(authentication), subscriber).orElse(null);
+        if (subscription == null) {
             return ResponseEntity.notFound().build();
         }
+        subscriber.attach(subscription);
         return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(emitter);
     }
 
     /**
-     * 把运行层的解读增量写成 SSE 事件。
+     * 把运行层的任务事件写成旧版 SSE 字段（snapshot / delta / end）。
      *
-     * 发送与结束都吞掉异常：客户端早已断开时这里不能再抛回调查线程，
+     * 发送与结束都吞掉异常：客户端早已断开时这里不能再抛回派发线程，
      * 否则一次连接抖动就会连带把整次模型解读变成降级结果。
      */
-    private static final class SseAnalysisListener implements AnalysisStreamListener {
+    private static final class AnalysisSseSubscriber implements TaskEventSubscriber {
 
         private final SseEmitter emitter;
         private final AtomicBoolean finished = new AtomicBoolean();
+        private volatile TaskEventSubscription subscription = TaskEventSubscription.NONE;
 
-        private SseAnalysisListener(SseEmitter emitter) {
+        private AnalysisSseSubscriber(SseEmitter emitter) {
             this.emitter = emitter;
         }
 
-        @Override
-        public void onSnapshot(String text) {
-            if (text != null && !text.isEmpty()) {
-                send("snapshot", text);
+        /** 订阅句柄在订阅成功之后才拿到；若期间连接已经结束，就地退订，避免留下无人消费的订阅。 */
+        private void attach(TaskEventSubscription attached) {
+            this.subscription = attached;
+            if (finished.get()) {
+                attached.cancel();
             }
         }
 
         @Override
-        public void onDelta(String chunk) {
-            send("delta", chunk);
+        public void onEvent(TaskEvent event) {
+            if (finished.get()) {
+                return;
+            }
+            switch (event.type()) {
+                case SNAPSHOT -> snapshot(event);
+                case ANALYSIS_DELTA -> delta(event);
+                // 等待用户补充信息也意味着本次「解读」不会再产出内容，收尾让前端停止等待。
+                default -> {
+                    if (event.type().terminal() || event.type() == TaskEventType.CLARIFICATION_REQUIRED) {
+                        finish();
+                    }
+                }
+            }
         }
 
-        @Override
-        public void onComplete() {
+        private void snapshot(TaskEvent event) {
+            TaskSnapshot snapshot = (TaskSnapshot) event.payload();
+            if (!snapshot.analysis().isEmpty()) {
+                write("snapshot", snapshot.analysis());
+            }
+        }
+
+        private void delta(TaskEvent event) {
+            if (event.payload() instanceof Map<?, ?> payload && payload.get("text") instanceof String text
+                    && !text.isEmpty()) {
+                write("delta", text);
+            }
+        }
+
+        /** 结束本次观察：客户端断开、超时、出错与任务进入终态都走这里。 */
+        private void cancel() {
             if (finished.compareAndSet(false, true)) {
+                subscription.cancel();
+            }
+        }
+
+        private void finish() {
+            if (finished.compareAndSet(false, true)) {
+                subscription.cancel();
                 write("end", "end");
                 emitter.complete();
-            }
-        }
-
-        private void send(String name, String data) {
-            if (!finished.get()) {
-                write(name, data);
             }
         }
 
@@ -136,6 +178,7 @@ public class DiagnosisController {
                 emitter.send(SseEmitter.event().name(name).data(data, EVENT_DATA_TYPE));
             } catch (Exception ex) {
                 finished.set(true);
+                subscription.cancel();
                 emitter.completeWithError(ex);
             }
         }
