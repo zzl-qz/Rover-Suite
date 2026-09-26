@@ -106,6 +106,24 @@ class AdminSecurityWebTest {
                 .andExpect(jsonPath("$.code").value(429));
     }
 
+    /** 伪造的 X-Forwarded-For 不改变限流来源：默认只认直连地址，否则该头可以被用来绕过限流。 */
+    @Test
+    void ignoresForgedForwardedHeaderByDefault() throws Exception {
+        for (int attempt = 0; attempt < 3; attempt++) {
+            mockMvc.perform(post("/login").with(from("10.10.0.9")).with(csrf())
+                            .header("X-Forwarded-For", "203.0.113." + attempt)
+                            .param("username", "ops")
+                            .param("password", "nope"))
+                    .andExpect(status().isFound());
+        }
+
+        mockMvc.perform(post("/login").with(from("10.10.0.9")).with(csrf())
+                        .header("X-Forwarded-For", "198.51.100.7")
+                        .param("username", "ops")
+                        .param("password", "correct-horse"))
+                .andExpect(status().isTooManyRequests());
+    }
+
     @Test
     void rejectsWriteRequestWithoutCsrfToken() throws Exception {
         mockMvc.perform(post("/api/configs").with(from("10.10.0.7"))

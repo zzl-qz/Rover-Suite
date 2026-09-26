@@ -12,7 +12,6 @@ import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import com.rover.agent.runtime.repository.InMemoryIncidentRepository;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,7 +23,8 @@ import java.util.UUID;
  * 因此后续换成持久化实现时业务代码不需要改。无参构造使用内存实现（单机、重启即失）；
  * 由组合根注入具体实现时走两参构造。
  *
- * 会话与事件数量有上限，超出后按写入顺序淘汰最早的记录。
+ * 会话与事件数量有上限：启用保留策略（{@link WorkspaceRetention}）时，容量满会整组清理最早的会话
+ * 或最早的事件，不留孤儿记录；未启用时（如测试里的小容量场景）容量满会直接拒绝写入并报错。
  */
 public final class IncidentRegistry {
 
@@ -32,6 +32,7 @@ public final class IncidentRegistry {
 
     private final AgentSessionRepository sessions;
     private final IncidentRepository incidents;
+    private final WorkspaceRetention retention;
 
     /** 当前阶段的内存实现；接入持久化后由组合根注入具体实现。 */
     public IncidentRegistry() {
@@ -39,8 +40,14 @@ public final class IncidentRegistry {
     }
 
     public IncidentRegistry(AgentSessionRepository sessions, IncidentRepository incidents) {
+        this(sessions, incidents, null);
+    }
+
+    public IncidentRegistry(AgentSessionRepository sessions, IncidentRepository incidents,
+                            WorkspaceRetention retention) {
         this.sessions = sessions;
         this.incidents = incidents;
+        this.retention = retention;
     }
 
     /** 开启一个没有归属用户的会话；仅供尚未接入认证上下文的调用方使用。 */
@@ -53,7 +60,7 @@ public final class IncidentRegistry {
         long now = System.currentTimeMillis();
         Session session = new Session(UUID.randomUUID().toString(), userId, null, null, SessionStatus.ACTIVE,
                 now, now, List.of());
-        sessions.save(session);
+        admit(session);
         return session;
     }
 
@@ -69,8 +76,12 @@ public final class IncidentRegistry {
                 IncidentStatus.OPEN, IncidentSeverity.UNKNOWN, target,
                 timeRange == null ? TimeRange.unspecified() : timeRange, "",
                 now, now, List.of());
-        incidents.save(incident);
-        sessions.find(sessionId).ifPresent(session -> sessions.save(withIncident(session, incident.incidentId())));
+        if (retention == null) {
+            incidents.save(incident);
+        } else {
+            retention.admitIncident(incident);
+        }
+        sessions.find(sessionId).ifPresent(session -> sessions.save(SessionLinks.withIncident(session, incident.incidentId())));
         return incident;
     }
 
@@ -94,7 +105,7 @@ public final class IncidentRegistry {
                 incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
                 IncidentStatus.INVESTIGATING, incident.severity(), incident.target(), incident.timeRange(),
                 incident.summary(), incident.createdAtMillis(), System.currentTimeMillis(),
-                append(incident.taskIds(), taskId))));
+                SessionLinks.append(incident.taskIds(), taskId))));
     }
 
     /**
@@ -124,35 +135,33 @@ public final class IncidentRegistry {
         Optional<Incident> removed = incidents.find(incidentId);
         incidents.remove(incidentId);
         removed.ifPresent(incident -> sessions.find(incident.sessionId())
-                .ifPresent(session -> sessions.save(withoutIncident(session, incidentId))));
+                .ifPresent(session -> sessions.save(SessionLinks.withoutIncident(session, incidentId))));
     }
 
-    /** 撤销一个会话登记，用于回滚未成功提交的调查。 */
+    /**
+     * 撤销一个会话登记，用于回滚未成功提交的调查。
+     *
+     * 启用保留策略时整组清理：会话、它的事件、消息与任务一起删，避免"会话回滚了、
+     * 它的任务记录还挂在事件上"这种孤儿（旧入口在队列满时正是这条路径）。
+     */
     public void removeSession(String sessionId) {
-        sessions.remove(sessionId);
+        if (retention == null) {
+            sessions.remove(sessionId);
+            return;
+        }
+        retention.deleteSessionCascade(sessionId);
     }
 
     public Optional<Session> session(String sessionId) {
         return sessions.find(sessionId);
     }
 
-    /** 把事件挂到会话上，并把当前事件指针指向它。 */
-    private static Session withIncident(Session session, String incidentId) {
-        return new Session(session.sessionId(), session.userId(), session.title(), incidentId, session.status(),
-                session.createdAtMillis(), System.currentTimeMillis(), append(session.incidentIds(), incidentId));
-    }
-
-    /** 从会话上摘除事件；被摘除的正好是当前事件时，当前事件指针回到空。 */
-    private static Session withoutIncident(Session session, String incidentId) {
-        List<String> remaining = session.incidentIds().stream().filter(id -> !id.equals(incidentId)).toList();
-        String active = incidentId.equals(session.activeIncidentId()) ? null : session.activeIncidentId();
-        return new Session(session.sessionId(), session.userId(), session.title(), active, session.status(),
-                session.createdAtMillis(), session.lastActiveAtMillis(), remaining);
-    }
-
-    private static List<String> append(List<String> values, String item) {
-        List<String> copy = new ArrayList<>(values);
-        copy.add(item);
-        return List.copyOf(copy);
+    /** 登记会话：有保留策略时按容量准入（必要时整组清理最早的会话），否则直接写入。 */
+    private void admit(Session session) {
+        if (retention == null) {
+            sessions.save(session);
+        } else {
+            retention.admitSession(session);
+        }
     }
 }

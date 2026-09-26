@@ -74,14 +74,14 @@ public class AdminSecurityConfiguration {
                 .usernameParameter("username")
                 .passwordParameter("password")
                 .successHandler((request, response, authentication) -> {
-                    loginAttemptGuard.reset(source(request));
-                    log.info("控制台登录成功：来源={} 用户={}", request.getRemoteAddr(), authentication.getName());
+                    loginAttemptGuard.reset(source(request, properties));
+                    log.info("控制台登录成功：来源={} 用户={}", source(request, properties), authentication.getName());
                     response.sendRedirect(safeRedirect(request.getParameter("redirect")));
                 })
                 .failureHandler((request, response, exception) -> {
-                    loginAttemptGuard.recordFailure(source(request));
-                    log.warn("控制台登录失败：来源={} 剩余尝试={}", request.getRemoteAddr(),
-                            loginAttemptGuard.remaining(source(request)));
+                    loginAttemptGuard.recordFailure(source(request, properties));
+                    log.warn("控制台登录失败：来源={} 剩余尝试={}", source(request, properties),
+                            loginAttemptGuard.remaining(source(request, properties)));
                     response.sendRedirect(LOGIN_PAGE + "?error=1");
                 })
                 .permitAll());
@@ -100,7 +100,8 @@ public class AdminSecurityConfiguration {
         http.exceptionHandling(handling -> handling.authenticationEntryPoint(apiAwareEntryPoint()));
 
         // 限流要挡在口令校验之前，否则爆破依然会消耗 BCrypt 计算。
-        http.addFilterBefore(new LoginAttemptGuardFilter(loginAttemptGuard), UsernamePasswordAuthenticationFilter.class);
+        http.addFilterBefore(new LoginAttemptGuardFilter(loginAttemptGuard, properties),
+                UsernamePasswordAuthenticationFilter.class);
 
         if (properties.isEnabled()) {
             log.info("控制台已启用登录鉴权：用户={} 口令来源={}", properties.getUsername(),
@@ -164,10 +165,19 @@ public class AdminSecurityConfiguration {
         return redirect;
     }
 
-    private static String source(HttpServletRequest request) {
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
+    /**
+     * 登录限流的来源地址：默认取 {@code remoteAddr}（直连对端，客户端无法伪造）。
+     *
+     * 只有显式打开 {@code rover.admin.auth.trust-forwarded-headers} 时才认
+     * {@code X-Forwarded-For} 的首个地址——应用直接暴露时该头可以由任意客户端自带，
+     * 无条件采信等于把"按来源限流"变成"按攻击者自选值限流"。
+     */
+    private static String source(HttpServletRequest request, AdminSecurityProperties properties) {
+        if (properties.isTrustForwardedHeaders()) {
+            String forwarded = request.getHeader("X-Forwarded-For");
+            if (forwarded != null && !forwarded.isBlank()) {
+                return forwarded.split(",")[0].trim();
+            }
         }
         return request.getRemoteAddr();
     }
@@ -183,9 +193,11 @@ public class AdminSecurityConfiguration {
     private static final class LoginAttemptGuardFilter extends OncePerRequestFilter {
 
         private final LoginAttemptGuard guard;
+        private final AdminSecurityProperties properties;
 
-        private LoginAttemptGuardFilter(LoginAttemptGuard guard) {
+        private LoginAttemptGuardFilter(LoginAttemptGuard guard, AdminSecurityProperties properties) {
             this.guard = guard;
+            this.properties = properties;
         }
 
         @Override
@@ -193,7 +205,7 @@ public class AdminSecurityConfiguration {
                                         jakarta.servlet.FilterChain chain) throws IOException, jakarta.servlet.ServletException {
             boolean loginSubmit = "POST".equalsIgnoreCase(request.getMethod())
                     && LOGIN_PROCESSING_URL.equals(request.getRequestURI());
-            if (loginSubmit && guard.isBlocked(source(request))) {
+            if (loginSubmit && guard.isBlocked(source(request, properties))) {
                 response.setStatus(429);
                 response.setContentType("application/json;charset=UTF-8");
                 response.setCharacterEncoding(StandardCharsets.UTF_8.name());

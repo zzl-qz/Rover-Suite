@@ -5,13 +5,16 @@ import com.rover.agent.core.context.AgentContextManager;
 import com.rover.agent.core.context.AgentRequestOptions;
 import com.rover.agent.core.context.TargetResolution;
 import com.rover.agent.core.context.TargetResolver;
+import com.rover.agent.core.event.TaskEventSubscriber;
+import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.model.AgentMessage;
-import com.rover.agent.core.model.AgentResponse;
+import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
+import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
@@ -20,17 +23,25 @@ import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.runtime.task.IncidentRegistry;
+import com.rover.agent.runtime.task.InvestigationTask;
+import com.rover.agent.runtime.task.WorkspaceRetention;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Agent 应用入口：把一条用户消息编排成「上下文 → 目标 → 事件 → 任务 → 调查」的完整流程。
  *
- * 编排职责集中在这里，HTTP 契约层只做参数校验与结果映射，不再直接调用路由/实例/指标/追踪查询，
- * 也不再直接调用模型。会话连续性由三件事保证：
+ * 提交是异步的：{@link #submit} 只做参数校验、会话归属检查、落用户消息与登记 PENDING 任务，
+ * 随即把「目标解析 + 事件选择 + 调查执行」整段交给 Agent Worker。这样 Servlet 线程不会被
+ * 管理口 HTTP（路由/实例快照）或模型调用拖住，浏览器拿到的只是任务句柄，进度经由任务快照与
+ * 任务事件观察。
+ *
+ * 会话连续性由三件事保证（全部在 Worker 里完成）：
  * <ol>
  *   <li>上下文装配（最近 N 条消息 + 当前事件 + 结构化目标 + 关键证据）；</li>
  *   <li>目标解析（显式指定 → 现有路由/服务/实例 → 模型辅助 → 澄清）；</li>
@@ -38,7 +49,8 @@ import java.util.concurrent.RejectedExecutionException;
  * </ol>
  *
  * 上下文的"沿用"是刻意的：解析不出新对象时沿用当前事件的目标，是会话连续性而不是猜测——
- * 只有在确实没有可继承目标时才把澄清提问回给用户，并且此时不产生任何任务。
+ * 只有在确实没有可继承目标时才把澄清提问回给用户，此时任务停在 {@code WAITING_INPUT}，
+ * 既不占用会话并发位，也不用一轮空转调查冒充结论。
  *
  * 用户隔离：{@code userId} 只能由后端认证上下文提供（HTTP 层从 Authentication 取），
  * 领域层不接受前端提交的用户身份。未启用登录时 {@code userId} 为 {@code null}，
@@ -46,8 +58,14 @@ import java.util.concurrent.RejectedExecutionException;
  */
 public final class AgentOrchestrator {
 
+    private static final Logger log = LoggerFactory.getLogger(AgentOrchestrator.class);
+
     private static final int MAX_MESSAGE_LENGTH = 1000;
     private static final int MAX_TITLE_LENGTH = 60;
+
+    private static final String STEP_TARGET = "目标解析";
+    private static final String TARGET_RUNNING = "根据问题与会话上下文确定调查对象";
+    private static final String TARGET_NEEDS_INPUT = "未能确定调查对象，需要用户补充信息";
 
     private final AgentSessionRepository sessions;
     private final IncidentRepository incidents;
@@ -57,11 +75,12 @@ public final class AgentOrchestrator {
     private final AgentContextManager contexts;
     private final TargetResolver targets;
     private final InvestigationService investigations;
+    private final WorkspaceRetention retention;
 
     public AgentOrchestrator(AgentSessionRepository sessions, IncidentRepository incidents,
                              AgentMessageRepository messages, AgentTaskRepository tasks, IncidentRegistry registry,
                              AgentContextManager contexts, TargetResolver targets,
-                             InvestigationService investigations) {
+                             InvestigationService investigations, WorkspaceRetention retention) {
         this.sessions = sessions;
         this.incidents = incidents;
         this.messages = messages;
@@ -70,6 +89,7 @@ public final class AgentOrchestrator {
         this.contexts = contexts;
         this.targets = targets;
         this.investigations = investigations;
+        this.retention = retention;
     }
 
     /** 新建会话；会话归属由后端认证上下文决定。 */
@@ -94,7 +114,7 @@ public final class AgentOrchestrator {
 
     /** 当前用户的会话列表；不属于该用户的会话不可见。 */
     public List<Session> sessions(String userId) {
-        return sessions.listAll().stream().filter(session -> ownedBy(session, userId)).toList();
+        return sessions.findByUserId(user(userId));
     }
 
     /** 按 ID 取会话；不存在或不属于该用户时返回空。 */
@@ -127,57 +147,113 @@ public final class AgentOrchestrator {
     }
 
     /**
+     * Workbench 聚合视图：会话、对话、事件与最近任务一次取齐，前端不必逐个任务轮询。
+     *
+     * 只做读模型聚合，不引入新的状态：任务只返回最近 {@code taskLimit} 条（新的在前），
+     * 完整时间线仍由任务详情按需取；未登录时与会话详情一样只认无归属的会话。
+     */
+    public Optional<Workspace> workspace(String sessionId, String userId, int taskLimit) {
+        return session(sessionId, userId).map(owned -> new Workspace(owned, messages.bySession(sessionId),
+                incidents.bySession(sessionId), tasks.recentBySession(sessionId, taskLimit),
+                owned.activeIncidentId() == null ? null : incidents.find(owned.activeIncidentId()).orElse(null)));
+    }
+
+    /**
+     * 订阅任务事件：任务不存在或所属会话不属于该用户时返回空（由调用方回 404）。
+     *
+     * 权限校验在这里统一完成——事件流与任务详情看到的是同一份归属判定，
+     * 调用方（HTTP 层）不再自己查任务。
+     */
+    public Optional<TaskEventSubscription> subscribeEvents(String taskId, String userId,
+                                                           TaskEventSubscriber subscriber) {
+        if (task(taskId, userId).isEmpty()) {
+            return Optional.empty();
+        }
+        return investigations.subscribeEvents(taskId, subscriber);
+    }
+
+    /**
      * 一次性调查：新建会话后立即按显式目标提问。
      *
      * 保留给"只问一次、不需要连续追问"的旧入口使用，行为与老的提交接口一致。
      */
-    public AgentResponse oneShot(String userId, ResourceTarget target, String question) {
+    public TaskView oneShot(String userId, ResourceTarget target, String question) {
         Session session = startSession(userId);
-        return send(session.sessionId(), userId, question,
+        return submit(session.sessionId(), userId, question,
                 new AgentRequestOptions(target, TimeRange.unspecified())).orElseThrow();
     }
 
     /**
-     * 处理一条用户消息：装配上下文、解析目标、复用或新开事件、启动调查。
+     * 提交一条用户消息：校验 → 落用户消息 → 登记 PENDING 任务 → 入队，随即返回任务句柄。
      *
-     * @return 处理结果；会话不存在或不属于该用户时返回空（由调用方回 404）
-     * @throws IllegalArgumentException 消息为空或超长
-     * @throws RejectedExecutionException 任务容量已满，调用方应回 429
+     * 目标解析、事件选择与调查执行全部在 Agent Worker 中进行，本方法不做任何阻塞调用。
+     *
+     * @return 任务视图（PENDING）；会话不存在或不属于该用户时返回空（由调用方回 404）
+     * @throws IllegalArgumentException                                     消息为空或超长
+     * @throws com.rover.agent.runtime.task.SessionTaskRunningException    同会话已有执行中的任务（调用方回 409）
+     * @throws RejectedExecutionException                                  任务容量或队列已满（调用方回 429）
      */
-    public Optional<AgentResponse> send(String sessionId, String userId, String message,
-                                        AgentRequestOptions options) {
+    public Optional<TaskView> submit(String sessionId, String userId, String message,
+                                     AgentRequestOptions options) {
         String asked = validateMessage(message);
         AgentRequestOptions request = options == null ? AgentRequestOptions.none() : options;
         Optional<Session> owned = session(sessionId, userId);
         if (owned.isEmpty()) {
             return Optional.empty();
         }
-        Session session = withTitle(owned.get(), asked);
-        AgentContext context = contexts.build(sessionId).orElse(null);
-        appendMessage(sessionId, MessageRole.USER, asked);
-
-        TargetResolution resolution = targets.resolve(asked, request.target());
-        if (resolution.needsClarification() && reuseTarget(context)) {
-            // 追问沿用当前事件的目标：这是会话连续性，不是猜测（解析器本身不做这件事）。
-            resolution = targets.resolve("", context.currentTarget());
-        }
-        if (resolution.needsClarification()) {
-            AgentMessage reply = appendMessage(sessionId, MessageRole.AGENT, resolution.clarification());
-            return Optional.of(new AgentResponse(touch(sessionId), null, null, reply, resolution.clarification()));
-        }
-
-        IncidentChoice choice = pickIncident(session, context, resolution.target(), request.timeRange());
+        InvestigationTask task = investigations.register(sessionId, asked);
+        appendMessage(sessionId, MessageRole.USER, asked, task.taskId());
+        withTitle(owned.get(), asked);
+        touch(sessionId);
         try {
-            TaskView task = investigations.start(sessionId, choice.incident(), resolution.investigationPath(),
-                    resolution.target(), asked);
-            AgentMessage reply = appendMessage(sessionId, MessageRole.AGENT, started(choice, resolution.target()));
-            return Optional.of(new AgentResponse(touch(sessionId), choice.incident(), task, reply, null));
+            investigations.execute(() -> resolveAndRun(task, request));
         } catch (RejectedExecutionException ex) {
-            // 只有本次新建的事件才需要撤销；沿用的事件留着，它已经有历史任务。
-            if (choice.created()) {
-                registry.removeIncident(choice.incident().incidentId());
-            }
+            // 队列满：回滚登记。用户消息已经落库，它是「用户说过这句话」的真实记录，保留不动。
+            investigations.discard(task.taskId());
             throw ex;
+        }
+        return Optional.of(task.view());
+    }
+
+    /**
+     * Agent Worker 的完整执行段：目标解析 → 事件选择 → 调查执行。
+     *
+     * 任何异常都在这里收敛成任务失败，绝不把异常抛回线程池（否则任务会永远停在 RUNNING）。
+     */
+    private void resolveAndRun(InvestigationTask task, AgentRequestOptions options) {
+        try {
+            task.start();
+            task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.RUNNING, TARGET_RUNNING);
+
+            AgentContext context = contexts.build(task.sessionId()).orElse(null);
+            TargetResolution resolution = targets.resolve(task.question(), options.target());
+            if (resolution.needsClarification() && reuseTarget(context)) {
+                // 追问沿用当前事件的目标：这是会话连续性，不是猜测（解析器本身不做这件事）。
+                resolution = targets.resolve("", context.currentTarget());
+            }
+            if (resolution.needsClarification()) {
+                task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED, TARGET_NEEDS_INPUT);
+                appendMessage(task.sessionId(), MessageRole.AGENT, resolution.clarification(), task.taskId());
+                task.waitForInput(resolution.clarification());
+                return;
+            }
+
+            Session session = sessions.find(task.sessionId()).orElse(null);
+            if (session == null) {
+                task.fail("会话不存在");
+                return;
+            }
+            IncidentChoice choice = pickIncident(session, context, resolution.target(), options.timeRange());
+            registry.attachTask(choice.incident().incidentId(), task.taskId());
+            task.bind(choice.incident().incidentId(), resolution.investigationPath(), resolution.target());
+            task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED,
+                    "已确定调查对象：" + describe(resolution.target()));
+            appendMessage(task.sessionId(), MessageRole.AGENT, started(choice, resolution.target()),
+                    task.taskId());
+            investigations.run(task);
+        } catch (Exception ex) {
+            log.error("Agent 目标解析或调查执行异常", ex);
+            task.fail("调查任务执行失败");
         }
     }
 
@@ -217,11 +293,11 @@ public final class AgentOrchestrator {
         };
     }
 
-    /** 落一条会话消息。 */
-    private AgentMessage appendMessage(String sessionId, MessageRole role, String content) {
+    /** 落一条会话消息，并绑定触发它的任务（会话时间线的排序依据）；消息容量由保留策略管理。 */
+    private AgentMessage appendMessage(String sessionId, MessageRole role, String content, String relatedTaskId) {
         AgentMessage message = new AgentMessage(UUID.randomUUID().toString(), sessionId, role, content,
-                System.currentTimeMillis());
-        messages.save(message);
+                System.currentTimeMillis(), relatedTaskId);
+        retention.admitMessage(message);
         return message;
     }
 
@@ -277,4 +353,13 @@ public final class AgentOrchestrator {
 
     /** 事件选择结果；{@code created} 标记本次是否新建，决定提交失败时是否需要撤销。 */
     private record IncidentChoice(Incident incident, boolean created) { }
+
+    /**
+     * Workbench 聚合视图。
+     *
+     * {@code tasks} 只是最近若干条：窗口外的历史任务不在本次响应里，响应结构保持对象形态，
+     * 之后接入持久化时可以在同一层加游标字段而不破坏调用方。
+     */
+    public record Workspace(Session session, List<AgentMessage> messages, List<Incident> incidents,
+                            List<TaskView> tasks, Incident activeIncident) { }
 }

@@ -60,8 +60,12 @@
         var json = null;
         try { json = await res.json(); } catch (e) { /* 非 JSON */ }
         if (!res.ok) {
-            // 403（CSRF 失败）/429（登录限流）同样透出服务端文案，不吞成裸 HTTP 码
-            throw new Error((json && json.message) ? json.message : ('HTTP ' + res.status));
+            // 403（CSRF 失败）/409（会话已有任务）/429（限流或繁忙）同样透出服务端文案，不吞成裸 HTTP 码；
+            // 同时把状态码与错误体挂到异常上，调用方才能按 code / taskId 做分支处理。
+            var error = new Error((json && json.message) ? json.message : ('HTTP ' + res.status));
+            error.status = res.status;
+            error.body = json;
+            throw error;
         }
         return json;
     }

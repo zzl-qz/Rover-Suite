@@ -9,6 +9,9 @@ import java.util.Optional;
  *
  * 业务代码只依赖本接口：当前由内存实现承载（单机、重启即失），后续接入 MySQL 时替换实现即可，
  * 用例层不需要改动。按会话 ID 查询必须只返回该用户的会话，用户隔离由实现与调用方共同保证。
+ *
+ * 容量语义：内存实现在容量满时**拒绝写入**（抛 {@code IllegalStateException}），不淘汰已有记录——
+ * 会话被丢掉而它的事件、消息与任务还在就会留下孤儿；腾出位置由上层保留策略做整组清理。
  */
 public interface AgentSessionRepository {
 
@@ -17,6 +20,14 @@ public interface AgentSessionRepository {
 
     /** 按 ID 查询会话。 */
     Optional<Session> find(String sessionId);
+
+    /**
+     * 按归属用户查询会话，按写入顺序（最早在前）。
+     *
+     * {@code userId} 为 {@code null} 时返回未启用登录时创建的无归属会话；
+     * 调用方必须传已规范化的用户身份（空白视为 {@code null}），不能传前端提交的原值。
+     */
+    List<Session> findByUserId(String userId);
 
     /** 全部会话，按写入顺序（最早写入在前）。 */
     List<Session> listAll();

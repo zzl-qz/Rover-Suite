@@ -31,6 +31,7 @@ Health probe: `GET /_manage/health` → `{"status":"UP","component":"..."}`
 | `rover.admin.auth.password` | empty | Plaintext password, hashed into memory at startup (startup WARN recommends `password-hash`); env `ROVER_ADMIN_PASSWORD` | Restart |
 | `rover.admin.auth.max-login-failures` | `5` | Failed sign-ins allowed per source within the window; env `ROVER_ADMIN_MAX_LOGIN_FAILURES` | Restart |
 | `rover.admin.auth.failure-window-seconds` | `600` | Failure-counting window in seconds; env `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | Restart |
+| `rover.admin.auth.trust-forwarded-headers` | `false` | Source used for sign-in rate limiting: by default only the TCP peer `remoteAddr`; the first `X-Forwarded-For` segment is used only when this is explicitly enabled. Enable it only when Admin really runs behind a trusted reverse proxy — otherwise forged headers bypass the failure limit | Restart |
 | `rover.admin.model.config-file` | empty = `config/admin-model.properties` under the working directory | Model config file path (UTF-8 properties, holds the `api-key-enc` ciphertext); an empty config is created on startup when the file is missing, and the whole `config/` directory is gitignored; env `ROVER_ADMIN_MODEL_CONFIG_FILE` | Restart |
 | `rover.admin.model.master-key` | empty | Base64 that decodes to 32 bytes is used directly as the AES key; otherwise a password is run through PBKDF2-HMAC-SHA256 (65536 rounds); env `ROVER_ADMIN_MASTER_KEY` | Restart |
 | `rover.admin.model.master-key-file` | empty = `master.key` next to the config file | Master key file; a 32-byte random master key is generated and persisted on first encryption; env `ROVER_ADMIN_MASTER_KEY_FILE` | Restart |
@@ -50,6 +51,34 @@ and `GET /api/auth/status` returns `authEnabled:false`. Configure one of the two
 on real hosts (prefer `password-hash`) and still protect `server.port` with
 network ACLs, a reverse proxy or a VPN. The session cookie is `ROVERADMIN_SESSION`
 (HttpOnly, SameSite=Strict) with a timeout taken from `server.servlet.session.timeout`.
+
+### Master key isolation and the startup warning
+
+How strong `api-key-enc` really is depends on whether the master key is stored apart from the configuration:
+by default `master.key` sits next to `admin-model.properties`, so copying the directory also copies the key —
+equivalent to no encryption. In that case startup logs one `[SECURITY WARNING]` (it neither blocks startup nor
+removes the auto-generation mechanism). For production, do one of two things: set the `ROVER_ADMIN_MASTER_KEY`
+environment variable (or `rover.admin.model.master-key`), or point `rover.admin.model.master-key-file` at a
+separate directory or mounted volume. Keys, plaintext passwords, and ciphertext never appear in logs or responses.
+
+## Agent Workbench configuration
+
+| Configuration | Default | Description | Applied |
+| --- | --- | --- | --- |
+| `rover.agent.execution.worker-threads` | `2` | Investigation worker threads (1–32); blocking model and read-port calls use only these threads, never Servlet request threads | Restart |
+| `rover.agent.execution.queue-capacity` | `16` | Execution queue capacity (1–1000); a full queue rejects submissions with `429`. Never an unbounded queue | Restart |
+| `rover.agent.execution.task-capacity` | `200` | Task registration capacity (1–10000); finished tasks may be evicted by the retention policy, running tasks never are | Restart |
+| `rover.agent.context.recent-message-limit` | `8` | Number of recent messages carried into a follow-up | Restart |
+| `rover.agent.metrics.enabled` | `true` | Master switch for Agent runtime metrics; `false` (emergency degradation) registers no meters and changes no business logic | Restart |
+
+An out-of-range execution parameter fails startup on the spot, so a configuration mistake surfaces at startup
+instead of appearing later as "a task rejected for no reason".
+
+Metric names (prefix `rover.agent.`, written to the host process's single `MeterRegistry`): `task.submitted` /
+`task.completed` / `task.failed` / `task.rejected` are counters; `task.active` / `task.queue.size` /
+`sse.connections` are current values; `task.duration` (tag `status`) and `model.duration` / `model.error`
+(tag `model`) cover latency and failures. Tags are limited to the finite `status`, `reason`, and `model` values;
+model names are normalized and truncated, so tag cardinality stays bounded.
 
 ## Gateway startup configuration
 

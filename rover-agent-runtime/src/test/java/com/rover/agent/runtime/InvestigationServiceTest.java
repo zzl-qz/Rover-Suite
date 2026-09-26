@@ -1,7 +1,6 @@
 package com.rover.agent.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -15,6 +14,9 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.rover.agent.core.event.TaskEvent;
+import com.rover.agent.core.event.TaskEventSubscriber;
+import com.rover.agent.core.event.TaskSnapshot;
 import com.rover.agent.core.model.Hypothesis;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TaskView;
@@ -30,13 +32,15 @@ import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ModelExplainer;
-import com.rover.agent.runtime.task.AnalysisStreamListener;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -298,14 +302,16 @@ class InvestigationServiceTest {
         });
 
         TaskView submitted = investigations.submit("/api/hello", "为什么失败？");
-        RecordingListener listener = new RecordingListener();
-        assertTrue(investigations.subscribeAnalysis(submitted.taskId(), listener));
+        RecordingSubscriber subscriber = new RecordingSubscriber();
+        assertTrue(investigations.subscribeEvents(submitted.taskId(), subscriber).isPresent());
         subscribed.countDown();
         TaskView task = await(submitted.taskId());
 
-        // 增量拼接结果与落库文本逐字一致，且订阅者一定收到结束通知。
+        // 增量拼接结果与落库文本逐字一致，且订阅者一定收到终态通知。
         assertEquals("先看路由，再看实例", task.result().aiAnalysis());
-        assertEquals(List.of("snapshot:", "delta:先看路由", "delta:，再看实例", "complete"), listener.events());
+        subscriber.awaitTerminal();
+        assertEquals(List.of("snapshot:", "delta:先看路由", "delta:，再看实例", "end:COMPLETED"),
+                subscriber.notes());
         // 步骤说明如实记录证据来源：预读快照与模型另调的工具各自可追溯。
         assertTrue(task.steps().stream().anyMatch(step -> "AI 解读".equals(step.name())
                 && step.outputSummary() != null && step.outputSummary().contains("运行时预读快照：路由快照、实例快照")
@@ -313,16 +319,17 @@ class InvestigationServiceTest {
     }
 
     @Test
-    void lateSubscriberOfFinishedTaskGetsReplayAndImmediateEnd() throws Exception {
+    void lateSubscriberOfFinishedTaskGetsSnapshotAndImmediateTerminal() throws Exception {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
         when(instances.instances()).thenReturn(List.of());
         TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
 
-        RecordingListener listener = new RecordingListener();
-        assertFalse(investigations.subscribeAnalysis("missing-task", listener));
-        // 未配置模型：没有增量，但必须立刻结束，不能让前端 SSE 连接悬着等超时。
-        assertTrue(investigations.subscribeAnalysis(task.taskId(), listener));
-        assertEquals(List.of("snapshot:", "complete"), listener.events());
+        RecordingSubscriber subscriber = new RecordingSubscriber();
+        assertTrue(investigations.subscribeEvents("missing-task", subscriber).isEmpty());
+        // 未配置模型：没有增量，但订阅者立刻拿到快照与终态，不能让前端 SSE 连接悬着等超时。
+        assertTrue(investigations.subscribeEvents(task.taskId(), subscriber).isPresent());
+        subscriber.awaitTerminal();
+        assertEquals(List.of("snapshot:", "end:COMPLETED"), subscriber.notes());
     }
 
     /** 换入不同的模型端口，复用同一组只读端口桩。 */
@@ -370,9 +377,11 @@ class InvestigationServiceTest {
                 new ModelExplainer(TestGateway.notConfigured()));
         try {
             // 用未结束的任务占满登记容量：这些任务不会被执行，也不会被淘汰，submit 将在登记阶段被拒。
+            // 每个占用任务挂在各自的会话下——同一会话同时只允许一个执行中任务（并发约束）。
+            int sessionSeq = 0;
             while (true) {
                 try {
-                    full.register("session-x", "incident-x", "/api/hello", ResourceTarget.route("/api/hello"), "预占容量");
+                    full.register("session-" + (++sessionSeq), "预占容量");
                 } catch (RejectedExecutionException ex) {
                     break;
                 }
@@ -414,28 +423,55 @@ class InvestigationServiceTest {
         }
     }
 
-    /** 记录订阅到的事件，形如 snapshot:、delta:片段、complete。 */
-    private static final class RecordingListener implements AnalysisStreamListener {
+    /**
+     * 只记录解读相关事件（快照 / 增量 / 终态），形如 {@code snapshot:}、{@code delta:片段}、{@code end:COMPLETED}。
+     * 步骤类事件由任务与事件总线的测试覆盖，这里只关心「解读文本怎么到达订阅者」。
+     */
+    private static final class RecordingSubscriber implements TaskEventSubscriber {
 
-        private final List<String> events = new ArrayList<>();
-
-        @Override
-        public void onSnapshot(String text) {
-            events.add("snapshot:" + text);
-        }
+        private final List<TaskEvent> events = new CopyOnWriteArrayList<>();
 
         @Override
-        public void onDelta(String chunk) {
-            events.add("delta:" + chunk);
+        public void onEvent(TaskEvent event) {
+            events.add(event);
         }
 
-        @Override
-        public void onComplete() {
-            events.add("complete");
+        private List<String> notes() {
+            List<String> notes = new ArrayList<>();
+            for (TaskEvent event : events) {
+                switch (event.type()) {
+                    case SNAPSHOT -> notes.add("snapshot:" + ((TaskSnapshot) event.payload()).analysis());
+                    case ANALYSIS_DELTA -> notes.add("delta:" + text(event));
+                    default -> {
+                        if (event.type().terminal()) {
+                            notes.add("end:" + event.type().name().substring("TASK_".length()));
+                        }
+                    }
+                }
+            }
+            return List.copyOf(notes);
         }
 
-        private List<String> events() {
-            return List.copyOf(events);
+        private void awaitTerminal() {
+            await(() -> events.stream().anyMatch(event -> event.type().terminal()));
+        }
+
+        private static String text(TaskEvent event) {
+            return event.payload() instanceof Map<?, ?> payload && payload.get("text") instanceof String text
+                    ? text : "";
+        }
+
+        private static void await(BooleanSupplier condition) {
+            long deadline = System.currentTimeMillis() + 5000;
+            while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            assertTrue(condition.getAsBoolean(), "等待事件超时");
         }
     }
 
