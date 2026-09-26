@@ -164,7 +164,7 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces; in-memory and bounded today) |
 | | `com.rover.agent.runtime.repository` | Four thread-safe in-memory implementations (lost on restart), replaced when persistence lands |
 | | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model |
-| | `com.rover.agent.runtime.llm` | ModelExplainer: model interpretation and rejection when required evidence was not read |
+| | `com.rover.agent.runtime.llm` | ModelExplainer: model interpretation grounded in runtime pre-fetched snapshots and read-only tools |
 | `rover-admin` | `com.rover.admin.agent.adapter` | Four read-only adapters: AdminConfigService → ports, never triggering a write |
 | | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + DiagnosisController (legacy entry, forwarded) + composition root |
 
@@ -234,9 +234,11 @@ they are built, rather than scaffolding empty modules now.
   returns the active `buildId` and applied-at time, proving the active config is the one just saved).
 - When no model is configured or the model is unavailable, diagnosis automatically degrades to pure rule-based
   diagnosis (`aiAnalysis` is null); collection and orchestration are unaffected, and the missing evidence is stated.
-- The model participates through restricted read-only snapshot tools executed by the application; it never calls
-  management APIs directly, and its answer is rejected when required evidence was not read. The tools it actually
-  called are recorded in the result text of the "AI interpretation" step, so the reasoning traces back to snapshots.
+- The model's explanation draws only on read-only snapshots and never calls management APIs directly: the route and
+  instance snapshots — the minimum basis for any explanation — are pre-read by the runtime and written into the prompt,
+  while metrics and traces are read on demand through read-only tools executed by the application. The result text of
+  the "AI interpretation" step distinguishes runtime pre-fetched snapshots from tools the model called itself, so the
+  reasoning traces back to specific snapshots.
 - The AI interpretation is pushed as it is generated: `ModelExplainer` streams chunks to the task and Admin relays
   them over SSE. The final full text still lands in the task result, and polling covers dropped connections.
   Collection and rule verdicts are a blocking Graph chain and are not streamed.

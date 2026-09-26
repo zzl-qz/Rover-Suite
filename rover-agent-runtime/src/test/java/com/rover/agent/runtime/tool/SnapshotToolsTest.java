@@ -1,12 +1,12 @@
 package com.rover.agent.runtime.tool;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.EvidenceType;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class SnapshotToolsTest {
@@ -31,16 +31,33 @@ class SnapshotToolsTest {
     }
 
     @Test
-    void tracksWhetherTheModelActuallyReadTheRequiredEvidence() {
+    void prefetchedCoreSnapshotsAreAlwaysAvailableAndNotCountedAsModelCalls() {
         SnapshotTools tools = new SnapshotTools(EVIDENCE);
 
-        assertFalse(tools.hasReadRoute());
-        assertFalse(tools.hasReadInstances());
-        tools.routeSnapshot();
-        assertTrue(tools.hasReadRoute());
-        assertFalse(tools.hasReadInstances());
-        tools.instanceSnapshot();
-        assertTrue(tools.hasReadInstances());
+        Map<String, String> core = tools.coreSnapshots();
+
+        assertEquals(List.of("路由快照", "实例快照"), List.copyOf(core.keySet()));
+        assertEquals("路由快照", core.get("路由快照"));
+        assertEquals("实例快照", core.get("实例快照"));
+        // 预读发生在运行时：不能混进「模型实际调用过的工具」，否则步骤说明会失真。
+        assertTrue(tools.calledTools().isEmpty());
+        // 核心快照缺失时给占位文本，而不是让整段解读失败。
+        Map<String, String> empty = new SnapshotTools(List.of()).coreSnapshots();
+        assertEquals("路由数据不可用", empty.get("路由快照"));
+        assertEquals("实例数据不可用", empty.get("实例快照"));
+    }
+
+    @Test
+    void duplicatedEvidenceAddressesDoNotBreakTheSnapshotIndex() {
+        List<Evidence> duplicated = List.of(
+                Evidence.of("task-1", EvidenceType.ROUTE, "Gateway 路由表", "路由匹配", "路由快照", "/api/routes", 1),
+                Evidence.of("task-1", EvidenceType.ROUTE, "Gateway 路由表", "重复地址快照", "另一条同址快照",
+                        "/api/routes", 2));
+
+        SnapshotTools tools = new SnapshotTools(duplicated);
+
+        assertEquals("路由快照", tools.routeSnapshot());
+        assertEquals("路由快照", tools.coreSnapshots().get("路由快照"));
     }
 
     @Test

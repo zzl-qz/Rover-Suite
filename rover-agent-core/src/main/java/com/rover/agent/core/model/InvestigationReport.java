@@ -10,7 +10,7 @@ import java.util.List;
  * @param evidence    支撑结论的只读证据
  * @param limitations 本次判断的适用边界
  * @param hypotheses  假设验证明细
- * @param aiAnalysis  模型解读；模型不可用或未读取必要证据时为空
+ * @param aiAnalysis  模型解读；模型未配置、不可用或调用失败时为空
  */
 public record InvestigationReport(String summary, Confidence confidence, List<Evidence> evidence,
                                   List<String> limitations, List<Hypothesis> hypotheses, String aiAnalysis) { }
