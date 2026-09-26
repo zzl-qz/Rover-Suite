@@ -69,10 +69,14 @@ separate directory or mounted volume. Keys, plaintext passwords, and ciphertext 
 | `rover.agent.execution.queue-capacity` | `16` | Execution queue capacity (1–1000); a full queue rejects submissions with `429`. Never an unbounded queue | Restart |
 | `rover.agent.execution.task-capacity` | `200` | Task registration capacity (1–10000); finished tasks may be evicted by the retention policy, running tasks never are | Restart |
 | `rover.agent.context.recent-message-limit` | `8` | Number of recent messages carried into a follow-up | Restart |
+| `rover.agent.planning.max-rounds` | `3` | Maximum planning rounds per dynamic investigation (>0); once reached, collection stops and the limit is recorded as a limitation | Restart |
+| `rover.agent.planning.max-tool-calls` | `10` | Maximum read-only capability calls per investigation (>0); after the limit no further call is made and skipped steps are reported honestly | Restart |
+| `rover.agent.planning.max-plan-steps` | `6` | Maximum steps in a single round's plan (>0); extra steps are truncated by plan validation, and any unregistered write capability is dropped | Restart |
+| `rover.agent.llm.quick-timeout-seconds` | `10` | Wait cap for cheap calls that can always fall back — intent recognition, target resolution, investigation planning (seconds; `0` = use the model config timeout); retried once on timeout only, and the AI interpretation is unaffected | Restart |
 | `rover.agent.metrics.enabled` | `true` | Master switch for Agent runtime metrics; `false` (emergency degradation) registers no meters and changes no business logic | Restart |
 
-An out-of-range execution parameter fails startup on the spot, so a configuration mistake surfaces at startup
-instead of appearing later as "a task rejected for no reason".
+An out-of-range execution parameter or planning limit fails startup on the spot, so a configuration mistake surfaces
+at startup instead of appearing later as "a task rejected for no reason" or "an investigation stopping early".
 
 Metric names (prefix `rover.agent.`, written to the host process's single `MeterRegistry`): `task.submitted` /
 `task.completed` / `task.failed` / `task.rejected` are counters; `task.active` / `task.queue.size` /

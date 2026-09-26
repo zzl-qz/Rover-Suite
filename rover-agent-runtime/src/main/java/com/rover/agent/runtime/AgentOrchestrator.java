@@ -7,15 +7,23 @@ import com.rover.agent.core.context.TargetResolution;
 import com.rover.agent.core.context.TargetResolver;
 import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
+import com.rover.agent.core.intent.IntentClassifier;
+import com.rover.agent.core.intent.IntentService;
+import com.rover.agent.core.intent.QuerySubject;
+import com.rover.agent.core.model.AgentIntent;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.Confidence;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
+import com.rover.agent.core.model.IntentDecision;
+import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TargetType;
+import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.repository.AgentMessageRepository;
@@ -34,12 +42,24 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Agent 应用入口：把一条用户消息编排成「上下文 → 目标 → 事件 → 任务 → 调查」的完整流程。
+ * Agent 应用入口：把一条用户消息编排成「识别意图 → 解析目标 → 事件 → 任务 → 执行」的完整流程。
  *
  * 提交是异步的：{@link #submit} 只做参数校验、会话归属检查、落用户消息与登记 PENDING 任务，
- * 随即把「目标解析 + 事件选择 + 调查执行」整段交给 Agent Worker。这样 Servlet 线程不会被
+ * 随即把「意图识别 + 目标解析 + 事件选择 + 执行」整段交给 Agent Worker。这样 Servlet 线程不会被
  * 管理口 HTTP（路由/实例快照）或模型调用拖住，浏览器拿到的只是任务句柄，进度经由任务快照与
  * 任务事件观察。
+ *
+ * P2 起「先分意图，再决定要不要解析目标」是本类的核心分工：
+ * <ul>
+ *   <li>规则先判「想干什么」（{@link IntentService}），高置信度的处置/能力/巡检请求不交给模型；</li>
+ *   <li>状态查询只在需要对象时才解析目标（全局指标不需要）；</li>
+ *   <li>能力咨询不进入目标解析——「你能做什么」问的是系统能力，不是某个资源，解析不出对象是正常的，
+ *       不应该回一句「请给出请求路径」；</li>
+ *   <li>处置请求尽力解析对象但不因解析失败而澄清：产物是计划本身，未解析出的目标以原文保留；</li>
+ *   <li>识别不出意图时先看问题里有没有可解析对象：能解析就按调查继续，解析不出就回一段自我介绍与能力清单，
+ *       不向用户追问「请给出请求路径」——闲聊型输入追问路径是答非所问；</li>
+ *   <li>只有故障调查沿用「解析不出就问用户」的澄清策略。</li>
+ * </ul>
  *
  * 会话连续性由三件事保证（全部在 Worker 里完成）：
  * <ol>
@@ -63,9 +83,24 @@ public final class AgentOrchestrator {
     private static final int MAX_MESSAGE_LENGTH = 1000;
     private static final int MAX_TITLE_LENGTH = 60;
 
+    private static final String STEP_INTENT = "意图识别";
+    private static final String INTENT_RUNNING = "根据问题与会话上下文判断用户想做什么";
     private static final String STEP_TARGET = "目标解析";
     private static final String TARGET_RUNNING = "根据问题与会话上下文确定调查对象";
     private static final String TARGET_NEEDS_INPUT = "未能确定调查对象，需要用户补充信息";
+    private static final String STEP_ANSWER = "回答";
+
+    /** 未开放能力的回复：如实说明边界，并给出当前确实能做的事。 */
+    private static final String UNSUPPORTED_INSPECTION =
+            "定时巡检尚未开放：当前版本不接入调度与通知，无法创建周期任务。可以先手动提问，或让我对该服务做一次只读调查。";
+    private static final String UNSUPPORTED_KNOWLEDGE =
+            "知识检索尚未开放：当前版本没有接入文档检索，无法回答使用类问题。可以问我路由、实例与指标的事实，或让我调查一次调用失败。";
+    private static final String UNSUPPORTED_NOTE =
+            "能力边界由 CapabilityRegistry 声明：未开放的能力不会被 Agent 调用，也不会被模拟执行。";
+
+    private static final String UNKNOWN_TARGET_FALLBACK = "未识别出明确意图，但问题指向了可解析的对象，按故障调查处理";
+    private static final String UNKNOWN_INTRO_STEP = "未能识别意图，也没有可解析的对象，改为说明 Agent 身份与能力";
+    private static final String UNKNOWN_INTRO_FALLBACK = "未能识别用户想做什么，先说明 Agent 的身份、能力与提问方式";
 
     private final AgentSessionRepository sessions;
     private final IncidentRepository incidents;
@@ -76,11 +111,17 @@ public final class AgentOrchestrator {
     private final TargetResolver targets;
     private final InvestigationService investigations;
     private final WorkspaceRetention retention;
+    private final IntentService intents;
+    private final QueryStateService queries;
+    private final ExplainService explanations;
+    private final ActionPlanService actionPlans;
 
     public AgentOrchestrator(AgentSessionRepository sessions, IncidentRepository incidents,
                              AgentMessageRepository messages, AgentTaskRepository tasks, IncidentRegistry registry,
                              AgentContextManager contexts, TargetResolver targets,
-                             InvestigationService investigations, WorkspaceRetention retention) {
+                             InvestigationService investigations, WorkspaceRetention retention,
+                             IntentService intents, QueryStateService queries, ExplainService explanations,
+                             ActionPlanService actionPlans) {
         this.sessions = sessions;
         this.incidents = incidents;
         this.messages = messages;
@@ -90,6 +131,10 @@ public final class AgentOrchestrator {
         this.targets = targets;
         this.investigations = investigations;
         this.retention = retention;
+        this.intents = intents == null ? new IntentService() : intents;
+        this.queries = queries;
+        this.explanations = explanations;
+        this.actionPlans = actionPlans;
     }
 
     /** 新建会话；会话归属由后端认证上下文决定。 */
@@ -216,51 +261,265 @@ public final class AgentOrchestrator {
     }
 
     /**
-     * Agent Worker 的完整执行段：目标解析 → 事件选择 → 调查执行。
+     * Agent Worker 的完整执行段：意图识别 → 目标解析（按需）→ 事件选择 → 执行。
      *
      * 任何异常都在这里收敛成任务失败，绝不把异常抛回线程池（否则任务会永远停在 RUNNING）。
      */
     private void resolveAndRun(InvestigationTask task, AgentRequestOptions options) {
         try {
             task.start();
-            task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.RUNNING, TARGET_RUNNING);
-
-            AgentContext context = contexts.build(task.sessionId()).orElse(null);
-            TargetResolution resolution = targets.resolve(task.question(), options.target());
-            if (resolution.needsClarification() && reuseTarget(context)) {
-                // 追问沿用当前事件的目标：这是会话连续性，不是猜测（解析器本身不做这件事）。
-                resolution = targets.resolve("", context.currentTarget());
-            }
-            if (resolution.needsClarification()) {
-                task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED, TARGET_NEEDS_INPUT);
-                appendMessage(task.sessionId(), MessageRole.AGENT, resolution.clarification(), task.taskId());
-                task.waitForInput(resolution.clarification());
-                return;
-            }
-
             Session session = sessions.find(task.sessionId()).orElse(null);
             if (session == null) {
                 task.fail("会话不存在");
                 return;
             }
-            IncidentChoice choice = pickIncident(session, context, resolution.target(), options.timeRange());
-            registry.attachTask(choice.incident().incidentId(), task.taskId());
-            task.bind(choice.incident().incidentId(), resolution.investigationPath(), resolution.target());
-            task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED,
-                    "已确定调查对象：" + describe(resolution.target()));
-            appendMessage(task.sessionId(), MessageRole.AGENT, started(choice, resolution.target()),
-                    task.taskId());
-            investigations.run(task);
+            AgentContext context = contexts.build(task.sessionId()).orElse(null);
+
+            // 先判「想干什么」，再决定要不要解析目标：能力咨询与全局指标查询都不该被目标解析挡住。
+            task.step(AgentStepType.INTENT_RESOLUTION, STEP_INTENT, StepStatus.RUNNING, INTENT_RUNNING);
+            IntentDecision decision = intents.decide(task.question(), contextSummary(context));
+            TaskType type = typeOf(decision);
+            task.step(AgentStepType.INTENT_RESOLUTION, STEP_INTENT, StepStatus.COMPLETED,
+                    intentDetail(decision, type));
+            task.classify(type, decision);
+
+            switch (type) {
+                case UNSUPPORTED -> unsupported(task, decision);
+                case EXPLAIN -> {
+                    // 解释复用会话已有结论，不解析新对象：绑定当前事件只为保持会话连续性。
+                    bindCurrentIncident(task, context, "", ResourceTarget.unknown());
+                    explanations.run(task);
+                    appendReply(task);
+                }
+                case QUERY -> runQuery(task, context, decision, options);
+                case ACTION_PLAN -> runActionPlan(task, context, decision, options);
+                case INVESTIGATION -> {
+                    if (decision.intent() == AgentIntent.UNKNOWN) {
+                        runUnknown(task, session, context, decision, options);
+                    } else {
+                        runInvestigation(task, session, context, decision, options);
+                    }
+                }
+            }
         } catch (Exception ex) {
-            log.error("Agent 目标解析或调查执行异常", ex);
-            task.fail("调查任务执行失败");
+            log.error("Agent 任务执行异常", ex);
+            task.fail("任务执行失败");
         }
+    }
+
+    /** 状态查询：全局指标直接取数；实例/路由口径先落到真实对象上，点不出对象时才澄清。 */
+    private void runQuery(InvestigationTask task, AgentContext context, IntentDecision decision,
+                          AgentRequestOptions options) {
+        QuerySubject subject = IntentClassifier.stateSubject(task.question());
+        if (subject == QuerySubject.METRIC) {
+            bindCurrentIncident(task, context, "", ResourceTarget.unknown());
+            answerQuery(task, subject);
+            return;
+        }
+        TargetResolution resolution = resolveTarget(task.question(), context, options.target());
+        if (resolution.needsClarification()) {
+            if (decision.targetHint().isBlank() && subject == QuerySubject.INSTANCE) {
+                // 没点名任何对象：按注册表整体口径回答「一共几个实例」，这不缺目标。
+                bindCurrentIncident(task, context, "", ResourceTarget.unknown());
+                answerQuery(task, subject);
+                return;
+            }
+            task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED, TARGET_NEEDS_INPUT);
+            appendMessage(task.sessionId(), MessageRole.AGENT, resolution.clarification(), task.taskId());
+            task.waitForInput(resolution.clarification());
+            return;
+        }
+        task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED,
+                "已确定查询对象：" + describe(resolution.target()));
+        bindResolvedTarget(task, context, resolution.investigationPath(), resolution.target());
+        answerQuery(task, subject);
+    }
+
+    private void answerQuery(InvestigationTask task, QuerySubject subject) {
+        queries.run(task, subject);
+        appendReply(task);
+    }
+
+    /** 处置请求：尽力解析对象，解析不出也照样出计划（计划才是产物），绝不因为对象不明而澄清。 */
+    private void runActionPlan(InvestigationTask task, AgentContext context, IntentDecision decision,
+                               AgentRequestOptions options) {
+        task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.RUNNING, TARGET_RUNNING);
+        TargetResolution resolution = resolveTarget(task.question(), context, options.target());
+        if (resolution.needsClarification()) {
+            task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED,
+                    "未能解析出确定对象，处置计划将按用户描述生成，供人工核对后执行");
+            bindCurrentIncident(task, context, "", ResourceTarget.unknown());
+        } else {
+            task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED,
+                    "已确定处置对象：" + describe(resolution.target()));
+            bindResolvedTarget(task, context, resolution.investigationPath(), resolution.target());
+        }
+        actionPlans.run(task, decision);
+        appendReply(task);
+    }
+
+    /** 故障调查：目标解析不出来就问用户。 */
+    private void runInvestigation(InvestigationTask task, Session session, AgentContext context,
+                                  IntentDecision decision, AgentRequestOptions options) {
+        task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.RUNNING, TARGET_RUNNING);
+        TargetResolution resolution = resolveTarget(task.question(), context, options.target());
+        if (resolution.needsClarification()) {
+            task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED, TARGET_NEEDS_INPUT);
+            appendMessage(task.sessionId(), MessageRole.AGENT, resolution.clarification(), task.taskId());
+            task.waitForInput(resolution.clarification());
+            return;
+        }
+        startInvestigation(task, session, context, resolution, options);
+    }
+
+    /**
+     * 意图识别不出的处理：问题里能解析出对象就按故障调查继续（步骤与意图里写明依据），
+     * 找不到对象就回一段自我介绍与能力清单——闲聊不该被追问「请给出请求路径」。
+     *
+     * 没有对象线索时不跑目标解析：这类输入（「你好」「谢谢」）既不需要读注册数据，
+     * 也不能沿用会话当前对象，否则一句客套话会莫名其妙地重启上一轮调查。
+     */
+    private void runUnknown(InvestigationTask task, Session session, AgentContext context,
+                            IntentDecision decision, AgentRequestOptions options) {
+        if (decision.targetHint().isBlank() && !hasExplicitTarget(options)) {
+            explainIdentity(task, context, decision);
+            return;
+        }
+        task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.RUNNING, TARGET_RUNNING);
+        TargetResolution resolution = resolveTarget(task.question(), context, options.target());
+        if (resolution.needsClarification()) {
+            explainIdentity(task, context, decision);
+            return;
+        }
+        task.classify(TaskType.INVESTIGATION,
+                decision.as(AgentIntent.INVESTIGATE, Confidence.MEDIUM, UNKNOWN_TARGET_FALLBACK));
+        startInvestigation(task, session, context, resolution, options);
+    }
+
+    /** 兜底说明：沿用当前事件（若有）但不新建事件，直接讲清身份、能力与提问方式。 */
+    private void explainIdentity(InvestigationTask task, AgentContext context, IntentDecision decision) {
+        task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED, UNKNOWN_INTRO_STEP);
+        task.classify(TaskType.EXPLAIN,
+                decision.as(AgentIntent.EXPLAIN, Confidence.MEDIUM, UNKNOWN_INTRO_FALLBACK));
+        bindCurrentIncident(task, context, "", ResourceTarget.unknown());
+        explanations.introduce(task);
+        appendReply(task);
+    }
+
+    /** 目标确定后的调查启动：选事件、挂任务、写开始消息、交给调查图。 */
+    private void startInvestigation(InvestigationTask task, Session session, AgentContext context,
+                                    TargetResolution resolution, AgentRequestOptions options) {
+        IncidentChoice choice = pickIncident(session, context, resolution.target(), options.timeRange());
+        registry.attachTask(choice.incident().incidentId(), task.taskId());
+        task.bind(choice.incident().incidentId(), resolution.investigationPath(), resolution.target());
+        task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED,
+                "已确定调查对象：" + describe(resolution.target()));
+        appendMessage(task.sessionId(), MessageRole.AGENT, started(choice, resolution.target()), task.taskId());
+        investigations.run(task);
+    }
+
+    /** 已识别但未开放的能力：如实回复边界，不进入目标解析，也不跑一轮空调查。 */
+    private void unsupported(InvestigationTask task, IntentDecision decision) {
+        String reply = decision.intent() == AgentIntent.CREATE_INSPECTION
+                ? UNSUPPORTED_INSPECTION : UNSUPPORTED_KNOWLEDGE;
+        task.step(AgentStepType.ANSWER, STEP_ANSWER, StepStatus.COMPLETED, reply);
+        task.complete(new InvestigationReport(reply, Confidence.HIGH, List.of(), List.of(UNSUPPORTED_NOTE),
+                List.of(), null));
+        appendMessage(task.sessionId(), MessageRole.AGENT, reply, task.taskId());
+    }
+
+    /** 目标解析：显式指定 → 现有对象 → 模型辅助；解析不出时按会话上下文沿用（追问连续性）。 */
+    private TargetResolution resolveTarget(String question, AgentContext context, ResourceTarget explicit) {
+        TargetResolution resolution = targets.resolve(question, explicit);
+        if (resolution.needsClarification() && reuseTarget(context)) {
+            // 追问沿用当前事件的目标：这是会话连续性，不是猜测（解析器本身不做这件事）。
+            resolution = targets.resolve("", context.currentTarget());
+        }
+        return resolution;
+    }
+
+    /**
+     * 轻量任务的绑定：只沿用当前事件（若有），不新建事件、不挂任务、不覆盖事件结论。
+     *
+     * 状态查询与解释不产出调查结论，把任务挂到事件上会把事件状态卡在「调查中」、
+     * 也会让解释覆盖掉真正的调查结论；而挂在同一事件下，会话的追问与解释才连得上。
+     */
+    private void bindCurrentIncident(InvestigationTask task, AgentContext context, String path,
+                                     ResourceTarget target) {
+        if (context == null || !context.hasActiveIncident()) {
+            return;
+        }
+        task.bind(context.activeIncidentId(), path, target);
+    }
+
+    /**
+     * 已解析对象的绑定：有活动事件时挂在事件下（保持追问连续），没有事件时也要把对象落到任务上。
+     *
+     * 轻量任务不新建事件，但解析出的对象是本次取数与预检的口径——不绑就会退回全局口径，
+     * 用户问的是某个服务，回答却在报注册表总数。
+     */
+    private void bindResolvedTarget(InvestigationTask task, AgentContext context, String path,
+                                    ResourceTarget target) {
+        String incidentId = context != null && context.hasActiveIncident() ? context.activeIncidentId() : null;
+        task.bind(incidentId, path, target);
+    }
+
+    /** 结论落成一条 Agent 回复：任务失败或没有结论时静默跳过，不伪造回复。 */
+    private void appendReply(InvestigationTask task) {
+        InvestigationReport report = task.view().result();
+        if (report == null || report.summary().isBlank()) {
+            return;
+        }
+        appendMessage(task.sessionId(), MessageRole.AGENT, report.summary(), task.taskId());
+    }
+
+    /** 意图到执行形态的映射：UNKNOWN 先按调查形态走，能解析出对象就继续调查，否则改为自我介绍与能力清单。 */
+    private static TaskType typeOf(IntentDecision decision) {
+        return switch (decision.intent()) {
+            case QUERY_STATE -> TaskType.QUERY;
+            case INVESTIGATE, UNKNOWN -> TaskType.INVESTIGATION;
+            case EXPLAIN -> TaskType.EXPLAIN;
+            case ACTION_REQUEST -> TaskType.ACTION_PLAN;
+            case CREATE_INSPECTION, KNOWLEDGE_QUERY -> TaskType.UNSUPPORTED;
+        };
+    }
+
+    /** 意图步骤的结果说明：意图、置信度、执行形态与判断依据一起给出，便于核对「为什么这么做」。 */
+    private static String intentDetail(IntentDecision decision, TaskType type) {
+        return "意图=" + decision.intent() + "（置信度 " + decision.confidence() + "）→ 执行方式=" + type
+                + "：" + decision.reason();
+    }
+
+    /** 交给意图解释器的上下文摘要：只给当前对象与最近的用户消息，不夹带任何受控事实。 */
+    private static String contextSummary(AgentContext context) {
+        if (context == null) {
+            return "";
+        }
+        StringBuilder summary = new StringBuilder();
+        if (context.currentTarget().type() != TargetType.UNKNOWN && !context.currentTarget().value().isBlank()) {
+            summary.append("当前对象：").append(describe(context.currentTarget())).append("；");
+        }
+        String asked = context.recentMessages().stream()
+                .filter(message -> message.role() == MessageRole.USER)
+                .map(AgentMessage::content)
+                .reduce((left, right) -> left + " / " + right)
+                .orElse("");
+        if (!asked.isBlank()) {
+            summary.append("最近的用户消息：").append(asked);
+        }
+        return summary.toString();
     }
 
     /** 目标是否可以从当前上下文继承：必须已经是一个确定的对象。 */
     private static boolean reuseTarget(AgentContext context) {
         return context != null && context.currentTarget().type() != TargetType.UNKNOWN
                 && !context.currentTarget().value().isBlank();
+    }
+
+    /** 请求是否显式指定了对象（旧入口的一次性调查会带显式目标，此时不能只认文本线索）。 */
+    private static boolean hasExplicitTarget(AgentRequestOptions options) {
+        ResourceTarget target = options == null ? null : options.target();
+        return target != null && target.type() != TargetType.UNKNOWN && !target.value().isBlank();
     }
 
     /** 事件选择：目标与当前事件一致就沿用（含时间范围更新），否则另开新事件。 */
@@ -281,7 +540,8 @@ public final class AgentOrchestrator {
 
     private static String started(IncidentChoice choice, ResourceTarget target) {
         String prefix = choice.created() ? "已开始调查" : "已继续调查";
-        return prefix + describe(target) + "：读取路由 → 读取实例 → 读取指标 → 读取追踪。";
+        // 不在这里承诺具体步骤：计划由调查图按问题规划后随任务快照暴露。
+        return prefix + describe(target) + "：按问题规划只读调查步骤。";
     }
 
     private static String describe(ResourceTarget target) {

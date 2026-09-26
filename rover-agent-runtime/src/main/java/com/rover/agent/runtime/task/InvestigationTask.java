@@ -1,18 +1,23 @@
 package com.rover.agent.runtime.task;
 
+import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.event.TaskEvent;
 import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.event.TaskSnapshot;
+import com.rover.agent.core.model.ActionPlan;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.IntentDecision;
 import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Step;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TaskStatus;
+import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
-import com.rover.agent.runtime.graph.StepSink;
+import com.rover.agent.core.planning.InvestigationPlan;
+import com.rover.agent.runtime.graph.InvestigationReporter;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,7 +37,7 @@ import java.util.function.Consumer;
  * 以及向事件总线发布一条结构化事件。前者是事实来源，后者只是通知——发布本身不做网络 IO，
  * 订阅者掉队或断开都不会影响本对象的执行。
  */
-public final class InvestigationTask implements StepSink {
+public final class InvestigationTask implements InvestigationReporter {
 
     private final String taskId;
     private final String sessionId;
@@ -43,11 +48,16 @@ public final class InvestigationTask implements StepSink {
     private final long createdAtMillis = System.currentTimeMillis();
     private final List<Step> steps = new ArrayList<>();
     private final StringBuilder analysis = new StringBuilder();
+    private final List<AgentCapability> executedCapabilities = new ArrayList<>();
     private TaskStatus status = TaskStatus.PENDING;
     private AgentStepType currentStage;
     private String incidentId;
     private String path = "";
     private ResourceTarget target = ResourceTarget.unknown();
+    private TaskType taskType = TaskType.INVESTIGATION;
+    private IntentDecision intent;
+    private InvestigationPlan plan = InvestigationPlan.empty();
+    private ActionPlan actionPlan;
     private long completedAtMillis;
     private InvestigationReport report;
     private String error;
@@ -87,6 +97,21 @@ public final class InvestigationTask implements StepSink {
         return path;
     }
 
+    /** 本次任务的结构化目标；目标解析完成前为未知对象。 */
+    public synchronized ResourceTarget target() {
+        return target;
+    }
+
+    /** 本次任务识别出的意图；尚未识别时为 {@code null}。 */
+    public synchronized IntentDecision intent() {
+        return intent;
+    }
+
+    /** 本次任务类型；未识别意图前默认为故障调查。 */
+    public synchronized TaskType taskType() {
+        return taskType;
+    }
+
     public String question() {
         return question;
     }
@@ -109,6 +134,53 @@ public final class InvestigationTask implements StepSink {
     }
 
     /**
+     * 意图识别完成：把任务类型与意图判断写进快照。
+     *
+     * 意图不是一次状态迁移，而是结构化进展；用一次全量快照事件通知订阅者，
+     * 前端按「快照覆盖」语义合并，既能看到意图判定，也不会打乱步骤与解读的增量流。
+     */
+    public synchronized void classify(TaskType type, IntentDecision decision) {
+        this.taskType = type == null ? TaskType.INVESTIGATION : type;
+        this.intent = decision;
+        persist();
+        publishSnapshot();
+    }
+
+    /**
+     * 本轮调查计划：用户要能看到 Agent 打算查哪几项、每步依据是什么。
+     *
+     * 计划随快照暴露（不是过程日志），因此这里与状态变更走同一条持久化路径。
+     */
+    @Override
+    public synchronized void reportPlan(InvestigationPlan reported) {
+        this.plan = reported == null ? InvestigationPlan.empty() : reported;
+        persist();
+        publishSnapshot();
+    }
+
+    /** 某个能力已被执行或按事实跳过：重复出现只记一次，顺序按首次使用。 */
+    @Override
+    public synchronized void reportCapabilityExecuted(AgentCapability capability) {
+        if (capability != null && !executedCapabilities.contains(capability)) {
+            executedCapabilities.add(capability);
+        }
+        persist();
+        publishSnapshot();
+    }
+
+    /** 处置请求的产出：只生成计划、不执行任何写操作，说明书随快照一起展示。 */
+    public synchronized void attachActionPlan(ActionPlan plan) {
+        this.actionPlan = plan;
+        persist();
+        publishSnapshot();
+    }
+
+    /** 计划与能力进展的全量快照通知：payload 与订阅时补发的快照同型，订阅者按覆盖语义处理。 */
+    private void publishSnapshot() {
+        publish(TaskEventType.SNAPSHOT, snapshot());
+    }
+
+    /**
      * 停在澄清点：目标无法确定，等待用户补充信息。
      *
      * 澄清提问写进快照，前端据此在任务卡上提问；任务不占用会话并发位，用户可以继续追问。
@@ -122,8 +194,16 @@ public final class InvestigationTask implements StepSink {
         settle();
     }
 
-    /** 调查开始执行。 */
+    /**
+     * 调查开始执行。
+     *
+     * 幂等：只有登记后仍是 PENDING 的任务才会进入 RUNNING。编排层与各用例服务都可能调用它
+     * （轻量用例自带执行段），重复调用不应重复发事件或把已落定的任务拉回运行态。
+     */
     public synchronized void start() {
+        if (status != TaskStatus.PENDING) {
+            return;
+        }
         this.status = TaskStatus.RUNNING;
         persist();
         publish(TaskEventType.TASK_STARTED, Map.of("status", status));
@@ -238,7 +318,8 @@ public final class InvestigationTask implements StepSink {
 
     public synchronized TaskView view() {
         return new TaskView(taskId, sessionId, incidentId, status, currentStage, path, target, question,
-                createdAtMillis, completedAtMillis, List.copyOf(steps), report, error, clarification);
+                createdAtMillis, completedAtMillis, List.copyOf(steps), report, error, clarification,
+                taskType, intent, plan, List.copyOf(executedCapabilities), actionPlan);
     }
 
     /** 任务快照：视图 + 已产生的解读全文 + 已发布的最新事件序号（订阅者的对齐依据）。 */

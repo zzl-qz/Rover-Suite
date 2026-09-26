@@ -3,7 +3,9 @@ package com.rover.admin.agent.model;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -101,6 +103,24 @@ class AdminChatModelGatewayTest {
         gateway.apply(settings(true, "https://api.openai.com", "sk-abcdefghijklmnop", "gpt-4o-mini"));
 
         assertFalse(gateway.description().contains("sk-abcdefghijklmnop"));
+    }
+
+    @Test
+    void sceneTimeoutClientIsCachedAndOnlyTightensTheConfiguredTimeout() {
+        AdminChatModelGateway gateway = newGateway();
+        gateway.apply(settings(true, "https://api.deepseek.com", "sk-abcdefghijklmnop", "deepseek-chat"));
+
+        // 配置 30 秒：更短的场景上限才另建客户端并复用；0 或不小于配置值的请求都用主客户端
+        ChatClient main = gateway.chatClient();
+        ChatClient quick = gateway.chatClient(10);
+        assertNotSame(main, quick);
+        assertSame(quick, gateway.chatClient(10));
+        assertSame(main, gateway.chatClient(0));
+        assertSame(main, gateway.chatClient(30));
+
+        // 配置再次生效：按旧配置建出的场景客户端一律作废
+        gateway.apply(settings(true, "http://127.0.0.1:11434/v1", "", "qwen2.5:7b"));
+        assertNotSame(quick, gateway.chatClient(10));
     }
 
     private static ModelSettings settings(boolean enabled, String baseUrl, String apiKey, String model) {

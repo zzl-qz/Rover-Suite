@@ -37,7 +37,7 @@
         </div>
     </aside>
 
-    <div class="main">
+    <div class="main" :class="{ 'main-window': page === 'workbench' }">
         <header class="topbar">
             <div class="topbar-left">
                 <h1>{{ pageTitle }}</h1>
@@ -411,7 +411,7 @@
 
                 <div class="wb-grid">
                     <!-- 左栏：会话列表 -->
-                    <div class="wb-col">
+                    <div class="wb-col wb-col-left">
                         <div class="card">
                             <div class="card-head">
                                 <h2>会话</h2>
@@ -440,45 +440,80 @@
                         </div>
                     </div>
 
-                    <!-- 中栏：对话与调查 -->
-                    <div class="wb-col">
-                        <div class="card">
-                            <div class="card-head">
-                                <h2>对话</h2>
+                    <!-- 中栏：IM 式对话窗口 -->
+                    <div class="wb-col wb-col-chat">
+                        <div class="card wb-chat">
+                            <div class="wb-chat-head">
+                                <span class="wb-avatar agent">R</span>
+                                <div class="wb-chat-ident">
+                                    <strong>Rover Ops Agent</strong>
+                                    <span class="wb-chat-state" :class="wbAgentState.tone">
+                                        <span class="dot"></span>{{ wbAgentState.label }}
+                                    </span>
+                                </div>
                                 <span v-if="wbLoading" class="card-hint">加载中...</span>
-                                <span v-if="wbSession" class="card-hint ml-auto">会话 {{ wbSession.sessionId }}</span>
+                                <span v-if="wbSession" class="card-hint ml-auto">会话 {{ wbSession.sessionId.slice(0, 8) }}</span>
                             </div>
 
-                            <div v-if="!wbActiveSessionId" class="empty">
-                                直接提问就会新开一个会话，也可以在左边选择或新建会话。
-                                <div class="empty-hint">同一个会话里的目标与结论会跨多轮保留，可以直接追问「为什么没有实例？」「那昨天呢？」。</div>
-                            </div>
-                            <div v-else-if="!wbTurns.length" class="empty">
-                                这个会话还没有提问。
-                                <div class="empty-hint">例如：<code>为什么 /api/demo/tt 调用失败？</code> 或 <code>order-service 为什么一直失败？</code></div>
-                            </div>
-                            <div v-else class="wb-turns">
+                            <div ref="wbBody" class="wb-chat-body" @scroll="wbOnScroll">
+                                <div v-if="!wbActiveSessionId || !wbTurns.length" class="wb-welcome">
+                                    <span class="wb-avatar agent big">R</span>
+                                    <h3>Rover Ops Agent</h3>
+                                    <p>只读运维诊断：基于 Gateway 路由、服务实例、实时指标与抽样追踪回答状态问题、调查调用失败；
+                                        日志、变更记录与知识检索尚未接入，当前版本不执行任何写操作。</p>
+                                    <div class="wb-examples">
+                                        <button v-for="example in wbExamples" :key="example" type="button"
+                                                class="wb-example" @click="wbUseExample(example)">{{ example }}</button>
+                                    </div>
+                                    <p class="wb-welcome-note">同一个会话里的目标与结论会跨多轮保留，可以直接追问「为什么没有实例？」「那昨天呢？」。</p>
+                                </div>
+                                <template v-else>
                                 <template v-for="turn in wbTurns" :key="turn.key">
-                                    <div v-if="turn.kind === 'message'" class="wb-msg"
-                                         :class="turn.message.role === 'USER' ? 'user' : 'agent'">
-                                        <div class="wb-msg-head">
-                                            <strong>{{ turn.message.role === 'USER' ? '你' : (turn.message.role === 'AGENT' ? 'Agent' : '系统') }}</strong>
-                                            <span>{{ fmtTime(turn.message.createdAtMillis) }}</span>
+                                    <div v-if="turn.kind === 'day'" class="wb-day"><span>{{ turn.label }}</span></div>
+
+                                    <div v-else-if="turn.message && turn.message.role === 'USER'" class="wb-turn user">
+                                        <div class="wb-bubble-row">
+                                            <div class="wb-bubble user">{{ turn.message.content }}</div>
+                                            <span class="wb-avatar user">你</span>
                                         </div>
-                                        <div class="wb-msg-body">{{ turn.message.content }}</div>
+                                        <div class="wb-meta">你 · {{ fmtTime(turn.message.createdAtMillis) }}</div>
                                     </div>
 
-                                    <div v-else class="wb-task">
-                                        <div class="wb-task-head">
-                                            <strong>调查任务</strong>
+                                    <div v-else-if="turn.message && turn.message.role !== 'AGENT'" class="wb-turn system">
+                                        <div class="wb-system">{{ turn.message.content }}</div>
+                                    </div>
+
+                                    <!-- Agent 的一条回答：过程条与答案同属这条消息，共用一个头像、一条时间线 -->
+                                    <div v-else class="wb-turn agent wb-answer">
+                                        <!-- 过程条：默认只有这一行，答案只留下面那条回复；点开才是真实调查过程 -->
+                                        <div v-if="turn.task" class="wb-process">
+                                        <button type="button" class="wb-task-toggle"
+                                                :aria-expanded="wbTaskOpen(turn.task) ? 'true' : 'false'"
+                                                @click="wbToggleTask(turn.task.taskId)">
+                                            <span class="wb-task-caret" :class="{ open: wbTaskOpen(turn.task) }">▸</span>
+                                            <strong>{{ wbTaskTypeLabel(turn.task.taskType) }}</strong>
                                             <span class="badge" :class="wbStatusBadge(turn.task.status)">{{ wbStatusLabel(turn.task.status) }}</span>
+                                            <span v-if="wbTaskStepText(turn.task)" class="card-hint">{{ wbTaskStepText(turn.task) }}</span>
+                                            <span v-if="wbUncertainties(turn.task).length" class="badge warn"
+                                                  :title="wbUncertaintyText(turn.task)">
+                                                {{ wbUncertainties(turn.task).length }} 项判断仍无法验证
+                                            </span>
+                                            <span class="card-hint">{{ wbTaskToggleHint(turn.task) }}</span>
+                                        </button>
+
+                                        <div v-if="wbTaskOpen(turn.task)" class="wb-task-body">
+                                        <div class="wb-task-head">
+                                            <span v-if="turn.task.intent" class="badge comp">{{ wbIntentLabel(turn.task.intent.intent) }}</span>
                                             <span v-if="wbCurrentStage(turn.task)" class="card-hint">当前阶段：{{ wbCurrentStage(turn.task) }}</span>
                                             <span class="card-hint">{{ fmtTime(turn.task.createdAtMillis) }}</span>
-                                            <code>{{ turn.task.taskId }}</code>
                                         </div>
+                                        <!-- 没有对象时不摆一个「未限定对象」的空标签，直接说明按全局取值 -->
                                         <div class="diagnosis-target">
-                                            <code>{{ wbTargetText(turn.task) || '待解析' }}</code>
-                                            <span class="muted">调查对象</span>
+                                            <code v-if="wbTargetText(turn.task)">{{ wbTargetText(turn.task) }}</code>
+                                            <span class="muted">{{ wbTargetText(turn.task) ? '调查对象' : '这次提问没有指定具体对象，按全局取值' }}</span>
+                                        </div>
+                                        <div v-if="turn.task.intent && turn.task.intent.reason" class="card-hint wb-intent-reason">
+                                            意图判断依据：{{ turn.task.intent.reason }}
                                         </div>
                                         <div v-if="turn.task.clarification" class="banner tip diagnosis-task-error">
                                             <strong>需要补充调查对象</strong>
@@ -491,9 +526,21 @@
                                             </span>
                                         </div>
                                         <div v-else class="card-hint">尚未上报执行步骤。</div>
+                                        <div v-if="turn.task.plan && turn.task.plan.steps && turn.task.plan.steps.length" class="wb-plan">
+                                            <div class="card-hint">调查计划：{{ turn.task.plan.goal || '按问题规划只读步骤' }}</div>
+                                            <div v-for="(planStep, index) in turn.task.plan.steps" :key="index" class="wb-plan-step">
+                                                <span class="wb-plan-mark" :class="wbPlanState(turn.task, planStep.capability)">{{ wbPlanMark(turn.task, planStep.capability) }}</span>
+                                                <span class="badge comp">{{ wbCapabilityLabel(planStep.capability) }}</span>
+                                                <span class="muted">{{ planStep.reason }}</span>
+                                                <span v-if="planStep.required" class="card-hint">必查</span>
+                                            </div>
+                                            <div v-if="wbExecutedCapabilities(turn.task)" class="card-hint">
+                                                已执行能力：{{ wbExecutedCapabilities(turn.task) }}（未执行的能力不会被调用，计划与执行对不上时会如实反映在这里）
+                                            </div>
+                                        </div>
                                         <div v-if="turn.task.error" class="banner warn diagnosis-task-error">{{ turn.task.error }}</div>
                                         <div v-if="turn.task.result" class="wb-result">
-                                            <p class="diagnosis-summary">{{ turn.task.result.summary }}</p>
+                                            <!-- 结论不在这里重复：同一条 summary 已经作为 Agent 回复落在时间线上 -->
                                             <div class="card-hint">
                                                 置信度：{{ wbConfidenceLabel(turn.task.result.confidence) }}
                                                 <span v-if="turn.task.completedAtMillis"> · 完成于 {{ fmtTime(turn.task.completedAtMillis) }}</span>
@@ -503,19 +550,35 @@
                                                 <span class="muted">{{ wbUncertaintyText(turn.task) }}</span>
                                             </div>
                                         </div>
+                                        <div v-if="turn.task.actionPlan" class="wb-action-plan">
+                                            <div class="banner tip">
+                                                <strong>[当前版本仅生成计划，不执行]</strong>
+                                                <span>{{ turn.task.actionPlan.blockedReason }}</span>
+                                            </div>
+                                            <div class="wb-kv">
+                                                <div><span>动作</span><b>{{ wbActionTypeLabel(turn.task.actionPlan.actionType) }}</b></div>
+                                                <div><span>风险</span><b><span class="badge" :class="wbRiskBadge(turn.task.actionPlan.riskLevel)">{{ wbRiskLabel(turn.task.actionPlan.riskLevel) }}</span></b></div>
+                                                <div class="wide"><span>目标</span><b><code>{{ wbActionTargetText(turn.task.actionPlan) }}</code></b></div>
+                                                <div class="wide"><span>建议依据</span><b>{{ turn.task.actionPlan.reason || '-' }}</b></div>
+                                                <div class="wide"><span>当前状态</span><b>{{ turn.task.actionPlan.currentState || '-' }}</b></div>
+                                                <div class="wide"><span>目标状态</span><b>{{ turn.task.actionPlan.desiredState || '-' }}</b></div>
+                                                <div class="wide"><span>预期影响</span><b>{{ turn.task.actionPlan.expectedImpact || '-' }}</b></div>
+                                                <div class="wide"><span>验证方式</span><b>{{ turn.task.actionPlan.verificationPlan || '-' }}</b></div>
+                                                <div class="wide"><span>回滚方式</span><b>{{ turn.task.actionPlan.rollbackPlan || '-' }}</b></div>
+                                            </div>
+                                        </div>
                                         <div v-if="wbAnalysisText(turn.task)" class="wb-ai">
                                             <h4>AI 解读
-                                                <span v-if="wbStreaming && wbStreamTaskId === turn.task.taskId" class="card-hint">实时生成中...</span>
+                                                <span v-if="wbIsStreaming(turn.task)" class="wb-stream-flag">
+                                                    <span class="dot"></span>实时生成中
+                                                </span>
                                             </h4>
-                                            <p class="diagnosis-ai">{{ wbAnalysisText(turn.task) }}</p>
+                                            <p class="diagnosis-ai">{{ wbAnalysisText(turn.task) }}<span
+                                                    v-if="wbIsStreaming(turn.task)" class="wb-caret"></span></p>
                                         </div>
-                                        <div v-if="turn.task.result || (turn.task.steps && turn.task.steps.length)" class="wb-detail-toggle">
-                                            <button class="btn ghost mini" @click="wbToggleDetail(turn.task.taskId)">
-                                                {{ wbDetailOpen[turn.task.taskId] ? '收起调查详情' : '查看调查详情' }}
-                                            </button>
-                                        </div>
-
-                                        <div v-if="wbDetailOpen[turn.task.taskId]" class="wb-detail">
+                                        <div class="wb-detail">
+                                            <!-- 任务 ID 挪进详情：时间线上只留人看得懂的信息，要排障时展开就有 -->
+                                            <div class="card-hint">任务 ID <code>{{ turn.task.taskId }}</code></div>
                                             <h4>执行步骤</h4>
                                             <div v-if="!(turn.task.steps && turn.task.steps.length)" class="empty slim">暂无步骤记录</div>
                                             <div v-else>
@@ -526,6 +589,16 @@
                                                     <span class="muted">{{ step.error || step.outputSummary || step.inputSummary || '-' }}</span>
                                                 </div>
                                             </div>
+
+                                            <h4>计划候选原因</h4>
+                                            <div v-if="turn.task.plan && turn.task.plan.hypotheses && turn.task.plan.hypotheses.length">
+                                                <div v-for="(item, index) in turn.task.plan.hypotheses" :key="index" class="diagnosis-step">
+                                                    <span class="diagnosis-step-num">{{ index + 1 }}</span>
+                                                    <strong>{{ item }}</strong>
+                                                    <span class="card-hint">规划假设，需由证据验证</span>
+                                                </div>
+                                            </div>
+                                            <div v-else class="empty slim">计划未给出候选原因</div>
 
                                             <h4>调查过程</h4>
                                             <div v-if="turn.task.result && turn.task.result.hypotheses && turn.task.result.hypotheses.length">
@@ -560,8 +633,28 @@
                                                 <ul><li v-for="(item, index) in turn.task.result.limitations" :key="index">{{ item }}</li></ul>
                                             </div>
                                         </div>
+                                        </div>
+                                        </div>
+
+                                        <!-- 答案正文：与上面的过程条同属这一条回答，不再各占一条 -->
+                                        <div v-if="turn.message" class="wb-bubble agent">{{ turn.message.content }}</div>
+                                        <div v-if="turn.message" class="wb-meta">
+                                            Rover Ops Agent · {{ fmtTime(turn.message.createdAtMillis) }}
+                                        </div>
                                     </div>
                                 </template>
+                                    <div v-if="wbSending" class="wb-turn agent">
+                                        <div class="wb-bubble-row">
+                                            <span class="wb-avatar agent">R</span>
+                                            <div class="wb-bubble agent wb-typing">
+                                                <span class="wb-typing-dot"></span><span class="wb-typing-dot"></span><span
+                                                    class="wb-typing-dot"></span>正在处理…
+                                            </div>
+                                        </div>
+                                    </div>
+                                </template>
+                                <button v-if="wbTurns.length && !wbAtBottom" type="button" class="wb-jump"
+                                        @click="wbJumpToLatest">↓ 回到最新</button>
                             </div>
 
                             <div v-if="wbHint" class="banner tip wb-hint">
@@ -570,8 +663,8 @@
                             </div>
 
                             <form class="wb-form" @submit.prevent="wbSend">
-                                <textarea v-model="wbInput" rows="2" :disabled="wbSending"
-                                          placeholder="为什么 /api/demo/tt 调用失败？"></textarea>
+                                <textarea ref="wbInputEl" v-model="wbInput" rows="2" @keydown="wbOnKeydown"
+                                          placeholder="输入问题，Enter 发送、Shift+Enter 换行。例如：为什么 /api/demo/tt 调用失败？"></textarea>
                                 <div class="wb-form-actions">
                                     <button class="btn ghost mini" type="button" @click="wbContextOpen = !wbContextOpen">
                                         {{ wbContextOpen ? '收起高级上下文' : '高级上下文（可选）' }}
@@ -612,7 +705,7 @@
                     </div>
 
                     <!-- 右栏：事件上下文 -->
-                    <div class="wb-col">
+                    <div class="wb-col wb-col-side">
                         <div class="card">
                             <div class="card-head">
                                 <h2>当前事件</h2>

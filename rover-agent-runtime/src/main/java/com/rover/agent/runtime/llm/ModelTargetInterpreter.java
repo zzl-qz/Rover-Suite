@@ -18,7 +18,8 @@ import org.slf4j.LoggerFactory;
  * 命中不了就当作没有把握。这样即使模型胡说，也不会把诊断带到不存在的对象上。
  *
  * 模型未配置、不可用或调用失败时一律返回空，由 {@link com.rover.agent.core.context.TargetResolver}
- * 回退到澄清提问——辅助能力缺失不能变成能力退化后的猜测。
+ * 回退到澄清提问——辅助能力缺失不能变成能力退化后的猜测。调用按场景收紧超时并只为超时重试一次
+ * （见 {@link QuickModelCall}）：等不到就尽快转为澄清，而不是让用户等满模型配置里的超时。
  */
 public final class ModelTargetInterpreter implements TargetInterpreter {
 
@@ -32,9 +33,14 @@ public final class ModelTargetInterpreter implements TargetInterpreter {
             + "没有把握就只回复 " + UNKNOWN + "。不要解释、不要补充、不要编造清单外的对象。";
 
     private final ChatModelGateway gateway;
+    private final int timeoutSeconds;
 
-    public ModelTargetInterpreter(ChatModelGateway gateway) {
+    /**
+     * @param timeoutSeconds 场景超时上限（秒）；0 表示用模型配置里的超时
+     */
+    public ModelTargetInterpreter(ChatModelGateway gateway, int timeoutSeconds) {
         this.gateway = gateway == null ? new NoopChatModelGateway() : gateway;
+        this.timeoutSeconds = Math.max(0, timeoutSeconds);
     }
 
     @Override
@@ -43,14 +49,12 @@ public final class ModelTargetInterpreter implements TargetInterpreter {
         if (candidates.isEmpty() || query == null || query.isBlank() || !gateway.configured() || !gateway.available()) {
             return Optional.empty();
         }
+        String userPrompt = "候选对象：\n" + describe(candidates)
+                + "\n用户问题：" + truncate(query)
+                + "\n只回复一个候选行原样内容，或 " + UNKNOWN;
         try {
-            String answer = gateway.chatClient().prompt()
-                    .system(SYSTEM_PROMPT)
-                    .user("候选对象：\n" + describe(candidates)
-                            + "\n用户问题：" + truncate(query)
-                            + "\n只回复一个候选行原样内容，或 " + UNKNOWN)
-                    .call()
-                    .content();
+            String answer = QuickModelCall.content(gateway, timeoutSeconds, "目标解析",
+                    client -> client.prompt().system(SYSTEM_PROMPT).user(userPrompt).call().content());
             return pick(candidates, answer);
         } catch (Exception ex) {
             log.warn("模型目标识别失败，转为请求澄清：{}", ex.getMessage());

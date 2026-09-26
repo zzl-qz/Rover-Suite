@@ -22,6 +22,14 @@ const WB_EVENT_TYPES = [
     'TASK_CANCELLED',
 ];
 
+/** 空态里可直接点的问题示例：都落在已接入的只读能力范围内，点了就填进输入框而不是直接发送。 */
+const WB_EXAMPLES = [
+    '网关现在 QPS 多少？',
+    'order-service 有几个健康实例？',
+    '为什么 /api/demo/tt 调用失败？',
+    '你能做什么？',
+];
+
 window.RoverAdminPages = window.RoverAdminPages || {};
 window.RoverAdminPages.workbench = {
     data() {
@@ -39,10 +47,14 @@ window.RoverAdminPages.workbench = {
             wbContext: { path: '', service: '', instance: '', from: '', to: '' },
             wbContextOpen: false,
             wbSending: false,
+            /** 本地回显的用户消息：服务端受理前先显示出来，IM 的手感是「发出去就立刻看到」。 */
+            wbPending: [],
             wbDetailOpen: {},
             wbStreamTaskId: '',
             wbStreamTexts: {},
             wbStreaming: false,
+            /** 视图是否贴着对话底部：决定自动跟随，以及要不要显示「回到最新」。 */
+            wbAtBottom: true,
         };
     },
 
@@ -67,33 +79,98 @@ window.RoverAdminPages.workbench = {
             return groups.filter(group => group.items.length);
         },
 
+        /** 空态可直接点的问题示例，与注册表里的只读能力一一对应。 */
+        wbExamples() {
+            return WB_EXAMPLES;
+        },
+
         /**
-         * 中栏时间线：会话消息与事件下的调查任务按时间归并。
+         * 聊天窗头部状态：受理 / 生成解读 / 调查中 / 在线。
          *
-         * 同一毫秒内先消息后任务卡片（提问 → 回复 → 调查进度），因此每轮问答的卡片都紧跟在它后面。
+         * 依据就是页面上已有的三份事实（提交中、事件流在推、有任务没定型），不另做一套判断。
+         */
+        wbAgentState() {
+            if (this.wbSending) return { label: '正在受理…', tone: 'busy' };
+            if (this.wbStreaming) return { label: '正在生成解读…', tone: 'busy' };
+            const running = Object.values(this.wbTasks).some(task => task && !this.wbTaskSettled(task.status));
+            if (running) return { label: '调查中…', tone: 'busy' };
+            return { label: '在线 · 只读', tone: 'ok' };
+        },
+
+        /**
+         * 中栏时间线：会话消息与本地回显按时间归并，再按天插入日期分隔。
+         *
+         * 一次提问只对应一条 Agent 回答——过程条与答案同属这条回答（模板里是同一个 turn），
+         * 与主流 Agent 一样：过程收在答案上方，点开才看真实经过。
+         *
+         * 一个任务可能留下多条 Agent 消息（「已开始调查 X」→ 目标解析的澄清 → 最终结论），
+         * 只有最后一条算回答、由它携带过程条；中间播报并入过程条，不在时间线上另起一条，
+         * 否则一次提问看起来是两条回复。还没产出回答的任务自己成一条过程条。
          */
         wbTurns() {
+            const tasks = {};
+            Object.values(this.wbTasks).forEach((task) => { if (task) tasks[task.taskId] = task; });
+
+            /** 每个任务的最后一条 Agent 消息：这条是回答，其余都是过程播报。 */
+            const answer = {};
+            this.wbMessages.forEach((message) => {
+                if (message.role !== 'AGENT' || !message.relatedTaskId || !tasks[message.relatedTaskId]) return;
+                const previous = answer[message.relatedTaskId];
+                if (!previous || (message.createdAtMillis || 0) >= (previous.createdAtMillis || 0)) {
+                    answer[message.relatedTaskId] = message;
+                }
+            });
+
+            const askedAt = {};
             const turns = [];
             this.wbMessages.forEach((message) => {
+                const taskId = message.relatedTaskId;
+                if (taskId && message.role === 'USER' && askedAt[taskId] === undefined) {
+                    askedAt[taskId] = message.createdAtMillis || 0;
+                }
+                if (message.role === 'AGENT' && taskId && tasks[taskId] && answer[taskId] !== message) {
+                    return;
+                }
                 turns.push({
                     kind: 'message',
                     key: 'm-' + message.messageId,
                     at: message.createdAtMillis || 0,
-                    rank: 0,
+                    // 消息经 relatedTaskId 稳定绑定任务：回答带着过程条，是同一条回复的两个部分
+                    task: message.role === 'AGENT' && taskId ? (tasks[taskId] || null) : null,
                     message,
                 });
             });
-            Object.values(this.wbTasks).forEach((task) => {
-                if (!task) return;
+            this.wbPending.forEach((item) => turns.push({
+                kind: 'message',
+                key: item.key,
+                at: item.at,
+                task: null,
+                message: { role: 'USER', content: item.content, createdAtMillis: item.at },
+            }));
+            Object.values(tasks).forEach((task) => {
+                if (answer[task.taskId]) return;
+                // 任务注册比用户消息落库早 1~2ms，直接按时间排会跑到提问前面；锚到那次提问之后。
+                const asked = askedAt[task.taskId];
                 turns.push({
                     kind: 'task',
                     key: 't-' + task.taskId,
-                    at: task.createdAtMillis || 0,
-                    rank: 1,
+                    at: asked === undefined ? (task.createdAtMillis || 0) : asked + 1,
                     task,
+                    message: null,
                 });
             });
-            return turns.sort((a, b) => (a.at - b.at) || (a.rank - b.rank));
+            const sorted = turns.sort((a, b) => a.at - b.at);
+            const withDays = [];
+            let lastDay = '';
+            sorted.forEach((turn) => {
+                const day = this.wbDayKey(turn.at);
+                if (day && day !== lastDay) {
+                    withDays.push({ kind: 'day', key: 'day-' + day, at: turn.at, label: this.wbDayLabel(turn.at) });
+                    lastDay = day;
+                }
+                withDays.push(turn);
+            });
+            return withDays;
         },
 
         /** 当前事件下最近一次产出结论的任务，右栏「当前诊断」与「证据」都用它。 */
@@ -114,6 +191,16 @@ window.RoverAdminPages.workbench = {
         },
     },
 
+    /**
+     * 对话是一扇滚动窗口：新消息、新步骤与流式增量都要把视图带到底部。
+     *
+     * 跟随发生在「用户本来就贴着底部」时；往上翻历史时新内容不打扰阅读，与 IM 一致。
+     */
+    watch: {
+        wbTurns() { this.wbScrollDown(false); },
+        wbStreamTexts() { this.wbScrollDown(false); },
+    },
+
     methods: {
         /** 进入工作台时调用：拉会话列表，必要时选中最近的会话。 */
         async wbRefresh() {
@@ -131,6 +218,8 @@ window.RoverAdminPages.workbench = {
             this.wbIncidents = {};
             this.wbTasks = {};
             this.wbStreamTexts = {};
+            this.wbPending = [];
+            this._wbLoadedSessionId = '';
         },
 
         async wbLoadSessions() {
@@ -174,6 +263,8 @@ window.RoverAdminPages.workbench = {
             this.wbIncidents = {};
             this.wbTasks = {};
             this.wbStreamTexts = {};
+            this.wbPending = [];
+            this._wbLoadedSessionId = '';
             this.wbDetailOpen = {};
             this.wbError = null;
             await this.wbLoadSession(sessionId);
@@ -203,6 +294,15 @@ window.RoverAdminPages.workbench = {
                 (workspace.tasks || []).forEach((task) => { tasks[task.taskId] = task; });
                 this.wbTasks = tasks;
                 this.wbError = null;
+                // 切到别的会话（含首次载入）直接落到底部；同一会话的刷新则尊重用户当前的阅读位置。
+                const switched = this._wbLoadedSessionId !== sessionId;
+                this._wbLoadedSessionId = sessionId;
+                if (switched) {
+                    this.wbAtBottom = true;
+                    this.wbScrollDown(true);
+                } else {
+                    this.wbScrollDown(false);
+                }
                 this.wbFollowRunningTask();
             } catch (e) {
                 if (this.wbActiveSessionId === sessionId) {
@@ -266,12 +366,22 @@ window.RoverAdminPages.workbench = {
             if (extra === null) return;
             this.wbSending = true;
             this.wbError = null;
+            this.wbInput = '';
+            const pending = {
+                key: 'p-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7),
+                content: message,
+                at: Date.now(),
+            };
+            this.wbPending = [...this.wbPending, pending];
+            this.wbAtBottom = true;
+            this.wbScrollDown(true);
             try {
                 // 没有会话时直接提问：先开一个空会话再发，主入口就是这一个输入框。
                 let sessionId = this.wbActiveSessionId;
                 if (!sessionId) {
                     sessionId = await this.wbCreateSession();
                     this.wbActiveSessionId = sessionId;
+                    this.wbScrollDown(true);
                 }
                 // 202 只给任务句柄：目标解析与调查在 Agent Worker 里，进度靠任务事件流观察。
                 const response = await RoverAdminApi.api(
@@ -281,11 +391,14 @@ window.RoverAdminPages.workbench = {
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(Object.assign({ message }, extra)),
                     });
-                this.wbInput = '';
+                this.wbDropPending(pending.key);
                 await this.wbLoadSession(sessionId);
                 this.wbLoadSessions();
                 if (response && response.taskId) this.wbOpenStream(response.taskId);
             } catch (e) {
+                this.wbDropPending(pending.key);
+                // 没发出去就把内容还回输入框：用户不必重新打一遍（已经在打新内容时不覆盖）。
+                if (!this.wbInput.trim()) this.wbInput = message;
                 if (e.status === 409) {
                     // 同会话已有执行中的任务：复用那张任务卡并接上它的事件流，而不是再开一张。
                     this.wbError = e.message;
@@ -299,7 +412,79 @@ window.RoverAdminPages.workbench = {
                 }
             } finally {
                 this.wbSending = false;
+                this.wbFocusInput();
             }
+        },
+
+        /** 去掉本地回显：服务端已受理（或明确失败）后，它就该从时间线上消失。 */
+        wbDropPending(key) {
+            this.wbPending = this.wbPending.filter(item => item.key !== key);
+        },
+
+        /** Enter 发送、Shift+Enter 换行；输入法组合中的 Enter 是在选词，不能当发送。 */
+        wbOnKeydown(event) {
+            if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+            event.preventDefault();
+            this.wbSend();
+        },
+
+        /** 示例问题只填入输入框，发不发由用户决定——点了就发会剥夺改词的机会。 */
+        wbUseExample(text) {
+            this.wbInput = text;
+            this.wbFocusInput();
+        },
+
+        wbFocusInput() {
+            this.$nextTick(() => {
+                const el = this.$refs.wbInputEl;
+                if (el) el.focus();
+            });
+        },
+
+        /**
+         * IM 式滚动：只在用户本来就贴着底部时跟随新内容。
+         *
+         * 往上翻历史时新消息不打断阅读；主动发消息与切换会话则强制落到底部。
+         */
+        wbOnScroll() {
+            const el = this.$refs.wbBody;
+            if (!el) return;
+            this.wbAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        },
+
+        wbScrollDown(force) {
+            this.$nextTick(() => {
+                const el = this.$refs.wbBody;
+                // 默认视为贴在底部：首次渲染与切换会话都能直接看到最新内容。
+                if (!el || (!force && !this.wbAtBottom)) return;
+                el.scrollTop = el.scrollHeight;
+                this.wbAtBottom = true;
+            });
+        },
+
+        /** 「回到最新」：翻完历史一键落回底部，并把自动跟随重新打开。 */
+        wbJumpToLatest() {
+            this.wbAtBottom = true;
+            this.wbScrollDown(true);
+        },
+
+        /** 这条任务的解读是不是正在流式生成：决定要不要闪烁光标与状态点。 */
+        wbIsStreaming(task) {
+            return Boolean(task && this.wbStreaming && this.wbStreamTaskId === task.taskId);
+        },
+
+        wbDayKey(millis) {
+            if (!millis) return '';
+            const date = new Date(millis);
+            return date.getFullYear() + '-' + (date.getMonth() + 1) + '-' + date.getDate();
+        },
+
+        wbDayLabel(millis) {
+            const day = this.wbDayKey(millis);
+            if (day === this.wbDayKey(Date.now())) return '今天';
+            if (day === this.wbDayKey(Date.now() - 86400000)) return '昨天';
+            const date = new Date(millis);
+            return (date.getMonth() + 1) + '月' + date.getDate() + '日';
         },
 
         /** 高级上下文：只把填了的项发给服务端；时间范围要么都填要么都不填。 */
@@ -525,6 +710,10 @@ window.RoverAdminPages.workbench = {
         /** 步骤类型的中文名：只在后端没给 step.name 时兜底，不参与任何流程判断。 */
         wbStepTypeLabel(type) {
             return {
+                INTENT_RESOLUTION: '意图识别',
+                PLANNING: '调查规划',
+                ACTION_PLANNING: '生成处置计划',
+                ANSWER: '回答',
                 TARGET_RESOLUTION: '目标解析',
                 ROUTE_INVESTIGATION: '读取路由',
                 INSTANCE_INVESTIGATION: '读取实例',
@@ -535,6 +724,72 @@ window.RoverAdminPages.workbench = {
             }[type] || type || '步骤';
         },
 
+        /** 任务类型：一次提问最终以什么形态执行，后端 taskType 直接给出，不靠文本猜。 */
+        wbTaskTypeLabel(type) {
+            return {
+                QUERY: '状态查询', INVESTIGATION: '故障调查', ACTION_PLAN: '处置计划',
+                EXPLAIN: '解释说明', UNSUPPORTED: '暂未开放',
+            }[type] || '故障调查';
+        },
+
+        wbTaskTypeBadge(type) {
+            return { INVESTIGATION: 'comp', QUERY: 'ok', EXPLAIN: 'ok', ACTION_PLAN: 'warn', UNSUPPORTED: 'warn' }[type]
+                || 'comp';
+        },
+
+        wbIntentLabel(intent) {
+            return {
+                QUERY_STATE: '查询状态', INVESTIGATE: '故障调查', EXPLAIN: '解释说明',
+                ACTION_REQUEST: '处置请求', CREATE_INSPECTION: '定时巡检', KNOWLEDGE_QUERY: '知识检索',
+                UNKNOWN: '未识别',
+            }[intent] || intent || '未识别';
+        },
+
+        /** 只读能力的中文名：与后端 AgentCapability 一一对应，用于计划与已执行能力展示。 */
+        wbCapabilityLabel(capability) {
+            return {
+                ROUTE_QUERY: '路由查询', INSTANCE_QUERY: '实例查询', GATEWAY_METRICS_QUERY: '指标查询',
+                TRACE_QUERY: '追踪查询', CONFIG_READ: '配置读取', EVENT_QUERY: '事件查询',
+            }[capability] || capability || '-';
+        },
+
+        /** 计划步骤的执行情况：已执行的能力在计划里就地标出来，不必对照两份清单。 */
+        wbPlanState(task, capability) {
+            const executed = (task && task.executedCapabilities) || [];
+            return executed.includes(capability) ? 'done' : 'pending';
+        },
+
+        wbPlanMark(task, capability) {
+            return this.wbPlanState(task, capability) === 'done' ? '✓' : '○';
+        },
+
+        wbActionTypeLabel(type) {
+            return {
+                DRAIN_INSTANCE: '摘除实例', RESTORE_INSTANCE: '恢复实例', UPDATE_ROUTE_TIMEOUT: '调整路由超时',
+                UPDATE_RATE_LIMIT: '调整限流', UNKNOWN: '未识别的动作',
+            }[type] || type || '未识别的动作';
+        },
+
+        wbRiskLabel(level) {
+            return { LOW: '低', MEDIUM: '中', HIGH: '高' }[level] || level || '未评估';
+        },
+
+        wbRiskBadge(level) {
+            return { LOW: 'ok', MEDIUM: 'warn', HIGH: 'bad' }[level] || 'comp';
+        },
+
+        /** 处置计划的目标展示：优先用预检解析出的对象，解析不出时如实退回用户原文。 */
+        wbActionTargetText(plan) {
+            if (!plan) return '-';
+            const value = plan.target && plan.target.value;
+            return value || plan.targetDescription || '未指定';
+        },
+
+        /** 已执行能力的中文清单；没有时返回空串，由模板决定是否展示这一行。 */
+        wbExecutedCapabilities(task) {
+            return ((task && task.executedCapabilities) || []).map(cap => this.wbCapabilityLabel(cap)).join('、');
+        },
+
         /** 被调查对象：目标解析完成前路径为空，如实显示待解析而不是伪造一个对象。 */
         wbTargetText(task) {
             const target = task && task.target;
@@ -542,8 +797,35 @@ window.RoverAdminPages.workbench = {
             return (task && task.path) || '';
         },
 
-        wbToggleDetail(taskId) {
-            this.wbDetailOpen = Object.assign({}, this.wbDetailOpen, { [taskId]: !this.wbDetailOpen[taskId] });
+        /**
+         * 任务卡是否展开：默认只留一行「过程条」，点开才看真实调查过程。
+         *
+         * 调查中的任务例外——步骤正在往上滚，铺开才有意义；定型后自动折回一行。
+         * 用户手动开合过就以用户的为准（{@link #wbDetailOpen} 里存着手动状态）。
+         */
+        wbTaskOpen(task) {
+            if (!task) return false;
+            const manual = this.wbDetailOpen[task.taskId];
+            if (manual !== undefined) return manual;
+            return !this.wbTaskSettled(task.status);
+        },
+
+        wbToggleTask(taskId) {
+            const task = this.wbTasks[taskId];
+            if (!task) return;
+            this.wbDetailOpen = Object.assign({}, this.wbDetailOpen, { [taskId]: !this.wbTaskOpen(task) });
+        },
+
+        /** 折叠条上的进度：3/4 步；后端没上报步骤时不占位置。 */
+        wbTaskStepText(task) {
+            const steps = this.wbSteps(task);
+            if (!steps.length) return '';
+            return steps.filter(step => step.state === 'done').length + '/' + steps.length + ' 步';
+        },
+
+        wbTaskToggleHint(task) {
+            if (this.wbTaskOpen(task)) return '收起过程';
+            return this.wbAnalysisText(task) ? '查看调查过程 · 含 AI 解读' : '查看调查过程';
         },
 
         wbSessionAt(session) {
