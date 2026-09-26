@@ -15,7 +15,8 @@ class CapabilityRegistryTest {
     @Test
     void onlyConnectedReadOnlyCapabilitiesAreSelectable() {
         assertEquals(List.of(AgentCapability.ROUTE_QUERY, AgentCapability.INSTANCE_QUERY,
-                AgentCapability.GATEWAY_METRICS_QUERY, AgentCapability.TRACE_QUERY), registry.selectable().stream()
+                AgentCapability.GATEWAY_METRICS_QUERY, AgentCapability.TRACE_QUERY, AgentCapability.CONFIG_READ,
+                AgentCapability.EVENT_QUERY), registry.selectable().stream()
                 .map(CapabilityDescriptor::id).toList());
         assertTrue(registry.selectable().stream().allMatch(item -> item.risk() == CapabilityRisk.READ_ONLY));
         assertEquals(6, registry.all().size());
@@ -24,10 +25,11 @@ class CapabilityRegistryTest {
     @Test
     void registeredButUnconnectedCapabilitiesAreNotSelectable() {
         // 已登记、但尚未接入数据适配器：出现在清单里让用户看到边界，但不可被计划选择。
-        assertTrue(registry.descriptor(AgentCapability.CONFIG_READ).isPresent());
-        assertFalse(registry.selectable(AgentCapability.CONFIG_READ));
-        assertFalse(registry.selectable(AgentCapability.EVENT_QUERY));
-        assertFalse(registry.descriptor(AgentCapability.CONFIG_READ).orElseThrow().available());
+        CapabilityRegistry partial = registryWithout(AgentCapability.CONFIG_READ);
+        assertTrue(partial.descriptor(AgentCapability.CONFIG_READ).isPresent());
+        assertFalse(partial.selectable(AgentCapability.CONFIG_READ));
+        assertFalse(partial.descriptor(AgentCapability.CONFIG_READ).orElseThrow().available());
+        assertTrue(partial.selectable(AgentCapability.EVENT_QUERY), "未收口的能力仍可被选择");
     }
 
     @Test
@@ -35,13 +37,24 @@ class CapabilityRegistryTest {
         String described = registry.describe();
 
         for (AgentCapability capability : List.of(AgentCapability.ROUTE_QUERY, AgentCapability.INSTANCE_QUERY,
-                AgentCapability.GATEWAY_METRICS_QUERY, AgentCapability.TRACE_QUERY)) {
+                AgentCapability.GATEWAY_METRICS_QUERY, AgentCapability.TRACE_QUERY, AgentCapability.CONFIG_READ,
+                AgentCapability.EVENT_QUERY)) {
             assertTrue(described.contains(capability.name()), "能力清单缺少 " + capability);
         }
-        assertTrue(described.contains("尚未开放的能力"));
-        assertTrue(described.contains(AgentCapability.CONFIG_READ.name()));
+        assertFalse(described.contains("尚未开放的能力"), "六个能力全部接入时不应出现未开放段落");
         // 处置边界与能力清单一起给出：不会让用户以为可以「让它去执行」。
         assertTrue(described.contains("不执行任何写操作"));
+    }
+
+    /** 把指定能力标为「已登记但未接入」，用于验证清单与选择范围的收口。 */
+    private static CapabilityRegistry registryWithout(AgentCapability unavailable) {
+        List<CapabilityDescriptor> descriptors = CapabilityRegistry.standard().all().stream()
+                .map(item -> item.id() == unavailable
+                        ? new CapabilityDescriptor(item.id(), item.name(), item.description(), item.risk(),
+                                item.supportedTargetTypes(), false, item.stepType(), item.stepName())
+                        : item)
+                .toList();
+        return new CapabilityRegistry(descriptors);
     }
 
     @Test

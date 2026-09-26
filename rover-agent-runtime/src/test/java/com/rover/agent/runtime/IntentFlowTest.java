@@ -22,6 +22,8 @@ import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.port.ConfigReadPort;
+import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
@@ -103,13 +105,16 @@ class IntentFlowTest {
         TraceReadPort traces = path -> {
             throw new SnapshotUnavailableException("测试桩未提供追踪");
         };
+        ConfigReadPort configs = () -> List.of();
+        EventReadPort events = () -> List.of();
 
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instances, 8);
         CapabilityRegistry capabilities = CapabilityRegistry.standard();
-        CapabilityExecutor executor = new CapabilityExecutor(routes, instances, metrics, traces, capabilities);
-        InvestigationService investigations = new InvestigationService(routes, instances, metrics, traces,
-                registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
+        CapabilityExecutor executor = new CapabilityExecutor(routes, instances, metrics, traces, configs, events,
+                capabilities);
+        InvestigationService investigations = new InvestigationService(routes, instances, metrics, traces, configs,
+                events, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
         orchestrator = new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instances, TargetInterpreter.none()), investigations, retention,
                 new IntentService(), new QueryStateService(executor),
@@ -166,7 +171,10 @@ class IntentFlowTest {
         assertNull(task.clarification(), "能力咨询不该要求用户补充资源对象");
         String answer = task.result().summary();
         assertTrue(answer.contains("ROUTE_QUERY"), "能力清单必须来自真实注册表，实际为 " + answer);
-        assertTrue(answer.contains("尚未开放的能力"), "未开放能力要如实列出");
+        // 六个能力全部接入：配置读取与事件查询必须出现在清单里，不再有「尚未开放」段落。
+        assertTrue(answer.contains("CONFIG_READ"), "已接入的配置读取能力必须在清单里");
+        assertTrue(answer.contains("EVENT_QUERY"), "已接入的事件查询能力必须在清单里");
+        assertFalse(answer.contains("尚未开放的能力"), "六个能力全部接入时不应出现未开放段落");
         assertTrue(answer.contains("不执行任何写操作"), "边界声明必须包含「不执行写操作」");
         assertTrue(task.executedCapabilities().isEmpty(), "能力咨询不读生产数据");
     }

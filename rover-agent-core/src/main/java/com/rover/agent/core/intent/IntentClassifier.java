@@ -70,6 +70,15 @@ public final class IntentClassifier {
 
     private static final List<String> ROUTE_WORDS = List.of("路由", "指向", "前缀", "转发", "匹配", "网关配置");
 
+    private static final List<String> CONFIG_WORDS = List.of("配置", "限流", "熔断", "阈值", "限速", "并发", "采样率",
+            "超时");
+
+    /**
+     * 事件词表刻意避开「注册」这一类实例词：问「注册实例有几个」问的是当前状态，
+     * 只有明确提到「事件 / 上下线 / 剔除 / 注销」才是问变更经过。
+     */
+    private static final List<String> EVENT_WORDS = List.of("事件", "变更记录", "上下线", "剔除", "注销", "注册记录");
+
     private static final List<String> INCIDENT_CONTEXT_WORDS = List.of("这次", "当前", "刚才", "上一轮", "这个故障",
             "这个问题", "本次", "事件");
 
@@ -119,6 +128,8 @@ public final class IntentClassifier {
      * 状态查询问的是哪一类事实。
      *
      * 与意图分类分开：这里只回答「问什么」，由查询执行侧决定用哪个只读能力取数。
+     * 判定顺序为指标 → 配置 → 事件 → 实例 → 路由：越具体的口径越先判定，避免「限流阈值」被
+     * 更宽泛的实例词抢走。
      */
     public static QuerySubject stateSubject(String question) {
         String text = question == null ? "" : question.trim();
@@ -127,6 +138,12 @@ public final class IntentClassifier {
         }
         if (containsAny(text, METRIC_WORDS)) {
             return QuerySubject.METRIC;
+        }
+        if (containsAny(text, CONFIG_WORDS)) {
+            return QuerySubject.CONFIG;
+        }
+        if (containsAny(text, EVENT_WORDS)) {
+            return QuerySubject.EVENT;
         }
         if (containsAny(text, INSTANCE_WORDS)) {
             return QuerySubject.INSTANCE;

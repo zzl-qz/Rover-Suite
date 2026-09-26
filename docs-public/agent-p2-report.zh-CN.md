@@ -26,9 +26,10 @@
 位置：`rover-agent-core` → `com.rover.agent.core.capability`（AgentCapability / CapabilityDescriptor /
 CapabilityRegistry / CapabilityExecutor / CapabilityResult）。
 
-- 注册表是 Agent「能做什么」的唯一声明处，`CapabilityRegistry.standard()` 当前登记：
-  - 可选（`selectable=true`，风险均为 `READ_ONLY`）：`ROUTE_QUERY`、`INSTANCE_QUERY`、`GATEWAY_METRICS_QUERY`、`TRACE_QUERY`；
-  - 已登记但未开放（`available=false`，`supportedTargetTypes` 为空，Planner 不可选）：`CONFIG_READ`、`EVENT_QUERY`。
+- 注册表是 Agent「能做什么」的唯一声明处，`CapabilityRegistry.standard()` 当前登记六个可选能力
+  （`selectable=true`，风险均为 `READ_ONLY`）：`ROUTE_QUERY`、`INSTANCE_QUERY`、`GATEWAY_METRICS_QUERY`、`TRACE_QUERY`、
+  `CONFIG_READ`、`EVENT_QUERY`。P2 收尾时把后两者从「已登记未开放」接上了数据适配器（Admin 侧 `ConfigReadPort` / `EventReadPort`），
+  注册表不再有「未开放」段落。
 - 每个能力声明：编号、名称、说明、风险等级、支持的目标类型、是否已接入、对应的步骤类型与步骤名。
 - 执行器是模型与生产数据之间唯一的取数口：未知能力与未开放能力不执行；取数失败或数据不可用转成
   `limitations`（如实说明），不产生假证据。指标窗口固定为最近 60 秒（`CapabilityExecutor.METRIC_WINDOW_SECONDS`）。
@@ -113,25 +114,30 @@ START → plan ──有可执行步骤──→ execute（逐条执行只读能
 
 ## 7. 测试结果
 
-执行命令与结果（真实输出，日志 `rover-agent-runtime/target/p2-1-full-test.log`）：
+执行命令与结果（P2 收尾 + 阶段 1「路由 × 上游」观测增强后的最终版本，259 项全绿）：
 
 ```bash
-mvn -pl rover-agent-core,rover-agent-runtime,rover-admin -am test
+mvn -o -pl rover-common,rover-gateway-core,rover-agent-core,rover-agent-runtime,rover-admin -am test
 ```
 
 | 模块 | Tests run | 结果 |
 | :--- | ---: | :--- |
 | rover-common | 17 | 全绿 |
-| rover-agent-core | 67 | 全绿 |
-| rover-agent-runtime | 73 | 全绿 |
-| rover-admin | 75 | 全绿 |
-| 合计 | 232 | BUILD SUCCESS |
+| rover-nameserver-client | 9 | 全绿 |
+| rover-gateway-core | 8 | 全绿 |
+| rover-agent-core | 72 | 全绿 |
+| rover-agent-runtime | 77 | 全绿 |
+| rover-admin | 76 | 全绿 |
+| 合计 | 259 | BUILD SUCCESS |
 
 新增与关键回归测试：
 
 - 新增：`IntentClassifierTest`（11，意图分类、取值边界与兜底口径）、`CapabilityRegistryTest`（5，注册表、能力清单与自我介绍）、
   `PlanValidatorTest`（8，越界丢弃与硬边界）、`DynamicInvestigationGraphTest`（3，规划轮数 / 调用次数 / 只选已登记能力）、
   `IntentFlowTest`（7，§13 七个验收 Case 的端到端分流 + 识别不出意图时的自我介绍兜底）。
+- 阶段 1 新增：`InvestigationRulesTest` 的 5 个上游实例用例（点名 5xx 实例、样本不足不归因、空窗口不算恢复、
+  样本达标全非 5xx 判排除、指标不可用保持无法验证）、`SnapshotToolsTest.upstreamSnapshotReturnsEveryInstanceRow`
+  （一跳一条的行不能被地址索引合并）、`MetricsRegistryTest` / `MetricsExporterTest` 的路由 × 实例窗口与 `enabled=false` 口径。
 - 回归：`InvestigationServiceTest`（16）、`AgentOrchestratorTest`（12）等全部通过；既有 Session / Incident / Task /
   Evidence / SSE / Async Worker 行为未被破坏。
 
@@ -162,11 +168,14 @@ runQuery 与 runActionPlan 的已解析分支共用。
 - **ActionPlan 不执行**：本阶段没有任何写操作入口；审批流、审计、任务持久化缺一不可（Level C）。
 - **未实现清单**（任务书 §14 明确排除）：MySQL / Redis 持久化、MCP、RAG、日志接入、Scheduler 与邮件通知、
   真实写操作、Approval、PolicyEngine、Multi-Agent、Shell / SQL。
-- **能力面窄**：只接入 4 个只读能力；`CONFIG_READ` / `EVENT_QUERY` 已登记但无数据适配器，Planner 不可选。
+- **能力面只读**：已接入 6 个只读能力（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件），仍没有任何写能力，
+  处置请求只出不可执行计划。
 - **模型侧不稳定由规则兜底**：意图与计划候选依赖受限 JSON，模型未配置或输出越界时退化为纯规则路径，
   能力清单类问题永远来自注册表而不是模型自由发挥。
-- **数据侧固有边界**：追踪为抽样且有缓冲上限，未采到只能判「无法验证」；指标窗口固定最近 60 秒；
-  同一时间窗口内证据与判定口径一致，窗口外记录只报条数不计入判定。
+- **数据侧固有边界**：追踪为抽样且有缓冲上限，未采到只能判「无法验证」；指标窗口取最近 60 秒
+  （网关侧支持 60 / 300，按上游实例的观测与全局指标同窗口）；
+  同一时间窗口内证据与判定口径一致，窗口外记录只报条数不计入判定；样本量不足时结论写「无法判断」，
+  空窗口不当作「已恢复」。
 - **规划上限即停止**：触顶（默认 3 轮 / 10 次调用 / 6 步）后不再采集，结论中如实标注，复杂问题可能证据不足。
 - **存储与验收**：Session / Incident / Task 仍在内存，重启即失；浏览器端人工验收（事件流、动态步骤、
   409 提示、断线重连）未执行，目前只有接口与单元测试覆盖。
@@ -176,15 +185,18 @@ runQuery 与 runActionPlan 的已解析分支共用。
 1. **Level C 治理层先行**：审批、审计与任务持久化落地后，才把 `executable` 从硬约束放开；
    处置动作必须带幂等、回滚与执行后验证。
 2. **事件接入**：Alert / Gateway 事件自动创建 Incident 并触发调查，复用现有动态图与能力执行器，不新增执行路径。
-3. **补齐能力适配器**：接入 `CONFIG_READ`（路由/限流配置读取）与 `EVENT_QUERY`（变更与告警事件），
-   让「为什么刚变更后就失败」这类问题有据可查；两者仍是只读。
-4. **Planner 评估更细**：evaluate 节点按「证据价值 / 边际收益」决定是否继续，配合成本预算（轮数与调用次数可配但要有默认值）。
-5. **持久化（Lite ↔ Standard）**：Redis 承担短期上下文、MySQL 承载任务与审计，替换现有内存仓储；
+3. ~~**补齐能力适配器**~~：P2 收尾已完成——`CONFIG_READ`（Gateway / Nameserver 生效配置）与 `EVENT_QUERY`
+   （Nameserver 注册事件）已接上只读适配器并进入注册表，两者仍是只读，让「为什么刚变更后就失败」这类问题有据可查。
+4. **按上游实例的窗口观测**：网关侧新增 `GET /_manage/metrics/routes`（`routeId`、`range`），
+   输出每个实例的窗口请求数、状态码、错误率、连接失败、超时与延迟；Agent 侧新增「该路由的某个上游实例返回了 5xx」
+   假设（样本量阈值 5，样本不足判「无法判断」），是对后续摘实例 / 切流动作的判断依据。
+5. **Planner 评估更细**：evaluate 节点按「证据价值 / 边际收益」决定是否继续，配合成本预算（轮数与调用次数可配但要有默认值）。
+6. **持久化（Lite ↔ Standard）**：Redis 承担短期上下文、MySQL 承载任务与审计，替换现有内存仓储；
    仓储接口已经就位，替换不影响业务代码。
-6. **浏览器端端到端验收**：把 §13 七个 Case 在 Workbench 上真实走一遍（含 SSE 断线重连与 409 提示），
+7. **浏览器端端到端验收**：把 §13 七个 Case 在 Workbench 上真实走一遍（含 SSE 断线重连与 409 提示），
    作为下一阶段的验收前置。
-7. **文档同步**：本轮已更新 `admin-api`（P2 任务字段、SSE 覆盖语义、「支持的问法与落点」表）、
-   `configuration-reference`（`rover.agent.planning.*` 三参数）与 `ops-agent`（动态计划、能力注册表、ActionPlan 边界）。
+8. **文档同步**：本轮已更新 `admin-api`（P2 任务字段、SSE 覆盖语义、「支持的问法与落点」表、证据 `metadata` 统计口径与上游实例假设）、
+   `configuration-reference`（`rover.agent.planning.*` 三参数）与 `ops-agent`（动态计划、能力注册表、ActionPlan 边界、六类快照）。
 
 尚未实现的能力一律不出现在注册表的可选集合里——这是本阶段最重要的长期约束：
 **Agent 变聪明的部分全部来自「能选择什么」与「怎么循环」，而不是获得了更多权限。**

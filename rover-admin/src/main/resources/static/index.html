@@ -624,6 +624,7 @@
                                                         <div class="muted wb-evidence-ref">
                                                             <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
                                                         </div>
+                                                        <div v-if="wbEvidenceScope(item)" class="muted wb-evidence-ref">{{ wbEvidenceScope(item) }}</div>
                                                     </div>
                                                 </div>
                                             </div>
@@ -776,6 +777,7 @@
                                         <div class="muted wb-evidence-ref">
                                             <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
                                         </div>
+                                        <div v-if="wbEvidenceScope(item)" class="muted wb-evidence-ref">{{ wbEvidenceScope(item) }}</div>
                                     </div>
                                 </div>
                             </div>

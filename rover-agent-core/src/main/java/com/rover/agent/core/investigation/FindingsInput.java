@@ -3,6 +3,7 @@ package com.rover.agent.core.investigation;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.util.List;
 
@@ -15,6 +16,8 @@ import java.util.List;
  * @param discoveryMode 上游发现模式
  * @param instances     实例快照；不可用时为 null
  * @param traces        追踪快照；不可用时为 null
+ * @param routeUpstreams 该路由下各上游实例的窗口观测；指标能力未执行时为 null，窗口内无转发记录时为空列表
  */
 public record FindingsInput(String path, RouteSnapshot route, boolean routeRead, DiscoveryMode discoveryMode,
-                            List<InstanceSnapshot> instances, TraceSnapshot traces) { }
+                            List<InstanceSnapshot> instances, TraceSnapshot traces,
+                            List<RouteUpstreamSnapshot> routeUpstreams) { }

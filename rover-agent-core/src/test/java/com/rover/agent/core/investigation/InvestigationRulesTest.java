@@ -1,6 +1,7 @@
 package com.rover.agent.core.investigation;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.Confidence;
@@ -9,6 +10,7 @@ import com.rover.agent.core.model.Verdict;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.util.List;
@@ -45,7 +47,9 @@ class InvestigationRulesTest {
         assertEquals(Verdict.REJECTED, hypothesis(findings, "H1").status());
         // 静态上游是路由事实，不是故障假设：只写进结论，不显示为已确认假设。
         assertTrue(findings.hypotheses().stream().noneMatch(item -> "H2".equals(item.id())));
-        assertEquals(1, findings.hypotheses().size());
+        // 静态上游没有 Nameserver 实例假设，但「某台上游返回 5xx」这条例外仍要判定（此处指标未执行）。
+        assertEquals(2, findings.hypotheses().size());
+        assertEquals(Verdict.UNKNOWN, hypothesis(findings, "H6").status());
         assertTrue(findings.summary().contains("静态上游"));
         assertEquals(Confidence.LOW, findings.confidence());
     }
@@ -56,7 +60,7 @@ class InvestigationRulesTest {
 
         // 服务发现模式同样是判断范围，不是已确认故障。
         assertTrue(findings.hypotheses().stream().noneMatch(item -> "H2".equals(item.id())));
-        assertEquals(1, findings.hypotheses().size());
+        assertEquals(2, findings.hypotheses().size());
         assertTrue(findings.summary().contains("NACOS"));
         assertTrue(findings.summary().contains("不能用于判断"));
     }
@@ -165,12 +169,99 @@ class InvestigationRulesTest {
         Findings findings = evaluate(route("/api/demo/tt", "demo", "11"), true, DiscoveryMode.NAMESERVER,
                 List.of(new InstanceSnapshot("demo-service", "", "127.0.0.1", 8081, true)), null);
 
-        assertEquals("确认 1 项 / 排除 1 项 / 无法验证 1 项", InvestigationRules.describeVerdicts(findings.hypotheses()));
+        // H6 在指标能力未执行时如实记为「无法验证」，不因缺少证据而默认排除。
+        assertEquals("确认 1 项 / 排除 1 项 / 无法验证 2 项", InvestigationRules.describeVerdicts(findings.hypotheses()));
     }
 
     private static Findings evaluate(RouteSnapshot route, boolean routeRead, DiscoveryMode discoveryMode,
                                     List<InstanceSnapshot> instances, TraceSnapshot traces) {
-        return InvestigationRules.evaluate(new FindingsInput(PATH, route, routeRead, discoveryMode, instances, traces));
+        return evaluateWithUpstreams(route, routeRead, discoveryMode, instances, traces, null);
+    }
+
+    private static Findings evaluateWithUpstreams(RouteSnapshot route, boolean routeRead, DiscoveryMode discoveryMode,
+                                                  List<InstanceSnapshot> instances, TraceSnapshot traces,
+                                                  List<RouteUpstreamSnapshot> routeUpstreams) {
+        return InvestigationRules.evaluate(new FindingsInput(PATH, route, routeRead, discoveryMode, instances, traces,
+                routeUpstreams));
+    }
+
+    /** 一台稳定返回 5xx 的上游实例 + 一台正常实例：窗口样本都达到判定阈值。 */
+    @Test
+    void upstreamInstanceReturning5xxIsConfirmedAndNamed() {
+        Findings findings = evaluateWithUpstreams(route("/api/order", "order-service", ""), true,
+                DiscoveryMode.NAMESERVER, List.of(), null,
+                List.of(upstream("order-1", 120, 0, 8.0, 20), upstream("order-2", 118, 42, 9.0, 22)));
+
+        Hypothesis h6 = hypothesis(findings, "H6");
+        assertEquals(Verdict.CONFIRMED, h6.status());
+        assertTrue(h6.detail().contains("order-2"), "确认时必须点名异常实例，实际为 " + h6.detail());
+        assertTrue(h6.detail().contains("42"), "确认时必须给出 5xx 计数，实际为 " + h6.detail());
+        assertTrue(findings.summary().contains("order-2"), "结论同样要点名异常实例");
+    }
+
+    /**
+     * H6 已点名异常实例时，结论里不能再留「数据不足以确定原因」——同一份报告不能一边说查不出来、
+     * 一边给出确定的异常实例（真实故障注入时就是这样自相矛盾）。
+     */
+    @Test
+    void confirmedUpstreamInstanceDropsTheInconclusiveWording() {
+        Findings findings = evaluateWithUpstreams(route("/api/order", "order-service", ""), true,
+                DiscoveryMode.NAMESERVER,
+                List.of(new InstanceSnapshot("order-service", "", "127.0.0.1", 9202, true)), null,
+                List.of(upstream("127.0.0.1:9202", 35, 35, 2.7, 4)));
+
+        assertEquals(Verdict.CONFIRMED, hypothesis(findings, "H6").status());
+        assertTrue(findings.summary().contains("127.0.0.1:9202"), "实际为 " + findings.summary());
+        assertFalse(findings.summary().contains("不足以确定"), "实际为 " + findings.summary());
+    }
+
+    @Test
+    void upstreamSamplesBelowThresholdCannotBlameAnInstance() {
+        Findings findings = evaluateWithUpstreams(route("/api/order", "order-service", ""), true,
+                DiscoveryMode.NAMESERVER, List.of(), null,
+                List.of(upstream("order-1", 2, 0, 8.0, 20), upstream("order-2", 3, 3, 9.0, 22)));
+
+        // 请求数低于阈值时，5xx 只是小样本噪音：不能点名实例，也不能说健康。
+        Hypothesis h6 = hypothesis(findings, "H6");
+        assertEquals(Verdict.UNKNOWN, h6.status());
+        assertTrue(h6.detail().contains("样本不足"), "实际为 " + h6.detail());
+        assertTrue(findings.hypotheses().stream().noneMatch(item -> item.status() == Verdict.CONFIRMED
+                && "H6".equals(item.id())));
+    }
+
+    @Test
+    void emptyUpstreamWindowNeitherBlamesNorDeclaresRecovery() {
+        Findings findings = evaluateWithUpstreams(route("/api/order", "order-service", ""), true,
+                DiscoveryMode.NAMESERVER, List.of(), null, List.of());
+
+        // 停止流量后窗口内没有任何样本：既不能说异常仍在，也不能说已经恢复。
+        Hypothesis h6 = hypothesis(findings, "H6");
+        assertEquals(Verdict.UNKNOWN, h6.status());
+        assertTrue(h6.detail().contains("不能据此认定异常已恢复"), "实际为 " + h6.detail());
+    }
+
+    @Test
+    void adequateHealthyUpstreamSamplesRejectTheInstanceHypothesis() {
+        Findings findings = evaluateWithUpstreams(route("/api/order", "order-service", ""), true,
+                DiscoveryMode.NAMESERVER, List.of(), null,
+                List.of(upstream("order-1", 200, 0, 8.0, 20), upstream("order-2", 180, 0, 9.0, 22)));
+
+        assertEquals(Verdict.REJECTED, hypothesis(findings, "H6").status());
+    }
+
+    @Test
+    void unavailableUpstreamMetricsStayUnknown() {
+        Findings findings = evaluate(route("/api/order", "order-service", ""), true, DiscoveryMode.NAMESERVER,
+                List.of(), null);
+
+        assertEquals(Verdict.UNKNOWN, hypothesis(findings, "H6").status());
+        assertTrue(hypothesis(findings, "H6").detail().contains("不可用"));
+    }
+
+    private static RouteUpstreamSnapshot upstream(String hostPort, long windowRequests, long status5xx,
+                                                  double avgMillis, long p95Millis) {
+        return new RouteUpstreamSnapshot("order-route", hostPort, 60, windowRequests, status5xx, 0, 0,
+                avgMillis, p95Millis, System.currentTimeMillis());
     }
 
     private static Hypothesis hypothesis(Findings findings, String id) {

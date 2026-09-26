@@ -161,6 +161,9 @@ public class MetricsRegistry {
             upstreams.computeIfAbsent(upstreamHostPort, key -> new UpstreamMetrics())
                     .record(epochSecond, upstreamCostMillis, connectFail, timeout);
             routeMetrics.recordInstance(upstreamHostPort);
+            // 路由 × 实例维度：按真实 statusCode 归类，才能指出是哪台实例返回了 5xx
+            routeMetrics.upstreamMetrics.computeIfAbsent(upstreamHostPort, key -> new UpstreamMetrics())
+                    .record(epochSecond, upstreamCostMillis, statusCode, connectFail, timeout);
         }
     }
 
@@ -241,6 +244,34 @@ public class MetricsRegistry {
         return exporter.liveJson(rangeSeconds);
     }
 
+    /** 组装 /_manage/metrics/routes 的 JSON 内容。 */
+    public String routeMetricsJson(String routeId, int rangeSeconds) {
+        return exporter.routeMetricsJson(routeId, rangeSeconds);
+    }
+
+    /** 指定路由下各上游实例的窗口观测；路由未知或窗口内无转发记录时返回空列表。 */
+    public List<Map<String, Object>> routeUpstreamRows(String routeId, int rangeSeconds) {
+        if (routeId == null || routeId.isBlank()) {
+            return List.of();
+        }
+        RouteMetrics routeMetrics = routes.get(routeId);
+        if (routeMetrics == null) {
+            return List.of();
+        }
+        long nowSecond = System.currentTimeMillis() / 1000;
+        int window = clampRange(rangeSeconds);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Map.Entry<String, UpstreamMetrics> entry : routeMetrics.upstreamMetrics.entrySet()) {
+            Map<String, Object> row = entry.getValue()
+                    .windowSnapshot(routeId, entry.getKey(), nowSecond, window);
+            // 只输出窗口内确实有转发记录的实例，避免把历史实例当作当前观测
+            if (((Number) row.get("windowRequests")).longValue() > 0) {
+                rows.add(row);
+            }
+        }
+        return rows;
+    }
+
     /** 自洽性自检：校验各加和关系，返回 JSON。 */
     public String selfcheckJson() {
         return exporter.selfcheckJson();
@@ -294,11 +325,20 @@ public class MetricsRegistry {
 
         /** 记录一个样本到对应秒槽位。 */
         void record(long epochSecond, long costMillis, boolean error) {
-            record(epochSecond, costMillis, error, 200);
+            record(epochSecond, costMillis, error, 200, false, false);
         }
 
         /** 记录一个样本，并按状态码归进近窗四桶。 */
         void record(long epochSecond, long costMillis, boolean error, int statusCode) {
+            record(epochSecond, costMillis, error, statusCode, false, false);
+        }
+
+        /**
+         * 完整重载：额外把连接失败/超时纳入按秒窗口，使它们也能给出窗口口径而非累计值。
+         * 旧重载统一委托到这里并传 false，保证既有调用点行为不变。
+         */
+        void record(long epochSecond, long costMillis, boolean error, int statusCode,
+                    boolean connectFail, boolean timeout) {
             Slot slot = slots[(int) Math.floorMod(epochSecond, slots.length)];
             if (slot.stamp != epochSecond) {
                 synchronized (slot) {
@@ -311,6 +351,8 @@ public class MetricsRegistry {
                         slot.base3xx = slot.s3.sum();
                         slot.base4xx = slot.s4.sum();
                         slot.base5xx = slot.s5.sum();
+                        slot.baseConnectFail = slot.connectFailCount.sum();
+                        slot.baseTimeout = slot.timeoutCount.sum();
                         slot.maxMillis.set(0);
                         slot.sampleSize.set(0);
                         slot.sampleCount.set(0);
@@ -322,6 +364,12 @@ public class MetricsRegistry {
             slot.sumMillis.add(costMillis);
             if (error) {
                 slot.errors.increment();
+            }
+            if (connectFail) {
+                slot.connectFailCount.increment();
+            }
+            if (timeout) {
+                slot.timeoutCount.increment();
             }
             addStatusBucket(slot, statusCode);
             long currentMax = slot.maxMillis.get();
@@ -383,6 +431,8 @@ public class MetricsRegistry {
                 long s3 = slot.s3.sum() - slot.base3xx;
                 long s4 = slot.s4.sum() - slot.base4xx;
                 long s5 = slot.s5.sum() - slot.base5xx;
+                long cf = slot.connectFailCount.sum() - slot.baseConnectFail;
+                long to = slot.timeoutCount.sum() - slot.baseTimeout;
                 // 秒切换瞬间的极小并发误差可能导致 delta 为负，夹到 0 保证展示自洽
                 count = Math.max(0, count);
                 sum = Math.max(0, sum);
@@ -394,6 +444,8 @@ public class MetricsRegistry {
                 view.status3xx += Math.max(0, s3);
                 view.status4xx += Math.max(0, s4);
                 view.status5xx += Math.max(0, s5);
+                view.connectFail += Math.max(0, cf);
+                view.timeout += Math.max(0, to);
                 view.maxMillis = Math.max(view.maxMillis, slot.maxMillis.get());
                 actualSeconds++;
                 int size = Math.min(slot.sampleSize.get(), RESERVOIR_SIZE);
@@ -424,6 +476,8 @@ public class MetricsRegistry {
             volatile long base3xx;
             volatile long base4xx;
             volatile long base5xx;
+            volatile long baseConnectFail;
+            volatile long baseTimeout;
             final LongAdder count = new LongAdder();
             final LongAdder sumMillis = new LongAdder();
             final LongAdder errors = new LongAdder();
@@ -431,6 +485,8 @@ public class MetricsRegistry {
             final LongAdder s3 = new LongAdder();
             final LongAdder s4 = new LongAdder();
             final LongAdder s5 = new LongAdder();
+            final LongAdder connectFailCount = new LongAdder();
+            final LongAdder timeoutCount = new LongAdder();
             final AtomicLong maxMillis = new AtomicLong();
             final long[] samples = new long[RESERVOIR_SIZE];
             final AtomicInteger sampleSize = new AtomicInteger();
@@ -448,6 +504,8 @@ public class MetricsRegistry {
             long status3xx;
             long status4xx;
             long status5xx;
+            long connectFail;
+            long timeout;
             long[] samples = new long[0];
         }
     }
@@ -462,6 +520,8 @@ public class MetricsRegistry {
         final TimeRing ring = new TimeRing(RING_SECONDS);
         /** 命中的上游实例分布，键为 host:port，用于观察负载均衡是否均匀。 */
         final ConcurrentHashMap<String, LongAdder> instanceCounts = new ConcurrentHashMap<>();
+        /** 路由 × 上游实例的窗口观测，键为 host:port，用于定位是哪台实例返回了 5xx。 */
+        final ConcurrentHashMap<String, UpstreamMetrics> upstreamMetrics = new ConcurrentHashMap<>();
 
         void record(int statusCode, long epochSecond, long costMillis) {
             total.increment();
@@ -559,8 +619,53 @@ public class MetricsRegistry {
             ring.record(epochSecond, Math.max(0, costMillis), connectFailFlag || timeoutFlag, status);
         }
 
+        /**
+         * 路由 × 实例维度专用：按真实 statusCode 归类（而非只归 200/502），
+         * 并把连接失败/超时一并写入按秒窗口，使二者可给出窗口口径。
+         */
+        void record(long epochSecond, long costMillis, int statusCode,
+                    boolean connectFailFlag, boolean timeoutFlag) {
+            requests.increment();
+            sumMillis.add(Math.max(0, costMillis));
+            if (connectFailFlag) {
+                connectFail.increment();
+            }
+            if (timeoutFlag) {
+                timeout.increment();
+            }
+            ring.record(epochSecond, Math.max(0, costMillis), statusCode >= 500, statusCode,
+                    connectFailFlag, timeoutFlag);
+        }
+
         long windowRequestCount(long nowSecond, int windowSeconds) {
             return ring.view(nowSecond, windowSeconds).requestCount;
+        }
+
+        /**
+         * 路由 × 实例的窗口观测：全部字段取窗口口径，
+         * errorRate 的分子是窗口内 5xx（连接失败/超时按 502 计入 5xx）。
+         */
+        Map<String, Object> windowSnapshot(String routeId, String hostPort, long nowSecond, int windowSeconds) {
+            TimeRing.WindowView view = ring.view(nowSecond, windowSeconds);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("routeId", routeId);
+            row.put("hostPort", hostPort);
+            row.put("windowRequests", view.requestCount);
+            row.put("errorRate", view.requestCount == 0
+                    ? 0 : round2(view.status5xx / (double) view.requestCount));
+            row.put("avgMillis", view.requestCount == 0
+                    ? 0 : round2(view.sumMillis / (double) view.requestCount));
+            row.put("p95Millis", percentile(view.samples, 0.95));
+            row.put("p95Samples", view.samples.length);
+            Map<String, Object> status = new LinkedHashMap<>();
+            status.put("2xx", view.status2xx);
+            status.put("3xx", view.status3xx);
+            status.put("4xx", view.status4xx);
+            status.put("5xx", view.status5xx);
+            row.put("status", status);
+            row.put("connectFail", view.connectFail);
+            row.put("timeout", view.timeout);
+            return row;
         }
 
         Map<String, Object> snapshot(String hostPort, long nowSecond, int windowSeconds) {

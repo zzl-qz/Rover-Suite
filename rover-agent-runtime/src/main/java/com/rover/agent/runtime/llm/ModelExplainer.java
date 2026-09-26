@@ -22,8 +22,10 @@ public final class ModelExplainer {
     private static final int MAX_ANALYSIS_LENGTH = 2000;
 
     private static final String SYSTEM_PROMPT = "你是 Rover 运维诊断助手。只根据提示词里给出的只读快照、只读工具返回的快照"
-            + "和已完成的假设验证解释问题。路由与实例快照已由运行时读好，需要指标或追踪证据时再调用对应的只读工具。"
-            + "区分配置事实、推断和缺失证据。不要声称已经执行修复，也不要输出执行命令。"
+            + "和已完成的假设验证解释问题。路由与实例快照已由运行时读好；需要指标、按上游实例的窗口观测、"
+            + "追踪、配置或注册事件证据时，再调用对应的只读工具。"
+            + "区分事实、推断和缺失证据，指标证据要说明统计窗口与样本量，样本不足时明确说无法判断。"
+            + "不要声称已经执行修复，也不要输出执行命令。"
             + "用简洁中文给出原因和下一步人工检查建议。";
 
     private final ChatModelGateway gateway;

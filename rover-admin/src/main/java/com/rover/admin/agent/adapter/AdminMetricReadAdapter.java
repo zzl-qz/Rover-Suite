@@ -5,10 +5,13 @@ import com.rover.admin.service.AdminConfigService;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.SnapshotUnavailableException;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 
-/** 从 Admin 管理口读取 Gateway 全局指标快照。 */
+/** 从 Admin 管理口读取 Gateway 全局指标与「路由 × 上游实例」窗口观测。 */
 @Component
 public class AdminMetricReadAdapter implements MetricReadPort {
 
@@ -39,6 +42,44 @@ public class AdminMetricReadAdapter implements MetricReadPort {
             throw ex;
         } catch (Exception ex) {
             throw new SnapshotUnavailableException("读取 Gateway 指标失败", ex);
+        }
+    }
+
+    /**
+     * 读取指定路由下各上游实例的窗口观测。
+     *
+     * 网关把「路由未知」与「窗口内没有转发记录」都表达为空 rows，因此这里返回空列表；
+     * 只有指标未启用或端点不可达才抛 {@link SnapshotUnavailableException}——
+     * 「没有样本」不能变成「数据不可用」，否则结论会把采样空白当成采集失败。
+     */
+    @Override
+    public List<RouteUpstreamSnapshot> routeUpstreams(String routeId, int windowSeconds) {
+        try {
+            JsonNode payload = admin.loadRouteUpstreams(routeId, windowSeconds);
+            if (!payload.path("enabled").asBoolean(true)) {
+                throw new SnapshotUnavailableException("Gateway 指标采集未启用，无法读取按上游实例指标");
+            }
+            int window = payload.path("windowSeconds").asInt(windowSeconds);
+            long observedAt = payload.path("observedAtMillis").asLong(System.currentTimeMillis());
+            List<RouteUpstreamSnapshot> rows = new ArrayList<>();
+            for (JsonNode row : payload.path("rows")) {
+                rows.add(new RouteUpstreamSnapshot(
+                        row.path("routeId").asText(routeId == null ? "" : routeId),
+                        row.path("hostPort").asText(""),
+                        window,
+                        row.path("windowRequests").asLong(0),
+                        row.path("status").path("5xx").asLong(0),
+                        row.path("connectFail").asLong(0),
+                        row.path("timeout").asLong(0),
+                        row.path("avgMillis").asDouble(0),
+                        row.path("p95Millis").asLong(0),
+                        observedAt));
+            }
+            return rows;
+        } catch (SnapshotUnavailableException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new SnapshotUnavailableException("读取 Gateway 按上游实例指标失败", ex);
         }
     }
 }

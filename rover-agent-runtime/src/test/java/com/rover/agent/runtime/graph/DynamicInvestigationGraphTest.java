@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.capability.AgentCapability;
+import com.rover.agent.core.capability.CapabilityDescriptor;
 import com.rover.agent.core.capability.CapabilityExecutor;
 import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.model.AgentStepType;
@@ -92,20 +93,34 @@ class DynamicInvestigationGraphTest {
     @Test
     void onlyExecutesCapabilitiesRegisteredAsSelectable() {
         PlanningLimits limits = PlanningLimits.defaults();
-        // Planner（或模型建议）塞进两个「已登记但未接入」的能力：校验层丢弃它们，图不会执行。
+        // 注册表里 CONFIG_READ / EVENT_QUERY 被标为「已登记但未接入」：校验层丢弃它们，图不会执行。
+        CapabilityRegistry registry = registryWithout(AgentCapability.CONFIG_READ, AgentCapability.EVENT_QUERY);
         ScriptedPlanner planner = new ScriptedPlanner(
                 List.of(plan(AgentCapability.CONFIG_READ, AgentCapability.ROUTE_QUERY,
                         AgentCapability.EVENT_QUERY, AgentCapability.INSTANCE_QUERY)),
                 PlanningDecision.finish("测试：本轮即可收尾"));
         RecordingReporter reporter = new RecordingReporter();
 
-        InvestigationOutcome outcome = investigate(planner, limits, reporter);
+        InvestigationOutcome outcome = investigateWithRegistry(planner, limits, reporter, registry,
+                new AtomicInteger());
 
         assertEquals(List.of(AgentCapability.ROUTE_QUERY, AgentCapability.INSTANCE_QUERY),
                 outcome.executedCapabilities());
         assertFalse(outcome.plan().capabilities().contains(AgentCapability.CONFIG_READ));
         assertFalse(outcome.plan().capabilities().contains(AgentCapability.EVENT_QUERY));
         assertEquals(outcome.executedCapabilities(), reporter.capabilities());
+    }
+
+    /** 把指定能力标为「已登记但未接入」：这是 Planner 与执行层共同的硬边界。 */
+    private static CapabilityRegistry registryWithout(AgentCapability... unavailable) {
+        java.util.Set<AgentCapability> blocked = java.util.Set.of(unavailable);
+        List<CapabilityDescriptor> descriptors = CapabilityRegistry.standard().all().stream()
+                .map(item -> blocked.contains(item.id())
+                        ? new CapabilityDescriptor(item.id(), item.name(), item.description(), item.risk(),
+                                item.supportedTargetTypes(), false, item.stepType(), item.stepName())
+                        : item)
+                .toList();
+        return new CapabilityRegistry(descriptors);
     }
 
     private static InvestigationOutcome investigate(InvestigationPlanner planner, PlanningLimits limits,
@@ -116,12 +131,19 @@ class DynamicInvestigationGraphTest {
     private static InvestigationOutcome investigateWithCounter(InvestigationPlanner planner, PlanningLimits limits,
                                                                 RecordingReporter reporter,
                                                                 AtomicInteger metricReads) {
-        CapabilityRegistry registry = CapabilityRegistry.standard();
+        return investigateWithRegistry(planner, limits, reporter, CapabilityRegistry.standard(), metricReads);
+    }
+
+    private static InvestigationOutcome investigateWithRegistry(InvestigationPlanner planner, PlanningLimits limits,
+                                                                 RecordingReporter reporter,
+                                                                 CapabilityRegistry registry,
+                                                                 AtomicInteger metricReads) {
         MetricReadPort metrics = windowSeconds -> {
             metricReads.incrementAndGet();
             return new GatewayMetricSnapshot(10, 0, 0, System.currentTimeMillis());
         };
-        CapabilityExecutor executor = new CapabilityExecutor(routes(), instances(), metrics, traces(), registry);
+        CapabilityExecutor executor = new CapabilityExecutor(routes(), instances(), metrics, traces(),
+                () -> List.of(), () -> List.of(), registry);
         DynamicInvestigationGraph graph = new DynamicInvestigationGraph(planner,
                 new PlanValidator(registry, limits), executor, limits, reporter);
         return graph.investigate("task-1", PATH, "为什么 " + PATH + " 调用失败？", TARGET, null);

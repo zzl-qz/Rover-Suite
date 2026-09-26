@@ -24,6 +24,8 @@ public final class CapabilityRegistry {
     private static final String SOURCE_INSTANCES = "Nameserver 实例注册表";
     private static final String SOURCE_METRICS = "Gateway 实时指标";
     private static final String SOURCE_TRACES = "Gateway 抽样追踪";
+    private static final String SOURCE_CONFIGS = "Gateway / Nameserver 生效配置";
+    private static final String SOURCE_EVENTS = "Nameserver 事件流";
 
     private final List<CapabilityDescriptor> descriptors;
 
@@ -32,9 +34,11 @@ public final class CapabilityRegistry {
     }
 
     /**
-     * 本阶段的标准注册表：四个已接入的只读能力 + 两个「已登记但未开放」的能力。
+     * 本阶段的标准注册表：六个已接入的只读能力。
      *
-     * 未开放的能力照样出现在清单里（用户问「有哪些能力」时看得到边界），但不可被 Planner 选择。
+     * 未接入数据适配器的能力照样登记（用户问「有哪些能力」时看得到边界），但不可被 Planner 选择。
+     * 目前六个能力全部接入，因此没有「已登记但未开放」项——一旦某个适配器被移除，把对应能力改为
+     * {@code available=false} 即可，Planner 与能力清单会自动跟着收口。
      */
     public static CapabilityRegistry standard() {
         return new CapabilityRegistry(List.of(
@@ -47,7 +51,7 @@ public final class CapabilityRegistry {
                         List.of(TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
                         true, AgentStepType.INSTANCE_INVESTIGATION, "读取实例"),
                 new CapabilityDescriptor(AgentCapability.GATEWAY_METRICS_QUERY, "网关指标查询",
-                        "查询 Gateway 全局流量与拒绝计数（最近窗口）",
+                        "查询 Gateway 全局流量与拒绝计数，以及路由各上游实例的窗口请求数、状态码与延迟",
                         CapabilityRisk.READ_ONLY,
                         List.of(TargetType.UNKNOWN, TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
                         true, AgentStepType.METRIC_INVESTIGATION, "读取指标"),
@@ -55,10 +59,16 @@ public final class CapabilityRegistry {
                         CapabilityRisk.READ_ONLY,
                         List.of(TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
                         true, AgentStepType.TRACE_INVESTIGATION, "读取追踪"),
-                new CapabilityDescriptor(AgentCapability.CONFIG_READ, "配置读取", "读取 Gateway 路由与限流配置",
-                        CapabilityRisk.READ_ONLY, List.of(), false, AgentStepType.ANSWER, "读取配置"),
-                new CapabilityDescriptor(AgentCapability.EVENT_QUERY, "事件查询", "查询变更与告警事件",
-                        CapabilityRisk.READ_ONLY, List.of(), false, AgentStepType.ANSWER, "读取事件")));
+                new CapabilityDescriptor(AgentCapability.CONFIG_READ, "配置读取",
+                        "读取 Gateway 与 Nameserver 当前生效配置（限流、熔断、超时、采样率等）",
+                        CapabilityRisk.READ_ONLY,
+                        List.of(TargetType.UNKNOWN, TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
+                        true, AgentStepType.CONFIG_INVESTIGATION, "读取配置"),
+                new CapabilityDescriptor(AgentCapability.EVENT_QUERY, "事件查询",
+                        "查询注册中心最近事件（注册、注销、剔除、标记不健康、推送）",
+                        CapabilityRisk.READ_ONLY,
+                        List.of(TargetType.UNKNOWN, TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
+                        true, AgentStepType.EVENT_INVESTIGATION, "读取事件")));
     }
 
     /** 全部已登记能力（含未开放的）。 */
@@ -121,17 +131,19 @@ public final class CapabilityRegistry {
      * 不存在第二处「对外话术」，也就不会出现「介绍里说能做、注册表里其实没有」的分叉。
      */
     public String introduce() {
-        return "我是 Rover Ops Agent：一个只读的运维诊断 Agent，基于 Gateway 路由、服务实例、实时指标与抽样追踪"
-                + "回答状态问题、调查调用失败；日志、变更记录与知识检索尚未接入。\n"
+        return "我是 Rover Ops Agent：一个只读的运维诊断 Agent，基于 Gateway 路由、服务实例、实时指标、抽样追踪、"
+                + "生效配置与注册事件回答状态问题、调查调用失败；日志、知识检索与网关写操作尚未接入。\n"
                 + "可以直接这样问我：\n"
                 + "- 「网关 QPS 多少」「order-service 有几个健康实例」——状态查询；\n"
                 + "- 「为什么 /api/demo/tt 调用失败」——只读故障调查；\n"
+                + "- 「限流阈值是多少」「最近有哪些实例上下线」——配置与事件查询；\n"
                 + "- 「你能做什么」——完整能力清单。\n"
                 + describe();
     }
 
     /** 供证据来源说明使用（与既有数据源命名保持一致）。 */
     public String describeSources() {
-        return String.join("、", SOURCE_ROUTES, SOURCE_INSTANCES, SOURCE_METRICS, SOURCE_TRACES);
+        return String.join("、", SOURCE_ROUTES, SOURCE_INSTANCES, SOURCE_METRICS, SOURCE_TRACES,
+                SOURCE_CONFIGS, SOURCE_EVENTS);
     }
 }

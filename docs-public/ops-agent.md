@@ -56,10 +56,12 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 ### Level A: Observe
 
-The agent queries Route, Instance, Metrics, Trace, and Events runtime data. Read-only.
+The agent queries Route, Instance, Metrics, Trace, Config, and Events runtime data. Read-only.
 
 **Status: implemented.** `InvestigationService` (in `rover-agent-runtime`), driven by `AgentOrchestrator`, collects
-route, instance, metric, and trace snapshots and returns a conclusion, evidence sources, and collection timestamps.
+route, instance, metric, trace, configuration, and registry-event snapshots and returns a conclusion, evidence sources,
+and collection timestamps. Metrics go beyond the global window: they also expose windowed request counts, status codes,
+error rate, and latency per route × upstream instance, which is what names the instance that is failing.
 
 ### Level B: Reason
 
@@ -69,7 +71,8 @@ and produces a root cause with remediation advice.
 **Status: in progress.** Hypothesis-driven investigation is live for the read-only chain: the investigation runs as a
 StateGraph where a planner proposes read-only steps (a plan → execute → evaluate loop) and a synthesis node confirms or
 eliminates candidate causes one by one (for example "the path matches no route", "the target service has no matching instance",
-"all matching instances are unhealthy", "downstream calls failed recently"), each bound to its evidence sources.
+"all matching instances are unhealthy", "downstream calls failed recently", "one upstream instance of this route returned 5xx"),
+each bound to its evidence sources.
 
 Dynamic capability selection and evidence-adaptive investigation plans are now live: the orchestrator first decides the
 intent, then selects read-only capabilities from the capability registry; a planner produces the plan, an executor runs it,
@@ -251,8 +254,9 @@ they are built, rather than scaffolding empty modules now.
   when needed; state queries run a couple of read-only capabilities, capability questions answer from the registry's
   real list, and unsupported requests are answered honestly instead of forced into an investigation. Unrecognised
   messages with no resolvable target get a self-introduction plus the capability list instead of a path clarification.
-- Capability registry and read-only executor: available capabilities (route / instance / gateway metrics / trace queries)
-  are registered as READ_ONLY, planning may only choose among them, and the executor is the single data-access point
+- Capability registry and read-only executor: available capabilities (route / instance / gateway metrics / trace /
+  configuration / registry-event queries) are registered as READ_ONLY, planning may only choose among them, and the
+  executor is the single data-access point
   between the model and production data; capabilities without a data adapter are marked unselectable, and action requests
   only produce a non-executable action plan (`executable` is always `false`).
 - The investigation chain is orchestrated by a Spring AI Alibaba StateGraph: a planner produces the plan (rule-based

@@ -2,6 +2,8 @@ package com.rover.agent.core.planning;
 
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.capability.CapabilityRegistry;
+import com.rover.agent.core.intent.IntentClassifier;
+import com.rover.agent.core.intent.QuerySubject;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TargetType;
 import java.util.ArrayList;
@@ -25,6 +27,8 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
     private static final String REASON_INSTANCE = "核对目标服务的注册实例与健康实例数";
     private static final String REASON_METRIC = "确认 Gateway 最近窗口的流量与拒绝计数";
     private static final String REASON_TRACE = "查看该路径最近的请求结果";
+    private static final String REASON_CONFIG = "查看当前生效的限流、熔断与超时配置";
+    private static final String REASON_EVENT = "查看注册中心最近的实例上下线经过";
 
     private final CapabilityRegistry registry;
 
@@ -51,7 +55,23 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
             // 没有请求路径时不规划路由与追踪：这两类能力都以路径为取数口径，强行执行只会产出噪声。
             add(steps, AgentCapability.INSTANCE_QUERY, REASON_INSTANCE, target, true);
         }
+        addQuestionDrivenSteps(steps, context, target);
         return new InvestigationPlan(goal(context, target, hasPath), hypotheses(hasPath), steps);
+    }
+
+    /**
+     * 问题本身指向配置或事件时，才追加对应的可选步骤。
+     *
+     * 这两类事实对常见故障调查没有普遍判定价值，因此不做成必查项：每次都读会凭空增加两跳只读调用，
+     * 也会让证据里塞进与问题无关的内容。词汇判定复用意图层的同一套口径，不在这里维护第二份关键词。
+     */
+    private void addQuestionDrivenSteps(List<PlannedStep> steps, PlanningRequest request, ResourceTarget target) {
+        QuerySubject subject = IntentClassifier.stateSubject(request.question());
+        if (subject == QuerySubject.CONFIG) {
+            add(steps, AgentCapability.CONFIG_READ, REASON_CONFIG, target, false);
+        } else if (subject == QuerySubject.EVENT) {
+            add(steps, AgentCapability.EVENT_QUERY, REASON_EVENT, target, false);
+        }
     }
 
     @Override
@@ -101,6 +121,7 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         hypotheses.add("目标服务没有匹配的注册实例");
         hypotheses.add("匹配实例均不健康");
         if (hasPath) {
+            hypotheses.add("该路由的某个上游实例返回了 5xx");
             hypotheses.add("该路径近期返回 503");
         }
         return List.copyOf(hypotheses);

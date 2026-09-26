@@ -25,6 +25,8 @@ import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.port.ConfigReadPort;
+import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
@@ -323,12 +325,15 @@ class AgentOrchestratorTest {
             throw new SnapshotUnavailableException("测试桩未提供追踪");
         };
         IncidentRegistry registry = new IncidentRegistry(sessions, incidents, retention);
+        ConfigReadPort configPort = () -> List.of();
+        EventReadPort eventPort = () -> List.of();
         InvestigationService investigations = new InvestigationService(routes, instancePort, metricPort,
-                tracePort, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
+                tracePort, configPort, eventPort, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instancePort, 8);
         CapabilityRegistry capabilities = CapabilityRegistry.standard();
-        CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort, capabilities);
+        CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort,
+                configPort, eventPort, capabilities);
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
                 new IntentService(), new QueryStateService(executor),

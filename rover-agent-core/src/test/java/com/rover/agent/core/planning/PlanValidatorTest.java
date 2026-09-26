@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.capability.AgentCapability;
+import com.rover.agent.core.capability.CapabilityDescriptor;
 import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.model.ResourceTarget;
 import java.util.List;
@@ -31,8 +32,9 @@ class PlanValidatorTest {
 
     @Test
     void unregisteredOrUnconnectedCapabilityIsRejected() {
-        // CONFIG_READ / EVENT_QUERY 已登记但尚未接入适配器：出现在计划里也必须被丢掉。
-        InvestigationPlan validated = validator.validate(planOf(AgentCapability.CONFIG_READ,
+        // 把两个能力收口为「已登记但未接入适配器」：出现在计划里也必须被丢掉。
+        PlanValidator partial = validatorWithout(AgentCapability.CONFIG_READ, AgentCapability.EVENT_QUERY);
+        InvestigationPlan validated = partial.validate(planOf(AgentCapability.CONFIG_READ,
                 AgentCapability.EVENT_QUERY), request("/api/demo/tt", ResourceTarget.route("/api/demo/tt")), Set.of());
 
         assertTrue(validated.isEmpty());
@@ -40,12 +42,25 @@ class PlanValidatorTest {
 
     @Test
     void keepsOnlySelectableCapabilitiesFromMixedPlan() {
-        InvestigationPlan validated = validator.validate(planOf(AgentCapability.ROUTE_QUERY,
+        PlanValidator partial = validatorWithout(AgentCapability.CONFIG_READ);
+        InvestigationPlan validated = partial.validate(planOf(AgentCapability.ROUTE_QUERY,
                 AgentCapability.CONFIG_READ, AgentCapability.INSTANCE_QUERY),
                 request("/api/demo/tt", ResourceTarget.route("/api/demo/tt")), Set.of());
 
         assertEquals(List.of(AgentCapability.ROUTE_QUERY, AgentCapability.INSTANCE_QUERY),
                 validated.steps().stream().map(PlannedStep::capability).toList());
+    }
+
+    /** 按「指定能力未接入」重建校验器：选择与执行边界由注册表统一收口。 */
+    private static PlanValidator validatorWithout(AgentCapability... unavailable) {
+        Set<AgentCapability> blocked = Set.of(unavailable);
+        List<CapabilityDescriptor> descriptors = REGISTRY.all().stream()
+                .map(item -> blocked.contains(item.id())
+                        ? new CapabilityDescriptor(item.id(), item.name(), item.description(), item.risk(),
+                                item.supportedTargetTypes(), false, item.stepType(), item.stepName())
+                        : item)
+                .toList();
+        return new PlanValidator(new CapabilityRegistry(descriptors), PlanningLimits.defaults());
     }
 
     @Test

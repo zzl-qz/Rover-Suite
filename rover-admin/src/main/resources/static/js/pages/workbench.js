@@ -872,6 +872,24 @@ window.RoverAdminPages.workbench = {
             }[type] || type || '-';
         },
 
+        /**
+         * 证据的统计口径摘要：窗口秒数与样本量直接来自证据 metadata。
+         * 样本不足时前端也要看得见「样本量」，否则无法判断「有没有异常」这句话的依据够不够。
+         */
+        wbEvidenceScope(item) {
+            const meta = (item && item.metadata) || {};
+            const parts = [];
+            const windowSeconds = Number(meta.windowSeconds);
+            if (windowSeconds > 0) parts.push('窗口 ' + windowSeconds + 's');
+            else if (windowSeconds === 0) parts.push('时点快照');
+            const sampleSize = Number(meta.sampleSize);
+            if (Number.isFinite(sampleSize) && sampleSize > 0) parts.push('样本 ' + sampleSize);
+            if (meta.routeId) parts.push('路由 ' + meta.routeId);
+            if (meta.hostPort) parts.push('上游 ' + meta.hostPort);
+            if (meta.component) parts.push('组件 ' + meta.component);
+            return parts.join(' · ');
+        },
+
         wbTimeRangeText(range) {
             if (!range || (!range.fromMillis && !range.toMillis)) return '默认窗口';
             return this.fmtTime(range.fromMillis) + ' ~ ' + this.fmtTime(range.toMillis);
