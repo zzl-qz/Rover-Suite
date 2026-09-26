@@ -256,25 +256,30 @@ class InvestigationServiceTest {
     }
 
     @Test
-    void modelMustReadSnapshotToolsBeforeServingExplanation() throws Exception {
+    void explanationIsGroundedInRuntimePrefetchedSnapshotsEvenWhenTheModelCallsNoTool() throws Exception {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
         when(instances.instances()).thenReturn(List.of());
         ChatModel model = mock(ChatModel.class);
         when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
         useModel(new ModelExplainer(TestGateway.of(model)));
-        // Spring AI 2.x：工具调用循环在真实 ChatModel 内部执行，mock 无法触发；
-        // 模型拿到了工具却一个都没读，正好验证 guard：不得采信未读取证据的解释。
+        // Spring AI 2.x：工具调用循环在真实 ChatModel 内部执行，mock 无法触发。
+        // 模型一个工具都不读也必须能产出解释：路由与实例快照由运行时预读后写进提示词。
         when(model.stream(any(Prompt.class))).thenReturn(Flux.just(
-                new ChatResponse(List.of(new Generation(new AssistantMessage("AI 解释（未读取证据）"))))));
+                response("AI 解释（依据运行时预读快照）")));
 
         TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
-        // 模型未读取路由/实例快照，guard 拒绝其解释，回退为规则诊断。
-        assertNull(task.result().aiAnalysis());
-        assertTrue(task.result().limitations().stream().anyMatch(item -> item.contains("模型暂时不可用")));
-        assertTrue(task.steps().stream().anyMatch(step -> step.name().equals("AI 解读")
-                && step.status().name().equals("FAILED")));
+        assertEquals("AI 解释（依据运行时预读快照）", task.result().aiAnalysis());
+        assertTrue(task.steps().stream().anyMatch(step -> "AI 解读".equals(step.name())
+                && "COMPLETED".equals(step.status().name())
+                && step.outputSummary().contains("运行时预读快照：路由快照、实例快照")));
+        // 提示词里确实带着预读快照文本：解释有据可依，不靠模型自觉调用工具。
+        ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
+        verify(model).stream(prompts.capture());
+        String userText = prompts.getValue().getUserMessage().getText();
+        assertTrue(userText.contains("运行时已读取的只读快照："));
+        assertTrue(userText.contains("路由快照："));
     }
 
     @Test
@@ -301,10 +306,10 @@ class InvestigationServiceTest {
         // 增量拼接结果与落库文本逐字一致，且订阅者一定收到结束通知。
         assertEquals("先看路由，再看实例", task.result().aiAnalysis());
         assertEquals(List.of("snapshot:", "delta:先看路由", "delta:，再看实例", "complete"), listener.events());
-        // 步骤说明如实记录模型读过的工具：「解释了」必须能追到「读了哪几份快照」。
+        // 步骤说明如实记录证据来源：预读快照与模型另调的工具各自可追溯。
         assertTrue(task.steps().stream().anyMatch(step -> "AI 解读".equals(step.name())
-                && step.outputSummary() != null && step.outputSummary().contains("调用只读工具：")
-                && step.outputSummary().contains("路由快照")));
+                && step.outputSummary() != null && step.outputSummary().contains("运行时预读快照：路由快照、实例快照")
+                && step.outputSummary().contains("模型另调工具：")));
     }
 
     @Test
@@ -397,9 +402,9 @@ class InvestigationServiceTest {
     }
 
     /**
-     * 替身模型"读一遍"提示词里挂的全部快照工具：guard 只认工具调用记录，不看答案本身。
-     * 工具回调只有进了提示词才读得到，所以替身的 getOptions() 必须是 ToolCallingChatOptions
-     * （真实模型用的 OpenAiChatOptions 本身就实现了它）。
+     * 替身模型"读一遍"提示词里挂的全部快照工具：用来验证步骤说明里的「模型另调工具」记录，
+     * 以及模型额外调用时解读仍然正常。工具回调只有进了提示词才读得到，所以替身的 getOptions()
+     * 必须是 ToolCallingChatOptions（真实模型用的 OpenAiChatOptions 本身就实现了它）。
      */
     private static void readAllTools(Prompt prompt) {
         if (prompt.getOptions() instanceof ToolCallingChatOptions options) {

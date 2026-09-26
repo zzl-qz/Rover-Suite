@@ -162,8 +162,8 @@ public final class InvestigationService {
             task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.RUNNING, AI_RUNNING);
             ModelExplainer.Explanation explanation = explainer.explainStreaming(task.path(), task.question(),
                     outcome.evidence(), outcome.findings().hypotheses(), task::appendAnalysis);
-            // 步骤里带上模型实际读过的工具：解释的依据可追溯到具体快照，而不是一句「已生成解释」。
-            task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.COMPLETED, completedDetail(explanation.tools()));
+            // 步骤里区分「运行时预读」与「模型另调」：解释的依据可追溯到具体快照，而不是一句「已生成解释」。
+            task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.COMPLETED, completedDetail(explanation));
             return new InvestigationReport(report.summary(), report.confidence(), report.evidence(),
                     report.limitations(), report.hypotheses(), explanation.text().trim());
         } catch (Exception ex) {
@@ -173,9 +173,14 @@ public final class InvestigationService {
         }
     }
 
-    /** 解读成功的结果说明：如实列出模型调用过的只读工具。 */
-    private static String completedDetail(List<String> tools) {
-        return tools.isEmpty() ? AI_COMPLETED : AI_COMPLETED + "，调用只读工具：" + String.join("、", tools);
+    /** 解读成功的结果说明：如实区分运行时预读的快照与模型自己额外调用的工具。 */
+    private static String completedDetail(ModelExplainer.Explanation explanation) {
+        StringBuilder detail = new StringBuilder(AI_COMPLETED)
+                .append("，运行时预读快照：").append(String.join("、", explanation.prefetched()));
+        if (!explanation.tools().isEmpty()) {
+            detail.append("；模型另调工具：").append(String.join("、", explanation.tools()));
+        }
+        return detail.toString();
     }
 
     private static InvestigationReport withoutAnalysis(InvestigationReport report, String limitation) {
