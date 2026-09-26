@@ -20,9 +20,9 @@ public enum AgentCapability {
     /** 查询指定请求路径的抽样追踪 */
     TRACE_QUERY,
 
-    /** 读取 Gateway 配置；尚未接入适配器 */
+    /** 读取 Gateway / Nameserver 当前生效配置（限流、熔断、超时、采样率等） */
     CONFIG_READ,
 
-    /** 查询 Gateway/管理口事件；尚未接入适配器 */
+    /** 查询注册中心最近事件（注册、注销、剔除、标记不健康、推送） */
     EVENT_QUERY
 }

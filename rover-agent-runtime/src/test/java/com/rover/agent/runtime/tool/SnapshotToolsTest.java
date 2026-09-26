@@ -16,7 +16,15 @@ class SnapshotToolsTest {
             Evidence.of("task-1", EvidenceType.INSTANCE, "Nameserver 实例注册表", "实例健康", "实例快照",
                     "/api/instances", 1),
             Evidence.of("task-1", EvidenceType.TRACE, "Gateway 抽样追踪", "路径追踪记录", "追踪快照",
-                    "/api/traces?path=%2Fapi%2Fhello", 1));
+                    "/api/traces?path=%2Fapi%2Fhello", 1),
+            Evidence.of("task-1", EvidenceType.CONFIG, "Gateway / Nameserver 生效配置", "生效配置", "配置快照",
+                    "/api/configs", 1),
+            Evidence.of("task-1", EvidenceType.EVENT, "Nameserver 事件流", "注册中心事件", "事件快照",
+                    "/api/events", 1),
+            Evidence.of("task-1", EvidenceType.METRIC, "Gateway 实时指标", "上游实例窗口观测",
+                    "上游 order-1（窗口请求 120 次，5xx 0 次）", "/api/metrics/routes?routeId=r3", 1),
+            Evidence.of("task-1", EvidenceType.METRIC, "Gateway 实时指标", "上游实例窗口观测",
+                    "上游 order-2（窗口请求 118 次，5xx 42 次）", "/api/metrics/routes?routeId=r3", 1));
 
     @Test
     void exposesOnlyCollectedSnapshotsAndIsRepeatable() {
@@ -26,8 +34,22 @@ class SnapshotToolsTest {
             assertEquals("路由快照", tools.routeSnapshot());
             assertEquals("实例快照", tools.instanceSnapshot());
             assertEquals("追踪快照", tools.traceSnapshot());
+            assertEquals("配置快照", tools.configSnapshot());
+            assertEquals("事件快照", tools.eventSnapshot());
             assertEquals("实时指标不可用", tools.metricsSnapshot());
         }
+    }
+
+    /** 路由 × 上游实例一次产出多条同前缀证据：必须全部返回，只给第一条会让模型以为只有一台实例。 */
+    @Test
+    void upstreamSnapshotReturnsEveryInstanceRow() {
+        SnapshotTools tools = new SnapshotTools(EVIDENCE);
+
+        String text = tools.upstreamSnapshot();
+
+        assertTrue(text.contains("order-1"), "实际为 " + text);
+        assertTrue(text.contains("order-2"), "实际为 " + text);
+        assertEquals(List.of("上游实例窗口观测"), tools.calledTools());
     }
 
     @Test
@@ -79,5 +101,8 @@ class SnapshotToolsTest {
         assertEquals("实例数据不可用", tools.instanceSnapshot());
         assertEquals("实时指标不可用", tools.metricsSnapshot());
         assertEquals("追踪数据不可用", tools.traceSnapshot());
+        assertEquals("按上游实例的指标不可用", tools.upstreamSnapshot());
+        assertEquals("配置快照不可用", tools.configSnapshot());
+        assertEquals("注册事件不可用", tools.eventSnapshot());
     }
 }

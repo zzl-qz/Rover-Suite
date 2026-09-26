@@ -13,6 +13,8 @@ public final class ManageApiPaths {
     public static final String ROUTES = PREFIX + "/routes";
     public static final String METRICS = PREFIX + "/metrics";
     public static final String METRICS_LIVE = METRICS + "/live";
+    /** 路由 × 上游实例的窗口观测（只读）。 */
+    public static final String METRICS_ROUTES = METRICS + "/routes";
     public static final String METRICS_SELFCHECK = METRICS + "/selfcheck";
     public static final String PROMETHEUS = PREFIX + "/prometheus";
     public static final String TRACES = PREFIX + "/traces";
@@ -25,6 +27,7 @@ public final class ManageApiPaths {
     public static final String PARAM_PATH = "path";
     public static final String PARAM_SLOW = "slow";
     public static final String PARAM_RANGE = "range";
+    public static final String PARAM_ROUTE_ID = "routeId";
 
     /** live 默认近窗：1 分钟。 */
     public static final int LIVE_RANGE_1M = 60;

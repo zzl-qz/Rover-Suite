@@ -175,7 +175,7 @@ effect verification.
 | Instances | Registered Nameserver instances and health |
 | Recent events | Registration, removal, health and push events |
 | Configuration | Runtime Gateway/Nameserver settings |
-| Diagnosis | Hypothesis-based read-only investigation over route, instance, metric, and trace evidence, with an optional streamed-live AI explanation |
+| Diagnosis | Hypothesis-based read-only investigation over route, instance, metric, trace, configuration, and registry-event evidence, with an optional streamed-live AI explanation |
 
 ## Screenshots and quick orientation
 

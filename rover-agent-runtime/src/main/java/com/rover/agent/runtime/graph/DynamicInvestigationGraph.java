@@ -31,6 +31,7 @@ import com.rover.agent.core.planning.PlanningRequest;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -109,6 +110,7 @@ public final class DynamicInvestigationGraph {
     private DiscoveryMode discovery = DiscoveryMode.UNKNOWN;
     private List<InstanceSnapshot> instances;
     private TraceSnapshot traces;
+    private List<RouteUpstreamSnapshot> routeUpstreams;
     private Findings findings;
     private String clarification;
 
@@ -271,7 +273,13 @@ public final class DynamicInvestigationGraph {
             }
             applyFacts(capability, result);
             evidence.addAll(result.evidence());
-            limitations.addAll(result.limitations());
+            // 多个能力会给出同一条边界说明（例如全局指标与按上游观测共用 60 秒窗口口径、
+            // 配置快照按组件各给一次）。同一句话重复出现只会让判断边界显得像噪声，这里保序去重。
+            for (String limitation : result.limitations()) {
+                if (!limitations.contains(limitation)) {
+                    limitations.add(limitation);
+                }
+            }
             report(capability);
             if (reporter != null) {
                 reporter.step(result.stepType(), result.stepName(),
@@ -322,7 +330,7 @@ public final class DynamicInvestigationGraph {
 
     /** 合成节点：只依据已采集的只读事实逐条确认或排除候选故障原因。 */
     private Map<String, Object> synthesise(OverAllState state) {
-        FindingsInput input = new FindingsInput(path, route, routeRead, discovery, instances, traces);
+        FindingsInput input = new FindingsInput(path, route, routeRead, discovery, instances, traces, routeUpstreams);
         Findings result = InvestigationRules.evaluate(input);
         if (reporter != null) {
             reporter.step(AgentStepType.DIAGNOSIS, STEP_SYNTHESIS, StepStatus.COMPLETED,
@@ -359,6 +367,8 @@ public final class DynamicInvestigationGraph {
             discovery = result.discoveryMode();
         } else if (capability == AgentCapability.INSTANCE_QUERY && result.executed()) {
             instances = result.instances();
+        } else if (capability == AgentCapability.GATEWAY_METRICS_QUERY && result.executed()) {
+            routeUpstreams = result.routeUpstreams();
         } else if (capability == AgentCapability.TRACE_QUERY && result.executed()) {
             traces = result.traces();
         }

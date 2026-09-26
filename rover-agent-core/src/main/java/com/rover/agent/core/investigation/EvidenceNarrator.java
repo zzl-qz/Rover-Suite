@@ -1,16 +1,36 @@
 package com.rover.agent.core.investigation;
 
+import com.rover.agent.core.snapshot.ConfigEntrySnapshot;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
+import com.rover.agent.core.snapshot.RegistryEventSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /** 证据表述：证据内容、判断边界与读取失败说明的唯一出处，保证各数据源的口径一致。 */
 public final class EvidenceNarrator {
+
+    /**
+     * 指标的统计窗口：与 Gateway 的 {@code /_api/live?range=60} 同口径。
+     *
+     * 该常量是本项目「指标证据窗口」的唯一出处，能力执行与状态查询都引用它，避免出现两套窗口长度。
+     */
+    public static final int METRIC_WINDOW_SECONDS = 60;
+
+    /** 事件与追踪共用的判定窗口：最近五分钟。 */
+    public static final int EVENT_WINDOW_SECONDS = 300;
+
+    /** 配置证据里最多列举的条目数：证据要能复核，但不能把整张配置表塞进结论。 */
+    private static final int MAX_CONFIG_SAMPLE = 8;
+
+    /** 事件证据里最多列举的条数。 */
+    private static final int MAX_EVENT_SAMPLE = 5;
 
     private EvidenceNarrator() { }
 
@@ -46,7 +66,7 @@ public final class EvidenceNarrator {
      * 实例快照的证据表述（按服务/分组口径）。
      *
      * 能力执行器不持有路由对象（能力之间彼此独立），因此这里以服务名与分组作为口径入参，
-     * 与按路由对象取数的重载共用同一份表述逻辑。
+     * 与按路由对象取数的重载共用同一份表述逻辑。样本量即注册实例总数：健康实例数是按这批实例数出来的。
      */
     public static EvidenceNarration instances(List<InstanceSnapshot> instances, String serviceName, String group) {
         List<InstanceSnapshot> rows = instances == null ? List.of() : instances;
@@ -57,11 +77,12 @@ public final class EvidenceNarrator {
         String service = text(serviceName);
         String groupName = text(group);
         if (service.isBlank()) {
-            return new EvidenceNarration("注册实例共 " + rows.size() + " 个；样本：" + sample, List.of());
+            return new EvidenceNarration("注册实例共 " + rows.size() + " 个；样本：" + sample, List.of(),
+                    rows.size(), 0);
         }
         long healthy = healthyCount(rows, service, groupName);
         return new EvidenceNarration("目标 " + service + "/" + routeGroupLabel(groupName) + " 的健康实例 " + healthy
-                + " 个；注册实例共 " + rows.size() + " 个；样本：" + sample, List.of());
+                + " 个；注册实例共 " + rows.size() + " 个；样本：" + sample, List.of(), rows.size(), 0);
     }
 
     /**
@@ -83,11 +104,106 @@ public final class EvidenceNarrator {
                 .count();
     }
 
-    /** 指标快照的证据表述。 */
+    /** 指标快照的证据表述；样本量即窗口内请求数。 */
     public static EvidenceNarration metrics(GatewayMetricSnapshot metric) {
         return new EvidenceNarration("最近窗口请求数=" + metric.windowRequests() + "，5xx=" + metric.status5xx()
                 + "，全局无上游拒绝累计=" + metric.noUpstreamRejects(),
-                List.of("无上游拒绝数是全局累计值，不能单独归因到该路径。"));
+                List.of("无上游拒绝数是全局累计值，不能单独归因到该路径。"),
+                metric.windowRequests(), METRIC_WINDOW_SECONDS);
+    }
+
+    /**
+     * 「路由 × 上游实例」窗口观测的证据表述。
+     *
+     * 样本量即该实例在窗口内的请求数。样本不足时只报事实、不给出「健康 / 异常」的倾向性判断——
+     * 一两个请求里的 5xx 与几百个请求里的 5xx 不是同一件事，这里必须把差异说清楚。
+     */
+    public static EvidenceNarration routeUpstream(RouteUpstreamSnapshot row) {
+        String detail = "上游 " + text(row.hostPort()) + "：窗口请求数=" + row.windowRequests()
+                + "，5xx=" + row.status5xx() + "，连接失败=" + row.connectFail() + "，超时=" + row.timeout()
+                + "，平均耗时=" + row.avgMillis() + "ms，P95=" + row.p95Millis() + "ms";
+        List<String> limitations = new ArrayList<>();
+        if (row.windowRequests() < InvestigationRules.MIN_INSTANCE_SAMPLE) {
+            limitations.add("上游 " + text(row.hostPort()) + " 窗口请求数 " + row.windowRequests()
+                    + " 低于判断阈值 " + InvestigationRules.MIN_INSTANCE_SAMPLE + "，样本不足，无法判断该实例是否异常。");
+        }
+        limitations.add("该观测只覆盖最近 " + row.windowSeconds()
+                + " 秒；停止流量后窗口内没有新样本，历史观测不能证明异常已恢复。");
+        return new EvidenceNarration(detail, List.copyOf(limitations), row.windowRequests(), row.windowSeconds());
+    }
+
+    /** 「路由 × 上游实例」窗口内没有转发记录时的证据表述：这是「没有样本」，不是「数据不可用」。 */
+    public static EvidenceNarration routeUpstreamsEmpty(String routeId, int windowSeconds) {
+        return new EvidenceNarration("路由 " + text(routeId) + " 最近 " + windowSeconds
+                + " 秒没有上游转发记录，无法按实例归因",
+                List.of("窗口内没有样本，无法判断该路由任何上游实例的状态；也不能据此判定异常已恢复。"),
+                0, windowSeconds);
+    }
+
+    /**
+     * 单个上游实例观测的单行事实：查询回答与假设判定共用同一套数字口径。
+     *
+     * 只报事实（请求数、5xx、错误率），是否算异常由调用方结合样本量判断。
+     */
+    public static String upstreamFact(RouteUpstreamSnapshot row) {
+        return "上游 " + text(row.hostPort()) + "（窗口请求 " + row.windowRequests() + " 次，5xx "
+                + row.status5xx() + " 次，错误率 " + String.format(Locale.ROOT, "%.1f", errorRate(row)) + "%）";
+    }
+
+    /** 窗口内 5xx 的错误率（百分比）；没有样本时记 0，由调用方按「样本不足」处理。 */
+    public static double errorRate(RouteUpstreamSnapshot row) {
+        return row.windowRequests() == 0 ? 0.0 : row.status5xx() * 100.0 / row.windowRequests();
+    }
+
+    /**
+     * 配置快照的证据表述（按组件聚合）。
+     *
+     * 配置是时点事实：它说明「生效配置是什么」，不能说明运行态是否已按新配置工作。
+     */
+    public static EvidenceNarration configs(String component, List<ConfigEntrySnapshot> entries) {
+        List<ConfigEntrySnapshot> rows = entries == null ? List.of() : entries;
+        long unavailable = rows.stream().filter(ConfigEntrySnapshot::unavailable).count();
+        String sample = rows.stream().limit(MAX_CONFIG_SAMPLE)
+                .map(item -> text(item.key()) + "=" + text(item.value())
+                        + "（应用方式=" + text(item.applyMode())
+                        + (item.hotReloadable() ? "，支持热更新" : "，不支持热更新") + "）")
+                .reduce((left, right) -> left + "、" + right).orElse("无");
+        String detail = "组件 " + text(component) + " 生效配置 " + rows.size() + " 项"
+                + (unavailable == 0 ? "" : "（其中 " + unavailable + " 项取值读取失败）") + "；样本：" + sample;
+        List<String> limitations = new ArrayList<>();
+        limitations.add("配置快照只反映当前生效值，不代表运行态已按该配置工作；改动是否生效要看对应流量与错误指标。");
+        if (unavailable > 0) {
+            limitations.add("有 " + unavailable + " 项配置取值读取失败，判断时不能把这些项当作默认值。");
+        }
+        return new EvidenceNarration(detail, List.copyOf(limitations), rows.size(), 0);
+    }
+
+    /**
+     * 注册中心事件的证据表述：只列举最近 {@link #EVENT_WINDOW_SECONDS} 秒内的事件。
+     *
+     * 事件说明「注册状态什么时候变了」，不能替代实例快照，也不能证明网关已经按新状态转发。
+     */
+    public static EvidenceNarration events(List<RegistryEventSnapshot> events, long nowMillis) {
+        List<RegistryEventSnapshot> rows = events == null ? List.of() : events;
+        long now = nowMillis > 0 ? nowMillis : System.currentTimeMillis();
+        long windowMillis = EVENT_WINDOW_SECONDS * 1000L;
+        List<String> recent = new ArrayList<>();
+        for (RegistryEventSnapshot row : rows) {
+            if (!isWithin(row.timestampMillis(), now, windowMillis)) {
+                continue;
+            }
+            recent.add(text(row.type()) + " " + text(row.serviceName()) + "/" + text(row.instanceId())
+                    + "：" + text(row.detail()));
+        }
+        long outside = rows.size() - recent.size();
+        String detail = "最近 " + EVENT_WINDOW_SECONDS + " 秒注册中心事件 " + recent.size() + " 条"
+                + (outside == 0 ? "" : "（另有 " + outside + " 条更早事件，不计入判定）")
+                + (recent.isEmpty() ? "" : "；最近事件："
+                        + String.join("、", recent.subList(Math.max(0, recent.size() - MAX_EVENT_SAMPLE), recent.size())));
+        List<String> limitations = new ArrayList<>();
+        limitations.add("事件来自注册中心，只说明注册状态变化，不能证明 Gateway 已经按新状态转发请求。");
+        limitations.add("事件缓冲区容量有限，事件少不等于没有发生上下线。");
+        return new EvidenceNarration(detail, List.copyOf(limitations), recent.size(), EVENT_WINDOW_SECONDS);
     }
 
     /**
@@ -123,7 +239,7 @@ public final class EvidenceNarrator {
             limitations.add("Gateway 追踪已关闭，当前无法采集新的请求记录。");
         }
         limitations.add("追踪受采样与缓冲容量影响；历史记录不能证明当前配置导致失败，没有记录也不能证明没有请求。");
-        return new EvidenceNarration(detail, List.copyOf(limitations));
+        return new EvidenceNarration(detail, List.copyOf(limitations), matched, EVENT_WINDOW_SECONDS);
     }
 
     public static String routeUnavailable() {
@@ -140,6 +256,24 @@ public final class EvidenceNarrator {
 
     public static String tracesUnavailable() {
         return "Gateway 追踪数据不可用。";
+    }
+
+    public static String configsUnavailable() {
+        return "Gateway 配置快照不可用，无法确认当前生效配置。";
+    }
+
+    public static String eventsUnavailable() {
+        return "Nameserver 注册事件不可用，无法确认实例的上下线经过。";
+    }
+
+    /** 按上游实例的指标取数失败：与「窗口内没有样本」严格区分。 */
+    public static String routeUpstreamsUnavailable(String routeId) {
+        return "路由 " + text(routeId) + " 的按上游实例指标不可用，无法确认是哪台实例异常。";
+    }
+
+    /** 记录时间是否落在判定窗口内；时间戳缺失或晚于当前时刻的记录一律不计入。 */
+    private static boolean isWithin(long timestampMillis, long nowMillis, long windowMillis) {
+        return timestampMillis > 0 && timestampMillis <= nowMillis && nowMillis - timestampMillis <= windowMillis;
     }
 
     private static String groupLabel(String group) {

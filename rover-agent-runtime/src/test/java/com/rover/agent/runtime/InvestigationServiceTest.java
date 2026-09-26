@@ -20,6 +20,8 @@ import com.rover.agent.core.event.TaskSnapshot;
 import com.rover.agent.core.model.Hypothesis;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.port.ConfigReadPort;
+import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
@@ -62,6 +64,8 @@ class InvestigationServiceTest {
     private InstanceReadPort instances;
     private MetricReadPort metrics;
     private TraceReadPort traces;
+    private ConfigReadPort configs;
+    private EventReadPort events;
     private IncidentRegistry incidentRegistry;
     private InvestigationTaskRegistry taskRegistry;
     private InvestigationService investigations;
@@ -72,10 +76,12 @@ class InvestigationServiceTest {
         instances = mock(InstanceReadPort.class);
         metrics = mock(MetricReadPort.class);
         traces = mock(TraceReadPort.class);
+        configs = () -> List.of();
+        events = () -> List.of();
         incidentRegistry = new IncidentRegistry();
         taskRegistry = new InvestigationTaskRegistry();
-        investigations = new InvestigationService(routes, instances, metrics, traces, incidentRegistry, taskRegistry,
-                new ModelExplainer(TestGateway.notConfigured()));
+        investigations = new InvestigationService(routes, instances, metrics, traces, configs, events,
+                incidentRegistry, taskRegistry, new ModelExplainer(TestGateway.notConfigured()));
         when(routes.discoveryMode()).thenReturn(DiscoveryMode.NAMESERVER);
         when(metrics.gatewayWindow(anyInt())).thenReturn(new GatewayMetricSnapshot(0, 0, 0, 1L));
         when(traces.byPath(anyString())).thenReturn(new TraceSnapshot(true, 1.0, List.of(), 1L));
@@ -334,16 +340,16 @@ class InvestigationServiceTest {
 
     /** 换入不同的模型端口，复用同一组只读端口桩。 */
     private void useModel(ModelExplainer modelExplainer) {
-        this.investigations = new InvestigationService(routes, instances, metrics, traces, incidentRegistry,
-                taskRegistry, modelExplainer);
+        this.investigations = new InvestigationService(routes, instances, metrics, traces, configs, events,
+                incidentRegistry, taskRegistry, modelExplainer);
     }
 
     @Test
     void rejectedSubmitRollsBackItsSessionAndIncident() throws Exception {
         IncidentRegistry registry = spy(new IncidentRegistry());
         InvestigationTaskRegistry busy = new InvestigationTaskRegistry();
-        InvestigationService service = new InvestigationService(routes, instances, metrics, traces, registry, busy,
-                new ModelExplainer(TestGateway.notConfigured()));
+        InvestigationService service = new InvestigationService(routes, instances, metrics, traces, configs, events,
+                registry, busy, new ModelExplainer(TestGateway.notConfigured()));
         CountDownLatch release = new CountDownLatch(1);
         when(routes.routes()).thenAnswer(invocation -> {
             release.await();
@@ -373,8 +379,8 @@ class InvestigationServiceTest {
     void registerCapacityRejectionRollsBackSessionAndIncident() throws Exception {
         IncidentRegistry registry = spy(new IncidentRegistry());
         InvestigationTaskRegistry full = new InvestigationTaskRegistry();
-        InvestigationService service = new InvestigationService(routes, instances, metrics, traces, registry, full,
-                new ModelExplainer(TestGateway.notConfigured()));
+        InvestigationService service = new InvestigationService(routes, instances, metrics, traces, configs, events,
+                registry, full, new ModelExplainer(TestGateway.notConfigured()));
         try {
             // 用未结束的任务占满登记容量：这些任务不会被执行，也不会被淘汰，submit 将在登记阶段被拒。
             // 每个占用任务挂在各自的会话下——同一会话同时只允许一个执行中任务（并发约束）。

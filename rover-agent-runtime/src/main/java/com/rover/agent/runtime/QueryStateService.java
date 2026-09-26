@@ -5,6 +5,7 @@ import com.rover.agent.core.capability.CapabilityExecutor;
 import com.rover.agent.core.capability.CapabilityResult;
 import com.rover.agent.core.intent.QuerySubject;
 import com.rover.agent.core.investigation.EvidenceNarrator;
+import com.rover.agent.core.investigation.InvestigationRules;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Confidence;
 import com.rover.agent.core.model.Evidence;
@@ -15,9 +16,11 @@ import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.runtime.task.InvestigationTask;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,8 +40,9 @@ public final class QueryStateService {
 
     private static final String STEP_ANSWER = "回答";
     private static final String NO_SUBJECT =
-            "未能从问题中识别出要查询的状态口径（实例 / 指标 / 路由），请说明要查哪一类事实。";
-    private static final String NO_SUBJECT_NOTE = "状态查询需要明确的口径：实例健康、Gateway 指标或路由配置。";
+            "未能从问题中识别出要查询的状态口径（实例 / 指标 / 路由 / 配置 / 事件），请说明要查哪一类事实。";
+    private static final String NO_SUBJECT_NOTE =
+            "状态查询需要明确的口径：实例健康、Gateway 指标、路由配置、生效配置或注册事件。";
 
     private final CapabilityExecutor executor;
 
@@ -84,6 +88,8 @@ public final class QueryStateService {
             case METRIC -> AgentCapability.GATEWAY_METRICS_QUERY;
             case INSTANCE -> AgentCapability.INSTANCE_QUERY;
             case ROUTE -> AgentCapability.ROUTE_QUERY;
+            case CONFIG -> AgentCapability.CONFIG_READ;
+            case EVENT -> AgentCapability.EVENT_QUERY;
             case NONE -> AgentCapability.ROUTE_QUERY;
         };
     }
@@ -93,11 +99,16 @@ public final class QueryStateService {
             case METRIC -> metricAnswer(result);
             case INSTANCE -> instanceAnswer(task.target(), result);
             case ROUTE -> routeAnswer(task.path(), result);
+            case CONFIG, EVENT -> joinEvidence(result);
             case NONE -> fact(result);
         };
     }
 
-    /** 指标回答：请求数、折算速率、5xx 与全局拒绝累计一并给出，并保留「累计值不能归因」的口径提醒。 */
+    /**
+     * 指标回答：请求数、折算速率、5xx 与全局拒绝累计一并给出，并保留「累计值不能归因」的口径提醒。
+     *
+     * 全局计数之外再补一句按上游实例的归因：全局 5xx 说明「有没有异常」，实例维度才说明「是哪台」。
+     */
     private static String metricAnswer(CapabilityResult result) {
         GatewayMetricSnapshot metric = result.metric();
         if (metric == null) {
@@ -107,7 +118,44 @@ public final class QueryStateService {
         return "Gateway 最近 " + CapabilityExecutor.METRIC_WINDOW_SECONDS + " 秒窗口内请求数 "
                 + metric.windowRequests() + " 次（平均约 " + oneDecimal(perSecond) + " 次/秒）；其中 5xx "
                 + metric.status5xx() + " 次；全局无上游拒绝累计 " + metric.noUpstreamRejects()
-                + " 次（累计值，不能单独归因到某条路径）。";
+                + " 次（累计值，不能单独归因到某条路径）。" + upstreamClause(result.routeUpstreams());
+    }
+
+    /**
+     * 按上游实例的窗口观测补充归因：只有样本量达标的实例才会被点名。
+     *
+     * 样本不足的实例一律不点名——「1 次请求里 1 次 5xx」不能当成异常实例，这种情况如实说样本不足。
+     */
+    private static String upstreamClause(List<RouteUpstreamSnapshot> rows) {
+        if (rows == null) {
+            return "";
+        }
+        if (rows.isEmpty()) {
+            return " 按上游实例的指标：最近窗口内没有转发记录，无法归因到具体实例，也不能据此判定异常已恢复。";
+        }
+        List<RouteUpstreamSnapshot> failing = rows.stream()
+                .filter(item -> item != null && item.windowRequests() >= InvestigationRules.MIN_INSTANCE_SAMPLE
+                        && item.status5xx() > 0)
+                .toList();
+        if (!failing.isEmpty()) {
+            return " 其中 " + failing.stream().map(EvidenceNarrator::upstreamFact)
+                    .collect(Collectors.joining("、")) + " 返回过 5xx。";
+        }
+        boolean lowSample = rows.stream().anyMatch(item -> item != null
+                && item.windowRequests() < InvestigationRules.MIN_INSTANCE_SAMPLE && item.status5xx() > 0);
+        if (lowSample) {
+            return " 有上游实例返回过 5xx，但窗口请求数不足 " + InvestigationRules.MIN_INSTANCE_SAMPLE
+                    + " 次，样本不足，无法归因到具体实例。";
+        }
+        return "";
+    }
+
+    /** 配置 / 事件类回答：一次能力可能产出多条证据（按组件拆分），逐条如实拼接。 */
+    private static String joinEvidence(CapabilityResult result) {
+        if (result.evidence().isEmpty()) {
+            return firstLimitation(result);
+        }
+        return result.evidence().stream().map(Evidence::summary).collect(Collectors.joining("；"));
     }
 
     /** 实例回答：按目标服务统计健康实例数；目标不是服务时退回注册表整体口径的证据文本。 */

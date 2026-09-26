@@ -164,6 +164,26 @@ final class MetricsExporter {
         return JsonCodec.toJson(root);
     }
 
+    /** 组装 /_manage/metrics/routes 的 JSON 内容。 */
+    String routeMetricsJson(String routeId, int rangeSeconds) {
+        int range = MetricsRegistry.clampRange(rangeSeconds);
+        Map<String, Object> root = new LinkedHashMap<>();
+        root.put("component", RoverComponent.GATEWAY.id());
+        long nowMillis = System.currentTimeMillis();
+        root.put("serverTimeMillis", nowMillis);
+        root.put("observedAtMillis", nowMillis);
+        root.put("windowSeconds", range);
+        root.put("routeId", routeId == null ? "" : routeId);
+        // 指标未启用时仍给出合法 JSON：用 enabled=false 把「采集关闭」与「没有样本」分开
+        if (!r.settings.isEnabled()) {
+            root.put("enabled", false);
+            root.put("rows", List.of());
+            return JsonCodec.toJson(root);
+        }
+        root.put("rows", r.routeUpstreamRows(routeId, range));
+        return JsonCodec.toJson(root);
+    }
+
     /** 近 N 秒的平均 QPS，分母固定为窗口长度，空闲就是 0。 */
     private double qpsOver(long nowSecond, int seconds) {
         TimeRing.WindowView view = r.globalRing.view(nowSecond, seconds);
@@ -276,6 +296,27 @@ final class MetricsExporter {
         checks.add(check("upstream_sum_equals_instance_sum", upstreamOk,
                 "upstreamSum=" + upstreamSum + ", instanceSum=" + instanceSum));
 
+        // 路由 × 实例自洽：record 同一分支里同时累加 route.upstreamMetrics 与 route.instanceCounts
+        long routeUpstreamTotal = 0;
+        long routeInstanceTotal = 0;
+        boolean routeUpstreamOk = true;
+        for (RouteMetrics route : r.routes.values()) {
+            long perRouteUpstream = 0;
+            for (UpstreamMetrics upstream : route.upstreamMetrics.values()) {
+                perRouteUpstream += upstream.requests.sum();
+            }
+            long perRouteInstance = 0;
+            for (LongAdder adder : route.instanceCounts.values()) {
+                perRouteInstance += adder.sum();
+            }
+            routeUpstreamTotal += perRouteUpstream;
+            routeInstanceTotal += perRouteInstance;
+            routeUpstreamOk &= perRouteUpstream == perRouteInstance;
+        }
+        allOk &= routeUpstreamOk;
+        checks.add(check("route_upstream_sum_equals_instance_sum", routeUpstreamOk,
+                "each route upstreamSum=" + routeUpstreamTotal + ", instanceSum=" + routeInstanceTotal));
+
         Map<String, Object> root = new LinkedHashMap<>();
         root.put("ok", allOk);
         root.put("checks", checks);
@@ -387,6 +428,9 @@ final class MetricsExporter {
             sb.append("rover_gateway_route_duration_ms{route=\"").append(route).append("\",stat=\"p95\"} ")
                     .append(MetricsRegistry.percentile(routeView.samples, 0.95)).append('\n');
         }
+
+        // 路由 × 上游实例维度刻意不在此导出：routeId×host:port 的标签基数会随实例数放大，易压垮 Prometheus；
+        // 需要时用只读端点 /_manage/metrics/routes 按路由查询。
 
         // JVM 运行时（两组件通用，零依赖）
         Map<String, Object> jvm = JvmMetricsCollector.collect();

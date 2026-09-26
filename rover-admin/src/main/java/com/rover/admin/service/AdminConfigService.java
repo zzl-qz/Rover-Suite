@@ -137,6 +137,25 @@ public class AdminConfigService {
         }
     }
 
+    /**
+     * 读取指定路由下各上游实例的窗口观测（/_manage/metrics/routes）。
+     *
+     * 窗口只认 60 / 300 两档，与 live 指标同口径；路由未知或窗口内没有转发记录时，
+     * 网关返回的是合法 JSON 加空 rows，而不是错误——「没有样本」与「取不到数据」必须分开。
+     */
+    public JsonNode loadRouteUpstreams(String routeId, int rangeSeconds) {
+        try {
+            int range = ManageApiPaths.clampLiveRange(String.valueOf(rangeSeconds));
+            String path = ManageApiPaths.METRICS_ROUTES + "?"
+                    + ManageApiPaths.PARAM_ROUTE_ID + "="
+                    + URLEncoder.encode(routeId == null ? "" : routeId, StandardCharsets.UTF_8)
+                    + "&" + ManageApiPaths.PARAM_RANGE + "=" + range;
+            return httpClient.getJson(properties.getGatewayUrl(), path);
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取 Gateway 按上游实例指标失败: " + ex.getMessage(), ex);
+        }
+    }
+
     /** 读取 Gateway 指标自洽校验结果（/api/selfcheck）。 */
     public JsonNode loadSelfcheck() {
         try {

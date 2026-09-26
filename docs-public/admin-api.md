@@ -59,6 +59,14 @@ count as running and does not hold the session's concurrency slot; the question 
 Diagnosis is read-only: it never changes routes or configuration. Tasks live in Admin memory and
 cannot be queried after a restart.
 
+Besides `source`, `observedAtMillis`, and `rawReference`, every piece of evidence carries its statistics in
+`metadata`: `windowSeconds` (`0` means a point-in-time snapshot), `sampleSize`, and the resource dimension
+(`routeId` / `hostPort` / `component`). When the sample is too small the answer says so instead of claiming
+recovery from an empty sample. The hypothesis set includes "one upstream instance of this route returned 5xx":
+`CONFIRMED` (naming the instance) only when that instance has at least the threshold of 5 in-window samples and
+real 5xx among them; `REJECTED` when the sample is adequate and 5xx-free; `UNKNOWN` when the window holds no
+forwarded request at all, explicitly noting that this cannot be read as recovery.
+
 Since P2 a task snapshot is no longer always a fault investigation. `GET /api/agent/tasks/{taskId}` and SSE
 snapshots carry `taskType` (`QUERY` / `INVESTIGATION` / `EXPLAIN` / `ACTION_PLAN` / `UNSUPPORTED`), `intent`
 (`intent`, `confidence`, `reason`, `targetHint`, `requestedAction`), `plan` (`goal`, `hypotheses`, `steps`;
@@ -133,7 +141,7 @@ Supported phrasings and where they land (all triggered by one natural-language s
 | `order-service 几个健康实例？` | State query: one `INSTANCE_QUERY` call, healthy-instance count of the resolved service |
 | `/api/demo/tt 命中了哪条路由？` | State query: one `ROUTE_QUERY` call, answers the matched route facts |
 | `为什么 /api/demo/tt 调用失败？` | Fault investigation: dynamic plan (route → instances → metrics → traces) over read-only capabilities, hypothesis verdicts |
-| `你能做什么？` | Explanation: `CapabilityRegistry` lists real capabilities and the not-yet-available ones; no target resolution. `你是谁` / `介绍一下你自己` are equivalent |
+| `你能做什么？` | Explanation: `CapabilityRegistry` lists the real capabilities (route / instance / gateway metrics / trace / configuration / registry events); no target resolution. `你是谁` / `介绍一下你自己` are equivalent |
 | `你好` / unclear chat | Fallback: no path clarification; a self-introduction plus the same registry-backed capability list, showing how to ask |
 | `把 order-03 摘掉` | Action plan: read-only precheck + non-executable `ActionPlan`, `executable=false` |
 | `每天 9 点自动巡检并发邮件` | Unsupported: states "scheduled inspection is not available"; no investigation |

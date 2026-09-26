@@ -16,6 +16,8 @@ import com.rover.agent.core.planning.InvestigationPlanner;
 import com.rover.agent.core.planning.PlanValidator;
 import com.rover.agent.core.planning.PlanningLimits;
 import com.rover.agent.core.planning.RuleBasedPlanner;
+import com.rover.agent.core.port.ConfigReadPort;
+import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
@@ -74,12 +76,13 @@ public final class InvestigationService {
      * 计划顺序仍是路由 → 实例 → 指标 → 追踪，只是改由动态图按同样的边界执行。
      */
     public InvestigationService(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
-                                TraceReadPort traces, IncidentRegistry incidents, InvestigationTaskRegistry tasks,
+                                TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
+                                IncidentRegistry incidents, InvestigationTaskRegistry tasks,
                                 ModelExplainer explainer) {
         this(incidents, tasks, explainer,
                 new RuleBasedPlanner(STANDARD_CAPABILITIES),
                 new PlanValidator(STANDARD_CAPABILITIES, PlanningLimits.defaults()),
-                new CapabilityExecutor(routes, instances, metrics, traces, STANDARD_CAPABILITIES),
+                new CapabilityExecutor(routes, instances, metrics, traces, configs, events, STANDARD_CAPABILITIES),
                 PlanningLimits.defaults());
     }
 

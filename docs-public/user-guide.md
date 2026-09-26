@@ -207,6 +207,7 @@ Built-in management endpoints:
 | Gateway | `GET/PUT/POST/DELETE /_manage/routes` | List, replace, add/update, or delete routes |
 | Gateway | `GET/POST /_manage/configs` | List or update registered runtime settings |
 | Gateway | `GET /_manage/metrics`, `/metrics/live`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, slim live snapshot (`range=60|300`; no p99/upstream Top; route Top short-cached), self-check, and Prometheus text |
+| Gateway | `GET /_manage/metrics/routes` | Per-upstream window observation for one route (`routeId`, `range=60|300`); only upstreams that forwarded traffic in the window are listed, and with metrics collection off it returns `enabled=false` with an empty `rows` |
 | Gateway | `GET /_manage/traces` | Bounded request timeline with `traceId`, `path`, and `slow` filters |
 | Nameserver | `GET /_manage/status`, `/instances` | Runtime status and current in-memory instances |
 | Nameserver | `GET/POST /_manage/configs` | List or update registered runtime settings |

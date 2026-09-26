@@ -38,6 +38,12 @@ public enum AgentStepType {
     /** 读取 Gateway 追踪 */
     TRACE_INVESTIGATION,
 
+    /** 读取 Gateway / Nameserver 生效配置 */
+    CONFIG_INVESTIGATION,
+
+    /** 读取注册中心事件 */
+    EVENT_INVESTIGATION,
+
     /** 合成假设验证结论 */
     DIAGNOSIS,
 

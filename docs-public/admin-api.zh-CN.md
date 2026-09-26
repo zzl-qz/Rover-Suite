@@ -51,6 +51,12 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 被确认、排除或证据不足无法验证。配置模型后还会包含可选的 `aiAnalysis`。诊断全程只读，不会修改路由或配置；
 任务存于 Admin 内存，重启后不可查询。
 
+每条证据除 `source`、`observedAtMillis`、`rawReference` 外，`metadata` 里带统计口径：`windowSeconds`（窗口秒数，`0` 表示时点快照）、
+`sampleSize`（样本量），以及该证据的资源维度（`routeId` / `hostPort` / `component`）。样本不足时如实写「无法判断」，
+不用空样本冒充「已恢复」。故障调查的假设集包含「该路由的某个上游实例返回了 5xx」：只有窗口内该实例样本达到阈值（5 条）
+且确有 5xx 才判 `CONFIRMED` 并点名实例；样本达标且全部非 5xx 判 `REJECTED`；窗口内没有任何转发记录时判 `UNKNOWN`，
+并明确说明「不能据此认定异常已恢复」。
+
 P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/tasks/{taskId}` 与 SSE 快照都带以下字段：
 `taskType`（`QUERY` / `INVESTIGATION` / `EXPLAIN` / `ACTION_PLAN` / `UNSUPPORTED`）、`intent`（`intent`、`confidence`、
 `reason`、`targetHint`、`requestedAction`）、`plan`（`goal`、`hypotheses`、`steps`；每步含 `capability`、`reason`、
@@ -108,7 +114,7 @@ P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/t
 | `order-service 几个健康实例？` | 状态查询：只调 `INSTANCE_QUERY`，按解析出的服务统计健康实例数 |
 | `/api/demo/tt 命中了哪条路由？` | 状态查询：只调 `ROUTE_QUERY`，回答命中的路由事实 |
 | `为什么 /api/demo/tt 调用失败？` | 故障调查：按动态计划（路由 → 实例 → 指标 → 追踪）执行只读调查，产出假设验证结论 |
-| `你能做什么？` | 解释：由 `CapabilityRegistry` 列出真实能力清单与未开放能力，不解析资源；`你是谁` / `介绍一下你自己` 同义 |
+| `你能做什么？` | 解释：由 `CapabilityRegistry` 列出真实能力清单（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件），不解析资源；`你是谁` / `介绍一下你自己` 同义 |
 | `你好` / 看不出意图的闲聊 | 兜底：不追问资源路径，回一段自我介绍 + 能力清单（同一份注册表），告诉用户可以怎么问 |
 | `把 order-03 摘掉` | 处置计划：只读预检 + 不可执行的 `ActionPlan`，`executable=false` |
 | `每天 9 点自动巡检并发邮件` | 未开放：如实说明「定时巡检尚未开放」，不进入调查 |

@@ -6,11 +6,13 @@ import com.rover.agent.core.model.Verdict;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * 假设驱动的结论合成：按已采集的只读事实逐条确认或排除候选故障原因，
@@ -23,14 +25,25 @@ public final class InvestigationRules {
     private static final String SOURCE_ROUTES = "/api/routes";
     private static final String SOURCE_INSTANCES = "/api/instances";
     private static final String SOURCE_TRACES = "/api/traces";
+    private static final String SOURCE_METRICS = "/api/metrics/routes";
     /** H5 的假设陈述保持中性：只描述可观察到的路径状态码，不指向任何一侧。 */
     private static final String H5_STATEMENT = "该路径近期返回 503";
+    /** H6 的假设陈述点明「路由 × 上游实例」这一口径：判定依据必须落在具体实例上。 */
+    private static final String H6_STATEMENT = "该路由的某个上游实例返回了 5xx";
     /**
      * 追踪记录只对最近五分钟内的判定有价值。
      *
      * 证据表述与假设判定共用这一个窗口，否则会出现「证据里列着 503、结论说没采到」的自相矛盾。
      */
     static final long RECENT_TRACE_WINDOW_MILLIS = TimeUnit.MINUTES.toMillis(5);
+
+    /**
+     * 判断单个上游实例是否异常所需的最小窗口请求数。
+     *
+     * 窗口内请求数低于该阈值时，5xx 与错误率都只是小样本噪音，证据表述与假设判定都必须给出
+     * 「无法判断」而不是「健康」或「异常」。证据表述与判定共用这一个阈值，避免两处口径分叉。
+     */
+    public static final int MIN_INSTANCE_SAMPLE = 5;
 
     private InvestigationRules() { }
 
@@ -44,6 +57,9 @@ public final class InvestigationRules {
         String summary;
         Confidence confidence = Confidence.LOW;
         boolean evaluateDownstream = false;
+        // 「实例齐全但没有任何假设被确认」时才成立的收尾话术。一旦 H6 点名了 5xx 实例，这句话必须撤掉，
+        // 否则同一份报告会一边说「数据不足以确定原因」一边给出确定的异常实例。
+        String inconclusiveClause = null;
         if (route == null) {
             hypotheses.add(hypothesis("H1", "该路径未命中任何路由",
                     input.routeRead() ? Verdict.CONFIRMED : Verdict.UNKNOWN,
@@ -94,14 +110,78 @@ public final class InvestigationRules {
                             "已找到 " + matching.size() + " 个匹配实例", List.of(SOURCE_INSTANCES)));
                     hypotheses.add(hypothesis("H4", "匹配实例均不健康", Verdict.REJECTED,
                             "其中 " + healthy + " 个健康", List.of(SOURCE_INSTANCES)));
-                    summary = "该路由当前有 " + healthy + " 个匹配的健康实例；现有数据不足以确定请求失败原因。";
+                    summary = "该路由当前有 " + healthy + " 个匹配的健康实例。";
+                    inconclusiveClause = "现有数据不足以确定请求失败原因。";
                 }
             }
         }
         if (evaluateDownstream) {
             hypotheses.add(downstreamTraceHypothesis(traces, input.path()));
         }
+        if (route != null) {
+            // H6 与 Nameserver 无关：它看的是 Gateway 转发到各上游实例的窗口结果，
+            // 因此静态上游、非 Nameserver 发现模式同样适用。
+            Hypothesis upstream = upstreamInstanceHypothesis(input.routeUpstreams());
+            hypotheses.add(upstream);
+            if (upstream.status() == Verdict.CONFIRMED) {
+                summary = summary + "指标显示" + upstream.detail() + "。";
+                if (confidence == Confidence.LOW) {
+                    confidence = Confidence.MEDIUM;
+                }
+            }
+        }
+        // 只有一条确认项都没有时，才把「数据不足以定位原因」写进结论。
+        if (inconclusiveClause != null
+                && hypotheses.stream().noneMatch(item -> item.status() == Verdict.CONFIRMED)) {
+            summary = summary + inconclusiveClause;
+        }
         return new Findings(List.copyOf(hypotheses), summary, confidence);
+    }
+
+    /**
+     * H6：该路由的某个上游实例返回了 5xx。
+     *
+     * 判定只用窗口内样本量达标的实例：样本不足的实例不参与「确认 / 排除」，否则一两个请求里的 5xx
+     * 会被当成故障实例。窗口内没有样本时只能是「无法验证」——这正是「停止流量后不能凭旧样本
+     * 声称已经恢复」的落点：没有新样本就既不能说异常仍在，也不能说已经恢复。
+     */
+    private static Hypothesis upstreamInstanceHypothesis(List<RouteUpstreamSnapshot> rows) {
+        if (rows == null) {
+            return hypothesis("H6", H6_STATEMENT, Verdict.UNKNOWN,
+                    "按上游实例的窗口指标不可用，无法验证", List.of(SOURCE_METRICS));
+        }
+        if (rows.isEmpty()) {
+            return hypothesis("H6", H6_STATEMENT, Verdict.UNKNOWN,
+                    "最近窗口内没有该路由的上游转发记录，无法判断是哪台实例异常；窗口内没有样本，也不能据此认定异常已恢复",
+                    List.of(SOURCE_METRICS));
+        }
+        List<RouteUpstreamSnapshot> adequate = rows.stream()
+                .filter(item -> item != null && item.windowRequests() >= MIN_INSTANCE_SAMPLE)
+                .toList();
+        List<RouteUpstreamSnapshot> failing = adequate.stream().filter(item -> item.status5xx() > 0).toList();
+        if (!failing.isEmpty()) {
+            return hypothesis("H6", H6_STATEMENT, Verdict.CONFIRMED,
+                    "窗口内样本达标的 " + adequate.size() + " 个上游实例中，"
+                            + failing.stream().map(EvidenceNarrator::upstreamFact).collect(Collectors.joining("、"))
+                            + " 返回了 5xx（样本阈值 " + MIN_INSTANCE_SAMPLE + " 次）",
+                    List.of(SOURCE_METRICS));
+        }
+        if (adequate.isEmpty()) {
+            return hypothesis("H6", H6_STATEMENT, Verdict.UNKNOWN,
+                    "窗口内 " + rows.size() + " 个上游实例的请求数都低于样本阈值 " + MIN_INSTANCE_SAMPLE
+                            + "，样本不足，无法判断是哪台实例异常",
+                    List.of(SOURCE_METRICS));
+        }
+        boolean lowSample5xx = rows.stream().anyMatch(item -> item != null
+                && item.windowRequests() < MIN_INSTANCE_SAMPLE && item.status5xx() > 0);
+        if (lowSample5xx) {
+            return hypothesis("H6", H6_STATEMENT, Verdict.UNKNOWN,
+                    "样本达标的 " + adequate.size() + " 个上游实例均未返回 5xx，但存在请求数低于 " + MIN_INSTANCE_SAMPLE
+                            + " 次的实例返回过 5xx，样本不足，无法判断",
+                    List.of(SOURCE_METRICS));
+        }
+        return hypothesis("H6", H6_STATEMENT, Verdict.REJECTED,
+                "窗口内样本达标的 " + adequate.size() + " 个上游实例均未返回 5xx", List.of(SOURCE_METRICS));
     }
 
     /**

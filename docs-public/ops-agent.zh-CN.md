@@ -52,9 +52,9 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 ### Level A：Observe（看）
 
-Agent 能查询 Route、Instance、Metrics、Trace、Events 等运行态数据，全程只读。
+Agent 能查询 Route、Instance、Metrics、Trace、Config、Events 等运行态数据，全程只读。
 
-**状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）由 `AgentOrchestrator` 驱动，采集路由、实例、指标、追踪四类快照，返回结论、证据来源和采集时间。
+**状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）由 `AgentOrchestrator` 驱动，采集路由、实例、指标、追踪、配置、注册事件六类快照，返回结论、证据来源和采集时间。其中指标除全局窗口外，还能按「路由 × 上游实例」取到窗口请求数、状态码、错误率与延迟，用于指出是哪台实例在出错。
 
 ### Level B：Reason（调查 + 推理）
 
@@ -62,7 +62,7 @@ Agent 能制定调查计划、动态选择工具、关联多条证据、排除�
 
 **状态：进行中。** 只读链路的假设驱动调查已经落地：调查以 StateGraph 编排，由节点采集事实，由条件边决定走向，
 再由结论节点逐条确认、排除或标记为无法验证（例如「路径未命中路由」「目标服务没有匹配实例」「匹配实例均不健康」
-「该路径近期返回 503」），每个假设都绑定证据来源。
+「该路径近期返回 503」「该路由的某个上游实例返回了 5xx」），每个假设都绑定证据来源。
 
 判定口径有明确边界：静态上游与服务发现模式属于路由事实，只写进结论与判断范围，不作为故障假设展示；
 追踪不可用、追踪已关闭、或最近五分钟未采到该路径的 503 时，只能判为「无法验证」，不能写成「排除」——
@@ -214,12 +214,12 @@ Session（一次连续对话）─┬─ Incident（一个被调查的问题，�
 - 单一编排入口 `AgentOrchestrator`：Controller 不再直接编排 route/metrics/chatClient 调用，只做参数校验与结果映射。
 - 存储已抽象成 4 个 Repository 接口，当前只有线程安全内存实现，**重启即清空**；业务代码不直接依赖 Map。
 - 用户身份一律取自后端认证上下文（`Authentication.getName()`），请求体不接受前端提交的 `userId`；会话、任务与事件按身份过滤。
-- 只读采集路由、实例、指标、追踪，产出结论、置信度、证据来源、采集时间和局限说明。
+- 只读采集路由、实例、指标（含「路由 × 上游实例」窗口观测）、追踪、配置、注册事件，产出结论、置信度、证据来源、采集时间和局限说明。
 - 已拆成 `rover-agent-core` / `rover-agent-runtime` / `rover-admin` 三层，依赖单向；只读由端口结构保证。
 - 意图识别与分流：消息先判定意图（`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` / `ACTION_REQUEST` / 未开放的 `CREATE_INSPECTION`、`KNOWLEDGE_QUERY`），
   再按需解析资源对象；状态查询只调少量只读能力直接回答，能力说明问题按注册表返回真实能力清单，未开放的请求如实回复而不硬走调查；
   识别不出意图时先看问题里有没有可解析对象，没有就回一段自我介绍与能力清单，不向用户追问「请给出请求路径」。
-- 能力注册表与只读执行器：可用能力（路由 / 实例 / 网关指标 / 追踪查询）统一登记为 READ_ONLY 能力，规划只能从中选择，
+- 能力注册表与只读执行器：可用能力（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件查询）统一登记为 READ_ONLY 能力，规划只能从中选择，
   执行器是模型与生产数据之间唯一的取数口；未接入数据适配器的能力标记为不可选，处置类请求只生成不可执行的处置计划（`executable` 恒为 `false`）。
 - 调查链由 Spring AI Alibaba StateGraph 编排：调查计划由规划器产出（规则打底、模型只提候选，越界步骤被丢弃），
   按「PLAN → EXECUTE → EVALUATE」循环推进，评估节点按证据决定继续规划、澄清还是出结论，触顶（`rover.agent.planning.*`）时停止并在结论中标注。
