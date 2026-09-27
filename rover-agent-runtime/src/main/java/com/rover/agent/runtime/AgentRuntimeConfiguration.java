@@ -23,6 +23,7 @@ import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.runtime.llm.ChatModelGateway;
+import com.rover.agent.runtime.llm.ConversationModel;
 import com.rover.agent.runtime.llm.LlmIntentInterpreter;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.llm.ModelTargetInterpreter;
@@ -273,6 +274,24 @@ public class AgentRuntimeConfiguration {
         return new ActionPlanService(agentCapabilityExecutor);
     }
 
+    /**
+     * 对话主路径：模型自主决定查什么、查几次、怎么答；工具来自只读能力执行器。
+     *
+     * <p>刻意不收紧超时：一次对话可能包含多轮工具调用（先看实例、再查它的指标），
+     * 用「意图识别」那种十秒上限会把它掐断在取数途中。等得久一些但答得完整，
+     * 比快而残缺更符合这个入口的用途。
+     */
+    @Bean
+    public ToolLoopService agentToolLoopService(CapabilityExecutor agentCapabilityExecutor,
+                                               ObjectProvider<ChatModelGateway> chatModelGateways,
+                                               ObjectProvider<ConversationModel> conversationModels) {
+        // 模型侧留一个可替换的入口：端到端测试用它注入脚本，从而在不依赖真实模型的前提下
+        // 验证「工具真的取数、证据真的落库」这条链路——这是单测替代不了的部分。
+        return new ToolLoopService(agentCapabilityExecutor,
+                chatModelGateways.getIfAvailable(NoopChatModelGateway::new),
+                conversationModels.getIfAvailable());
+    }
+
     /** Agent 应用入口：意图/目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */
     @Bean
     public AgentOrchestrator agentOrchestrator(AgentSessionRepository agentSessionRepository,
@@ -287,10 +306,11 @@ public class AgentRuntimeConfiguration {
                                                IntentService agentIntentService,
                                                QueryStateService agentQueryStateService,
                                                ExplainService agentExplainService,
-                                               ActionPlanService agentActionPlanService) {
+                                               ActionPlanService agentActionPlanService,
+                                               ToolLoopService agentToolLoopService) {
         return new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
                 agentTaskRepository, agentIncidentRegistry, agentContextManager, agentTargetResolver,
                 agentInvestigationService, agentWorkspaceRetention, agentIntentService, agentQueryStateService,
-                agentExplainService, agentActionPlanService);
+                agentExplainService, agentActionPlanService, agentToolLoopService);
     }
 }

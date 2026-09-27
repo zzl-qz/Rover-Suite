@@ -132,8 +132,8 @@ class AgentOrchestratorTest {
         assertEquals("/api/demo/tt", second.path());
         assertEquals(ResourceTarget.route("/api/demo/tt"), second.target());
         assertEquals(TaskStatus.COMPLETED, second.status());
-        // 每轮各有两条 Agent 消息（受理播报 + 结论回复）：第二条播报的措辞是「已继续调查」。
-        assertTrue(agentReplies(session.sessionId()).get(2).content().startsWith("已继续调查"));
+        // 每轮只有一条 Agent 回复：结论自己占一条，中间不再有「已开始/已继续调查」的受理播报。
+        assertEquals(2, agentReplies(session.sessionId()).size());
     }
 
     @Test
@@ -149,25 +149,26 @@ class AgentOrchestratorTest {
         assertEquals("/api/pay", second.path());
     }
 
+    /**
+     * 对象解析不出不再拦下对话：旧行为是停在 WAITING_INPUT 要用户补「请求路径」，
+     * 可「帮我看看最近有没有问题」这种问法本来就答得出来——模型可以自己去查实例与指标。
+     * 拿澄清当闸门，正是「稍微模糊一点就整句作废」的来源。
+     */
     @Test
-    void unresolvableTargetWaitsForInputAndDoesNotBlockTheSession() throws Exception {
+    void unresolvableTargetStillReachesTheModelInsteadOfStoppingForInput() throws Exception {
         Session session = orchestrator.startSession("admin");
 
-        TaskView waiting = submitAndAwait(session, "admin", "帮我看看最近有没有问题");
+        TaskView task = submitAndAwait(session, "admin", "帮我看看最近有没有问题");
 
-        // 目标解析不出对象时任务停在 WAITING_INPUT 并带上澄清提问，而不是不建任务地同步拒绝。
-        assertEquals(TaskStatus.WAITING_INPUT, waiting.status());
-        assertNull(waiting.incidentId());
-        assertTrue(waiting.clarification().contains("请求路径"));
+        assertEquals(TaskStatus.COMPLETED, task.status(), "解析不出对象不该把对话拦在等待输入上");
+        assertNull(task.clarification(), "不该再反问用户要请求路径");
+        assertNull(task.incidentId(), "没识别出对象就没有事件可挂");
         List<AgentMessage> conversation = orchestrator.conversation(session.sessionId(), "admin");
         assertEquals(2, conversation.size());
         assertEquals(MessageRole.USER, conversation.get(0).role());
-        assertEquals(waiting.taskId(), conversation.get(0).relatedTaskId());
+        assertEquals(task.taskId(), conversation.get(0).relatedTaskId());
         assertEquals(MessageRole.AGENT, conversation.get(1).role());
-        assertEquals(waiting.taskId(), conversation.get(1).relatedTaskId());
-        // WAITING_INPUT 不占会话并发位：用户可以立刻补充信息，不会被 409 挡住。
-        TaskView second = submitAndAwait(session, "admin", "还是看看 /api/demo/tt 吧");
-        assertEquals(TaskStatus.COMPLETED, second.status());
+        assertEquals(task.taskId(), conversation.get(1).relatedTaskId());
     }
 
     @Test
@@ -213,16 +214,13 @@ class AgentOrchestratorTest {
         TaskView task = submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
 
         List<AgentMessage> conversation = orchestrator.conversation(session.sessionId(), "admin");
-        // 三条：提问、受理播报、结论回复——结论自己占一条，气泡里才是答案而不是播报。
-        assertEquals(3, conversation.size());
+        // 两条：提问 + 结论回复。结论自己占一条，气泡里直接是答案，不再有中间的受理播报。
+        assertEquals(2, conversation.size());
         assertEquals(MessageRole.USER, conversation.get(0).role());
         assertEquals(MessageRole.AGENT, conversation.get(1).role());
-        assertTrue(conversation.get(1).content().startsWith("已开始调查"));
-        assertEquals(MessageRole.AGENT, conversation.get(2).role());
-        assertEquals(task.result().summary(), conversation.get(2).content());
+        assertEquals(task.result().summary(), conversation.get(1).content());
         assertEquals(task.taskId(), conversation.get(0).relatedTaskId());
         assertEquals(task.taskId(), conversation.get(1).relatedTaskId());
-        assertEquals(task.taskId(), conversation.get(2).relatedTaskId());
         // 首次提问生成会话标题，供会话列表展示。
         assertEquals("为什么 /api/demo/tt 调用失败？", orchestrator.session(session.sessionId(), "admin")
                 .orElseThrow().title());
@@ -259,8 +257,8 @@ class AgentOrchestratorTest {
                 .orElseThrow();
 
         assertEquals(session.sessionId(), workspace.session().sessionId());
-        // 两次提问各三条：提问、受理播报、结论回复。
-        assertEquals(6, workspace.messages().size());
+        // 两次提问各两条：提问 + 结论回复。
+        assertEquals(4, workspace.messages().size());
         assertEquals(2, workspace.incidents().size());
         // limit 之外的旧任务不在聚合里，最新的排在最前。
         assertEquals(List.of(second.taskId()), workspace.tasks().stream().map(TaskView::taskId).toList());
@@ -312,7 +310,7 @@ class AgentOrchestratorTest {
         orchestrator = buildOrchestrator(routes);
     }
 
-    /** 按给定路由端口装配完整编排链（意图 → 目标 → 事件 → 调查 / 查询 / 解释 / 处置计划）。 */
+    /** 按给定路由端口装配完整编排链（会话 → 目标 → 事件 → 对话主路径）。 */
     private AgentOrchestrator buildOrchestrator(RouteReadPort routes) {
         MetricReadPort metricPort = windowSeconds -> {
             throw new SnapshotUnavailableException("测试桩未提供指标");
@@ -333,7 +331,8 @@ class AgentOrchestratorTest {
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
                 new IntentService(), new QueryStateService(executor),
-                new ExplainService(capabilities, registry, records), new ActionPlanService(executor));
+                new ExplainService(capabilities, registry, records), new ActionPlanService(executor),
+                ScriptedConversationModel.service(executor, tools -> "已按问题作答。"));
     }
 
     private TaskView submit(Session session, String userId, String message) {
