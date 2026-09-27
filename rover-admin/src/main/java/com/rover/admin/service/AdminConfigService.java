@@ -169,6 +169,47 @@ public class AdminConfigService {
         }
     }
 
+    /**
+     * 单版本权重调整：灰度放量 / 停推的专用原语。
+     *
+     * 只改一个版本目标的权重，内部仍走「整表 + 乐观锁」（读整表 → 定位目标 → 改权重 → 整表提交）。
+     * 因此它比「打开整条路由编辑再整体保存」更窄——不会误改别的目标，同时并发修改照样被 revision 拦下。
+     *
+     * @param body 需含 routeId / serviceName / group / weight，以及读到的 revision
+     */
+    public Map<String, Object> adjustTargetWeight(Map<String, Object> body) {
+        Map<String, Object> payload = new LinkedHashMap<>(body);
+        payload.putIfAbsent(ManageApiPaths.PARAM_OPERATION_ID, UUID.randomUUID().toString());
+        try {
+            return httpClient.postJson(
+                    properties.getGatewayUrl(), ManageApiPaths.ROUTES_TARGET_WEIGHT, payload);
+        } catch (ManageApiCallException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new ManageApiCallException(0, "调用 Gateway 调整版本权重失败", ex);
+        }
+    }
+
+    /**
+     * 回滚路由到最近某次已应用的快照。
+     *
+     * 网关语义是「产生新版本」而不是覆盖历史，所以回滚本身也是一次可回查的写操作。
+     *
+     * @param body 需含 toRevision 与当前读到的 revision（乐观锁）
+     */
+    public Map<String, Object> rollbackRoutes(Map<String, Object> body) {
+        Map<String, Object> payload = new LinkedHashMap<>(body);
+        payload.putIfAbsent(ManageApiPaths.PARAM_OPERATION_ID, UUID.randomUUID().toString());
+        try {
+            return httpClient.postJson(
+                    properties.getGatewayUrl(), ManageApiPaths.ROUTES_ROLLBACK, payload);
+        } catch (ManageApiCallException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new ManageApiCallException(0, "调用 Gateway 回滚路由失败", ex);
+        }
+    }
+
     public List<Map<String, Object>> listInstances() {
         try {
             return httpClient.getList(properties.getNameserverManageUrl(), ManageApiPaths.INSTANCES);

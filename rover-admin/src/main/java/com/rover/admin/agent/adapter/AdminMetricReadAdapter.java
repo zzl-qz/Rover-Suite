@@ -63,9 +63,12 @@ public class AdminMetricReadAdapter implements MetricReadPort {
             long observedAt = payload.path("observedAtMillis").asLong(System.currentTimeMillis());
             List<RouteUpstreamSnapshot> rows = new ArrayList<>();
             for (JsonNode row : payload.path("rows")) {
+                // group 是版本归属：网关在每条实例行上都带了它（空串 = 无版本 / 默认组）。
+                // 之前没有读，导致 Agent 只能说「某台机器有问题」而无法归因到具体版本。
                 rows.add(new RouteUpstreamSnapshot(
                         row.path("routeId").asText(routeId == null ? "" : routeId),
                         row.path("hostPort").asText(""),
+                        row.path("group").asText(RouteUpstreamSnapshot.NO_GROUP),
                         window,
                         row.path("windowRequests").asLong(0),
                         row.path("status").path("5xx").asLong(0),

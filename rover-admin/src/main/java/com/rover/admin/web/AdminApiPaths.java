@@ -12,6 +12,15 @@ public final class AdminApiPaths {
     public static final String ROUTES = "/routes";
     /** 路由变更预览：只校验与比对，不落盘、不生效。 */
     public static final String ROUTES_PREVIEW = "/routes/preview";
+    /**
+     * 单版本权重调整：灰度放量 / 停推的专用原语。
+     *
+     * 与「打开整条路由编辑再整体保存」的区别是它只改一个版本的权重，内部仍走整表 + 乐观锁，
+     * 因此既窄（不会误改别的目标）又安全（并发修改照样被 revision 拦下）。
+     */
+    public static final String ROUTES_TARGET_WEIGHT = "/routes/targets/weight";
+    /** 回滚到最近某次已应用的路由快照（产生新版本，不是覆盖历史）。 */
+    public static final String ROUTES_ROLLBACK = "/routes/rollback";
     /** 路由写操作记录查询：请求超时后用同一个 operationId 确认是否已执行。 */
     public static final String ROUTE_OPERATION = "/routes/operations/{operationId}";
     public static final String INSTANCES = "/instances";

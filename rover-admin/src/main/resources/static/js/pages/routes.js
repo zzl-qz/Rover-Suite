@@ -19,6 +19,8 @@ window.RoverAdminPages.routes = {
             editingPrefix: null,
             routeDrawerOpen: false,
             routeForm: { ...EMPTY_ROUTE_FORM },
+            // 回滚目标版本号：网关只保留最近 5 次已应用快照，越界的版本号会被明确拒绝
+            rollbackRevision: '',
         };
     },
 
@@ -85,6 +87,7 @@ window.RoverAdminPages.routes = {
                 this.routeForm.targets = [{ serviceName: '', group: '', weight: 100 }];
             }
             this.routePreview = null;
+            this.rollbackRevision = '';
             this.routeDrawerOpen = true;
         },
         closeRouteDrawer() {
@@ -265,6 +268,89 @@ window.RoverAdminPages.routes = {
                         || String(e.message || '').includes('版本冲突')) {
                     await this.fetchRoutes();
                 }
+            }
+        },
+        /**
+         * 只调整一个版本的权重：灰度放量 / 停推的专用通道。
+         *
+         * 与「保存整条路由」的区别是它走网关收窄的原语——只改这一个版本，不会误动同一条路由上的
+         * 其它目标；乐观锁（revision）与超时回查（operationId）则与保存路由完全一致，
+         * 所以写失败后的对账逻辑可以直接复用。
+         */
+        async applyTargetWeight(target) {
+            if (!target || !String(target.serviceName || '').trim()) {
+                this.toast('error', '版本目标缺少服务名');
+                return;
+            }
+            const weight = weightOf(target);
+            const operationId = newOperationId();
+            const payload = {
+                routeId: this.routeForm.id || this.routeForm.businessPrefix,
+                serviceName: String(target.serviceName).trim(),
+                group: String(target.group || '').trim(),
+                weight,
+                revision: this.routesRevision,
+                operationId,
+            };
+            this.savingRoute = true;
+            try {
+                const result = await RoverAdminApi.api('/api/routes/targets/weight', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                this.toast('success',
+                    result.message || `版本 ${payload.group || '默认'} 权重已调整为 ${weight}`);
+                await this.fetchRoutes();
+            } catch (e) {
+                this.toast('error', e.message);
+                if (await this.recoverWriteOutcome(operationId, e)
+                        || String(e.message || '').includes('版本冲突')) {
+                    await this.fetchRoutes();
+                }
+            } finally {
+                this.savingRoute = false;
+            }
+        },
+        /** 把某个版本一次性停推：权重归零，等价于一键摘掉这个灰度版本。 */
+        stopTarget(target) {
+            if (!target) return;
+            target.weight = 0;
+            return this.applyTargetWeight(target);
+        },
+        /**
+         * 回滚路由表到某个历史版本。
+         *
+         * 网关以「产生新版本」的方式回滚（不覆盖历史），且只保留最近 5 次已应用快照——
+         * 不在窗口内的版本号会被网关明确拒绝，这里把原因原样透给操作者，不自己猜能不能回滚。
+         */
+        async rollbackRoutes() {
+            const toRevision = Number(this.rollbackRevision);
+            if (!Number.isInteger(toRevision) || toRevision <= 0) {
+                this.toast('error', '请填写要回滚到的版本号（正整数）');
+                return;
+            }
+            if (!confirm(`确定把路由表回滚到版本 ${toRevision} 吗？这会以「新版本」的形式生效。`)) return;
+            const operationId = newOperationId();
+            const payload = { toRevision, revision: this.routesRevision, operationId };
+            this.savingRoute = true;
+            try {
+                const result = await RoverAdminApi.api('/api/routes/rollback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                this.toast('success', result.message || `已回滚到版本 ${toRevision}`);
+                this.rollbackRevision = '';
+                await this.fetchRoutes();
+            } catch (e) {
+                this.toast('error', e.message);
+                if (await this.recoverWriteOutcome(operationId, e)
+                        || String(e.message || '').includes('版本冲突')) {
+                    await this.fetchRoutes();
+                }
+            } finally {
+                this.savingRoute = false;
             }
         },
         /**

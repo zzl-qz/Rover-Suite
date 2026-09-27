@@ -19,6 +19,7 @@ import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -120,6 +121,43 @@ class AdminReadAdaptersTest {
 
         assertFalse(snapshot.enabled());
         assertTrue(snapshot.rows().isEmpty());
+    }
+
+    /**
+     * 上游实例观测必须带版本归属（group）。
+     *
+     * 灰度场景下「哪台机器返回了 5xx」只有落到「哪个版本返回了 5xx」才能指导动作——
+     * 否则结论停在机器层面，既没法判断要不要停推某个版本，也没法决定回滚到哪一版。
+     */
+    @Test
+    void mapsUpstreamRowsWithVersionGroup() {
+        when(admin.loadRouteUpstreams(any(), anyInt())).thenReturn(read("""
+                {"enabled":true,"windowSeconds":60,"observedAtMillis":1000,"rows":[
+                  {"routeId":"demo-tt","hostPort":"127.0.0.1:9101","group":"v2","windowRequests":50,"status":{"5xx":20}},
+                  {"routeId":"demo-tt","hostPort":"127.0.0.1:9102","group":"v1","windowRequests":50,"status":{"5xx":0}}]}"""));
+
+        List<RouteUpstreamSnapshot> rows = new AdminMetricReadAdapter(admin).routeUpstreams("demo-tt", 60);
+
+        assertEquals(2, rows.size());
+        assertEquals("v2", rows.get(0).group());
+        assertTrue(rows.get(0).hasGroup());
+        assertEquals(20, rows.get(0).status5xx());
+        assertEquals("v1", rows.get(1).group());
+        assertEquals(0, rows.get(1).status5xx());
+    }
+
+    /** 实例行没有 group 时归一成空串：下游只判「有没有版本」，不必处理 null。 */
+    @Test
+    void normalizesMissingUpstreamGroup() {
+        when(admin.loadRouteUpstreams(any(), anyInt())).thenReturn(read("""
+                {"enabled":true,"windowSeconds":60,"observedAtMillis":1000,"rows":[
+                  {"routeId":"demo-tt","hostPort":"127.0.0.1:9101","windowRequests":5,"status":{"5xx":1}}]}"""));
+
+        List<RouteUpstreamSnapshot> rows = new AdminMetricReadAdapter(admin).routeUpstreams("demo-tt", 60);
+
+        assertEquals(1, rows.size());
+        assertEquals(RouteUpstreamSnapshot.NO_GROUP, rows.get(0).group());
+        assertFalse(rows.get(0).hasGroup());
     }
 
     @Test

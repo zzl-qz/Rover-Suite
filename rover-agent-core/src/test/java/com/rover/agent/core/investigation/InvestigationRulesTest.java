@@ -260,9 +260,11 @@ class InvestigationRulesTest {
 
     private static RouteUpstreamSnapshot upstream(String hostPort, long windowRequests, long status5xx,
                                                   double avgMillis, long p95Millis) {
-        return new RouteUpstreamSnapshot("order-route", hostPort, 60, windowRequests, status5xx, 0, 0,
-                avgMillis, p95Millis, System.currentTimeMillis());
+        return new RouteUpstreamSnapshot("order-route", hostPort, RouteUpstreamSnapshot.NO_GROUP, 60,
+                windowRequests, status5xx, 0, 0, avgMillis, p95Millis, System.currentTimeMillis());
     }
+
+
 
     private static Hypothesis hypothesis(Findings findings, String id) {
         return findings.hypotheses().stream().filter(item -> id.equals(item.id())).findFirst()

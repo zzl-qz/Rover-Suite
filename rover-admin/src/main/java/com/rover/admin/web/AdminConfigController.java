@@ -113,6 +113,29 @@ public class AdminConfigController {
         return configService.routeOperation(operationId);
     }
 
+    /**
+     * 灰度放量 / 停推：只改一个版本目标的权重。
+     *
+     * body 需含 routeId / serviceName / group / weight，以及读到的 revision。
+     * 与「保存整条路由」的区别是它走网关收窄的专用原语：不会误改同一条路由上的其它目标；
+     * 乐观锁与 operationId 回查机制则与保存路由完全一致。
+     */
+    @PostMapping(AdminApiPaths.ROUTES_TARGET_WEIGHT)
+    public Map<String, Object> adjustTargetWeight(@RequestBody Map<String, Object> body) {
+        return configService.adjustTargetWeight(body);
+    }
+
+    /**
+     * 回滚路由到最近某次已应用的快照。
+     *
+     * body 需含 toRevision 与当前 revision。网关以「产生新版本」的方式回滚（不覆盖历史），
+     * 因此同样返回可回查的 operationId。
+     */
+    @PostMapping(AdminApiPaths.ROUTES_ROLLBACK)
+    public Map<String, Object> rollbackRoutes(@RequestBody Map<String, Object> body) {
+        return configService.rollbackRoutes(body);
+    }
+
     /** 注册实例列表（Nameserver 管理口）。 */
     @GetMapping(AdminApiPaths.INSTANCES)
     public List<Map<String, Object>> instances() {
