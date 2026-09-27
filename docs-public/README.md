@@ -51,6 +51,7 @@ The system is easiest to understand as three cooperating surfaces: the Gateway r
 | :--- | :--- | :--- |
 | Run the first end-to-end request / 本地跑通一次完整链路 | [Quick Start](./quick-start.md) | [快速上手](./quick-start.zh-CN.md) |
 | Use Gateway routes and runtime config / 使用路由与运行时配置 | [User Guide](./user-guide.md) | [使用指南](./user-guide.zh-CN.md) |
+| Configure a versioned gray release / 配置版本化灰度发布 | [Gateway Gray Release](./gateway-gray-release.md) | [Gateway 灰度发布](./gateway-gray-release.zh-CN.md) |
 | Open and understand Admin / 使用 Admin 控制台 | [Admin User Guide](./admin-guide.md) | [Admin 使用手册](./admin-guide.zh-CN.md) |
 | Understand the Ops Agent positioning / 了解运维 Agent 定位 | [Rover Ops Agent](./ops-agent.md) | [Rover Ops Agent](./ops-agent.zh-CN.md) |
 | Call Admin APIs directly / 直接调用 Admin API | [Admin API](./admin-api.md) | [Admin API](./admin-api.zh-CN.md) |

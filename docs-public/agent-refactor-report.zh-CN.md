@@ -1,5 +1,11 @@
 # Rover Ops Agent 改造报告（第 1~6 步落地）
 
+> **后续变更提示（本轮之后）：** 本文描述的旧入口兼容层已在后续「死代码清理」轮中整体移除——`DiagnosisController`
+> （含三个 `/api/agent/diagnoses*` 入口与旧 SSE 三事件语义）、零引用的 `TaskEventSink` 与失去字段的 `IncidentSeverity`
+> 均已删除；`AgentController` 另删除了 `GET /api/agent/sessions/{sessionId}`（由 `GET /api/agent/sessions/{sessionId}/workspace`
+> 取代）与 `GET /api/agent/incidents/{incidentId}`（零引用）两个冗余端点。项目处于开发阶段、不保留向后兼容。
+> 本文以下内容为当时状态，保留作演进记录，读到 `DiagnosisController` / `TaskEventSink` 请以本提示为准。
+
 本报告对应改造任务书第 37 节的十六项要求，记录本阶段（Message 提交进异步任务生命周期 → Workbench 事件化 →
 仓储/安全/指标治理）的真实落地情况。所有结论以当前工作区代码与 `mvn test` 实测为准；本文只描述已发生的事。
 
@@ -70,7 +76,7 @@
 - `TaskEventType`：`SNAPSHOT`、`TASK_CREATED`、`TASK_STARTED`、`STEP_STARTED`、`STEP_COMPLETED`、`STEP_FAILED`、
   `EVIDENCE_ADDED`、`ANALYSIS_DELTA`、`CLARIFICATION_REQUIRED`、`TASK_COMPLETED`、`TASK_FAILED`、`TASK_CANCELLED`。
 - `TaskSnapshot`：任务视图 + 已产生的解读文本 + 已覆盖的事件序号 `coveredEventId`。
-- `TaskEventSink` / `TaskEventSubscriber` / `TaskEventSubscription`：运行层发布口与订阅口，`TaskEventSubscription.NONE` 为无操作句柄。
+- `TaskEventSink` / `TaskEventSubscriber` / `TaskEventSubscription`：运行层发布口与订阅口，`TaskEventSubscription.NONE` 为无操作句柄。（`TaskEventSink` 已在后续清理轮移除，其余保留。）
 
 **rover-agent-runtime**
 
@@ -104,7 +110,7 @@
 - `IncidentRegistry`：三参构造接入保留策略；准入失败可见；会话/事件的摘除统一走 `SessionLinks`。
 - `AgentController`：新增 `GET /sessions/{id}/workspace` 与 `GET /tasks/{id}/events`；提问改为 202 + 409/429 错误体；
   SSE 订阅者带连接数记账（只对确实建立过的连接加减）。
-- `DiagnosisController`：整类标记 `@Deprecated`，三个入口全部转发编排层并做归属校验；SSE 改为把新事件翻译回旧文本字段。
+- `DiagnosisController`：整类标记 `@Deprecated`，三个入口全部转发编排层并做归属校验；SSE 改为把新事件翻译回旧文本字段。（已在后续清理轮整类移除。）
 - `AgentCompositionConfiguration`：新增进程内唯一的 `SimpleMeterRegistry`（不引 Actuator/Prometheus）。
 - `AdminModelProperties` / `SecretCipher`：主密钥解析优先级（属性 → 环境变量）、隔离判定与 `[SECURITY WARNING]`。
 - `AdminSecurityProperties` / `AdminSecurityConfiguration`：`trust-forwarded-headers` 开关，成功/失败/限流三处共用同一 `source()`。
@@ -133,14 +139,14 @@
 | --- | --- | --- |
 | `POST /api/agent/sessions/{sessionId}/messages` | 同步返回 `AgentResponse`（含 `task`/`clarification`） | `202 {sessionId, taskId, status:"PENDING"}`；同会话冲突 `409 SESSION_TASK_RUNNING`；容量/队列满 `429 TASK_BUSY` |
 | `GET /api/agent/sessions` | `listAll` 后过滤 | 按 `userId` 语义化查询 |
-| `GET /api/agent/tasks/{taskId}`、`/incidents/{id}` | 已有归属校验 | 保持，未归属统一 404 |
+| `GET /api/agent/tasks/{taskId}`、`/incidents/{id}` | 已有归属校验 | 保持，未归属统一 404（`/incidents/{id}` 已在后续清理轮移除） |
 
-**旧接口（保留兼容，均标记 `@Deprecated`）**
+**旧接口（保留兼容，均标记 `@Deprecated`；已在后续清理轮整体移除）**
 
-- `POST /api/agent/diagnoses` → 转发编排层，返回任务详情（202）。
-- `GET /api/agent/diagnoses/{taskId}` → 转发 `agent.task(taskId, user)`，**新增归属校验**（原实现无校验）。
+- `POST /api/agent/diagnoses` → 转发编排层，返回任务详情（202）。（已在后续清理轮移除）
+- `GET /api/agent/diagnoses/{taskId}` → 转发 `agent.task(taskId, user)`，**新增归属校验**（原实现无校验）。（已在后续清理轮移除）
 - `GET /api/agent/diagnoses/{taskId}/stream` → 仍推 `snapshot` / `delta` / `end` 三个文本事件，数据源换成新事件总线，
-  并新增归属校验。
+  并新增归属校验。（已在后续清理轮移除）
 
 ## 9. Task State 变化
 
@@ -203,7 +209,7 @@ rover:
 
 | 编号 | 问题 | 修复 |
 | --- | --- | --- |
-| §13 | 旧 Diagnosis 的 `GET`/`stream` 无归属校验（越权读他人任务与解读流） | 三个入口统一按认证身份过滤，未归属 404；与 Workbench 新端点同一套校验 |
+| §13 | 旧 Diagnosis 的 `GET`/`stream` 无归属校验（越权读他人任务与解读流） | 三个入口统一按认证身份过滤，未归属 404；与 Workbench 新端点同一套校验（相关入口已在后续清理轮移除） |
 | §24 | 主密钥与模型配置同目录，密文可被整体拷走 | 显式主密钥（属性/`ROVER_ADMIN_MASTER_KEY`）或独立 `master-key-file` 目录视为已隔离；否则启动打 `[SECURITY WARNING]`，不阻断启动、不取消自动生成机制；密钥与密文不入日志与响应 |
 | §25 | 登录限流无条件信任 `X-Forwarded-For`，可伪造来源绕过锁定 | 默认只认 `remoteAddr`；仅 `rover.admin.auth.trust-forwarded-headers=true` 时取 XFF 首段；成功、失败、限流三处共用同一来源函数 |
 | §23 | 存储静默淘汰最早记录，可能丢掉仍在使用的会话/事件 | 存储满即拒绝（`StoreCapacityExceededException`）；由 `WorkspaceRetention` 决定清理谁、连不连子记录；有任务在跑的会话/事件不清理 |
@@ -227,7 +233,7 @@ rover:
 **改造既有用例**
 
 `IncidentRegistryTest`（旧"静默淘汰"断言改为"满则拒绝"）、`AgentOrchestratorTest`（装配保留策略）、
-`InvestigationServiceTest`、`AgentControllerWebTest`（202/409/429、workspace、事件流）、`DiagnosisControllerWebTest`（归属校验）、
+`InvestigationServiceTest`、`AgentControllerWebTest`（202/409/429、workspace、事件流）、`DiagnosisControllerWebTest`（归属校验，已在后续清理轮随被测类一起移除）、
 `ModelConfigStoreTest`（主密钥隔离判定）、`AdminSecurityWebTest`（默认忽略伪造 XFF）、`AgentContextManagerTest`。
 
 **实测结果**（`mvn -o -pl rover-agent-core,rover-agent-runtime,rover-admin -am test`）
@@ -242,7 +248,7 @@ rover:
 4. **保留策略是"够用即止"**：容量满且全是执行中任务时会显式失败（而不是无界增长），
    但历史任务被淘汰后无法回溯，接数据库前没有历史查询能力。
 5. **旧接口仍需双份维护**：`DiagnosisController` 的旧 SSE 语义（三个文本事件）与新事件协议并存，
-   等旧前端下线后可整体删除。
+   等旧前端下线后可整体删除。（`DiagnosisController` 已在后续清理轮整体移除，该双份维护问题随之消失。）
 6. **模型配置默认仍是"开发友好"**：默认 `master.key` 与配置同目录，生产必须按配置文档改环境变量或独立目录，
    目前只有启动告警，没有强制。
 7. **前端轮询降级未做端到端验收**：`§31` 的浏览器验收（事件流、动态步骤、409 提示、断线重连）尚未人工跑通，

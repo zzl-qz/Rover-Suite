@@ -46,14 +46,16 @@ held in Admin memory and disappear after restart. The Agent only reads managemen
 snapshots; it does not send requests to business paths or change routes and
 configuration.
 
-Once a model is configured, the "AI interpretation" section of an investigation
-card in the workbench fills in as the text is generated (the console subscribes
-to deltas over SSE and shows "generating live..."; a dropped connection does not
-affect the investigation, and polling fills in the final text). When generation
-finishes, `aiAnalysis` in the task result is authoritative. If the model is
-unavailable or not configured the section does not appear and only the rule-based
-diagnosis is shown. Expanding "view investigation details" on the card shows each
-step, the investigation trail, and the structured evidence.
+Once a model is configured, the answer is written into the reply bubble as it is
+generated (the console subscribes to deltas over SSE; a dropped connection does
+not affect the investigation, and polling fills in the final text). Each question
+gets exactly one answer: steps, plan, evidence, and hypotheses stay in a collapsed
+process row above the bubble — expand "view investigation process" to read them.
+When an investigation finishes, its conclusion is recorded as an Agent reply, and
+the bubble prefers the model's interpretation (`aiAnalysis` in the task result),
+falling back to the rule-based conclusion when there is none. The "investigation
+started / continued" notice stays in the process row instead of taking the
+answer's place.
 
 ## First login
 
@@ -215,16 +217,44 @@ that owns the largest share of total time.
 
 ![Route list](images/admin/05-routes-list.png)
 
-The route list shows `businessPrefix`, service name, static targets and
-`stripPrefix`. Saving applies the update to Gateway and persists it. Check for
-overlapping prefixes before changing a route.
+The route list shows `businessPrefix`, the versioned targets and their weights,
+static targets and `stripPrefix`. Saving applies the update to Gateway and
+persists it. Check for overlapping prefixes before changing a route.
 
 ![Route editor](images/admin/06-route-editor.png)
 
-In dynamic discovery, pick registry or static address first. Registry routes
-use `serviceName`; static routes use `targetUrl` or `targetUrls`. Do not keep
-both on one route. `stripPrefix` is removed before the request reaches the
-upstream; set it per route instead of relying on global `rewrite.stripPrefix`.
+In dynamic discovery, pick registry or static address first. Registry routes use
+a `targets` list of `{serviceName, group, weight}` — `group` is the version and
+`weight: 0` pauses a version without deleting it; all targets on one route must
+share the same `serviceName`. Static routes use `targetUrl` or `targetUrls`. Do
+not keep both kinds on one route. `stickyHeader` optionally names the header used
+for sticky version selection (default: the client IP). `stripPrefix` is removed
+before the request reaches the upstream; set it per route instead of relying on
+global `rewrite.stripPrefix`.
+
+Before saving, the editor previews the per-route diff (`ADDED` / `REMOVED` /
+`MODIFIED`). Every save sends the `revision` it last read; if someone else changed
+the routes first, Gateway returns `409`, the page refreshes to the latest
+revision and asks you to save again instead of silently overwriting.
+
+### Version metrics
+
+For a versioned route, `GET /_manage/metrics/routes?routeId=..&range=60|300`
+returns the declared `targets`, a per-version `byVersion` rollup, and a
+`versionCheck` comparison of declared vs observed versions. These metrics reuse
+the "route × instance" dimension (each forwarded instance carries its `group`),
+so they add no second store and keep the 5-minute sliding window.
+
+Read the time semantics carefully — they are mixed on purpose.
+`windowRequests`, `status5xx`, `connectFail`, `timeout`, `avgMillis`, `p95Millis`,
+`sampleSize`, `sufficient`, and `errorRate` are window values, but
+`noUpstreamRejects` / `circuitOpenRejects` are the route's **cumulative** reject
+counters. So `capacityProblem` ("this version hit a no-instance or
+all-circuit-open 503 at some point since startup") is a conservative hint, not
+proof that the current window is broken. A version with fewer than
+`sampleThreshold` (`5`) window samples is not enough to judge (`sufficient=false`),
+and `p95Millis` is the maximum of the version's instance p95 values (a
+conservative upper bound), not the version's true p95.
 
 ### Instances
 

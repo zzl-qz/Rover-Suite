@@ -181,7 +181,7 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | | `com.rover.agent.core.context` | AgentContextManager (N most recent messages + active incident + structured target + key evidence); TargetResolver / ResourceTarget (explicit input → existing routes and instances → model assistance → clarification) |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules (pure functions, unit-testable without the framework) |
 | | `com.rover.agent.core.intent` | IntentClassifier / IntentDecision / IntentService: intent recognition with constrained values (out-of-range values are dropped) |
-| | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult: capability catalogue and the single read-only execution point |
+| | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult / AgentGrounding (environment profile and glossary) / UntrustedText (sentinel fencing for untrusted content): capability catalogue and the single read-only execution point |
 | | `com.rover.agent.core.planning` | InvestigationPlanner / InvestigationPlan / PlannedStep / PlanValidator / PlanningLimits / RuleBasedPlanner: plan production, out-of-scope dropping, hard limits |
 | `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator (application entry: context → intent → target → task → dispatch); InvestigationService (investigation task lifecycle); QueryStateService / ExplainService / ActionPlanService (state queries, capability summary, action plans) |
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph: plan / execute / evaluate / clarify / synthesise nodes, looping conditional edges, conclusion synthesis |
@@ -189,9 +189,9 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces; in-memory and bounded today) |
 | | `com.rover.agent.runtime.repository` | Four thread-safe in-memory implementations (lost on restart), replaced when persistence lands |
 | | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model |
-| | `com.rover.agent.runtime.llm` | ModelExplainer (route and instance snapshots pre-read into the prompt, metrics / traces on demand through read-only tools); LlmIntentInterpreter / SpringAiJsonCompletion (constrained JSON output for intent and plan candidates) |
+| | `com.rover.agent.runtime.llm` | JsonCompletion (structured-output port; the parsing contract is supplied by the caller) / ModelExplainer (route and instance snapshots pre-read into the prompt, metrics / traces on demand through read-only tools) / LlmIntentInterpreter / ModelTargetInterpreter (constrained JSON output for intent and target) / SpringAiJsonCompletion (the implementation, which records each call's outcome against `ModelCallOutcome`) |
 | `rover-admin` | `com.rover.admin.agent.adapter` | Four read-only adapters: AdminConfigService → ports, never triggering a write |
-| | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + DiagnosisController (legacy entry, forwarded) + composition root |
+| | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + composition root |
 
 **Boundary rules:**
 
@@ -231,10 +231,9 @@ they are built, rather than scaffolding empty modules now.
 **Implemented:**
 
 - Admin Agent Workbench plus the conversational API: `POST/GET /api/agent/sessions`,
-  `GET /api/agent/sessions/{sessionId}`, `POST /api/agent/sessions/{sessionId}/messages`,
-  `GET /api/agent/tasks/{taskId}`, `GET /api/agent/incidents/{incidentId}`. The legacy `POST /api/agent/diagnoses`
-  and `GET /api/agent/diagnoses/{taskId}` (including the SSE interpretation stream) stay compatible and forward
-  internally to the same orchestration.
+  `POST /api/agent/sessions/{sessionId}/messages`, `GET /api/agent/sessions/{sessionId}/workspace`,
+  `GET /api/agent/tasks/{taskId}`, `GET /api/agent/tasks/{taskId}/events` (SSE). The legacy `/api/agent/diagnoses*`
+  entries were removed together with `DiagnosisController`; only the conversational entries remain.
 - Multi-turn follow-ups: AgentContextManager assembles "N most recent messages
   (`rover.agent.context.recent-message-limit`, default 8) + active incident + structured target + key evidence";
   TargetResolver resolves the object as "explicit input → existing routes and instances → model assistance →
@@ -254,6 +253,22 @@ they are built, rather than scaffolding empty modules now.
   when needed; state queries run a couple of read-only capabilities, capability questions answer from the registry's
   real list, and unsupported requests are answered honestly instead of forced into an investigation. Unrecognised
   messages with no resolvable target get a self-introduction plus the capability list instead of a path clarification.
+- Evidence-driven path correction (without changing the "a query stays a query" semantics): when a lightweight path
+  genuinely has nothing useful to produce, the fallback wording is not handed straight to the user — another path is
+  tried instead. A state query that cannot tell which kind of fact is being asked for ("what is the state of
+  order-service right now") or an explanation question with no conclusion in the session yet is escalated to a
+  read-only investigation, provided the object named in the question resolves. A dedicated "路径纠正" step records why
+  the shape changed. Correction only happens when the question itself names an object: a question missing its object
+  ("what is the state right now") still reports the missing subject honestly instead of restarting an investigation on
+  last turn's object.
+- The intent prompt has three parts: the environment profile and glossary from `AgentGrounding` (the system is a Gateway
+  plus a Nameserver, which hops a call passes through, and what users mean by each colloquialism), the read-only
+  capability boundary rendered from the same capability registry, and the allowed intents with their decision order
+  plus a few examples. The AI interpretation prompt reuses the same profile, so the two never describe the system
+  separately. The model-side policy is "if it is about this system at all, pick the closest intent and honestly report
+  MEDIUM or LOW"; `UNKNOWN` is reserved for input unrelated to operations, so an in-domain-but-uncertain message is no
+  longer thrown away. The rule layer gained colloquial failure vocabulary (扛不住 / 时好时坏 / 无响应 / 502 …) at the
+  same time: the deterministic layer stops missing, and the model fills gaps instead of covering for it.
 - Capability registry and read-only executor: available capabilities (route / instance / gateway metrics / trace /
   configuration / registry-event queries) are registered as READ_ONLY, planning may only choose among them, and the
   executor is the single data-access point
@@ -281,12 +296,47 @@ they are built, rather than scaffolding empty modules now.
   instance snapshots — the minimum basis for any explanation — are pre-read by the runtime and written into the prompt,
   while metrics and traces are read on demand through read-only tools executed by the application. The result text of
   the "AI interpretation" step distinguishes runtime pre-fetched snapshots from tools the model called itself, so the
-  reasoning traces back to specific snapshots.
+  reasoning traces back to specific snapshots. Every read-only tool description states what it returns, when to use it,
+  when not to, and what it cannot return — so the model does not look for traffic data in a route snapshot, or read a
+  missing trace as "no failure happened".
 - The AI interpretation is pushed as it is generated: `ModelExplainer` streams chunks to the task and Admin relays
   them over SSE. The final full text still lands in the task result, and polling covers dropped connections.
   Collection and rule verdicts are a blocking Graph chain and are not streamed.
+- An investigation's conclusion is recorded as an Agent reply, and it is written before the task reaches a terminal
+  state: a client that reloads the session on `TASK_COMPLETED` sees the answer itself instead of the
+  "investigation started / continued" notice. The reply prefers the model's interpretation and falls back to the
+  rule-based conclusion; a failed conclusion callback only logs a warning and never marks a finished investigation
+  as failed.
 - Task state lives in Admin memory and is gone after restart. Every question opens a Session, but only a fault
   investigation creates a `USER`-origin Incident.
+- Intent recognition evaluation loop (`IntentEvaluationTest`): 32 labelled utterances must be matched exactly,
+  one by one, by the rule layer; another 6 fuzzy phrasings of the same intents must **not** be settled by the rule
+  layer with `HIGH` confidence — the model has to step in. This solves "the intent hit rate is only a verbal claim
+  and prompt edits are pure guesswork": the hit rate becomes a regression baseline that can be compared before and
+  after a change.
+- Strict structured output plus failure classification: `JsonCompletion`'s parsing contract is now supplied by the
+  caller (`Function<String, Optional<T>> parser`), and `LlmIntentInterpreter` moved from "lenient default filling"
+  to a strict contract — invalid JSON, or any of intent / confidence / topic / action missing or out of range,
+  discards the whole result and falls back to the rule layer, with no default value filled in. `ModelCallOutcome`
+  splits the outcome into `OK` / `NOT_CONFIGURED` / `UNAVAILABLE` / `TIMEOUT` / `ERROR` / `EMPTY` / `REJECTED`,
+  where `rejected` means "the model returned text that violates the contract". This solves "an out-of-range output
+  gets patched with a default and the resulting hit-rate loss cannot be located": falling back to the rule layer is
+  preferable to swallowing a contract violation.
+- Model-call observability including token usage: the `AgentMetrics` port is now
+  `modelCall(model, scene, durationMillis, outcome)` plus a new
+  `modelTokens(model, scene, promptTokens, completionTokens)`; on the Micrometer side this exposes `model.calls`
+  (tags `model` / `scene` / `outcome`), `model.duration` (tags `model` / `scene`), and `model.tokens` (tags
+  `model` / `scene` / `kind`, `prompt` or `completion`; usage that is unavailable is not reported at all rather than
+  recorded as 0), and removes `model.error`, which could only answer "how many failures". This solves "call counts
+  and latency say nothing about cost or context growth": token usage is queryable per scene, so cost and prompt
+  bloat can be quantified.
+- Prompt-injection isolation (`UntrustedText`): untrusted content is fenced with sentinels (open `<<<ROVER-DATA`,
+  close `ROVER-DATA>>>`), `contract()` declares that anything inside the sentinels is not an instruction, and
+  `block(label, content)` first replaces any sentinel occurring in the content with the placeholder `[ROVER-DATA]`
+  before fencing it. It is applied in `ModelExplainer` (snapshot descriptions), `LlmInvestigationPlanner` (user
+  question plus collected evidence), and `ModelTargetInterpreter` (candidate objects plus user question). This
+  solves "snapshots / questions / evidence are external content that may coax the model into overstepping": content
+  cannot forge the boundary, so the model can separate "data" from "instructions".
 
 **Planned (not implemented):**
 

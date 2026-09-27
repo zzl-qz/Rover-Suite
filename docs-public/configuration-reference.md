@@ -80,8 +80,16 @@ at startup instead of appearing later as "a task rejected for no reason" or "an 
 
 Metric names (prefix `rover.agent.`, written to the host process's single `MeterRegistry`): `task.submitted` /
 `task.completed` / `task.failed` / `task.rejected` are counters; `task.active` / `task.queue.size` /
-`sse.connections` are current values; `task.duration` (tag `status`) and `model.duration` / `model.error`
-(tag `model`) cover latency and failures. Tags are limited to the finite `status`, `reason`, and `model` values;
+`sse.connections` are current values; `task.duration` (tag `status`), `model.duration` (tags `model`, `scene`),
+`model.calls` (tags `model`, `scene`, `outcome`), and `model.tokens` (tags `model`, `scene`, `kind` — `prompt` or
+`completion`; usage that is unavailable is not reported at all, never recorded as 0) cover latency, call counts,
+and token usage. The old `model.error` was removed: a single failed boolean can only answer "how many failures",
+not "which stage failed", and is now replaced by the `outcome` tag on `model.calls`
+(`ok` / `not_configured` / `unavailable` / `timeout` / `error` / `empty` / `rejected`, where `rejected` means "the
+model returned text that violates the output contract"). `scene` uses a finite set of Chinese values
+(`意图识别`, `目标解析`, `调查规划`, `解读`), blank input normalizes to `unknown`, and values longer than 24
+characters are truncated.
+Tags are limited to the finite `status`, `reason`, `model`, `scene`, `outcome`, and `kind` values;
 model names are normalized and truncated, so tag cardinality stays bounded.
 
 ## Gateway startup configuration
@@ -155,15 +163,63 @@ A 503 response includes `X-Rover-Reject-Reason`: `INFLIGHT_LIMIT` (in-flight gat
 ### Route fields
 
 `rover.gateway.routes` is an array. Each item supports `id`, `businessPrefix`,
-`serviceName`, `group`, `targetUrl`, `targetUrls`, and `stripPrefix`. Dynamic
-discovery uses `serviceName` (and optionally `group`); a route may also use
-`targetUrl` or `targetUrls` even when `discovery.type` is `nameserver` or
-`nacos`. Do not set both kinds on one route. A `targetUrls` item may use
-`http://host:port|weight`. Default `outbound=netty` accepts `http://` only.
-Startup and hot-reload reject `https://` so a config cannot pass and then fail on the first request.
-If the upstream is really HTTPS, set `proxy.outbound` to `jdk` and restart.
-Admin-saved routes are written to
-`config/routes.overlay.json` and replace the YAML route list as a whole.
+`targetUrl`, `targetUrls`, `targets`, `stickyHeader`, and `stripPrefix`.
+
+A route picks one upstream kind:
+
+- **Static** — `targetUrl` or `targetUrls`; a `targetUrls` item may use
+  `http://host:port|weight`.
+- **Dynamic / versioned** — `targets`, a list of `{serviceName, group, weight}`.
+
+The two are mutually exclusive: setting both on one route is rejected. The old
+flat `serviceName` / `group` fields were removed. A route may still use static
+addresses while `discovery.type` is `nameserver` or `nacos`, as long as that
+route uses only static addresses.
+
+Versioned targets are validated as "one service, several groups":
+
+- every `targets` item needs a non-empty `serviceName`;
+- all targets on one route must share the same `serviceName` — a route is not a
+  general multi-service aggregation, so per-version metrics and rollback keep a
+  single meaning;
+- `weight` is `0..10000`; `weight: 0` means "registered but receives no
+  traffic", which is how a version is paused without deleting it;
+- `(serviceName, group)` must not repeat;
+- the total weight must be greater than 0.
+
+`group` is the version label (`v1` / `v2` / …); there is no separate version
+field. The optional `stickyHeader` names the request header used for sticky
+routing and must match `[A-Za-z0-9-]+`. When it is absent the client IP is used,
+and when both are empty the request is routed by weight.
+
+A 95/5 canary:
+
+```yaml
+routes:
+  - id: order-api
+    businessPrefix: /api/orders
+    targets:
+      - serviceName: order-service
+        group: v1
+        weight: 95
+      - serviceName: order-service
+        group: v2
+        weight: 5
+    stripPrefix: /api
+```
+
+Raising `v2` from `5` to `20` (and `v1` from `95` to `80`) keeps the same keys on
+`v2`: the weight interval only extends leftward, so a user already on the canary
+is not pushed back to `v1`. See
+[Gateway versioned gray release](./gateway-gray-release.md) for the selection
+algorithm and the management flow.
+
+Default `outbound=netty` accepts `http://` only. Startup and hot-reload reject
+`https://` so a config cannot pass and then fail on the first request. If the
+upstream is really HTTPS, set `proxy.outbound` to `jdk` and restart.
+Admin-saved routes are written to `config/routes.overlay.json` — which also
+carries `revision` and `appliedOperationId` — and replace the YAML route list as
+a whole.
 
 ## Gateway runtime configuration
 
