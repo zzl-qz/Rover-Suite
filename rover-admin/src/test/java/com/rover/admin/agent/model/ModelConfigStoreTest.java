@@ -206,6 +206,28 @@ class ModelConfigStoreTest {
         assertTrue(lines.stream().noneMatch(line -> line.contains(SECRET)));
     }
 
+    /** 快速模型：配置往返不丢字段、密钥同样加密落盘，回读后 fastConfigured 成立。 */
+    @Test
+    void fastModelSurvivesReloadAndKeepsItsKeyEncrypted() throws IOException {
+        String fastSecret = "sk-fast-secret-0123456789";
+        ModelConfigStore store = store(environment("none", "", "", ""));
+        store.persist(new ModelSettings(true, "https://api.deepseek.com", SECRET, "deepseek-chat", 30,
+                ModelSettings.Source.FILE, ModelSettings.KeyState.OK,
+                new FastModel("https://open.bigmodel.cn/api/paas/v4", fastSecret, "glm-4-air")));
+
+        String onDisk = Files.readString(store.file(), StandardCharsets.UTF_8);
+        assertTrue(onDisk.contains("fast-base-url=https://open.bigmodel.cn/api/paas/v4"));
+        assertTrue(onDisk.contains("fast-model=glm-4-air"));
+        assertTrue(onDisk.contains("fast-api-key-enc="));
+        assertFalse(onDisk.contains(fastSecret), "快速模型密钥不得明文落盘");
+
+        ModelConfigStore reloaded = store(environment("none", "", "", ""));
+        assertTrue(reloaded.current().fastConfigured());
+        assertEquals("glm-4-air", reloaded.current().fast().model());
+        assertEquals("https://open.bigmodel.cn/api/paas/v4", reloaded.current().fast().baseUrl());
+        assertEquals(fastSecret, reloaded.current().fast().apiKey());
+    }
+
     private ModelConfigStore store(MockEnvironment environment) {
         ModelConfigStore store = new ModelConfigStore(properties(), environment,
                 new SecretCipher("", tempDir.resolve("master.key")));

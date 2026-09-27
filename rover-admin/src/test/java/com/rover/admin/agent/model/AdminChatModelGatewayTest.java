@@ -189,6 +189,42 @@ class AdminChatModelGatewayTest {
         assertFalse(gateway.lastError().contains("sk-abcdefghijklmnop"));
     }
 
+    /** 配置快速模型后，廉价调用（场景客户端）路由到快速模型，描述里能看到双模型。 */
+    @Test
+    void fastModelRoutesCheapCallsWhenConfigured() {
+        AdminChatModelGateway gateway = newGateway();
+        gateway.apply(new ModelSettings(true, "https://api.deepseek.com", "sk-abcdefghijklmnop", "deepseek-chat",
+                ModelSettings.DEFAULT_TIMEOUT_SECONDS, ModelSettings.Source.FILE, ModelSettings.KeyState.OK,
+                new FastModel("https://open.bigmodel.cn/api/paas/v4", "sk-abcdefghijklmnop", "glm-4-air")));
+
+        assertTrue(gateway.available());
+        ChatClient quick = gateway.chatClient(10);
+        assertNotNull(quick);
+        assertNotSame(gateway.chatClient(), quick, "配置快速模型后，廉价调用不应再复用主客户端");
+        assertSame(quick, gateway.chatClient(10), "同一场景超时的快速客户端应被缓存复用");
+        assertTrue(gateway.description().contains("glm-4-air"), "描述应体现快速模型已生效");
+    }
+
+    /** 快速模型构建失败只降级（回退主模型场景客户端），不拖累主诊断链。 */
+    @Test
+    void fastModelBuildFailureFallsBackToMainModel() {
+        AdminChatModelGateway gateway = new AdminChatModelGateway(mock(ModelConfigStore.class), toolManagers()) {
+            @Override
+            protected ChatClient build(ModelSettings settings, boolean thinking) {
+                if (settings.baseUrl().contains("bigmodel")) {
+                    throw new IllegalStateException("模拟快速模型构建失败");
+                }
+                return super.build(settings, thinking);
+            }
+        };
+        gateway.apply(new ModelSettings(true, "https://api.deepseek.com", "sk-abcdefghijklmnop", "deepseek-chat",
+                ModelSettings.DEFAULT_TIMEOUT_SECONDS, ModelSettings.Source.FILE, ModelSettings.KeyState.OK,
+                new FastModel("https://open.bigmodel.cn/api/paas/v4", "sk-abcdefghijklmnop", "glm-4-air")));
+
+        assertTrue(gateway.available(), "快速模型失败不能把主模型一起带崩");
+        assertNotNull(gateway.chatClient(10), "快速模型不可用时应回退主模型场景客户端");
+    }
+
     private static ModelSettings settings(boolean enabled, String baseUrl, String apiKey, String model) {
         return new ModelSettings(enabled, baseUrl, apiKey, model, ModelSettings.DEFAULT_TIMEOUT_SECONDS,
                 ModelSettings.Source.FILE, ModelSettings.keyStateOf(apiKey));
