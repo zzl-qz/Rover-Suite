@@ -167,7 +167,7 @@ routes:
 | :--- | :--- |
 | `id` | Unique route identifier |
 | `businessPrefix` | Incoming path prefix used for matching |
-| `targets` | Versioned upstreams: `{serviceName, group, weight}`; `group` is the version, `weight: 0` pauses a version |
+| `targets` | Versioned upstreams: `{serviceName, group, weight}`; reuses the registry's `group` (a general business group) as the gray dimension, `weight: 0` pauses a version |
 | `stickyHeader` | Optional header used as the sticky key; falls back to the client IP |
 | `targetUrl` / `targetUrls` | Fixed upstream list for a static route |
 | `stripPrefix` | Prefix removed before proxying; use `""` to preserve the full path |
@@ -218,7 +218,7 @@ Built-in management endpoints:
 | Gateway | `POST /_manage/routes/preview` | Per-route diff (`ADDED` / `REMOVED` / `MODIFIED`) and validation result only; nothing is persisted or applied |
 | Gateway | `POST /_manage/routes/targets/weight` | Raise or pause one version's weight (`routeId`, `serviceName`, `group`, `weight`); internally still a full-table optimistic-lock change |
 | Gateway | `POST /_manage/routes/rollback` | Roll back to a recent applied `toRevision`; the rollback itself is a new revision and cannot overwrite a concurrent change |
-| Gateway | `GET /_manage/routes/operations/{operationId}` | Confirm whether a write was applied after a timeout: `APPLIED` / `CONFLICT` / `REJECTED` / `UNKNOWN`, plus `currentRevision` |
+| Gateway | `GET /_manage/routes/operations/{operationId}` | Confirm whether a write was applied after a timeout: `APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` (submitted but the disk write failed) / `UNKNOWN` (no record), plus `currentRevision` |
 | Gateway | `GET /_manage/discovery/snapshot` | What the Gateway itself observes per `service@group`: `revision`, `epoch`, instance and healthy counts; `supported=false` under static discovery |
 | Gateway | `GET/POST /_manage/configs` | List or update registered runtime settings |
 | Gateway | `GET /_manage/metrics`, `/metrics/live`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, slim live snapshot (`range=60/300`; no p99/upstream Top; route Top short-cached), self-check, and Prometheus text |
@@ -295,13 +295,20 @@ public control plane. The deployer chooses hardening when exposing control ports
 
 - The current build is a single-node `1.0.0-SNAPSHOT`; it does not provide Nameserver HA or persistence-based
   restoration of online instances.
-- Discovery is push-first with periodic query reconciliation, not strongly real-time. A last-instance empty push is
-  currently protected by Gateway, so the cache clears at the next reconciliation — up to about 30 seconds by
-  default. Requests in that window may still select the recently stopped address. On this machine's Compose run
-  (`demo-fault.sh`), stopping the last instance produced 502 immediately and `503 NO_UPSTREAM` after about 17 seconds.
+- Discovery is push-first with periodic query reconciliation, not strongly real-time. When the last instance is
+  de-registered or expires, the server bumps `revision` and pushes an empty list; Gateway accepts that push and
+  **clears the group immediately**, so requests turn into `503 NO_UPSTREAM` right away. Only an empty push that is
+  *not newer* than the local cache is dropped as an out-of-order packet (empty-push protection); that case is the
+  one that waits for the next reconciliation (up to about 30 seconds by default). This machine's earlier Compose run
+  (`demo-fault.sh`) measured 502 immediately and `503 NO_UPSTREAM` after about 17 seconds — an artifact of the
+  rejected empty push; that figure needs re-measuring against the new behavior.
 - If Nameserver is unavailable when Gateway starts, the failed initial subscription may not be recovered until the
   next reconciliation, again up to about 30 seconds by default.
-- `group` is now the version label for versioned routes (`targets`), and per-group routing works: Gateway subscribes and queries per `serviceName + group`. Multi-group *push isolation* inside discovery is still being finalized, so treat `group` as a routing/version dimension rather than a hard tenant boundary. See
+- `group` is the registry's general-purpose business group (environments, tenants, data centres); versioned routes
+  (`targets`) merely **reuse it as the gray dimension**, so it is not a dedicated version field. Per-group routing
+  works: Gateway subscribes and queries per `serviceName + group`, and multi-group pushes are keyed by
+  `serviceName + group` with no fallback to the whole-service cache. It remains a business-group dimension rather
+  than a hard tenant boundary. See
   [Service Registration](./service-registration.md#23-current-group-boundary).
 - Gateway returns only healthy instances. When every instance of a service is unhealthy the candidate list is empty and the request gets `503 NO_UPSTREAM`; there is no fail-open fallback to the full cached list. A `group` (version) with no healthy instance is rejected the same way and is never silently diverted to another version, so "no instance to route to" and "upstream returned 5xx" stay distinguishable in metrics.
 - Gateway targets ordinary HTTP/1.1: inbound headers start the proxy and the request body is piped; default Netty

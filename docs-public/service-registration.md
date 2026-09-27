@@ -109,10 +109,15 @@ after reconnect, and performs best-effort deregistration during normal shutdown.
 ### 2.3 Current group boundary
 
 Registry identity is always `serviceName + instanceId`; `group` is a query, subscription, and routing filter rather
-than part of the instance key. Multi-group snapshot isolation is still being finalized in the current version: when
-one `serviceName` uses several non-empty groups, a pushed cache may temporarily contain instances from another group
-until periodic query reconciliation repairs it. Keep `group` empty unless this behavior has been fixed and validated
-for your build.
+than part of the instance key. `group` is a **general-purpose business group** (environments, tenants, data centres);
+versioned routing merely reuses it as the gray dimension, so it is not itself a version field.
+
+Multi-group snapshot pushes are now keyed by `service+group`, and the client cache never falls back to the
+whole-service cache for a specific group, so several non-empty groups under one `serviceName` no longer leak
+instances into each other. Two caveats remain: Gateway subscriptions and the local cache are per
+`(serviceName, group)`, so a group with no snapshot yet answers `503` instead of borrowing another group (that is
+deliberate); and `group` is only a filter dimension — do not treat it as a hard tenant boundary, since the
+registration and query APIs do not authenticate tenants.
 
 ## 3. HTTP+JSON registration
 

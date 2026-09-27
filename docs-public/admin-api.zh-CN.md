@@ -18,6 +18,7 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | GET | `/api/routes` | Gateway 路由列表 |
 | POST | `/api/routes` | 新增或更新路由，请求体为路由对象 |
 | DELETE | `/api/routes?businessPrefix=/api/demo` | 按业务前缀删除路由 |
+| GET | `/api/routes/operations/{operationId}` | 路由写操作记录查询：写请求超时后用同一个 `operationId` 确认是否已执行（`APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` / `UNKNOWN`） |
 | GET | `/api/instances` | Nameserver 注册实例列表 |
 | GET | `/api/nameserver/metrics` | Nameserver 指标快照 |
 | GET | `/api/events` | Nameserver 最近事件 |
@@ -229,7 +230,7 @@ curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 | `apiKeyMasked` | 只可能是 `******` 或空串；明文与密文都不会出现在任何响应里 |
 | `apiKeyReadable` / `masterKeyState` | 密钥能否解密；`masterKeyState` 为 `MISMATCH` 时需要在页面上重新填写密钥 |
 | `configFile` | 配置文件绝对路径，便于备份与排障 |
-| `presets` | 内置预设（OpenAI、DeepSeek、阿里云百炼、智谱、本地 Ollama、本地 vLLM），页面用它填充下拉 |
+| `presets` | 内置预设（DeepSeek、智谱 GLM），页面用它填充下拉 |
 
 `POST /api/model/config` 的请求体字段与上表同名：
 
@@ -247,7 +248,8 @@ curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 
 - 成功响应为 JSON。配置更新至少返回 `component`、`key` 和 `message`，部分配置会附带 `payload`。
 - 未登录访问 `/api/*` 回 `401` + `{"code":401,"message":"请先登录控制台"}`；写请求缺 CSRF 头回 `403`；登录失败次数超限时 `POST /login` 回 `429`。
-- 下游不可达、鉴权失败或参数校验失败时，Admin 返回对应的 HTTP 错误状态；同时页面会显示失败提示。
+- 下游组件返回客户端错误时，Admin 原样透传状态码与原始 `message`（例如路由版本冲突仍是 `409`，文案来自下游）；
+  只有完全拿不到下游响应（连接失败或超时）才回 `502` + 通用文案，并记一条 WARN 日志。
 - 指标聚合接口在旧版本组件缺少指标端点时，会返回包含 `error` 的结构化 JSON，而不是让整个仪表盘崩溃。
 - 避免把 `X-Rover-Admin-Token`、协议 token、Cookie 或完整请求体写入日志。
 

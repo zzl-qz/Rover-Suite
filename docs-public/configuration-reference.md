@@ -187,10 +187,11 @@ Versioned targets are validated as "one service, several groups":
 - `(serviceName, group)` must not repeat;
 - the total weight must be greater than 0.
 
-`group` is the version label (`v1` / `v2` / …); there is no separate version
-field. The optional `stickyHeader` names the request header used for sticky
-routing and must match `[A-Za-z0-9-]+`. When it is absent the client IP is used,
-and when both are empty the request is routed by weight.
+`group` is the registry's general-purpose business group; a gray route merely
+**reuses it as the version dimension** (`v1` / `v2` / …), which is why there is no
+separate version field. The optional `stickyHeader` names the request header used
+for sticky routing and must match `[A-Za-z0-9-]+`. When it is absent the client IP
+is used, and when both are empty the request is routed by weight.
 
 A 95/5 canary:
 

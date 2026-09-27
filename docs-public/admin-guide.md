@@ -157,12 +157,23 @@ Built-in presets (still editable after selection):
 
 | Preset | Base URL | Model |
 | --- | --- | --- |
-| OpenAI | `https://api.openai.com` | `gpt-4o-mini` |
 | DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
-| Alibaba Cloud Bailian | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
-| Zhipu | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-air` |
-| Local Ollama | `http://127.0.0.1:11434/v1` | `qwen2.5:7b` |
-| Local vLLM | `http://127.0.0.1:8000/v1` | `Qwen2.5-7B-Instruct` |
+| Zhipu GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` |
+
+Only these two are preseted because they are the common choices. Other OpenAI-compatible services still
+work (base URL and model name are free-form; unauthenticated local Ollama / vLLM included) — they simply
+have no thinking content to show.
+
+**To see the model's reasoning**: use `deepseek-reasoner` on DeepSeek, or `glm-4.6` or later on Zhipu.
+Both are integrated over their native protocols, and the workbench then shows a "deep thinking" panel —
+streaming while the model reasons, collapsed to a single line with elapsed time once the answer starts.
+
+**About the Zhipu compatibility shim**: the available `spring-ai-zhipuai` versions (2.0.0-M1..M4) predate
+`spring-ai-model` 2.0.1, and the `ToolExecutionEligibilityPredicate` types they reference were renamed in
+that version — class loading fails before any request is made. The project supplies two shim types under
+`org.springframework.ai.model.tool` in `rover-admin`: they only fill in the missing types and do not
+invent semantics (the verdict matches 2.0.1 exactly), which lets Zhipu use its native protocol. Delete
+both once that module ships a 2.0.1-aligned release.
 
 The page also shows three status cards: effective status, connection test and
 effect verification.
@@ -224,7 +235,8 @@ persists it. Check for overlapping prefixes before changing a route.
 ![Route editor](images/admin/06-route-editor.png)
 
 In dynamic discovery, pick registry or static address first. Registry routes use
-a `targets` list of `{serviceName, group, weight}` — `group` is the version and
+a `targets` list of `{serviceName, group, weight}` — here the registry's `group`
+(a general-purpose business group) is reused as the gray dimension and
 `weight: 0` pauses a version without deleting it; all targets on one route must
 share the same `serviceName`. Static routes use `targetUrl` or `targetUrls`. Do
 not keep both kinds on one route. `stickyHeader` optionally names the header used

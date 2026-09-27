@@ -173,8 +173,9 @@ YAML `server.maxInflight` 或 `-Drover.gateway.maxInflight` 覆盖）、`NO_UPST
 - `(serviceName, group)` 不重复；
 - 权重之和必须**大于 0**。
 
-`group` 就是版本号（`v1` / `v2` / …），没有单独的版本字段。可选的 `stickyHeader` 指定粘性路由用的请求头，
-必须是合法的 HTTP 头名 `[A-Za-z0-9-]+`；不写则回退客户端 IP，两者都为空时按权重路由。
+`group` 是注册中心的通用业务分组，灰度路由只是**复用它作为版本维度**（`v1` / `v2` / …），因此没有单独的版本
+字段。可选的 `stickyHeader` 指定粘性路由用的请求头，必须是合法的 HTTP 头名 `[A-Za-z0-9-]+`；
+不写则回退客户端 IP，两者都为空时按权重路由。
 
 95/5 灰度示例：
 

@@ -123,12 +123,20 @@ icacls "<file>" /inheritance:r /grant:r "%USERNAME%:F"
 
 | 预设 | 服务地址 | 模型名 |
 | --- | --- | --- |
-| OpenAI | `https://api.openai.com` | `gpt-4o-mini` |
 | DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
-| 阿里云百炼 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus` |
-| 智谱 | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-air` |
-| 本地 Ollama | `http://127.0.0.1:11434/v1` | `qwen2.5:7b` |
-| 本地 vLLM | `http://127.0.0.1:8000/v1` | `Qwen2.5-7B-Instruct` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` |
+
+预设只保留这两家是因为它们最常用。其余 OpenAI 兼容服务照样可用（服务地址与模型名都可自由填写，
+本地 Ollama / vLLM 这类无鉴权服务也可用），只是拿不到思考内容。
+
+**想看模型的推理过程**：DeepSeek 填 `deepseek-reasoner`；智谱填 `glm-4.6` 及以上。这两家走原生协议接入，
+工作台会显示「深度思考」面板——思考过程中实时滚动、答案开始输出后自动收拢成一行并给出用时。
+
+**关于智谱的兼容处理**：`spring-ai-zhipuai` 的可用版本（2.0.0-M1～M4）都早于 `spring-ai-model` 2.0.1，
+它引用的 `ToolExecutionEligibilityPredicate` 及其默认实现在该版本已改名，类加载阶段就会失败。
+项目在 `rover-admin` 的 `org.springframework.ai.model.tool` 包下补了两个兼容桥类——只补类型、
+不发明语义，判定口径与 2.0.1 一致，智谱因此能走原生协议。等该模块发布与 2.0.1 对齐的版本后，
+删掉那两个类即可。
 
 页面还包含三张状态卡：生效状态、连接测试、效果验证。
 
@@ -178,7 +186,8 @@ Gateway 的记录和内存开销也越大。
 编辑时最重要的是：
 
 - 动态发现时先选「注册中心」或「静态地址」。选注册中心填 `targets`，每项是 `{serviceName, group, weight}`：
-  `group` 就是版本号，`weight: 0` 表示暂停该版本而不删掉它；同一条路由的所有 target 必须同一个 `serviceName`。
+  这里复用注册中心的 `group`（通用业务分组）作为灰度维度，`weight: 0` 表示暂停该版本而不删掉它；
+  同一条路由的所有 target 必须同一个 `serviceName`。
 - 选静态地址填 `targetUrl` / `targetUrls`。
 - 整机是 `static` 时只填静态地址。
 - 同一条路由不要 `targets` 和静态地址两套都留着。

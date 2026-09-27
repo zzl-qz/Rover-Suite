@@ -23,6 +23,7 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | GET | `/api/routes` | Gateway route list |
 | POST | `/api/routes` | Create or update a route; body is the route object |
 | DELETE | `/api/routes?businessPrefix=/api/demo` | Delete a route by business prefix |
+| GET | `/api/routes/operations/{operationId}` | Route write-operation record: after a write times out, reuse the same `operationId` to confirm whether it was applied (`APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` / `UNKNOWN`) |
 | GET | `/api/instances` | Nameserver registered instances |
 | GET | `/api/nameserver/metrics` | Nameserver metric snapshot |
 | GET | `/api/events` | Recent Nameserver events |
@@ -275,7 +276,7 @@ curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 | `apiKeyMasked` | Either `******` or empty; plain text and cipher text never appear in any response |
 | `apiKeyReadable` / `masterKeyState` | Whether the key can be decrypted; `MISMATCH` means the key must be entered again in the console |
 | `configFile` | Absolute path of the configuration file, for backup and troubleshooting |
-| `presets` | Built-in presets (OpenAI, DeepSeek, Alibaba Cloud Bailian, Zhipu, local Ollama, local vLLM) that fill the console dropdown |
+| `presets` | Built-in presets (DeepSeek, Zhipu GLM) that fill the console dropdown |
 
 `POST /api/model/config` accepts the same field names:
 
@@ -300,8 +301,10 @@ proving that what is applied is exactly what was saved.
   `message`, and some entries include `payload`.
 - Unauthenticated `/api/*` calls return `401` with `{"code":401,"message":"请先登录控制台"}`; a write
   request without the CSRF header returns `403`; `POST /login` returns `429` once the failure limit is hit.
-- When a downstream component is unreachable, authentication fails, or validation rejects the input,
-  Admin returns the corresponding HTTP error status and the console shows a failure message.
+- When a downstream component answers with a client error, Admin passes the status code and the original
+  message through unchanged (for example a route revision conflict stays `409` with its own text). Only
+  when no downstream response is obtained at all (connection failure or timeout) does Admin return
+  `502` with a generic message, and it logs a WARN.
 - When an older component lacks metric endpoints, aggregation endpoints return structured JSON with an
   `error` field instead of breaking the whole dashboard.
 - Never write `X-Rover-Admin-Token`, protocol tokens, cookies, or full request bodies to logs.
