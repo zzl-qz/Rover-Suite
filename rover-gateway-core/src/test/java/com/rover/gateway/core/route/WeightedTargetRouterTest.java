@@ -57,6 +57,33 @@ class WeightedTargetRouterTest {
         }
     }
 
+    /**
+     * 只提高一个 target 的权重（总权重随之变化）时，该 target 原持有的键必须一个不丢。
+     *
+     * <p>这是「按总权重取模」实现最容易翻车的场景：100 → 115 会让所有键的槽位一起漂移，
+     * 原本落 v2 的键被打回 v1，灰度放量反而把已放量的用户抽走。
+     */
+    @Test
+    void increasingOneGroupWeightKeepsItsOwnKeys() {
+        List<RouteTarget> narrow = List.of(new RouteTarget("demo", "v1", 95), new RouteTarget("demo", "v2", 5));
+        List<RouteTarget> widened = List.of(new RouteTarget("demo", "v1", 95), new RouteTarget("demo", "v2", 20));
+
+        Set<String> v2KeysBefore = v2Keys(narrow);
+        assertTrue(!v2KeysBefore.isEmpty(), "5% 档应当有键命中 v2，否则样本或哈希有问题");
+
+        for (String key : v2KeysBefore) {
+            RouteTarget after = WeightedTargetRouter.select(widened, key, ROUTE_KEY);
+            assertNotNull(after, "键 " + key + " 放量后不应落空");
+            assertEquals("v2", after.group(),
+                    "键 " + key + " 原本落 v2，只提高 v2 权重（v1 不变）后不应被打回 " + after.group());
+        }
+
+        double ratio = v2Ratio(widened);
+        // 95:20 的归一化占比是 20/115≈17.4%，不是 20/100
+        assertTrue(ratio > 0.165 && ratio < 0.183,
+                "v1:95/v2:20 时 v2 实际占比=" + ratio + "，期望约 20/115≈17.4%（样本 " + SAMPLE + "）");
+    }
+
     @Test
     void zeroWeightTargetReceivesNoTraffic() {
         List<RouteTarget> targets = List.of(new RouteTarget("demo", "v1", 100), new RouteTarget("demo", "v2", 0));

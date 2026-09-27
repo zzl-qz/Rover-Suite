@@ -71,21 +71,28 @@ public class SubscriptionManager {
     }
 
     /**
-     * 这次变更要通知哪些订阅组。
-     * 空字符串是通配订阅，始终通知；实例带了具体组时再通知该组。
+     * 这次变更要通知哪些订阅组：该服务下**所有**还有订阅者的组。
+     *
+     * <p>为什么不只通知「通配 + 变更实例所在的组」：实例可以在组之间迁移（同 instanceId 重新注册到
+     * 另一个 group），此时**旧组的名单也变了**，而快照上只带得动新组。只通知新组会让旧组订阅者
+     * 一直留着已经迁走的实例，继续把流量打到不该打的机器上。
+     *
+     * <p>每个组都会拿到按自己过滤后的名单，因此多通知的组最多收到一次「本组名单没变」的推送，
+     * 代价可控，而漏通知会让缓存与注册中心长期不一致。
+     *
+     * @param serviceName 发生变更的服务名
+     * @return 需要通知的订阅组（含通配组 ""）；该服务无人订阅时为空列表
      */
-    public List<String> groupsToNotify(String serviceName, String instanceGroup) {
+    public List<String> groupsToNotify(String serviceName) {
         Map<String, Set<Channel>> byGroup = subscriptions.get(serviceName);
         if (byGroup == null || byGroup.isEmpty()) {
             return List.of();
         }
-        List<String> groups = new ArrayList<>(2);
-        if (hasChannels(byGroup.get(""))) {
-            groups.add("");
-        }
-        String normalized = normalizeGroup(instanceGroup);
-        if (!normalized.isEmpty() && hasChannels(byGroup.get(normalized))) {
-            groups.add(normalized);
+        List<String> groups = new ArrayList<>(byGroup.size());
+        for (Map.Entry<String, Set<Channel>> entry : byGroup.entrySet()) {
+            if (hasChannels(entry.getValue())) {
+                groups.add(entry.getKey());
+            }
         }
         return groups;
     }

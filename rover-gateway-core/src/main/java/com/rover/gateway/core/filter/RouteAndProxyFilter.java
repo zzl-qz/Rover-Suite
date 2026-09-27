@@ -133,8 +133,15 @@ public class RouteAndProxyFilter implements Filter {
             return CompletableFuture.completedFuture(null);
         }
 
+        // 路由一旦匹配上就先挂到上下文，再谈选上游。
+        // 后面两条拒绝路径（熔断打开、没有可用上游）也会回 503，而指标要靠这里的 routeId 与版本
+        // 归因；挂晚了它们会被记成「未匹配路由」，现象是「某条路由没有可用上游」，
+        // 在指标上却表现为「路由表配错了」。
+        gatewayContext.setRoute(route);
+
         // 分级选上游：动态路由先按权重+粘性选版本，再在版本内选实例
         RouteTarget target = resolveTarget(route, gatewayContext);
+        gatewayContext.setRouteTarget(target);
         ChosenUpstream chosen = resolveUpstream(route, target, gatewayContext, Set.of());
         // 都熔断了，就直接会503就行
         if (chosen != null && chosen.circuitOpen()) {
@@ -165,8 +172,6 @@ public class RouteAndProxyFilter implements Filter {
             return CompletableFuture.completedFuture(null);
         }
 
-        gatewayContext.setRoute(route);
-        gatewayContext.setRouteTarget(target);
         boolean mayRetry = retry != null && retry.isEnabled() && hasSibling(route, target, chosen.instance());
         long proxyStartNanos = System.nanoTime();
         return forwardOnce(gatewayContext, route, requestPath, chosen, !mayRetry)
