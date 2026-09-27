@@ -95,7 +95,9 @@ public final class AgentOrchestrator {
     private static final String UNSUPPORTED_INSPECTION =
             "定时巡检尚未开放：当前版本不接入调度与通知，无法创建周期任务。可以先手动提问，或让我对该服务做一次只读调查。";
     private static final String UNSUPPORTED_KNOWLEDGE =
-            "知识检索尚未开放：当前版本没有接入文档检索，无法回答使用类问题。可以问我路由、实例与指标的事实，或让我调查一次调用失败。";
+            "文档与教程检索还没接入，所以「怎么配置」这类使用说明我查不到；"
+                    + "但配置的当前生效值我能直接读出来——说清是哪一项（限流、熔断、超时、采样率等），我就去 Gateway 与 NameServer 上取。"
+                    + "路由、实例、指标、追踪、注册事件的事实性问题，以及调用失败排查，也都可以直接问我。";
     private static final String UNSUPPORTED_NOTE =
             "能力边界由 CapabilityRegistry 声明：未开放的能力不会被 Agent 调用，也不会被模拟执行。";
 
@@ -297,10 +299,25 @@ public final class AgentOrchestrator {
      */
     private void runExplain(InvestigationTask task, Session session, AgentContext context, IntentDecision decision,
                             AgentRequestOptions options) {
-        if (decision.topic() != IntentTopic.CAPABILITIES && !explanations.hasConclusion(task.sessionId())
-                && hasTargetClue(decision, options)
-                && escalateToInvestigation(task, session, context, decision, options, EXPLAIN_WITHOUT_CONTEXT)) {
-            return;
+        if (decision.topic() != IntentTopic.CAPABILITIES && !explanations.hasConclusion(task.sessionId())) {
+            // 形似「解释」实为「查询」：句子里点名了某类可查事实（实例 / 路由 / 指标 / 配置 / 事件）时，
+            // 用户要的是那类事实本身，而不是一段说明。这类问题若按解释走只会回一句「对不上」，
+            // 可它其实完全答得出来。先纠到查询路径，再考虑要不要升级为调查。
+            QuerySubject subject = IntentClassifier.stateSubject(task.question());
+            if (subject != QuerySubject.NONE) {
+                task.step(AgentStepType.INTENT_RESOLUTION, STEP_CORRECTION, StepStatus.COMPLETED,
+                        "问题里点名了可查的事实口径（" + subject + "），改为按状态查询执行");
+                // 任务类型必须先改过来：编排入口已按解释分类过，只换执行路径会让界面上写着
+                // 「解释说明」却在查实例——任务类型是给用户看的执行形态，必须与实际动作一致。
+                task.classify(TaskType.QUERY, decision.as(AgentIntent.QUERY_STATE, Confidence.MEDIUM,
+                        "问题里点名了「" + subject + "」这一可查口径，按状态查询执行"));
+                runQuery(task, session, context, decision, options);
+                return;
+            }
+            if (hasTargetClue(decision, options)
+                    && escalateToInvestigation(task, session, context, decision, options, EXPLAIN_WITHOUT_CONTEXT)) {
+                return;
+            }
         }
         // 解释复用会话已有结论，不解析新对象：绑定当前事件只为保持会话连续性。
         bindCurrentIncident(task, context, "", ResourceTarget.unknown());

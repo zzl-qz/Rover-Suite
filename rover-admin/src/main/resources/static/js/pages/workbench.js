@@ -15,11 +15,17 @@ const WB_TASK_LIMIT = 50;
 const WB_STREAM_RETRY_MIN_MILLIS = 1000;
 const WB_STREAM_RETRY_MAX_MILLIS = 15000;
 
+/** 打字机节奏：30ms 一拍；每拍至少补 {@link #WB_TYPE_MIN_CHARS_PER_TICK} 字，落后越多补得越快。 */
+const WB_TYPE_TICK_MILLIS = 30;
+const WB_TYPE_MIN_CHARS_PER_TICK = 2;
+/** 追赶系数：每拍补「落后字数 / 8」，保证积压时能追上而不是越拖越远。 */
+const WB_TYPE_CATCH_UP_DIVISOR = 8;
+
 /** 任务事件类型：事件名就是类型，数据是完整信封（eventId / type / timestampMillis / payload）。 */
 const WB_EVENT_TYPES = [
     'SNAPSHOT', 'TASK_CREATED', 'TASK_STARTED', 'STEP_STARTED', 'STEP_COMPLETED', 'STEP_FAILED',
-    'EVIDENCE_ADDED', 'ANALYSIS_DELTA', 'CLARIFICATION_REQUIRED', 'TASK_COMPLETED', 'TASK_FAILED',
-    'TASK_CANCELLED',
+    'EVIDENCE_ADDED', 'ANALYSIS_DELTA', 'THINKING_DELTA', 'CLARIFICATION_REQUIRED', 'TASK_COMPLETED',
+    'TASK_FAILED', 'TASK_CANCELLED',
 ];
 
 /** 空态里可直接点的问题示例：都落在已接入的只读能力范围内，点了就填进输入框而不是直接发送。 */
@@ -51,8 +57,26 @@ window.RoverAdminPages.workbench = {
             wbPending: [],
             wbDetailOpen: {},
             wbStreamTaskId: '',
+            /** 流式增量的完整目标文本（服务端推多少就是多少，不在渲染层做裁剪）。 */
             wbStreamTexts: {},
+            /**
+             * 已渲染到屏幕的文本：目标文本先落这里，再由打字机逐字追上。
+             *
+             * 分两份是为了「手感」：模型一帧吐一大段时，直接渲染会整段蹦出来；
+             * 拆成目标与进度之后，无论上游是逐字流还是整段到达，屏幕上的字都是匀速长出来的。
+             */
+            wbRenderTexts: {},
+            /** 模型思考文本：与答案同构的两份，各自走打字机，互不干扰。 */
+            wbThinkingTexts: {},
+            wbRenderThinking: {},
+            /** 思考用时的起止时刻：首条思考增量到首条答案增量之间，就是这次「深度思考」花掉的时间。 */
+            wbThinkingStart: {},
+            wbThinkingEnd: {},
+            /** 用户手动开合过思考面板的标记：手动优先，没动过则「思考中展开、出答案收拢」。 */
+            wbThinkManual: {},
             wbStreaming: false,
+            /** 每秒推进一次的时钟：让「进行中」的步骤耗时与思考用时自己往上走，不必等下一个事件。 */
+            wbNow: 0,
             /** 视图是否贴着对话底部：决定自动跟随，以及要不要显示「回到最新」。 */
             wbAtBottom: true,
         };
@@ -91,9 +115,14 @@ window.RoverAdminPages.workbench = {
          */
         wbAgentState() {
             if (this.wbSending) return { label: '正在受理…', tone: 'busy' };
+            const active = Object.values(this.wbTasks)
+                .filter(task => task && !this.wbTaskSettled(task.status))
+                .sort((a, b) => (b.createdAtMillis || 0) - (a.createdAtMillis || 0))[0];
+            if (active) {
+                // 有步骤在执行就直接说正在做什么，取不到才退回泛化措辞
+                return { label: this.wbCurrentAction(active) || '调查中…', tone: 'busy' };
+            }
             if (this.wbStreaming) return { label: '正在生成解读…', tone: 'busy' };
-            const running = Object.values(this.wbTasks).some(task => task && !this.wbTaskSettled(task.status));
-            if (running) return { label: '调查中…', tone: 'busy' };
             return { label: '在线 · 只读', tone: 'ok' };
         },
 
@@ -199,6 +228,10 @@ window.RoverAdminPages.workbench = {
     watch: {
         wbTurns() { this.wbScrollDown(false); },
         wbStreamTexts() { this.wbScrollDown(false); },
+        // 打字机每推进一拍都可能长出新行：跟随滚动要挂在渲染进度上，
+        // 挂在目标文本上会在「还没写到那里」时提前把视图拉到底。
+        wbRenderTexts() { this.wbScrollDown(false); },
+        wbRenderThinking() { this.wbFollowThinking(); },
     },
 
     methods: {
@@ -216,8 +249,15 @@ window.RoverAdminPages.workbench = {
             this.wbMessages = [];
             this.wbActiveIncident = null;
             this.wbIncidents = {};
+            this.wbStopPump();
             this.wbTasks = {};
             this.wbStreamTexts = {};
+            this.wbRenderTexts = {};
+            this.wbThinkingTexts = {};
+            this.wbRenderThinking = {};
+            this.wbThinkingStart = {};
+            this.wbThinkingEnd = {};
+            this.wbThinkManual = {};
             this.wbPending = [];
             this._wbLoadedSessionId = '';
         },
@@ -261,8 +301,15 @@ window.RoverAdminPages.workbench = {
             this.wbMessages = [];
             this.wbActiveIncident = null;
             this.wbIncidents = {};
+            this.wbStopPump();
             this.wbTasks = {};
             this.wbStreamTexts = {};
+            this.wbRenderTexts = {};
+            this.wbThinkingTexts = {};
+            this.wbRenderThinking = {};
+            this.wbThinkingStart = {};
+            this.wbThinkingEnd = {};
+            this.wbThinkManual = {};
             this.wbPending = [];
             this._wbLoadedSessionId = '';
             this.wbDetailOpen = {};
@@ -468,9 +515,20 @@ window.RoverAdminPages.workbench = {
             this.wbScrollDown(true);
         },
 
-        /** 这条任务的解读是不是正在流式生成：决定要不要闪烁光标与状态点。 */
+        /**
+         * 这条任务的解读是不是「还在写」：决定要不要闪烁光标与状态点。
+         *
+         * 除订阅在推之外还有第二个条件——屏幕上的字还没追上已收到的文本。少了这一条，
+         * 任务定型的瞬间渲染会从半句直接跳到全文，观感上就是「整段蹦出来」。
+         */
         wbIsStreaming(task) {
-            return Boolean(task && this.wbStreaming && this.wbStreamTaskId === task.taskId);
+            if (!task) return false;
+            const streamed = this.wbStreamTexts[task.taskId];
+            const rendered = this.wbRenderTexts[task.taskId];
+            if (typeof streamed === 'string' && typeof rendered === 'string' && rendered.length < streamed.length) {
+                return true;
+            }
+            return Boolean(this.wbStreaming && this.wbStreamTaskId === task.taskId);
         },
 
         wbDayKey(millis) {
@@ -529,10 +587,29 @@ window.RoverAdminPages.workbench = {
             this._wbStreamTaskId = taskId;
             this.wbStreamTaskId = taskId;
             this.wbStreaming = true;
+            this.wbStartClock();
             WB_EVENT_TYPES.forEach((type) => {
                 source.addEventListener(type, (event) => this.wbApplyEvent(taskId, type, event));
             });
             source.onerror = () => this.wbStreamFailed(taskId);
+        },
+
+        /**
+         * 每秒推进一次的时钟：让执行中步骤的耗时自己往上走。
+         *
+         * 没有它，耗时只在收到事件时刷新一次，看起来像卡住了；有它，「已进行 3.4s」是活的，
+         * 等待期因此不像在干等。
+         */
+        wbStartClock() {
+            if (this._wbClockTimer) return;
+            this.wbNow = Date.now();
+            this._wbClockTimer = setInterval(() => { this.wbNow = Date.now(); }, 1000);
+        },
+
+        wbStopClock() {
+            if (!this._wbClockTimer) return;
+            clearInterval(this._wbClockTimer);
+            this._wbClockTimer = null;
         },
 
         /** 只断开当前连接与待重连定时器，不动退避计数（重连路径要用它累加）。 */
@@ -547,6 +624,8 @@ window.RoverAdminPages.workbench = {
             }
             this._wbStreamTaskId = '';
             this.wbStreaming = false;
+            // 时钟跟着订阅走：没有订阅就不会再有「进行中」的步骤要找它计时
+            this.wbStopClock();
         },
 
         /** 主动关闭订阅：切换会话、任务收尾与离开工作台都走这里，退避计数一并归零。 */
@@ -574,13 +653,38 @@ window.RoverAdminPages.workbench = {
                 this._wbStreamAttempt = 0;
                 this.wbMergeTask(payload.task);
                 if (typeof payload.analysis === 'string') {
+                    // 快照是补齐既有内容（首连或断线重连），直接落到渲染位，不重放一遍打字机
                     this.wbStreamTexts = Object.assign({}, this.wbStreamTexts, { [taskId]: payload.analysis });
+                    this.wbRenderTexts = Object.assign({}, this.wbRenderTexts, { [taskId]: payload.analysis });
                 }
+                if (typeof payload.thinking === 'string' && payload.thinking) {
+                    this.wbThinkingTexts = Object.assign({}, this.wbThinkingTexts, { [taskId]: payload.thinking });
+                    this.wbRenderThinking = Object.assign({}, this.wbRenderThinking, { [taskId]: payload.thinking });
+                }
+                return;
+            }
+            if (type === 'THINKING_DELTA' && typeof payload.text === 'string') {
+                const current = this.wbThinkingTexts[taskId] || '';
+                this.wbThinkingTexts = Object.assign({}, this.wbThinkingTexts, { [taskId]: current + payload.text });
+                if (this.wbRenderThinking[taskId] === undefined) {
+                    this.wbRenderThinking = Object.assign({}, this.wbRenderThinking, { [taskId]: '' });
+                }
+                if (!this.wbThinkingStart[taskId]) {
+                    // 首个增量到达才算开始：模型排队与建连的时间不该算进「深度思考」
+                    this.wbThinkingStart = Object.assign({}, this.wbThinkingStart, { [taskId]: Date.now() });
+                }
+                this.wbPumpStream();
                 return;
             }
             if (type === 'ANALYSIS_DELTA' && typeof payload.text === 'string') {
                 const current = this.wbStreamTexts[taskId] || '';
                 this.wbStreamTexts = Object.assign({}, this.wbStreamTexts, { [taskId]: current + payload.text });
+                // 首次增量时给出渲染起点：从零开始逐字长出来，正是「正在写」的观感来源
+                if (this.wbRenderTexts[taskId] === undefined) {
+                    this.wbRenderTexts = Object.assign({}, this.wbRenderTexts, { [taskId]: '' });
+                }
+                this.wbMarkThinkingDone(taskId);
+                this.wbPumpStream();
                 return;
             }
             if (type === 'TASK_CREATED' || type === 'TASK_STARTED') {
@@ -674,12 +778,70 @@ window.RoverAdminPages.workbench = {
          */
         wbAnswerText(turn) {
             const task = turn && turn.task;
+            if (task) {
+                const streamed = this.wbStreamTexts[task.taskId];
+                const rendered = this.wbRenderTexts[task.taskId];
+                // 打字机还没追上就以进度为准：任务定型也不会让正文从半句跳成全文
+                if (typeof streamed === 'string' && typeof rendered === 'string' && rendered.length < streamed.length) {
+                    return rendered;
+                }
+            }
             if (task && this.wbIsStreaming(task)) {
                 const streamed = this.wbStreamTexts[task.taskId];
                 if (streamed) return streamed;
             }
             const analysis = task && task.result && task.result.aiAnalysis;
             return analysis || (turn.message && turn.message.content) || '';
+        },
+
+        /**
+         * 打字机泵：把「已收到的文本」逐拍补进「已渲染的文本」。
+         *
+         * 上游是逐 token 流时落后量很小，每拍补几个字，屏幕上是匀速书写；
+         * 上游一帧吐一大段（或重连补快照）时落后量大，按比例多补，很快追上但仍是长出来的。
+         * 全部追平后停泵，不留空转的定时器。
+         */
+        wbPumpStream() {
+            if (this._wbTypeTimer) return;
+            this._wbTypeTimer = setInterval(() => {
+                const answer = this.wbAdvance(this.wbStreamTexts, this.wbRenderTexts);
+                const thinking = this.wbAdvance(this.wbThinkingTexts, this.wbRenderThinking);
+                if (answer) this.wbRenderTexts = answer;
+                if (thinking) this.wbRenderThinking = thinking;
+                if (!answer && !thinking && !this.wbStreaming) this.wbStopPump();
+            }, WB_TYPE_TICK_MILLIS);
+        },
+
+        /**
+         * 把一批目标文本各自向前推一拍：答案与思考共用同一套节奏，只是落在不同的渲染位上。
+         *
+         * 没有变化时返回 null——泵据此判断是否已经追平，可以停下来。
+         */
+        wbAdvance(targets, rendered) {
+            let changed = false;
+            const next = Object.assign({}, rendered);
+            Object.keys(targets).forEach((key) => {
+                const full = targets[key] || '';
+                const current = next[key] || '';
+                if (current === full) return;
+                // 目标文本被更短的快照覆盖（重连补齐）时以目标为准，只减不增
+                if (current.length > full.length) {
+                    next[key] = full;
+                    changed = true;
+                    return;
+                }
+                const lag = full.length - current.length;
+                const step = Math.max(WB_TYPE_MIN_CHARS_PER_TICK, Math.ceil(lag / WB_TYPE_CATCH_UP_DIVISOR));
+                next[key] = full.slice(0, current.length + step);
+                changed = true;
+            });
+            return changed ? next : null;
+        },
+
+        wbStopPump() {
+            if (!this._wbTypeTimer) return;
+            clearInterval(this._wbTypeTimer);
+            this._wbTypeTimer = null;
         },
 
         wbTaskTerminal(status) {
@@ -703,8 +865,122 @@ window.RoverAdminPages.workbench = {
                 label: step.name || this.wbStepTypeLabel(step.type),
                 mark: { COMPLETED: '✓', FAILED: '!', RUNNING: '●' }[step.status] || '○',
                 state: { COMPLETED: 'done', FAILED: 'failed', RUNNING: 'running' }[step.status] || 'pending',
+                status: step.status || 'PENDING',
                 title: step.error || step.outputSummary || step.inputSummary || '',
+                // 进行中的说明在 inputSummary（「正在查什么」），结束时结果说明在 outputSummary
+                detail: step.error || step.outputSummary || step.inputSummary || '',
+                duration: this.wbStepDuration(step),
             }));
+        },
+
+        /**
+         * 步骤耗时：进行中按当前时刻算（靠 {@link #wbNow} 每秒推进），完成后用真实起止时刻。
+         *
+         * 让「它确实在干活、干了多久」变成可见事实，而不是只有一个转圈。
+         */
+        wbStepDuration(step) {
+            const started = Number(step && step.startedAtMillis);
+            if (!Number.isFinite(started) || started <= 0) return '';
+            const finished = Number(step && step.completedAtMillis);
+            const end = Number.isFinite(finished) && finished > 0 ? finished : (this.wbNow || Date.now());
+            return this.wbDurationText(Math.max(0, end - started));
+        },
+
+        wbDurationText(millis) {
+            if (!Number.isFinite(millis) || millis < 0) return '';
+            if (millis < 1000) return Math.round(millis) + 'ms';
+            const seconds = millis / 1000;
+            if (seconds < 10) return seconds.toFixed(1) + 's';
+            if (seconds < 60) return Math.round(seconds) + 's';
+            const minutes = Math.floor(seconds / 60);
+            return minutes + 'm ' + Math.round(seconds % 60) + 's';
+        },
+
+        /**
+         * 当前正在做的事：取最后一个执行中步骤的说明。
+         *
+         * 执行中的说明写在 {@code inputSummary}（「正在查什么」），结束时结果写在
+         * {@code outputSummary}，两者分开，所以这里只认前者，不会把已完成的结果当成进度。
+         */
+        wbCurrentAction(task) {
+            const steps = (task && task.steps) || [];
+            const running = steps.filter(step => step.status === 'RUNNING').pop();
+            if (!running) return '';
+            return running.inputSummary || running.name || this.wbStepTypeLabel(running.type);
+        },
+
+        /**
+         * 思考正文：同样是「追平前以渲染进度为准」。
+         *
+         * 思考由模型逐字产出，但一帧吐一大段时直接渲染会整段蹦出，打字机让它是长出来的。
+         */
+        wbThinkingText(task) {
+            if (!task) return '';
+            const full = this.wbThinkingTexts[task.taskId] || '';
+            const rendered = this.wbRenderThinking[task.taskId];
+            return typeof rendered === 'string' && rendered.length < full.length ? rendered : full;
+        },
+
+        /** 是否仍在思考：有思考内容，且答案还没开始产出、任务也还没定型。 */
+        wbThinkingLive(task) {
+            if (!task || !this.wbThinkingTexts[task.taskId]) return false;
+            return !this.wbThinkingEnd[task.taskId] && !this.wbTaskSettled(task.status);
+        },
+
+        /** 思考面板标题：进行中报「正在深度思考」，结束后给出实际用时。 */
+        wbThinkingLabel(task) {
+            const used = this.wbThinkingDuration(task && task.taskId);
+            if (this.wbThinkingLive(task)) {
+                return used ? '正在深度思考 · ' + used : '正在深度思考';
+            }
+            return used ? '已深度思考 · 用时 ' + used : '已深度思考';
+        },
+
+        /** 思考用时：进行中按当前时刻算（靠每秒时钟推进），结束后取固定的首尾差。 */
+        wbThinkingDuration(taskId) {
+            const start = this.wbThinkingStart[taskId];
+            if (!start) return '';
+            const end = this.wbThinkingEnd[taskId] || this.wbNow || Date.now();
+            return this.wbDurationText(Math.max(0, end - start));
+        },
+
+        /**
+         * 思考面板是否展开：思考中默认展开（这时它就是主要内容），出答案后收拢成一行，把位置让给正文。
+         * 用户手动开合过就听用户的，不跟自动策略较劲。
+         */
+        wbThinkOpen(task) {
+            if (!task) return false;
+            const manual = this.wbThinkManual[task.taskId];
+            return manual !== undefined ? manual : this.wbThinkingLive(task);
+        },
+
+        wbToggleThink(taskId) {
+            const task = this.wbTasks[taskId];
+            if (!task) return;
+            this.wbThinkManual = Object.assign({}, this.wbThinkManual, { [taskId]: !this.wbThinkOpen(task) });
+        },
+
+        /** 答案开始产出即视为「思考结束」：用时只算到这一刻，之后是正文生成的时间。 */
+        wbMarkThinkingDone(taskId) {
+            if (this.wbThinkingStart[taskId] && !this.wbThinkingEnd[taskId]) {
+                this.wbThinkingEnd = Object.assign({}, this.wbThinkingEnd, { [taskId]: Date.now() });
+            }
+        },
+
+        /**
+         * 让正在生成的思考面板跟到底部。
+         *
+         * 思考面板是独立滚动容器（有最大高度），新内容超出可视区后要自己滚——不跟随的话，
+         * 用户看到的永远是最开头那几句，反而不像在思考。
+         */
+        wbFollowThinking() {
+            this.$nextTick(() => {
+                const root = this.$el;
+                if (!root || !root.querySelectorAll) return;
+                root.querySelectorAll('.wb-think-body.live').forEach((el) => {
+                    el.scrollTop = el.scrollHeight;
+                });
+            });
         },
 
         /** 当前阶段：最后一个执行中的步骤，没有就取最后上报的那一步。 */
@@ -728,6 +1004,8 @@ window.RoverAdminPages.workbench = {
                 INSTANCE_INVESTIGATION: '读取实例',
                 METRIC_INVESTIGATION: '读取指标',
                 TRACE_INVESTIGATION: '读取追踪',
+                CONFIG_INVESTIGATION: '读取配置',
+                EVENT_INVESTIGATION: '读取事件',
                 DIAGNOSIS: '生成结论',
                 AI_EXPLANATION: 'AI 解读',
             }[type] || type || '步骤';
@@ -825,10 +1103,17 @@ window.RoverAdminPages.workbench = {
             this.wbDetailOpen = Object.assign({}, this.wbDetailOpen, { [taskId]: !this.wbTaskOpen(task) });
         },
 
-        /** 折叠条上的进度：3/4 步；后端没上报步骤时不占位置。 */
+        /**
+         * 折叠条上的进度：有步骤在执行就直接说「正在读什么」，否则给「3/4 步」。
+         *
+         * 折叠状态下也要看得出它在动——这是「正在思考」最直接的信号，
+         * 只给一个完成度数字，等待期就只剩一个不动的计数。
+         */
         wbTaskStepText(task) {
             const steps = this.wbSteps(task);
             if (!steps.length) return '';
+            const running = steps.filter(step => step.state === 'running').pop();
+            if (running) return running.detail || ('正在' + running.label + '…');
             return steps.filter(step => step.state === 'done').length + '/' + steps.length + ' 步';
         },
 

@@ -71,7 +71,8 @@ class CapabilityRegistryTest {
     void briefIntroductionStaysShortAndStillOffersExamples() {
         String brief = registry.introduceBriefly();
 
-        assertTrue(brief.contains("我没太明白您的意思"));
+        assertTrue(brief.contains("还没能对上具体的查询或排查目标"), "先说没听懂");
+        assertTrue(brief.contains("我就能直接查"), "要说清怎样问才查得到，而不是只回一句听不懂");
         assertTrue(brief.contains("您可以这样问我"));
         // 能做什么仍取自同一份注册表，不另写一份说法
         registry.selectable().forEach(item -> assertTrue(brief.contains(item.name())));

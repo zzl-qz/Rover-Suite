@@ -13,15 +13,21 @@ import com.rover.agent.core.context.AgentContextManager;
 import com.rover.agent.core.context.AgentRequestOptions;
 import com.rover.agent.core.context.TargetInterpreter;
 import com.rover.agent.core.context.TargetResolver;
+import com.rover.agent.core.intent.IntentClassifier;
+import com.rover.agent.core.intent.IntentInterpreter;
 import com.rover.agent.core.intent.IntentService;
 import com.rover.agent.core.model.ActionPlan;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentIntent;
+import com.rover.agent.core.model.Confidence;
+import com.rover.agent.core.model.IntentDecision;
+import com.rover.agent.core.model.IntentTopic;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
@@ -43,6 +49,7 @@ import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
 import com.rover.agent.runtime.task.WorkspaceRetention;
 import java.util.List;
+import java.util.Optional;
 import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -77,6 +84,16 @@ class IntentFlowTest {
 
     @BeforeEach
     void setUp() {
+        buildOrchestrator(IntentInterpreter.none());
+    }
+
+    /**
+     * 按指定的意图解释器装配一套编排依赖。
+     *
+     * <p>抽成方法是为了让测试能指定「模型怎么说」：规则层判 MEDIUM 时模型判断会被采用，
+     * 而编排层对模型的过度判断有纠正职责——那条路径只有在能替换解释器时才测得到。
+     */
+    private void buildOrchestrator(IntentInterpreter interpreter) {
         sessions = new InMemoryAgentSessionRepository(50);
         incidents = new InMemoryIncidentRepository(50);
         messages = new InMemoryAgentMessageRepository(200);
@@ -117,7 +134,7 @@ class IntentFlowTest {
                 events, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
         orchestrator = new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instances, TargetInterpreter.none()), investigations, retention,
-                new IntentService(), new QueryStateService(executor),
+                new IntentService(interpreter, new IntentClassifier()), new QueryStateService(executor),
                 new ExplainService(capabilities, registry, records), new ActionPlanService(executor));
     }
 
@@ -192,7 +209,8 @@ class IntentFlowTest {
         assertNull(task.incidentId(), "兜底说明不新建事件");
         assertTrue(task.executedCapabilities().isEmpty(), "兜底说明不调用任何能力");
         String answer = task.result().summary();
-        assertTrue(answer.contains("我没太明白您的意思"), "先说没听懂，实际为 " + answer);
+        assertTrue(answer.contains("还没能对上具体的查询或排查目标"), "先说没听懂，实际为 " + answer);
+        assertTrue(answer.contains("我就能直接查"), "要告诉用户怎样问才查得到，而不是只回一句听不懂");
         assertTrue(answer.contains("路由查询"), "要讲清现在能做什么（能力名取自注册表）");
         assertTrue(answer.contains("您可以这样问我"), "要给可以直接照抄的问法");
         assertTrue(answer.contains("不执行任何写操作"), "边界声明必须保留");
@@ -284,6 +302,30 @@ class IntentFlowTest {
         assertEquals(TaskType.EXPLAIN, task.taskType(), "没有对象线索的解释不该被升级成调查");
         assertTrue(task.result().summary().contains("还没有可解释的调查结论"),
                 "实际为 " + task.result().summary());
+    }
+
+    /**
+     * 形似「解释」实为「查询」：模型判成解释时，编排层要按句子里点到的口径纠正过来。
+     *
+     * <p>这是「问题稍微复杂一点就答不上来」的主要来源：一句话里问了好几件事，模型盯着
+     * 「说明一下 / 是什么」这类措辞判成解释，于是句中明明可查的部分（有哪些实例）也一并丢掉，
+     * 只剩一句「对不上」。规则层补词只覆盖没有模型的情形——有模型时意图由模型定，
+     * 纠正必须写在编排层，否则这条路径永远取决于模型心情。
+     */
+    @Test
+    void explainWithQuerySubjectIsCorrectedToStateQuery() throws Exception {
+        buildOrchestrator((question, context) -> Optional.of(new IntentDecision(
+                AgentIntent.EXPLAIN, Confidence.MEDIUM, IntentTopic.GENERAL, "", TimeRange.unspecified(),
+                ActionType.UNKNOWN, "模型认为这是在要求解释", false, null)));
+        Session session = orchestrator.startSession("admin");
+
+        TaskView task = submitAndAwait(session, "admin", "详细说明一下现在有哪些实例");
+
+        assertEquals(TaskType.QUERY, task.taskType(), "句中有可查口径时不该按解释回一句「对不上」");
+        assertTrue(task.result().summary().contains("实例"),
+                "回答应给出实例事实，实际为 " + task.result().summary());
+        assertTrue(task.steps().stream().anyMatch(step -> "路径纠正".equals(step.name())),
+                "换了执行形态必须在步骤里写明");
     }
 
     /** 路径纠正的边界：缺少宾语的问法不从会话沿用对象重启调查，该说清「要查哪一类事实」。 */

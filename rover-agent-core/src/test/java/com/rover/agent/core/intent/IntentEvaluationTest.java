@@ -58,12 +58,22 @@ class IntentEvaluationTest {
             new Sample("实例注册了几个节点", AgentIntent.QUERY_STATE),
             new Sample("order-service 在哪条路由上", AgentIntent.QUERY_STATE),
             new Sample("网关的限流阈值配的多少", AgentIntent.QUERY_STATE),
+            // 「有哪些 X」是最常见的问法，漏掉它整句会落到模型手里，
+            // 而模型看到「是什么 / 详细信息」这类措辞容易判成解释——明明可查的问题被回一句「对不上」。
+            // 下面第二条是一句真实用户原话：一句话问了三件事，其中「有哪些实例」完全答得出来。
+            new Sample("今天有哪些后端实例？", AgentIntent.QUERY_STATE),
+            new Sample("帮我看一下现在是什么时候？今天有哪些后端实例？他们的详细信息都是什么？",
+                    AgentIntent.QUERY_STATE),
 
             // 处置请求：只有读到明确动作才算，不靠猜测
             new Sample("帮我摘掉 demo-service 的 127.0.0.1:8081 这个实例", AgentIntent.ACTION_REQUEST),
             new Sample("把这条路由的超时改成 3 秒", AgentIntent.ACTION_REQUEST),
             new Sample("重启 demo-service", AgentIntent.ACTION_REQUEST),
             new Sample("把 /api/demo/tt 下线", AgentIntent.ACTION_REQUEST),
+            // 「删除 / 删掉」必须归到处置：漏掉它，请求会落到状态查询上，
+            // 用户要的是处置，得到的却是一句「请给出请求路径」。
+            new Sample("把网关所有路由都删掉", AgentIntent.ACTION_REQUEST),
+            new Sample("删除这条路由", AgentIntent.ACTION_REQUEST),
 
             // 定时巡检
             new Sample("帮我给 order-service 加一个每天上午的巡检", AgentIntent.CREATE_INSPECTION),
@@ -77,6 +87,10 @@ class IntentEvaluationTest {
             // 知识检索
             new Sample("怎么接入这个网关", AgentIntent.KNOWLEDGE_QUERY),
             new Sample("网关的文档在哪里", AgentIntent.KNOWLEDGE_QUERY),
+            // 「怎么配置」要盖过裸词「配置」：这两句问的是用法，不是当前生效值。
+            // 判成状态查询会接着卡在「没有可调查对象」的澄清上，答非所问。
+            new Sample("限流怎么配置", AgentIntent.KNOWLEDGE_QUERY),
+            new Sample("怎么设置熔断阈值", AgentIntent.KNOWLEDGE_QUERY),
 
             // 与运维无关的闲聊：必须如实落到 UNKNOWN，不能硬套一个意图
             new Sample("今天天气怎么样", AgentIntent.UNKNOWN),
@@ -124,5 +138,29 @@ class IntentEvaluationTest {
         }
         assertTrue(hijacked.isEmpty(),
                 "以下模糊说法被规则高置信度拍板，模型将没有机会补位：\n" + String.join("\n", hijacked));
+    }
+
+    /**
+     * 明确问数的句子必须由规则直接拍板（HIGH）。
+     *
+     * 它们是最常见的提问，问法与答案一一对应；判成 MEDIUM 会让每一次提问都多等一趟模型往返。
+     * 这条与上一条是一对：模糊说法要留给模型，明确问数就不该留。
+     */
+    @Test
+    void clearQuantityQuestionsSettleAtTheRuleLayer() {
+        List<String> notSettled = new ArrayList<>();
+        for (String question : List.of(
+                "网关现在 QPS 多少？",
+                "order-service 有几个健康实例？",
+                "网关的采样率是多少",
+                "最近的错误率多少")) {
+            IntentDecision decision = new IntentClassifier().classify(question);
+            if (decision.intent() != AgentIntent.QUERY_STATE || decision.confidence() != Confidence.HIGH) {
+                notSettled.add("「" + question + "」=> " + decision.intent() + "（" + decision.confidence() + "）");
+            }
+        }
+        assertTrue(notSettled.isEmpty(),
+                "明确问数的句子应被规则判为 HIGH 状态查询，否则每次提问都要多等一趟模型：\n"
+                        + String.join("\n", notSettled));
     }
 }

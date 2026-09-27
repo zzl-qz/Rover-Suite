@@ -29,6 +29,13 @@ public final class ModelExplainer {
 
     private static final int MAX_ANALYSIS_LENGTH = 2000;
 
+    /**
+     * 思考文本的长度上限：比解读宽松——推理过程本来就比结论长。
+     *
+     * 有上限是必要的：思考是过程展示，不落结论，无限累积只会把任务快照撑大。
+     */
+    private static final int MAX_THINKING_LENGTH = 4000;
+
     /** 指标里的场景名：与「意图识别 / 目标解析 / 调查规划」并列，便于按用途分开看模型表现。 */
     private static final String SCENE = "解读";
 
@@ -85,15 +92,21 @@ public final class ModelExplainer {
      * 基于本次调查的只读快照与假设验证结果生成解释，并把增量边产生边交给 {@code onDelta}
      * （供 SSE 实时展示）；返回的是截断后的完整文本，用于落库展示。
      *
+     * 深度思考模型会在正式回答前先产出思考内容，这部分交给 {@code onThinking} 单独推送——
+     * 思考是过程、答案是结论，两者在界面上占不同位置，不该混在一条流里。当前模型不产出思考时
+     * 该回调一次也不会被调用，调用方据此自然得到「没有思考过程」的界面。
+     *
      * 路由与实例快照由运行时预读后放进提示词，模型是否自觉调用工具都不影响解读有据可依；
      * 模型未返回内容时才抛异常，由调用方降级。推送与返回文本都受同一长度上限约束，
      * 因此前端看到的增量拼接结果与最终文本一致。预读与模型另调的工具各自如实记录，供调用方展示。
      */
     public Explanation explainStreaming(String path, String question, List<Evidence> evidence,
-                                       List<Hypothesis> hypotheses, Consumer<String> onDelta) {
+                                       List<Hypothesis> hypotheses, Consumer<String> onDelta,
+                                       Consumer<String> onThinking) {
         SnapshotTools tools = new SnapshotTools(evidence);
         Map<String, String> core = tools.coreSnapshots();
         StringBuilder answer = new StringBuilder();
+        StringBuilder thinking = new StringBuilder();
         UsageTotals tokens = new UsageTotals();
         long startedAt = System.nanoTime();
         ModelCallOutcome outcome = ModelCallOutcome.OK;
@@ -107,7 +120,7 @@ public final class ModelExplainer {
                     // 用 chatResponse 而不是 content：文本照旧逐段取，但顺带拿到用量与结束信息，
                     // content() 会把响应元数据整条丢掉，token 也就无从统计。
                     .chatResponse()
-                    .doOnNext(response -> collect(response, answer, onDelta, tokens))
+                    .doOnNext(response -> collect(response, answer, thinking, onDelta, onThinking, tokens))
                     .blockLast();
             if (answer.isEmpty()) {
                 outcome = ModelCallOutcome.EMPTY;
@@ -127,9 +140,15 @@ public final class ModelExplainer {
         }
     }
 
-    /** 累积一帧响应的文本增量并转发；超出上限的部分直接丢弃，保证推送内容与最终文本逐字一致。 */
-    private static void collect(ChatResponse response, StringBuilder answer, Consumer<String> onDelta,
-                               UsageTotals tokens) {
+    /**
+     * 累积一帧响应的文本与思考增量并转发；超出上限的部分直接丢弃，保证推送内容与最终文本逐字一致。
+     *
+     * 这里从静态方法改为实例方法，只因为思考内容要经 {@link ChatModelGateway#reasoningDelta} 取——
+     * 厂商差异收在那一层，本类不自己辨认消息类型。思考取不到或回调缺失都只是没有思考内容可看，
+     * 不影响文本与用量的正常累积。
+     */
+    private void collect(ChatResponse response, StringBuilder answer, StringBuilder thinking,
+                         Consumer<String> onDelta, Consumer<String> onThinking, UsageTotals tokens) {
         if (response == null) {
             return;
         }
@@ -141,6 +160,13 @@ public final class ModelExplainer {
             String piece = chunk.length() > room ? chunk.substring(0, room) : chunk;
             answer.append(piece);
             onDelta.accept(piece);
+        }
+        String thought = gateway.reasoningDelta(response);
+        if (!thought.isEmpty() && onThinking != null && thinking.length() < MAX_THINKING_LENGTH) {
+            int room = MAX_THINKING_LENGTH - thinking.length();
+            String piece = thought.length() > room ? thought.substring(0, room) : thought;
+            thinking.append(piece);
+            onThinking.accept(piece);
         }
         tokens.absorb(response);
     }

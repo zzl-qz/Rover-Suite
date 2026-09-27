@@ -7,19 +7,30 @@ import jakarta.annotation.PostConstruct;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.deepseek.DeepSeekAssistantMessage;
+import org.springframework.ai.deepseek.DeepSeekChatModel;
+import org.springframework.ai.deepseek.DeepSeekChatOptions;
+import org.springframework.ai.deepseek.api.DeepSeekApi;
 import org.springframework.ai.model.tool.DefaultToolCallingManager;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.retry.RetryPolicy;
+import org.springframework.core.retry.RetryTemplate;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
 
 /**
  * Admin 的 OpenAI 兼容模型适配器：把页面保存的配置变成运行层可用的 {@link ChatClient}，
@@ -87,10 +98,20 @@ public class AdminChatModelGateway implements ChatModelGateway {
             this.buildId = buildSequence.incrementAndGet();
             this.appliedAt = Instant.now();
             log.info("模型已生效：{}（buildId={}）", description(), buildId);
-        } catch (RuntimeException ex) {
-            this.lastError = "模型客户端构建失败：" + ex.getMessage();
-            log.warn("模型客户端构建失败，继续使用上一个生效配置：{}", ex.getMessage());
+        } catch (RuntimeException | LinkageError ex) {
+            // LinkageError（类缺失、依赖版本不匹配）也在这里收敛：模型建不起来只是「模型不可用」，
+            // 规则诊断与其余功能都不需要模型，不该让一件配置问题把整个 Admin 拖得住不了。
+            this.lastError = "模型客户端构建失败：" + describe(ex);
+            log.warn("模型客户端构建失败，继续使用上一个生效配置：{}", ex.toString());
         }
+    }
+
+    /** 构建失败的说明文本：类加载失败只给出类名，对使用者没有意义，补一句可行动的方向。 */
+    private static String describe(Throwable failure) {
+        if (failure instanceof LinkageError) {
+            return "依赖版本不匹配（缺少 " + failure.getMessage() + "）";
+        }
+        return failure.getMessage();
     }
 
     @Override
@@ -172,28 +193,171 @@ public class AdminChatModelGateway implements ChatModelGateway {
      * @param timeoutSeconds 覆写的超时；越界值按 {@link ModelSettings#clampTimeout(int)} 收敛
      */
     public ChatClient transientClient(ModelSettings settings, int timeoutSeconds) {
+        // 场景客户端服务的是「廉价调用」（见 ChatModelGateway#chatClient(int)），因此不开深度思考：
+        // 那些调用上限只有 10 秒，让模型先想一遍既拖慢等待，也更容易撞上超时后回退规则。
         return build(new ModelSettings(settings.enabled(), settings.baseUrl(), settings.apiKey(), settings.model(),
-                ModelSettings.clampTimeout(timeoutSeconds), settings.source(), settings.keyState()));
+                ModelSettings.clampTimeout(timeoutSeconds), settings.source(), settings.keyState()), false);
     }
 
     /** 构建客户端；构建不成功必须抛异常，由 {@link #apply(ModelSettings)} 决定是否保留上一个可用客户端。 */
     protected ChatClient build(ModelSettings settings) {
+        return build(settings, true);
+    }
+
+    /**
+     * 构建客户端。
+     *
+     * @param thinking 是否允许深度思考。只有主客户端开——它服务的是「AI 解读」这类需要推理质量的长调用；
+     *                 场景客户端走 {@code false}：意图识别、目标解析、规划都是 10 秒上限的廉价调用，
+     *                 让它们先想一遍既拖慢用户等待，也更容易撞上超时后回退规则，
+     *                 反而丢掉了模型本该贡献的那点判断
+     */
+    protected ChatClient build(ModelSettings settings, boolean thinking) {
+        ChatModel model = switch (vendorOf(settings.baseUrl())) {
+            case ZHIPU, DEEPSEEK -> thinkingCapableModel(settings, thinking);
+            case OPENAI_COMPATIBLE -> openAiCompatibleModel(settings);
+        };
+        return ChatClient.builder(model).build();
+    }
+
+    /**
+     * 接入协议：由服务地址决定，用户只填地址与模型名，不必理解协议差异。
+     *
+     * 智谱与 DeepSeek 共走一条「能解析思考内容」的构建路径——两家的思考内容都放在
+     * {@code delta.reasoning_content}，同属一套 Chat Completions 约定；其余服务走通用兼容协议。
+     */
+    private enum Vendor {
+        ZHIPU,
+        DEEPSEEK,
+        OPENAI_COMPATIBLE
+    }
+
+    private static Vendor vendorOf(String baseUrl) {
+        String host = host(baseUrl).toLowerCase(Locale.ROOT);
+        if (host.contains("bigmodel.cn") || host.contains("zhipu")) {
+            return Vendor.ZHIPU;
+        }
+        if (host.contains("deepseek.com")) {
+            return Vendor.DEEPSEEK;
+        }
+        return Vendor.OPENAI_COMPATIBLE;
+    }
+
+    /**
+     * 能解析思考内容的 OpenAI 兼容客户端（智谱与 DeepSeek 共用）。
+     *
+     * <p>这里用 DeepSeek 的客户端实现，把它当作「一个会解析 {@code reasoning_content} 的
+     * OpenAI 兼容客户端」，只换 baseUrl 与模型名。之所以不用智谱自己的
+     * {@code ZhiPuAiChatModel}：{@code spring-ai-zhipuai} 的可用版本（2.0.0-M1～M4）
+     * 都停留在 Spring AI 2.0.0-M1 的 API 上，连 {@code ModelOptionsUtils.copyToTarget/merge}
+     * 这类基础方法在 2.0.1 都已被移除——补类型救不了：类加载能过，一调用就
+     * {@code NoSuchMethodError}。两家的请求与响应结构一致，换 baseUrl 即可。
+     *
+     * <p>等智谱模块发布与 2.0.1 对齐的版本，把它换成 {@code ZhiPuAiChatModel} 即可。
+     * 模型名支持深度思考时才带 thinking 参数——不认识的模型名一律不带，
+     * 不传这个参数永远不会因参数不兼容而失败。
+     */
+    private ChatModel thinkingCapableModel(ModelSettings settings, boolean thinking) {
+        DeepSeekChatOptions.Builder options = DeepSeekChatOptions.builder();
+        options.model(settings.model());
+        if (thinking && supportsThinking(settings.model())) {
+            options.enableThinking();
+        }
+        DeepSeekApi api = DeepSeekApi.builder()
+                .baseUrl(settings.baseUrl())
+                .apiKey(key(settings))
+                .restClientBuilder(restClient(settings))
+                .build();
+        return DeepSeekChatModel.builder()
+                .deepSeekApi(api)
+                .options(options.build())
+                .toolCallingManager(toolCallingManager())
+                .retryTemplate(noRetry())
+                .observationRegistry(ObservationRegistry.NOOP)
+                .build();
+    }
+
+    /** OpenAI 兼容客户端：本地 Ollama / vLLM 与其余兼容服务都走这条。 */
+    private ChatModel openAiCompatibleModel(ModelSettings settings) {
         OpenAiChatOptions options = OpenAiChatOptions.builder()
                 .baseUrl(settings.baseUrl())
-                // 空串（非 null）会走成无鉴权客户端，正是本地 Ollama / vLLM 需要的形态。
-                .apiKey(settings.apiKey() == null ? "" : settings.apiKey())
+                .apiKey(key(settings))
                 .model(settings.model())
                 .timeout(Duration.ofSeconds(ModelSettings.clampTimeout(settings.timeoutSeconds())))
                 .maxRetries(0)
                 .build();
-        ChatModel model = OpenAiChatModel.builder()
+        return OpenAiChatModel.builder()
                 .options(options)
                 .observationRegistry(ObservationRegistry.NOOP)
                 .meterRegistry(new SimpleMeterRegistry())
-                // 优先用自动配置的实例：它带着 spring.ai.tools.limits.* 的调用上限。
-                .toolCallingManager(toolCallingManagers.getIfAvailable(() -> DefaultToolCallingManager.builder().build()))
+                .toolCallingManager(toolCallingManager())
                 .build();
-        return ChatClient.builder(model).build();
+    }
+
+    /** 空串（非 null）会走成无鉴权客户端，正是本地 Ollama / vLLM 需要的形态。 */
+    private static String key(ModelSettings settings) {
+        return settings.apiKey() == null ? "" : settings.apiKey();
+    }
+
+    /** 优先用自动配置的实例：它带着 spring.ai.tools.limits.* 的调用上限。 */
+    private ToolCallingManager toolCallingManager() {
+        return toolCallingManagers.getIfAvailable(() -> DefaultToolCallingManager.builder().build());
+    }
+
+    /**
+     * 不重试的重试模板：超时重试由运行层的 {@code QuickModelCall} 统一负责。
+     *
+     * 两处都重试会让等待时间成倍放大——快速调用本就限了 10 秒上限，底层再叠重试就失去意义。
+     */
+    private static RetryTemplate noRetry() {
+        return new RetryTemplate(RetryPolicy.withMaxRetries(0));
+    }
+
+    /**
+     * 带超时的 HTTP 客户端：原生协议的选项里没有超时字段，等待上限只能落在 HTTP 层。
+     *
+     * 这层超时是必要的——意图识别这类场景靠 {@code chatClient(timeoutSeconds)} 收紧等待，
+     * 底层不设超时那层收紧就形同虚设。读超时按「两次数据之间的间隔」计，
+     * 持续输出的流式解读不会被它误杀。
+     */
+    private static RestClient.Builder restClient(ModelSettings settings) {
+        Duration timeout = Duration.ofSeconds(ModelSettings.clampTimeout(settings.timeoutSeconds()));
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(timeout);
+        factory.setReadTimeout(timeout);
+        return RestClient.builder().requestFactory(factory);
+    }
+
+    /**
+     * 该模型是否支持深度思考。
+     *
+     * 按模型名判断而不是加一个配置开关：模型名本身就是最准确的判据，多一个开关只会多一处
+     * 「配错就报错」的地方。不认识的模型名一律不开——不传这个参数，永远不会因参数不兼容而失败。
+     */
+    private static boolean supportsThinking(String model) {
+        String name = model == null ? "" : model.trim().toLowerCase(Locale.ROOT);
+        return name.startsWith("glm-4.5") || name.startsWith("glm-4.6") || name.startsWith("glm-4.7")
+                || name.startsWith("glm-5") || name.startsWith("glm-z1");
+    }
+
+    /**
+     * 取一帧响应里的思考增量。
+     *
+     * 只有能解析 {@code reasoning_content} 的消息类型带这个字段（见
+     * {@link #thinkingCapableModel}）；取不到一律返回空串——思考内容只是解释过程的陪衬，
+     * 不能因为它缺失或类型不符而让一次解读失败。
+     */
+    @Override
+    public String reasoningDelta(ChatResponse response) {
+        if (response == null || response.getResult() == null) {
+            return "";
+        }
+        AssistantMessage message = response.getResult().getOutput();
+        if (message instanceof DeepSeekAssistantMessage deepSeek) {
+            String reasoning = deepSeek.getReasoningContent();
+            return reasoning == null ? "" : reasoning;
+        }
+        return "";
     }
 
     /** 只取主机名用于展示，避免把可能带凭据的完整地址写进日志或响应。 */

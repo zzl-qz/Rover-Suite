@@ -171,5 +171,11 @@ class SpringAiJsonCompletionTest {
         public String description() {
             return "测试模型 @ local";
         }
+
+        /** 替身不产出思考内容：语义与「当前模型不是深度思考模型」一致。 */
+        @Override
+        public String reasoningDelta(ChatResponse response) {
+            return "";
+        }
     }
 }

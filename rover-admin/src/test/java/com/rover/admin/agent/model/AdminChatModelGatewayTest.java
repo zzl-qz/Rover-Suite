@@ -123,6 +123,72 @@ class AdminChatModelGatewayTest {
         assertNotSame(quick, gateway.chatClient(10));
     }
 
+    /**
+     * 智谱客户端必须能真的建起来——这是 GLM 思考内容的唯一来源。
+     *
+     * 它复用 DeepSeek 的客户端（两家同属一套 Chat Completions 约定，思考内容都在
+     * {@code delta.reasoning_content}），因为智谱自己的模块与当前 Spring AI 版本系统性不兼容：
+     * 补类型只能让类加载通过，一调用就 {@code NoSuchMethodError}。
+     *
+     * <p>注意这条断言只覆盖「客户端能构建」——真实调用能否拿到思考内容，单测覆盖不了
+     * （需要真实密钥），必须在部署后用一次真实请求验证。上一版的教训正在这里：
+     * 只测了构建就以为通了，结果一调用就崩。
+     */
+    @Test
+    void buildsZhipuClientThroughThinkingCapableProtocol() {
+        AdminChatModelGateway gateway = newGateway();
+
+        gateway.apply(settings(true, "https://open.bigmodel.cn/api/paas/v4", "sk-abcdefghijklmnop", "glm-4.6"));
+
+        assertTrue(gateway.available(), "智谱客户端应能构建成功，实际错误：" + gateway.lastError());
+        assertNotNull(gateway.chatClient());
+        assertNull(gateway.lastError());
+    }
+
+    /** 智谱只填非思考模型时同样可用：只是不会带 thinking 参数，也不会有思考内容。 */
+    @Test
+    void zhipuWithoutThinkingCapableModelStaysUsable() {
+        AdminChatModelGateway gateway = newGateway();
+
+        gateway.apply(settings(true, "https://open.bigmodel.cn/api/paas/v4", "sk-abcdefghijklmnop", "glm-4-air"));
+
+        assertTrue(gateway.available(), "不支持的模型名只应「不带 thinking 参数」，不该构建失败");
+        assertNull(gateway.lastError());
+    }
+
+    /** DeepSeek 同样走原生协议：它的思考内容只在原生响应里，客户端必须建得起来。 */
+    @Test
+    void buildsDeepSeekClientThroughNativeProtocol() {
+        AdminChatModelGateway gateway = newGateway();
+
+        gateway.apply(settings(true, "https://api.deepseek.com", "sk-abcdefghijklmnop", "deepseek-reasoner"));
+
+        assertTrue(gateway.available(), "DeepSeek 原生客户端应能构建成功，实际错误：" + gateway.lastError());
+        assertNotNull(gateway.chatClient());
+    }
+
+    /**
+     * 客户端构建失败必须降级为「不可用」，不能把整个 Admin 拖崩。
+     *
+     * 类加载失败是 {@link Error} 而不是 RuntimeException：只 catch RuntimeException 的话，
+     * 它会一路冒到 {@code @PostConstruct}，让一个模型配置问题变成「Admin 起不来」。
+     */
+    @Test
+    void linkageFailureDuringBuildDegradesInsteadOfKillingStartup() {
+        AdminChatModelGateway gateway = new AdminChatModelGateway(mock(ModelConfigStore.class), toolManagers()) {
+            @Override
+            protected ChatClient build(ModelSettings settings) {
+                throw new NoClassDefFoundError("org/example/MissingType");
+            }
+        };
+
+        gateway.apply(settings(true, "https://api.deepseek.com", "sk-abcdefghijklmnop", "deepseek-chat"));
+
+        assertFalse(gateway.available(), "构建失败就不能报可用");
+        assertNotNull(gateway.lastError(), "失败原因必须留下，否则页面上只会看到「不可用」而不知为什么");
+        assertFalse(gateway.lastError().contains("sk-abcdefghijklmnop"));
+    }
+
     private static ModelSettings settings(boolean enabled, String baseUrl, String apiKey, String model) {
         return new ModelSettings(enabled, baseUrl, apiKey, model, ModelSettings.DEFAULT_TIMEOUT_SECONDS,
                 ModelSettings.Source.FILE, ModelSettings.keyStateOf(apiKey));

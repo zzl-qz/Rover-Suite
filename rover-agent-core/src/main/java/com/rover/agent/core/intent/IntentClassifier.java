@@ -40,7 +40,10 @@ public final class IntentClassifier {
 
     private static final List<String> ACTION_WORDS = List.of("摘掉", "摘除", "下线", "上线", "重启", "扩容", "缩容",
             "移除", "去掉", "禁用", "启用", "停用", "改成", "设为", "设置为", "调整为", "修改成",
-            "帮我摘", "帮我停", "帮我启", "帮我改", "帮我调", "帮我重启", "踢掉");
+            "帮我摘", "帮我停", "帮我启", "帮我改", "帮我调", "帮我重启", "踢掉",
+            // 「删除 / 删掉」是最高频的处置说法之一。漏掉它，这类请求会落到状态查询上，
+            // 接着卡在「请给出请求路径」的澄清里——用户要的是处置，得到的却是反问。
+            "删除", "删掉", "干掉", "清空");
 
     private static final List<String> CAPABILITY_WORDS = List.of("你能做什么", "你能干什么", "你会什么", "你能帮我做什么",
             "有什么能力", "有哪些能力", "能做什么", "能做哪些", "支持哪些能力", "能力清单", "你是谁", "怎么用你",
@@ -67,7 +70,25 @@ public final class IntentClassifier {
 
     private static final List<String> STATE_WORDS = List.of("多少", "几个", "数量", "状态", "有没有", "是否", "qps",
             "流量", "请求量", "请求数", "吞吐", "拒绝", "错误率", "5xx", "健康", "在线", "注册", "路由", "指向",
-            "前缀", "配置", "采样率");
+            "前缀", "配置", "采样率",
+            // 列表型问句：「有哪些 X」是最常见的问法，漏掉它整句会落到模型手里——
+            // 而模型看到「是什么 / 详细信息」这类措辞容易判成解释，于是明明可查的问题被回一句「对不上」。
+            "有哪些", "哪些", "列出", "列表",
+            // 对象名本身：问句里出现「实例 / 节点」基本就是在问这类事实。
+            // 放在状态查询的最后一道，故障词仍在它之前判断，所以「实例挂了」照样走调查。
+            "实例", "节点");
+
+    /**
+     * 状态查询里「明确问一个数」的信号：命中即 HIGH，不再走模型补位。
+     *
+     * <p>只收「多少 / 几个 / 数量」这类纯问值词，刻意不收「错误率」「吞吐」这类指标名——
+     * 指标名既能问值也能引出原因（「错误率为什么高」），而那些问法要留给调查路径，
+     * 收进来会把它们一起判成状态查询。指标名本身仍由 {@link #STATE_WORDS} 兜住（中置信度）。
+     *
+     * <p>判断位置在调查词之前：{@code INVESTIGATION_WORDS} 含裸词「错误」，
+     * 会让「最近的错误率多少」被当成追问原因；「多少」这样的问值词更具体，应当先判。
+     */
+    private static final List<String> STATE_QUANTITY_WORDS = List.of("多少", "几个", "数量");
 
     private static final List<String> KNOWLEDGE_WORDS = List.of("怎么配置", "如何配置", "怎么设置", "如何设置", "怎么用",
             "如何使用", "怎么接入", "如何接入", "文档", "教程");
@@ -128,17 +149,31 @@ public final class IntentClassifier {
             return new IntentDecision(AgentIntent.EXPLAIN, Confidence.MEDIUM, topic, hint, timeRange,
                     ActionType.UNKNOWN, "问题要求解释或总结已有信息", false, null);
         }
+        // 明确问数的句子（「QPS 多少」「有几个健康实例」）规则直接拍板：
+        // 它们问法与答案一一对应，再走一趟模型只是让最常见的提问白等十几秒。
+        // 位置在调查词之前——INVESTIGATION_WORDS 含裸词「错误」，「最近的错误率多少」会被它抢走。
+        if (containsAny(text, STATE_QUANTITY_WORDS)) {
+            return new IntentDecision(AgentIntent.QUERY_STATE, Confidence.HIGH, IntentTopic.NONE, hint, timeRange,
+                    ActionType.UNKNOWN, "问题在询问一个可直接读出的数量指标", false, null);
+        }
         if (containsAny(text, INVESTIGATION_WORDS)) {
             return new IntentDecision(AgentIntent.INVESTIGATE, Confidence.MEDIUM, IntentTopic.NONE, hint, timeRange,
                     ActionType.UNKNOWN, "问题在追问失败或异常的原因", false, null);
         }
+        // 「怎么配置 / 如何使用」要排在裸词「配置」前面：后者只是 STATE_WORDS 里的一个词，
+        // 先判就会把「限流怎么配置」当成状态查询，接着卡在「没有可调查对象」的澄清上——
+        // 问的是用法，却被要求给出一条路由，答非所问。更具体的组合先判，才轮到更宽的单字。
+        //
+        // 置信度给 HIGH、不留模型补位：这类措辞（怎么/如何 + 动作）本身就是「求方法」的明确信号，
+        // 再让模型判一遍，它很容易被「设置熔断阈值」读成一次改配置的动作请求，
+        // 于是本该回答「怎么用」的问题变成了生成一份处置计划。
+        if (containsAny(text, KNOWLEDGE_WORDS)) {
+            return new IntentDecision(AgentIntent.KNOWLEDGE_QUERY, Confidence.HIGH, IntentTopic.GENERAL, hint, timeRange,
+                    ActionType.UNKNOWN, "问题在询问文档或使用方式", false, null);
+        }
         if (containsAny(text, STATE_WORDS)) {
             return new IntentDecision(AgentIntent.QUERY_STATE, Confidence.MEDIUM, IntentTopic.NONE, hint, timeRange,
                     ActionType.UNKNOWN, "问题在询问当前状态", false, null);
-        }
-        if (containsAny(text, KNOWLEDGE_WORDS)) {
-            return new IntentDecision(AgentIntent.KNOWLEDGE_QUERY, Confidence.LOW, IntentTopic.GENERAL, hint, timeRange,
-                    ActionType.UNKNOWN, "问题在询问文档或使用方式", false, null);
         }
         return new IntentDecision(AgentIntent.UNKNOWN, Confidence.LOW, IntentTopic.NONE, hint, timeRange,
                 ActionType.UNKNOWN, "未能从问题文本识别出意图", false, null);

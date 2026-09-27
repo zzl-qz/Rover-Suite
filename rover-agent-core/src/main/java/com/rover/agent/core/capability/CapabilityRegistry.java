@@ -153,7 +153,8 @@ public final class CapabilityRegistry {
         for (CapabilityDescriptor item : selectable()) {
             names.append(names.length() == 0 ? "" : "、").append(item.name());
         }
-        return "我没太明白您的意思。我是 Rover Ops Agent，一个只读的运维诊断助手，不执行任何写操作。\n"
+        return "这句话我还没能对上具体的查询或排查目标——问题里带上「哪条路径、哪个服务、哪台实例」，我就能直接查。\n"
+                + "我是 Rover Ops Agent，一个只读的运维诊断助手，不执行任何写操作。\n"
                 + "我可以帮您查这些：" + names + "；也能排查一次调用失败的原因。\n"
                 + "您可以这样问我：\n"
                 + "- 「网关现在 QPS 多少？」\n"

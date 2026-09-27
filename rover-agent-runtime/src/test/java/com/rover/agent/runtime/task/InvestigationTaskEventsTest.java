@@ -81,6 +81,31 @@ class InvestigationTaskEventsTest {
         assertEquals(1, late.payloadValues("summary").size());
     }
 
+    /**
+     * 思考增量走独立事件与独立缓冲：它与解读是两段内容，界面上也占两个位置。
+     *
+     * 顺带断言快照同时带上思考与解读两份全文——晚连上的订阅者靠它一次对齐，不必回放历史事件。
+     */
+    @Test
+    void thinkingDeltaTravelsOnItsOwnStreamAndRidesAlongInSnapshot() {
+        task.start();
+        task.appendThinking("先确认路由是否命中");
+        task.appendAnalysis("路由命中了");
+
+        Recording late = new Recording();
+        task.subscribe(late);
+        task.appendThinking("再确认实例健康");
+        task.complete(report());
+
+        late.awaitTerminal();
+        assertEquals(List.of(TaskEventType.SNAPSHOT, TaskEventType.THINKING_DELTA, TaskEventType.EVIDENCE_ADDED,
+                TaskEventType.TASK_COMPLETED), late.types());
+        TaskSnapshot snapshot = late.snapshot();
+        assertEquals("先确认路由是否命中", snapshot.thinking(), "订阅前的思考全文要出现在快照里");
+        assertEquals("路由命中了", snapshot.analysis());
+        assertEquals(List.of("再确认实例健康"), late.payloadValues("text"), "思考增量不能混进解读那条流");
+    }
+
     @Test
     void clarificationAndFailureAreExpressedAsEvents() {
         Recording subscriber = new Recording();

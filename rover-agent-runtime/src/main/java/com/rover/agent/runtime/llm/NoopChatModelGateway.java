@@ -1,6 +1,7 @@
 package com.rover.agent.runtime.llm;
 
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatResponse;
 
 /**
  * 未接入模型的缺省端口：始终是"未配置"语义。
@@ -33,5 +34,11 @@ public final class NoopChatModelGateway implements ChatModelGateway {
     @Override
     public String description() {
         return "未配置模型";
+    }
+
+    /** 没有模型就没有思考内容：返回空串而不是抛异常，解读链路照常按规则诊断收尾。 */
+    @Override
+    public String reasoningDelta(ChatResponse response) {
+        return "";
     }
 }
