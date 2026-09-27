@@ -34,6 +34,9 @@ import java.util.Map;
  */
 public class GatewayManageApi extends AbstractManageApi {
 
+    /** 整表提交里承载路由列表的字段名。 */
+    private static final String ROUTES_FIELD = "routes";
+
     /** 网关运行时，路由/配置热更新的实际操作对象。 */
     private final GatewayRuntime runtime;
 
@@ -133,7 +136,7 @@ public class GatewayManageApi extends AbstractManageApi {
         }
         if (HttpMethod.PUT.equals(request.method())) {
             Map<String, Object> body = JsonCodec.parseObjectMap(bodyOf(request));
-            List<RouteConfig> routes = RouteOverlayStore.toRoutes(objectRows(body.get("routes")));
+            List<RouteConfig> routes = strictRoutes(body);
             GatewayRuntime.RouteChangeResult result = runtime.applyRoutes(
                     requiredRevision(body), operationId(body), routes);
             writeJson(ctx, HttpResponseStatus.OK, changeResponse(result));
@@ -177,7 +180,7 @@ public class GatewayManageApi extends AbstractManageApi {
             return;
         }
         Map<String, Object> body = JsonCodec.parseObjectMap(bodyOf(request));
-        List<RouteConfig> candidate = RouteOverlayStore.toRoutes(objectRows(body.get("routes")));
+        List<RouteConfig> candidate = strictRoutes(body);
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("revision", runtime.getRevision());
         resp.put("appliedOperationId", runtime.getAppliedOperationId());
@@ -369,6 +372,39 @@ public class GatewayManageApi extends AbstractManageApi {
             }
         }
         return rows;
+    }
+
+    /**
+     * 严格解析整表提交里的 {@code routes} 字段。
+     *
+     * <p>这里刻意不做宽松收敛。字段缺失或拼错键名时若当成「空表」，逐条校验会全部通过，
+     * 于是「请求体写错了」变成「清空整张路由表并落盘」——线上全站 404，重启也回不来。
+     * 只有显式写 {@code []} 才算「确实要把路由表清空」。
+     *
+     * @param body 请求体
+     * @return 解析后的路由列表
+     * @throws IllegalArgumentException 字段缺失、不是数组或元素不是对象
+     */
+    private static List<RouteConfig> strictRoutes(Map<String, Object> body) {
+        if (!body.containsKey(ROUTES_FIELD)) {
+            throw new IllegalArgumentException(
+                    "请求体缺少 " + ROUTES_FIELD + " 字段：整表提交必须显式给出 " + ROUTES_FIELD
+                            + " 数组，清空路由表请传 []");
+        }
+        Object value = body.get(ROUTES_FIELD);
+        if (!(value instanceof List<?> list)) {
+            throw new IllegalArgumentException(ROUTES_FIELD + " 必须是数组");
+        }
+        List<Map<String, Object>> rows = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) {
+                throw new IllegalArgumentException(ROUTES_FIELD + " 的元素必须是路由对象");
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            map.forEach((key, val) -> row.put(String.valueOf(key), val));
+            rows.add(row);
+        }
+        return RouteOverlayStore.toRoutes(rows);
     }
 
     /** 组装 GET /_manage/traces 的 JSON：支持按 traceId / path / slow 过滤。 */

@@ -12,6 +12,8 @@ public final class AdminApiPaths {
     public static final String ROUTES = "/routes";
     /** 路由变更预览：只校验与比对，不落盘、不生效。 */
     public static final String ROUTES_PREVIEW = "/routes/preview";
+    /** 路由写操作记录查询：请求超时后用同一个 operationId 确认是否已执行。 */
+    public static final String ROUTE_OPERATION = "/routes/operations/{operationId}";
     public static final String INSTANCES = "/instances";
     public static final String NAMESERVER_METRICS = "/nameserver/metrics";
     public static final String EVENTS = "/events";

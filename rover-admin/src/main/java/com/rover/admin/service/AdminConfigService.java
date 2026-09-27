@@ -1,6 +1,7 @@
 package com.rover.admin.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.rover.admin.client.ManageApiCallException;
 import com.rover.admin.client.ManageHttpClient;
 import com.rover.admin.config.AdminProperties;
 import com.rover.common.config.ConfigApplyMode;
@@ -93,14 +94,19 @@ public class AdminConfigService {
      *
      * <p>调用方必须带上读到的 {@code revision}：版本不一致时网关回 409，Admin 原样抛给前端，
      * 由人决定是重新拉取还是放弃，绝不做「自动重试覆盖别人」。
+     *
+     * <p>{@code operationId} 优先用调用方给的：前端自己生成才能在自己的请求超时后
+     * 用同一个号回查「到底执行了没有」。调用方没给（脚本、curl）时才补一个。
      */
     public Map<String, Object> saveRoute(Map<String, Object> route) {
         Map<String, Object> payload = new LinkedHashMap<>(route);
         payload.putIfAbsent(ManageApiPaths.PARAM_OPERATION_ID, UUID.randomUUID().toString());
         try {
             return httpClient.postJson(properties.getGatewayUrl(), ManageApiPaths.ROUTES, payload);
+        } catch (ManageApiCallException ex) {
+            throw ex;
         } catch (Exception ex) {
-            throw new IllegalArgumentException(ex.getMessage() == null ? "保存路由失败" : ex.getMessage(), ex);
+            throw new ManageApiCallException(0, "调用 Gateway 保存路由失败", ex);
         }
     }
 
@@ -116,8 +122,10 @@ public class AdminConfigService {
         try {
             return httpClient.postJson(
                     properties.getGatewayUrl(), ManageApiPaths.ROUTES_PREVIEW, payload);
+        } catch (ManageApiCallException ex) {
+            throw ex;
         } catch (Exception ex) {
-            throw new IllegalArgumentException(ex.getMessage() == null ? "预览路由失败" : ex.getMessage(), ex);
+            throw new ManageApiCallException(0, "调用 Gateway 预览路由失败", ex);
         }
     }
 
@@ -131,8 +139,33 @@ public class AdminConfigService {
                             + "?" + ManageApiPaths.PARAM_BUSINESS_PREFIX + "=" + encoded
                             + "&" + ManageApiPaths.PARAM_REVISION + "=" + revision
                             + "&" + ManageApiPaths.PARAM_OPERATION_ID + "=" + UUID.randomUUID());
+        } catch (ManageApiCallException ex) {
+            throw ex;
         } catch (Exception ex) {
-            throw new IllegalArgumentException(ex.getMessage() == null ? "删除路由失败" : ex.getMessage(), ex);
+            throw new ManageApiCallException(0, "调用 Gateway 删除路由失败", ex);
+        }
+    }
+
+    /**
+     * 按 operationId 查一次路由写操作的终态。
+     *
+     * <p>回答的是「我超时的这次写到底执行了没有」，所以不允许把失败吞成「查不到」：
+     * 网关不可达就如实报错，前端才知道「结果仍未确认、可以稍后用同一个号再查」。
+     */
+    public Map<String, Object> routeOperation(String operationId) {
+        if (operationId == null || operationId.isBlank()) {
+            throw new IllegalArgumentException("需要 operationId");
+        }
+        try {
+            JsonNode node = httpClient.getJson(
+                    properties.getGatewayUrl(),
+                    ManageApiPaths.ROUTES_OPERATIONS
+                            + URLEncoder.encode(operationId, StandardCharsets.UTF_8));
+            return JsonCodec.parseObjectMap(node.toString());
+        } catch (ManageApiCallException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalStateException("读取 Gateway 操作记录失败: " + ex.getMessage(), ex);
         }
     }
 
