@@ -407,12 +407,13 @@ public class GatewayManageApi extends AbstractManageApi {
         return RouteOverlayStore.toRoutes(rows);
     }
 
-    /** 组装 GET /_manage/traces 的 JSON：支持按 traceId / path / slow 过滤。 */
+    /** 组装 GET /_manage/traces 的 JSON：支持按 traceId / path / slow / error 过滤。 */
     private String tracesJson(FullHttpRequest request) {
         QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
         String traceIdFilter = firstQuery(decoder, ManageApiPaths.PARAM_TRACE_ID);
         String pathFilter = firstQuery(decoder, ManageApiPaths.PARAM_PATH);
         String slowFilter = firstQuery(decoder, ManageApiPaths.PARAM_SLOW);
+        String errorFilter = firstQuery(decoder, ManageApiPaths.PARAM_ERROR);
 
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("enabled", runtime.getTraceSettings().isEnabled());
@@ -434,6 +435,10 @@ public class GatewayManageApi extends AbstractManageApi {
             }
             if (slowFilter != null && !ConfigValues.FALSE.equalsIgnoreCase(slowFilter)
                     && !trace.isSlow()) {
+                continue;
+            }
+            if (errorFilter != null && !ConfigValues.FALSE.equalsIgnoreCase(errorFilter)
+                    && trace.getStatusCode() < 500) {
                 continue;
             }
             rows.add(traceRow(trace));

@@ -329,6 +329,30 @@ public class H2RecordStore implements RecordStore {
     }
 
     @Override
+    public long purgeOlderThan(long cutoffMillis, List<RecordType> types) {
+        if (types == null || types.isEmpty()) {
+            return 0;
+        }
+        StringBuilder sql = new StringBuilder("DELETE FROM records WHERE ts < ? AND type IN (");
+        for (int i = 0; i < types.size(); i++) {
+            sql.append(i == 0 ? "?" : ",?");
+        }
+        sql.append(')');
+        try (Connection conn = openConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            int idx = 1;
+            ps.setLong(idx++, cutoffMillis);
+            for (RecordType t : types) {
+                ps.setString(idx++, t.name());
+            }
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            log.warn("按类型清理过期日志失败", e);
+            return 0;
+        }
+    }
+
+    @Override
     public void flush() {
         List<Record> batch = new ArrayList<>(BATCH);
         criticalQueue.drainTo(batch);

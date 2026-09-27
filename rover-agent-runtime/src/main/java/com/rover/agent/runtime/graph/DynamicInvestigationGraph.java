@@ -441,6 +441,7 @@ public final class DynamicInvestigationGraph {
             case TRACE_QUERY -> AgentStepType.TRACE_INVESTIGATION;
             case CONFIG_READ -> AgentStepType.CONFIG_INVESTIGATION;
             case EVENT_QUERY -> AgentStepType.EVENT_INVESTIGATION;
+            case LOG_QUERY -> AgentStepType.LOG_INVESTIGATION;
         };
     }
 
@@ -453,6 +454,7 @@ public final class DynamicInvestigationGraph {
             case TRACE_QUERY -> "读取追踪";
             case CONFIG_READ -> "读取配置";
             case EVENT_QUERY -> "读取事件";
+            case LOG_QUERY -> "读取历史日志";
         };
     }
 
@@ -469,6 +471,7 @@ public final class DynamicInvestigationGraph {
             case TRACE_QUERY -> "正在读取该路径的抽样追踪";
             case CONFIG_READ -> "正在读取 Gateway 与 NameServer 生效配置";
             case EVENT_QUERY -> "正在读取注册中心近期事件";
+            case LOG_QUERY -> "正在读取落盘历史日志";
         };
     }
 

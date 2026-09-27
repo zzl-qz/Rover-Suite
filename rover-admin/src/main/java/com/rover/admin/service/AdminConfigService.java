@@ -119,13 +119,13 @@ public class AdminConfigService {
         String routeId = String.valueOf(route.getOrDefault("businessPrefix", ""));
         try {
             Map<String, Object> result = httpClient.postJson(properties.getGatewayUrl(), ManageApiPaths.ROUTES, payload);
-            recordConfig("saveRoute", routeId, "", "ok");
+            recordOperation(RecordType.CONFIG_CHANGE, "saveRoute", routeId, "", "ok");
             return result;
         } catch (ManageApiCallException ex) {
-            recordConfig("saveRoute", routeId, "", "FAILED:" + ex.getMessage());
+            recordOperation(RecordType.ERROR, "saveRoute", routeId, "", "FAILED:" + ex.getMessage());
             throw ex;
         } catch (Exception ex) {
-            recordConfig("saveRoute", routeId, "", "FAILED:" + ex.getMessage());
+            recordOperation(RecordType.ERROR, "saveRoute", routeId, "", "FAILED:" + ex.getMessage());
             throw new ManageApiCallException(0, "调用 Gateway 保存路由失败", ex);
         }
     }
@@ -159,13 +159,13 @@ public class AdminConfigService {
                             + "?" + ManageApiPaths.PARAM_BUSINESS_PREFIX + "=" + encoded
                             + "&" + ManageApiPaths.PARAM_REVISION + "=" + revision
                             + "&" + ManageApiPaths.PARAM_OPERATION_ID + "=" + UUID.randomUUID());
-            recordConfig("deleteRoute", idOrPrefix, "", "ok");
+            recordOperation(RecordType.CONFIG_CHANGE, "deleteRoute", idOrPrefix, "", "ok");
             return result;
         } catch (ManageApiCallException ex) {
-            recordConfig("deleteRoute", idOrPrefix, "", "FAILED:" + ex.getMessage());
+            recordOperation(RecordType.ERROR, "deleteRoute", idOrPrefix, "", "FAILED:" + ex.getMessage());
             throw ex;
         } catch (Exception ex) {
-            recordConfig("deleteRoute", idOrPrefix, "", "FAILED:" + ex.getMessage());
+            recordOperation(RecordType.ERROR, "deleteRoute", idOrPrefix, "", "FAILED:" + ex.getMessage());
             throw new ManageApiCallException(0, "调用 Gateway 删除路由失败", ex);
         }
     }
@@ -209,13 +209,13 @@ public class AdminConfigService {
         try {
             Map<String, Object> result = httpClient.postJson(
                     properties.getGatewayUrl(), ManageApiPaths.ROUTES_TARGET_WEIGHT, payload);
-            recordConfig("adjustTargetWeight", routeId, serviceName, "weight=" + body.get("weight"));
+            recordOperation(RecordType.CONFIG_CHANGE, "adjustTargetWeight", routeId, serviceName, "weight=" + body.get("weight"));
             return result;
         } catch (ManageApiCallException ex) {
-            recordConfig("adjustTargetWeight", routeId, serviceName, "FAILED:" + ex.getMessage());
+            recordOperation(RecordType.ERROR, "adjustTargetWeight", routeId, serviceName, "FAILED:" + ex.getMessage());
             throw ex;
         } catch (Exception ex) {
-            recordConfig("adjustTargetWeight", routeId, serviceName, "FAILED:" + ex.getMessage());
+            recordOperation(RecordType.ERROR, "adjustTargetWeight", routeId, serviceName, "FAILED:" + ex.getMessage());
             throw new ManageApiCallException(0, "调用 Gateway 调整版本权重失败", ex);
         }
     }
@@ -234,13 +234,13 @@ public class AdminConfigService {
         try {
             Map<String, Object> result = httpClient.postJson(
                     properties.getGatewayUrl(), ManageApiPaths.ROUTES_ROLLBACK, payload);
-            recordConfig("rollbackRoutes", "", "", "toRevision=" + toRevision);
+            recordOperation(RecordType.ROLLBACK, "rollbackRoutes", "", "", "toRevision=" + toRevision);
             return result;
         } catch (ManageApiCallException ex) {
-            recordConfig("rollbackRoutes", "", "", "FAILED:" + ex.getMessage());
+            recordOperation(RecordType.ERROR, "rollbackRoutes", "", "", "FAILED:" + ex.getMessage());
             throw ex;
         } catch (Exception ex) {
-            recordConfig("rollbackRoutes", "", "", "FAILED:" + ex.getMessage());
+            recordOperation(RecordType.ERROR, "rollbackRoutes", "", "", "FAILED:" + ex.getMessage());
             throw new ManageApiCallException(0, "调用 Gateway 回滚路由失败", ex);
         }
     }
@@ -375,10 +375,13 @@ public class AdminConfigService {
     }
 
     /**
-     * 记录一次配置变更/操作作为诊断证据。recordStore 为空（未装配或测试）时静默跳过，
+     * 记录一次运维写操作作为诊断证据。recordStore 为空（未装配或测试）时静默跳过，
      * 记录本身失败也只 debug，绝不影响业务写操作。
+     *
+     * <p>类型语义：成功审计按操作性质记 {@link RecordType#CONFIG_CHANGE} / {@link RecordType#ROLLBACK}，
+     * 失败统一记 {@link RecordType#ERROR}（错误证据与成功审计分库，便于后续按类型检索）。
      */
-    private void recordConfig(String action, String routeId, String serviceName, String detail) {
+    private void recordOperation(RecordType type, String action, String routeId, String serviceName, String detail) {
         if (recordStore == null) {
             return;
         }
@@ -387,9 +390,9 @@ public class AdminConfigService {
                     + "\",\"routeId\":\"" + escape(routeId)
                     + "\",\"serviceName\":\"" + escape(serviceName)
                     + "\",\"detail\":\"" + escape(detail) + "\"}";
-            recordStore.log(Record.of(RecordType.CONFIG_CHANGE, routeId, payload));
+            recordStore.log(Record.of(type, routeId, payload));
         } catch (Exception ex) {
-            log.debug("记录配置变更日志失败: action={}", action, ex);
+            log.debug("记录运维操作日志失败: type={} action={}", type, action, ex);
         }
     }
 

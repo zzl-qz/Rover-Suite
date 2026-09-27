@@ -276,7 +276,7 @@ class ConversationFlowTest {
                 instances, 8);
         CapabilityRegistry capabilities = CapabilityRegistry.standard();
         InvestigationService investigations = new InvestigationService(routes, instances, metrics, traces, configs,
-                events, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
+                events, r -> List.of(), registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instances, TargetInterpreter.none()), investigations, retention,
                 new IntentService(), new QueryStateService(executor),
@@ -308,7 +308,7 @@ class ConversationFlowTest {
     }
 
     private CapabilityExecutor newExecutor() {
-        return new CapabilityExecutor(routes, instances, metrics, traces, configs, events,
+        return new CapabilityExecutor(routes, instances, metrics, traces, configs, events, r -> List.of(),
                 CapabilityRegistry.standard());
     }
 

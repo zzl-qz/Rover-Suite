@@ -15,6 +15,7 @@ import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
+import com.rover.agent.core.port.LogQueryPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
@@ -173,9 +174,10 @@ public class AgentRuntimeConfiguration {
     public CapabilityExecutor agentCapabilityExecutor(RouteReadPort routeReadPort, InstanceReadPort instanceReadPort,
                                                      MetricReadPort metricReadPort, TraceReadPort traceReadPort,
                                                      ConfigReadPort configReadPort, EventReadPort eventReadPort,
+                                                     LogQueryPort logQueryPort,
                                                      CapabilityRegistry agentCapabilityRegistry) {
         return new CapabilityExecutor(routeReadPort, instanceReadPort, metricReadPort, traceReadPort,
-                configReadPort, eventReadPort, agentCapabilityRegistry);
+                configReadPort, eventReadPort, logQueryPort, agentCapabilityRegistry);
     }
 
     /**

@@ -20,6 +20,7 @@ import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
+import com.rover.agent.core.port.LogQueryPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
@@ -79,12 +80,13 @@ public final class InvestigationService {
      */
     public InvestigationService(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                                 TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
-                                IncidentRegistry incidents, InvestigationTaskRegistry tasks,
+                                LogQueryPort logs, IncidentRegistry incidents, InvestigationTaskRegistry tasks,
                                 ModelExplainer explainer) {
         this(incidents, tasks, explainer,
                 new RuleBasedPlanner(STANDARD_CAPABILITIES),
                 new PlanValidator(STANDARD_CAPABILITIES, PlanningLimits.defaults()),
-                new CapabilityExecutor(routes, instances, metrics, traces, configs, events, STANDARD_CAPABILITIES),
+                new CapabilityExecutor(routes, instances, metrics, traces, configs, events, logs,
+                        STANDARD_CAPABILITIES),
                 PlanningLimits.defaults());
     }
 
