@@ -270,6 +270,6 @@ class InvestigationRulesTest {
     }
 
     private static RouteSnapshot route(String prefix, String serviceName, String group) {
-        return new RouteSnapshot("demo-tt", prefix, serviceName, group, "", 1L);
+        return new RouteSnapshot("demo-tt", prefix, serviceName, group, "", "", 1L);
     }
 }

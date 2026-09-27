@@ -56,9 +56,9 @@ import org.junit.jupiter.api.Test;
 class AgentOrchestratorTest {
 
     private static final RouteSnapshot DEMO_ROUTE = new RouteSnapshot("r1", "/api/demo/tt", "demo-service", "",
-            "", 1L);
+            "", "", 1L);
     private static final RouteSnapshot PAY_ROUTE = new RouteSnapshot("r2", "/api/pay", "payment-service", "",
-            "", 1L);
+            "", "", 1L);
 
     private InMemoryAgentMessageRepository messages;
     private InMemoryAgentTaskRepository records;

@@ -149,7 +149,7 @@ class InvestigationServiceTest {
     @Test
     void staticUpstreamRouteSkipsInstanceCollection() throws Exception {
         when(routes.routes()).thenReturn(List.of(new RouteSnapshot("legacy", "/static", "", "",
-                "http://legacy.internal:8080", 1L)));
+                "http://legacy.internal:8080", "", 1L)));
 
         TaskView task = await(investigations.submit("/static/hello", "为什么失败？").taskId());
 
@@ -527,7 +527,7 @@ class InvestigationServiceTest {
     }
 
     private static RouteSnapshot route(String prefix, String serviceName, String group) {
-        return new RouteSnapshot("id-" + prefix, prefix, serviceName, group, "", 1L);
+        return new RouteSnapshot("id-" + prefix, prefix, serviceName, group, "", "", 1L);
     }
 
     private TaskView await(String taskId) throws InterruptedException {
