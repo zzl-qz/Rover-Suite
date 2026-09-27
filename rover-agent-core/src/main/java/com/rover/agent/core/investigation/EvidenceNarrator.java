@@ -39,11 +39,45 @@ public final class EvidenceNarrator {
         if (route == null) {
             return new EvidenceNarration("当前路由表没有匹配项", List.of());
         }
-        String targetUrl = text(route.targetUrl());
+        String targets = staticTargets(route);
         String detail = "id=" + text(route.routeId()) + "，前缀=" + text(route.businessPrefix())
                 + "，服务=" + text(route.serviceName()) + "，分组=" + routeGroupLabel(route.group())
-                + (targetUrl.isBlank() ? "" : "，静态目标=" + targetUrl);
-        return new EvidenceNarration(detail, List.of());
+                + (targets.isBlank() ? "" : "，静态目标=" + targets);
+        // 两种上游都没有时把「没有配」说成事实：只留空字段会让读的人以为信息缺失，
+        // 进而把一条能转发的路由判成配错了。
+        List<String> limitations = new ArrayList<>();
+        if (text(route.serviceName()).isBlank() && targets.isBlank()) {
+            limitations.add("该路由既没有目标服务也没有静态上游地址，请求匹配到它也无法转发。");
+        }
+        return new EvidenceNarration(detail, List.copyOf(limitations));
+    }
+
+    /** 静态上游地址：单个 targetUrl 与多地址 targetUrls 取有值的一个。 */
+    private static String staticTargets(RouteSnapshot route) {
+        String multiple = text(route.targetUrls());
+        return multiple.isBlank() ? text(route.targetUrl()) : multiple;
+    }
+
+    /** 路由清单的证据表述：逐条给出前缀与上游，「一共有几条路由」这类问题靠它回答。 */
+    public static EvidenceNarration routes(List<RouteSnapshot> all) {
+        if (all == null || all.isEmpty()) {
+            return new EvidenceNarration("Gateway 当前没有配置任何路由", List.of(), 0, 0);
+        }
+        List<String> lines = new ArrayList<>();
+        for (RouteSnapshot route : all) {
+            String targets = staticTargets(route);
+            String upstream;
+            if (!text(route.serviceName()).isBlank()) {
+                upstream = "服务=" + text(route.serviceName()) + "，分组=" + routeGroupLabel(route.group());
+            } else if (!targets.isBlank()) {
+                upstream = "静态目标=" + targets;
+            } else {
+                upstream = "无上游（匹配到也无法转发）";
+            }
+            lines.add(text(route.businessPrefix()) + "（id=" + text(route.routeId()) + "）→ " + upstream);
+        }
+        return new EvidenceNarration("共 " + all.size() + " 条路由：" + String.join("；", lines),
+                List.of(), all.size(), 0);
     }
 
     /** 上游发现模式的证据表述；未知模式会带出「实例数据不能用于判断上游」的判断边界。 */

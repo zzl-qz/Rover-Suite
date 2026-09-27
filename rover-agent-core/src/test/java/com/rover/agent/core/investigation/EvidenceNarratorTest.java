@@ -17,16 +17,60 @@ class EvidenceNarratorTest {
 
     @Test
     void describesMatchedRouteAndMissingRoute() {
-        RouteSnapshot route = new RouteSnapshot("demo-tt", "/api/demo/tt", "demo", "", "", 1L);
+        RouteSnapshot route = new RouteSnapshot("demo-tt", "/api/demo/tt", "demo", "", "", "", 1L);
 
         assertEquals("id=demo-tt，前缀=/api/demo/tt，服务=demo，分组=全部分组",
                 EvidenceNarrator.route(route).detail());
         assertEquals("当前路由表没有匹配项", EvidenceNarrator.route(null).detail());
     }
 
+    /**
+     * 静态路由的目标写在 {@code targetUrls} 里，服务名为空——不能因为「服务=」是空就判它转发不出去。
+     *
+     * <p>这条来自一次真实误判：网关的静态路由被读成「没有目标服务」，于是明明配置完好的路由
+     * 被回答成「配了但走不通」。
+     */
+    @Test
+    void staticRouteTargetsAreReportedInsteadOfLookingMisconfigured() {
+        RouteSnapshot route = new RouteSnapshot("static-demo-api", "/api/static", "", "",
+                "", "http://127.0.0.1:8081,http://127.0.0.1:8082", 1L);
+
+        String detail = EvidenceNarrator.route(route).detail();
+
+        assertTrue(detail.contains("静态目标=http://127.0.0.1:8081,http://127.0.0.1:8082"),
+                "多静态目标必须出现在证据里，否则读的人只能看到空字段，实际为 " + detail);
+        assertTrue(EvidenceNarrator.route(route).limitations().isEmpty(),
+                "有静态目标就不是「没配上游」，不该给判断边界");
+    }
+
+    /** 两种上游都没有：这才是「匹配得到也转发不出去」，要作为事实明说，而不是留两个空字段。 */
+    @Test
+    void routeWithoutAnyUpstreamIsReportedAsUnroutable() {
+        RouteSnapshot route = new RouteSnapshot("empty-route", "/api/empty", "", "", "", "", 1L);
+
+        assertTrue(EvidenceNarrator.route(route).limitations().stream()
+                        .anyMatch(item -> item.contains("无法转发")),
+                "既没有服务也没有静态地址时必须明确说出来");
+    }
+
+    /** 路由清单：一次给出全部路由，模型不必靠猜前缀逐个探测（猜不到的前缀会被漏掉）。 */
+    @Test
+    void routeListReportsEveryRouteWithItsUpstream() {
+        List<RouteSnapshot> all = List.of(
+                new RouteSnapshot("demo-api", "/api", "demo-service", "", "", "", 1L),
+                new RouteSnapshot("static-demo-api", "/api/static", "", "", "",
+                        "http://127.0.0.1:8081,http://127.0.0.1:8082", 1L));
+
+        String detail = EvidenceNarrator.routes(all).detail();
+
+        assertTrue(detail.contains("共 2 条路由"), "实际为 " + detail);
+        assertTrue(detail.contains("服务=demo-service"), "动态路由要给出目标服务，实际为 " + detail);
+        assertTrue(detail.contains("静态目标=http://127.0.0.1:8081"), "静态路由要给出静态目标，实际为 " + detail);
+    }
+
     @Test
     void blankGroupIsReportedAsUnrestrictedForRouteButDefaultForInstance() {
-        RouteSnapshot route = new RouteSnapshot("demo", "/api", "demo", "", "", 1L);
+        RouteSnapshot route = new RouteSnapshot("demo", "/api", "demo", "", "", "", 1L);
         List<InstanceSnapshot> instances = List.of(new InstanceSnapshot("demo", "", "", "127.0.0.1", 8081, true, 100, true, 0L));
 
         assertTrue(EvidenceNarrator.route(route).detail().contains("分组=全部分组"));

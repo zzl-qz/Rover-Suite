@@ -44,7 +44,7 @@ class DynamicInvestigationGraphTest {
     private static final String PATH = "/api/demo/tt";
     private static final ResourceTarget TARGET = ResourceTarget.route(PATH);
     private static final RouteSnapshot DEMO_ROUTE =
-            new RouteSnapshot("r1", PATH, "demo-service", "", "", 1L);
+            new RouteSnapshot("r1", PATH, "demo-service", "", "", "", 1L);
 
     @Test
     void stopsAtPlanningRoundLimitAndRecordsLimitation() {

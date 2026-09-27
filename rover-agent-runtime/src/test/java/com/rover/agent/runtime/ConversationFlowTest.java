@@ -56,7 +56,7 @@ import org.junit.jupiter.api.Test;
 class ConversationFlowTest {
 
     private static final RouteSnapshot DEMO_ROUTE =
-            new RouteSnapshot("r1", "/api/demo/tt", "demo-service", "", "", 1L);
+            new RouteSnapshot("r1", "/api/demo/tt", "demo-service", "", "", "", 1L);
 
     private InMemoryAgentMessageRepository messages;
     private InMemoryAgentTaskRepository records;
@@ -203,6 +203,24 @@ class ConversationFlowTest {
         assertEquals("demo-service 有一个健康实例。", task.result().summary());
         assertFalse(task.result().summary().contains("先看一下"),
                 "思考内容只走思考流，不该出现在结论里");
+    }
+
+    /**
+     * 列全部路由：工具集必须提供这个能力。
+     *
+     * <p>「网关一共有几条路由」是常问的问题，而只提供按路径查时，模型只能猜前缀逐个探测——
+     * 猜不到的前缀会被静默漏掉，它却会给出一个看起来确定的条数。
+     */
+    @Test
+    void listRoutesReturnsEveryRouteInOneCall() throws Exception {
+        AgentOrchestrator agent = build(tools -> tools.listRoutes());
+        Session session = agent.startSession("admin");
+
+        TaskView task = submitAndAwait(agent, session, "网关一共有几条路由？");
+
+        assertEquals(List.of(AgentCapability.ROUTE_QUERY), task.executedCapabilities());
+        assertTrue(task.result().summary().contains("共 1 条路由"),
+                "一次调用就要拿全，实际为 " + task.result().summary());
     }
 
     /** 识别出对象就按对象聚合成事件：同一对象的多次对话因此连得上。 */

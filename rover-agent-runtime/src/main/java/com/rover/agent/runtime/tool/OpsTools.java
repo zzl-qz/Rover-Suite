@@ -38,14 +38,24 @@ public final class OpsTools {
         this.task = task;
     }
 
+    /** 列出 Gateway 上配置的全部路由。 */
+    @Tool(description = "列出 Gateway 上配置的全部路由：每条的前缀、目标服务（含分组）或静态目标地址。"
+            + "问「一共有几条路由」「路由都指向哪里」「有没有配错的路由」时用它。"
+            + "它只说明路由配置本身，不含流量与健康数据；要判断某条路由是否通，请配合网关指标。")
+    public String listRoutes() {
+        return query(AgentCapability.ROUTE_QUERY, AgentStepType.ROUTE_INVESTIGATION, STEP_ROUTE,
+                "正在读取 Gateway 全部路由配置", ResourceTarget.unknown(), "");
+    }
+
     /** 查询路径匹配到的 Gateway 路由配置。 */
-    @Tool(description = "查询请求路径匹配到的 Gateway 路由配置：匹配前缀、目标服务与版本（group）、粘性头、是否剥离前缀。"
+    @Tool(description = "查询请求路径匹配到的 Gateway 路由配置：匹配前缀、目标服务与版本（group）、静态目标地址、是否剥离前缀。"
             + "问「这条路径打到哪个服务」「路由是怎么配的」「灰度是不是配的这条」时用它。"
-            + "它只说明转发规则本身，不含任何流量与错误数据；要判断请求成功与否，请配合实例清单、网关指标或追踪。")
-    public String getRoute(@ToolParam(description = "请求路径，例如 /api/demo/tt") String path) {
+            + "不传路径时列出全部路由。它只说明转发规则本身，不含任何流量与错误数据；"
+            + "要判断请求成功与否，请配合实例清单、网关指标或追踪。")
+    public String getRoute(@ToolParam(description = "请求路径，例如 /api/demo/tt；留空表示列出全部路由") String path) {
         String target = text(path);
         if (target.isBlank()) {
-            return "需要给出请求路径才能匹配路由，例如 /api/demo/tt。";
+            return listRoutes();
         }
         return query(AgentCapability.ROUTE_QUERY, AgentStepType.ROUTE_INVESTIGATION, STEP_ROUTE,
                 "正在匹配路径 " + target + " 对应的 Gateway 路由", ResourceTarget.route(target), target);

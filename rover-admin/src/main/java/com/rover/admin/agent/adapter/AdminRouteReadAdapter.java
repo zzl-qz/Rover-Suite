@@ -38,7 +38,7 @@ public class AdminRouteReadAdapter implements RouteReadPort {
     private static RouteSnapshot toSnapshot(Map<String, Object> route, long observedAt) {
         return new RouteSnapshot(AdminValues.text(route.get("id")), AdminValues.text(route.get("businessPrefix")),
                 serviceNameOf(route), groupsOf(route),
-                AdminValues.text(route.get("targetUrl")), observedAt);
+                AdminValues.text(route.get("targetUrl")), AdminValues.text(route.get("targetUrls")), observedAt);
     }
 
     /** 版本目标的 serviceName（校验保证同一条路由的 targets 同服务）；静态路由或空列表时为空串。 */

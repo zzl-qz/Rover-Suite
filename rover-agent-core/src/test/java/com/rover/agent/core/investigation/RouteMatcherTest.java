@@ -42,6 +42,6 @@ class RouteMatcherTest {
     }
 
     private static RouteSnapshot route(String prefix, String serviceName, String group) {
-        return new RouteSnapshot("id-" + prefix, prefix, serviceName, group, "", 1L);
+        return new RouteSnapshot("id-" + prefix, prefix, serviceName, group, "", "", 1L);
     }
 }

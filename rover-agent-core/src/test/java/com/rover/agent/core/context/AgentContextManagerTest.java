@@ -48,7 +48,7 @@ class AgentContextManagerTest {
     private final RouteReadPort routePort = new RouteReadPort() {
         @Override
         public List<RouteSnapshot> routes() {
-            return List.of(new RouteSnapshot("r1", "/api/demo/tt", "demo-service", "", "", 1L));
+            return List.of(new RouteSnapshot("r1", "/api/demo/tt", "demo-service", "", "", "", 1L));
         }
 
         @Override

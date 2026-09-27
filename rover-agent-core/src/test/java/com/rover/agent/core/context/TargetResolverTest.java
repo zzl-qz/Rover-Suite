@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 class TargetResolverTest {
 
     private static final RouteSnapshot ROUTE = new RouteSnapshot("r1", "/api/demo/tt", "demo-service", "",
-            "", 1L);
+            "", "", 1L);
     private static final InstanceSnapshot INSTANCE = new InstanceSnapshot("demo-service", "", "", "10.0.0.7", 8080, true, 100, true, 0L);
 
     private static TargetResolver resolver(TargetInterpreter interpreter) {

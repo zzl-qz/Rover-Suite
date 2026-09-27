@@ -143,12 +143,21 @@ public final class CapabilityExecutor {
         boolean routeRead = false;
         long observedAt = System.currentTimeMillis();
         try {
-            route = RouteMatcher.match(routes.routes(), path);
-            EvidenceNarration narration = EvidenceNarrator.route(route);
-            evidence.add(Evidence.of(taskId, EvidenceType.ROUTE, SOURCE_ROUTES, "路由匹配", narration.detail(),
-                    "/api/routes", metadata(narration, observedAt,
-                            KEY_ROUTE_ID, route == null ? "" : text(route.routeId())), observedAt));
-            limitations.addAll(narration.limitations());
+            if (path.isBlank()) {
+                // 无路径 = 列全部路由：「一共有几条路由」必须一次拿全。只给按路径查的话，
+                // 模型只能靠猜前缀逐个探测，猜不到的前缀会被漏掉，而它并不自知。
+                EvidenceNarration narration = EvidenceNarrator.routes(routes.routes());
+                evidence.add(Evidence.of(taskId, EvidenceType.ROUTE, SOURCE_ROUTES, "路由清单",
+                        narration.detail(), "/api/routes", metadata(narration, observedAt), observedAt));
+                limitations.addAll(narration.limitations());
+            } else {
+                route = RouteMatcher.match(routes.routes(), path);
+                EvidenceNarration narration = EvidenceNarrator.route(route);
+                evidence.add(Evidence.of(taskId, EvidenceType.ROUTE, SOURCE_ROUTES, "路由匹配", narration.detail(),
+                        "/api/routes", metadata(narration, observedAt,
+                                KEY_ROUTE_ID, route == null ? "" : text(route.routeId())), observedAt));
+                limitations.addAll(narration.limitations());
+            }
             routeRead = true;
         } catch (Exception ex) {
             log.warn("Agent 读取路由失败", ex);
