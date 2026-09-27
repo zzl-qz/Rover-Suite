@@ -27,6 +27,7 @@ public final class OpsTools {
     private static final String STEP_CONFIG = "读取配置";
     private static final String STEP_EVENT = "读取事件";
     private static final String STEP_LOG = "读取历史日志";
+    private static final String STEP_KNOWLEDGE = "检索知识";
 
     private final CapabilityExecutor executor;
     private final InvestigationTask task;
@@ -156,6 +157,18 @@ public final class OpsTools {
         task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.COMPLETED,
                 result.evidence().isEmpty() ? rendered : brief(result));
         return rendered;
+    }
+
+    /** 检索运维知识库：怎么配置限流/熔断/超时/采样率、怎么接入服务、怎么做灰度、怎么排查。 */
+    @Tool(description = "检索运维知识库，回答「怎么配置 / 怎么接入 / 怎么排查」这类使用方式问题。"
+            + "问「限流怎么配置」「怎么接入一个服务」「怎么做灰度发布」「怎么摘除异常实例」时用它。"
+            + "它返回文档/经验，不是当前实时状态；要查当前生效值请用配置或指标工具。")
+    public String searchKnowledge(@ToolParam(description = "要检索的问题，例如「怎么配置限流阈值」") String query) {
+        if (text(query).isBlank()) {
+            return "需要给出要检索的问题，例如「怎么配置限流阈值」。";
+        }
+        return query(AgentCapability.KNOWLEDGE_RETRIEVAL, AgentStepType.KNOWLEDGE_INVESTIGATION, STEP_KNOWLEDGE,
+                "正在检索运维知识库", ResourceTarget.unknown(), text(query));
     }
 
     /** 本次对话取回的全部证据。 */

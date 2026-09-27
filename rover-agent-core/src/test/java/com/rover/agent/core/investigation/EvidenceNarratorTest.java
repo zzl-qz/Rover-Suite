@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.rover.agent.core.port.KnowledgeEntry;
 import com.rover.agent.core.port.LogEntry;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
@@ -193,5 +194,19 @@ class EvidenceNarratorTest {
         EvidenceNarration narration = EvidenceNarrator.logs(List.of(), null, 0L, 0L);
         assertTrue(narration.detail().contains("没有"));
         assertTrue(narration.limitations().get(0).contains("没有"));
+    }
+
+    @Test
+    void knowledgeListsMatchedEntriesOrReportsMiss() {
+        List<KnowledgeEntry> rows = List.of(
+                new KnowledgeEntry("kb-1", "怎么配置限流", "设置阈值后热更新", List.of("限流", "阈值")));
+
+        EvidenceNarration hit = EvidenceNarrator.knowledge(rows, "限流怎么配置");
+        assertTrue(hit.detail().contains("怎么配置限流"));
+        assertEquals(1, hit.sampleSize());
+
+        EvidenceNarration miss = EvidenceNarrator.knowledge(List.of(), "没有收录的问题");
+        assertTrue(miss.detail().contains("没有"));
+        assertFalse(miss.limitations().isEmpty());
     }
 }
