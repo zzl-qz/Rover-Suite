@@ -291,7 +291,7 @@ class AgentControllerWebTest {
 
         TaskEventSubscriber subscriber = captured.get();
         assertNotNull(subscriber);
-        subscriber.onEvent(new TaskEvent(0, "t1", TaskEventType.SNAPSHOT, 1, new TaskSnapshot(TASK, "", -1)));
+        subscriber.onEvent(new TaskEvent(0, "t1", TaskEventType.SNAPSHOT, 1, new TaskSnapshot(TASK, "", -1, "")));
         subscriber.onEvent(new TaskEvent(2, "t1", TaskEventType.STEP_STARTED, 2,
                 Map.of("step", "读取路由快照")));
         subscriber.onEvent(new TaskEvent(3, "t1", TaskEventType.TASK_COMPLETED, 3, Map.of("status", "COMPLETED")));

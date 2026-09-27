@@ -33,6 +33,14 @@ public enum TaskEventType {
     /** 模型解读的增量文本。 */
     ANALYSIS_DELTA,
 
+    /**
+     * 模型思考过程的增量文本：只有深度思考模型产出，且只用于展示推理过程。
+     *
+     * 与 {@link #ANALYSIS_DELTA} 分成两条流，因为两者在界面上是两个位置——思考收在折叠面板里，
+     * 答案才是正文。混在一条流里，前端还得自己判断哪一段是思考。
+     */
+    THINKING_DELTA,
+
     /** 目标无法确定，任务等待用户补充信息。 */
     CLARIFICATION_REQUIRED,
 

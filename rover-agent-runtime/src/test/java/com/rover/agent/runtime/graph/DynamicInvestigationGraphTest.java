@@ -111,6 +111,38 @@ class DynamicInvestigationGraphTest {
         assertEquals(outcome.executedCapabilities(), reporter.capabilities());
     }
 
+    /**
+     * 每一步都必须「先报执行中、再报已完成」，且两次上报的步骤名逐字一致。
+     *
+     * 任务侧是按步骤名就地合并的：名字对不上，时间线上就会留下一条永远在转的步骤。
+     * 这里连同规划与结论一起断言，避免将来只补了某几个分支。
+     */
+    @Test
+    void reportsEveryStepAsRunningThenCompletedWithTheSameStepName() {
+        PlanningLimits limits = PlanningLimits.defaults();
+        ScriptedPlanner planner = new ScriptedPlanner(
+                List.of(plan(AgentCapability.ROUTE_QUERY, AgentCapability.GATEWAY_METRICS_QUERY)),
+                PlanningDecision.finish("测试：本轮即可收尾"));
+        RecordingReporter reporter = new RecordingReporter();
+
+        investigate(planner, limits, reporter);
+
+        assertStepPair(reporter.details(), "规划调查步骤");
+        assertStepPair(reporter.details(), "读取路由");
+        assertStepPair(reporter.details(), "读取指标");
+        assertStepPair(reporter.details(), "调查推理");
+    }
+
+    /** 指定步骤名必须恰好出现一次 RUNNING（在前）与一次 COMPLETED（在后）。 */
+    private static void assertStepPair(List<String> steps, String name) {
+        List<String> matched = steps.stream().filter(item -> item.contains("|" + name + "|")).toList();
+        List<StepStatus> statuses = matched.stream()
+                .map(item -> StepStatus.valueOf(item.split("\\|")[2]))
+                .toList();
+        assertEquals(List.of(StepStatus.RUNNING, StepStatus.COMPLETED), statuses,
+                "步骤「" + name + "」应恰好一次执行中 + 一次已完成（名称必须一致），实际为 " + matched);
+    }
+
     /** 把指定能力标为「已登记但未接入」：这是 Planner 与执行层共同的硬边界。 */
     private static CapabilityRegistry registryWithout(AgentCapability... unavailable) {
         java.util.Set<AgentCapability> blocked = java.util.Set.of(unavailable);

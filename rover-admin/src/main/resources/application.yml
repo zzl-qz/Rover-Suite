@@ -20,11 +20,12 @@ spring:
       embedding: none
     openai:
       api-key: ${ROVER_AGENT_API_KEY:}
-      base-url: ${ROVER_AGENT_BASE_URL:https://api.openai.com}
+      # 只在首次启动、尚无模型配置文件时用于播种；之后以控制台保存的配置为准
+      base-url: ${ROVER_AGENT_BASE_URL:https://api.deepseek.com}
       timeout: 30s
       max-retries: 0
       chat:
-        model: ${ROVER_AGENT_MODEL:gpt-5-mini}
+        model: ${ROVER_AGENT_MODEL:deepseek-chat}
         parallel-tool-calls: false
     tools:
       limits:

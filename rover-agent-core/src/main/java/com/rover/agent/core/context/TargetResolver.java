@@ -47,6 +47,9 @@ public final class TargetResolver {
     private static final int MAX_QUERY_LENGTH = 1000;
     private static final int MAX_PATH_LENGTH = 512;
 
+    /** 澄清时列出的候选对象条数上限：够用户挑就行，不是把整张路由表搬进对话框。 */
+    private static final int MAX_HINT_OBJECTS = 5;
+
     private final RouteReadPort routes;
     private final InstanceReadPort instances;
     private final TargetInterpreter interpreter;
@@ -98,7 +101,40 @@ public final class TargetResolver {
             return forTarget(inferred.get(), routeList, instanceList);
         }
         return TargetResolution.clarify("没能在已注册的路由、服务或实例中找到调查对象，"
-                + "请给出具体的请求路径、服务名或实例地址。");
+                + "请给出具体的请求路径、服务名或实例地址。" + availableHint(routeList, instanceList));
+    }
+
+    /**
+     * 可调查对象的提示：把当前确实存在的路由前缀与服务名摆出来。
+     *
+     * 澄清时手里已经有这两份列表，只回一句「请给出对象」等于让用户对着空对话框猜；
+     * 列出候选既省一轮往返，也不会猜错对象——列出的都是真实存在、可以直接调查的对象。
+     * 没有任何可列举对象时返回空串，不编造。
+     */
+    private static String availableHint(List<RouteSnapshot> routeList, List<InstanceSnapshot> instanceList) {
+        List<String> paths = (routeList == null ? List.<RouteSnapshot>of() : routeList).stream()
+                .map(route -> text(route.businessPrefix()))
+                .filter(prefix -> !prefix.isBlank())
+                .distinct()
+                .limit(MAX_HINT_OBJECTS)
+                .toList();
+        List<String> services = (instanceList == null ? List.<InstanceSnapshot>of() : instanceList).stream()
+                .map(instance -> text(instance.serviceName()))
+                .filter(name -> !name.isBlank())
+                .distinct()
+                .limit(MAX_HINT_OBJECTS)
+                .toList();
+        if (paths.isEmpty() && services.isEmpty()) {
+            return "";
+        }
+        StringBuilder hint = new StringBuilder("\n当前可调查的对象：");
+        if (!paths.isEmpty()) {
+            hint.append("\n- 路由前缀：").append(String.join("、", paths));
+        }
+        if (!services.isEmpty()) {
+            hint.append("\n- 服务名：").append(String.join("、", services));
+        }
+        return hint.toString();
     }
 
     /**
@@ -116,8 +152,9 @@ public final class TargetResolver {
                 ? target.value() : serviceOfInstance(instanceList, target.value());
         String path = service == null ? null : routePathOf(routeList, service);
         if (path == null) {
+            // 这里只列路由：缺的是「该服务对应的请求路径」，列服务名帮不上忙。
             return TargetResolution.clarify("「" + target.value() + "」当前没有对应的 Gateway 路由，"
-                    + "按现有调查口径无法取数；请给出该对象对应的请求路径。");
+                    + "按现有调查口径无法取数；请给出该对象对应的请求路径。" + availableHint(routeList, null));
         }
         return TargetResolution.resolved(target, path);
     }

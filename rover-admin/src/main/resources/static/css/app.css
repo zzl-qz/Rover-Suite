@@ -33,23 +33,28 @@
     --sidebar-bg: #161a17;
     --sidebar-text: #9aa39c;
     --sidebar-active: #2a3528;
-    --bg: #e6e9e4;
-    --card: #f4f5f2;
-    --wash: #dfe3db;
+    /* 纸面比卡片深一档：卡片因此能「浮」在页面上，而不是靠边框硬划出来 */
+    --bg: #e3e6e0;
+    --card: #f7f8f5;
+    --wash: #e1e5dd;
     --ink: #1a211c;
     --muted: #5a655e;
-    --line: #c4cbc3;
+    /* 边框两级：line 用于结构分隔，line-soft 用于行间细线——到处都是重线是「简陋感」的主要来源 */
+    --line: #ccd2c9;
+    --line-soft: #dfe3db;
     --accent: #3f5a38;
-    --accent-soft: #dfe5d8;
+    --accent-soft: #dee5d6;
     --lamp: #c17a22;
     --warn: #8a5a12;
     --warn-soft: #f4ead6;
     --danger: #a33b35;
     --danger-soft: #f6e4e2;
     --ok: #2f6b45;
-    --radius: 4px;
-    --radius-sm: 2px;
-    --shadow: none;
+    --radius: 8px;
+    --radius-sm: 5px;
+    /* 极轻的两级阴影：只为分层，不制造「卡片飘起来」的塑料感 */
+    --shadow-sm: 0 1px 2px rgba(26, 33, 28, 0.05);
+    --shadow: 0 1px 3px rgba(26, 33, 28, 0.07), 0 1px 2px rgba(26, 33, 28, 0.04);
     --font: "Atkinson Hyperlegible", "PingFang SC", "Microsoft YaHei", sans-serif;
     --mono: "IBM Plex Mono", ui-monospace, "JetBrains Mono", Consolas, monospace;
 }
@@ -70,6 +75,21 @@ body {
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
 }
+
+/* 滚动条也是界面的一部分：系统默认样式在浅色卡片上过重，压成细的一根就够 */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
+}
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--line);
+    background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--muted); background-clip: content-box; }
 
 code {
     font-family: var(--mono);
@@ -198,11 +218,12 @@ code {
 .page { display: flex; flex-direction: column; gap: 16px; }
 
 /* ============ 卡片 ============ */
+/* 一层极轻的阴影：卡片与页面底色分离，整个界面因此有了前后关系而不是一张平铺的纸 */
 .card {
     background: var(--card);
     border: 1px solid var(--line);
     border-radius: var(--radius);
-    box-shadow: none;
+    box-shadow: var(--shadow-sm);
     padding: 16px 18px;
 }
 
@@ -440,7 +461,7 @@ code {
     text-align: center;
     color: var(--muted);
     background: var(--wash);
-    border: 1px dashed var(--line);
+    border: 1px dashed var(--line-soft);
     border-radius: var(--radius);
 }
 .empty-hint {
@@ -566,20 +587,22 @@ code {
 .wb-sessions { display: flex; flex-direction: column; gap: 4px; }
 .wb-group-title { font-size: 11px; color: var(--muted); letter-spacing: 0.08em; margin: 10px 0 4px; }
 .wb-group-title:first-child { margin-top: 0; }
+/* 会话项默认不画边框：一屏十几条时，每条都描边就是噪声；悬停与选中才给底色 */
 .wb-session {
     display: flex;
     flex-direction: column;
     gap: 2px;
     width: 100%;
     text-align: left;
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
     border-radius: var(--radius-sm);
-    background: var(--card);
+    background: transparent;
     padding: 7px 9px;
     font: inherit;
     cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
 }
-.wb-session:hover { background: var(--bg); }
+.wb-session:hover { background: var(--wash); border-color: var(--line); }
 .wb-session.on { border-color: var(--accent); background: var(--accent-soft); }
 .wb-session-title { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
 .wb-session-meta { font-size: 11px; color: var(--muted); font-family: var(--mono); }
@@ -600,12 +623,12 @@ code {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 16px 16px 12px;
+    padding: 18px 18px 14px;
     background: var(--bg);
     border-bottom: 1px solid var(--line);
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 14px;
 }
 
 /* 「回到最新」：往上翻历史时贴在消息区底部，与 IM 一致 */
@@ -633,14 +656,15 @@ code {
 .wb-example {
     font: inherit;
     font-size: 12.5px;
-    padding: 5px 10px;
+    padding: 6px 11px;
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--card);
     color: var(--ink);
     cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
 }
-.wb-example:hover { border-color: var(--accent); background: var(--accent-soft); }
+.wb-example:hover { border-color: var(--accent); background: var(--accent-soft); box-shadow: var(--shadow-sm); }
 .wb-example:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* 头像：Agent 用注册表同色的字母牌，用户用中性字牌 */
@@ -672,17 +696,19 @@ code {
        640px 的绝对上限则让 Agent 答案气泡不随整列拉长，读起来才像一条回复 */
     max-width: min(100%, 640px);
     min-width: 0;
-    padding: 8px 12px;
+    padding: 9px 13px;
     border: 1px solid var(--line);
     border-radius: var(--radius);
     background: var(--card);
+    /* 气泡浮在对话底色之上：这是「层次」最直接的来源，也让长对话更易分条 */
+    box-shadow: var(--shadow-sm);
     font-size: 13.5px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
 }
-.wb-bubble.user { background: var(--accent-soft); border-color: #c6d2bd; }
+.wb-bubble.user { background: var(--accent-soft); border-color: #c3d0b8; }
 /* Agent 回复是正文不是插话：比用户消息宽一档，行高留够，内部排版交给 .wb-md */
-.wb-bubble.agent { max-width: min(100%, 720px); padding: 10px 14px; line-height: 1.7; white-space: normal; }
+.wb-bubble.agent { max-width: min(100%, 720px); padding: 11px 15px; line-height: 1.7; white-space: normal; }
 .wb-meta { padding: 0 2px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .wb-system { padding: 3px 8px; border-radius: var(--radius-sm); background: var(--wash); color: var(--muted); font-size: 11.5px; }
 .wb-day { display: flex; justify-content: center; }
@@ -747,6 +773,64 @@ code {
 .wb-md a { color: var(--accent); }
 .wb-md strong { font-weight: 600; }
 
+/* ============ 深度思考：模型给结论前的推理过程 ============ */
+/* 比过程条更轻的一层：它是「正在发生」的内容，不该抢正文的视觉重量 */
+.wb-think {
+    margin: 0 0 6px;
+    border-left: 2px solid var(--line);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+    background: var(--wash);
+    overflow: hidden;
+}
+/* 思考中左侧竖线亮起：与「已完成」一眼可分，不必再写状态文字 */
+.wb-think.live { border-left-color: var(--accent); }
+
+.wb-think-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: 100%;
+    padding: 7px 11px;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    color: var(--muted);
+    text-align: left;
+    cursor: pointer;
+}
+.wb-think-head:hover { color: var(--ink); }
+.wb-think-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.wb-think-head > strong { font-size: 12.5px; font-weight: 500; }
+.wb-think-head .wb-task-caret { margin-left: auto; }
+
+/* 火花：思考时脉动，结束后静默——状态由这一处表达就够了 */
+.wb-think-spark {
+    width: 6px;
+    height: 6px;
+    flex: 0 0 6px;
+    border-radius: 50%;
+    background: var(--muted);
+}
+.wb-think.live .wb-think-spark {
+    background: var(--accent);
+    animation: wb-pulse 1.2s ease-in-out infinite;
+}
+
+/* 思考正文：独立滚动 + 最大高度——推理过程可能很长，但不能把对话挤走 */
+.wb-think-body {
+    max-height: 220px;
+    overflow-y: auto;
+    padding: 0 12px 9px;
+    border-top: 1px dashed var(--line-soft);
+    font-size: 12.5px;
+    color: var(--muted);
+}
+.wb-think-body .wb-md { padding-top: 7px; }
+.wb-think-body .wb-md p { margin: 0 0 6px; }
+/* 思考里的行内代码不要再造视觉焦点：过程文本只求好读 */
+.wb-think-body .wb-md code { padding: 0 2px; background: transparent; }
+.wb-think-body .wb-md pre.wb-code { background: var(--card); }
+
 /* Agent 的一条回答：过程条与答案正文同属这条消息，共用一个头像（伪元素给出），不再各占一条 */
 .wb-turn.wb-answer { position: relative; padding-left: 34px; }
 .wb-answer::before {
@@ -795,6 +879,14 @@ code {
 .wb-task-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .wb-task-toggle > strong { font-size: 13px; }
 .wb-task-toggle .card-hint:last-child { margin-left: auto; }
+/* 折叠条上的实时进度：可能是一整句「正在读什么」，过长时按上限截断而不是把这条撑成两行 */
+.wb-task-toggle .wb-live-hint {
+    min-width: 0;
+    max-width: min(320px, 100%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .wb-task-caret { font-family: var(--mono); font-size: 11px; color: var(--muted); display: inline-block; transition: transform 0.15s; }
 .wb-task-caret.open { transform: rotate(90deg); color: var(--ink); }
 /* 展开态：真实调查过程（步骤 / 假设 / 证据 / AI 解读）都在这里 */
@@ -808,26 +900,28 @@ code {
 .wb-stage.done { color: var(--ok); }
 .wb-stage.failed { color: var(--danger); }
 .wb-stage.running { color: var(--ink); font-weight: 700; }
+/* 进行中的阶段标记自己闪：进度条上也要有「它在动」的信号 */
+.wb-stage.running .wb-stage-mark { color: var(--accent); animation: wb-pulse 1s ease-in-out infinite; }
 .wb-stage-mark { font-family: var(--mono); }
 
-.wb-result { border-top: 1px solid var(--line); padding-top: 8px; }
+.wb-result { border-top: 1px solid var(--line-soft); padding-top: 8px; }
 /* 不确定判断要在默认视图看得见，不能只藏在折叠的「调查详情」里 */
 .wb-uncertain { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
 .wb-intent-reason { overflow-wrap: anywhere; }
 
 /* 调查计划：每一步都写清「为什么查这个」，执行过的能力就地打勾 */
-.wb-plan { display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.wb-plan { display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed var(--line-soft); padding-top: 8px; }
 .wb-plan-step { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
 .wb-plan-step .muted { overflow-wrap: anywhere; }
 .wb-plan-mark { font-family: var(--mono); color: var(--muted); }
 .wb-plan-mark.done { color: var(--ok); }
 
 /* 处置计划：默认就标明「仅生成计划、不执行」，字段与后端 ActionPlan 一一对应 */
-.wb-action-plan { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--line); padding-top: 8px; }
+.wb-action-plan { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--line-soft); padding-top: 8px; }
 .wb-action-plan .banner { margin: 0; }
 .wb-action-plan .wb-kv b { white-space: pre-wrap; }
 
-.wb-detail { display: flex; flex-direction: column; border-top: 1px dashed var(--line); padding-top: 2px; }
+.wb-detail { display: flex; flex-direction: column; border-top: 1px dashed var(--line-soft); padding-top: 2px; }
 .wb-detail h4 { margin: 12px 0 4px; font-size: 12.5px; letter-spacing: 0.03em; color: var(--muted); }
 
 /* 输入区贴着窗口底部：提示与输入框都在消息区之外，不随消息滚动 */
@@ -839,17 +933,19 @@ code {
     padding: 12px 14px 14px;
     background: var(--card);
 }
+/* 输入框底色比表单面深一档：不用边框加粗也能看出「这里是能写字的地方」 */
 .wb-form textarea {
     width: 100%;
     min-height: 54px;
     resize: vertical;
-    padding: 8px 10px;
+    padding: 9px 11px;
     border: 1px solid var(--line);
     border-radius: var(--radius-sm);
-    background: var(--card);
+    background: var(--bg);
     font: inherit;
     font-size: 13.5px;
     color: var(--ink);
+    transition: border-color 0.15s;
 }
 .wb-form textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 .wb-form-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -880,8 +976,33 @@ code {
 
 /* 工作台复用的诊断展示件（步骤 / 假设 / 结论 / 判断范围） */
 .diagnosis-target { display: flex; flex-wrap: wrap; gap: 8px 12px; }
-.diagnosis-step { display: grid; grid-template-columns: 24px 110px 70px 1fr; align-items: start; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
+/* 列：编号 / 名称 / 状态 / 说明。假设列表与调查过程复用这套列宽，改动会同时影响它们 */
+.diagnosis-step { display: grid; grid-template-columns: 24px 110px 70px 1fr; align-items: start; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line-soft); font-size: 13px; }
+/* 执行步骤多一列固定宽度的耗时：空值也占位，各行说明因此对齐 */
+.diagnosis-step.has-duration { grid-template-columns: 24px 104px 62px 56px 1fr; }
 .diagnosis-step-num { color: var(--muted); font-family: var(--mono); }
+
+/*
+ * 执行中的步骤：整行缓慢呼吸，一眼看出「正在做的是这一步」，而不是列表里一条静态记录。
+ * 只动背景色、不动文字透明度——等待期要让内容始终清晰可读。
+ */
+.diagnosis-step.running { animation: wb-step-live 1.9s ease-in-out infinite; }
+.diagnosis-step.running .diagnosis-step-num { color: var(--accent); }
+.diagnosis-step.running .wb-step-duration { color: var(--accent); }
+@keyframes wb-step-live {
+    0%, 100% { background-color: transparent; }
+    50% { background-color: var(--wash); }
+}
+
+/* 耗时：执行中显示已用时（每秒自增），完成后显示实际耗时；没有起止时刻时占位不显示 */
+.wb-step-duration {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    text-align: right;
+}
+.wb-step-duration.empty { visibility: hidden; }
 .diagnosis-step .muted, .wb-evidence-body .muted { overflow-wrap: anywhere; }
 .diagnosis-task-error { margin: 0; }
 .diagnosis-summary, .diagnosis-ai { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }

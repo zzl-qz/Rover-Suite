@@ -493,7 +493,7 @@
                                             <span class="wb-task-caret" :class="{ open: wbTaskOpen(turn.task) }">▸</span>
                                             <strong>{{ wbTaskTypeLabel(turn.task.taskType) }}</strong>
                                             <span class="badge" :class="wbStatusBadge(turn.task.status)">{{ wbStatusLabel(turn.task.status) }}</span>
-                                            <span v-if="wbTaskStepText(turn.task)" class="card-hint">{{ wbTaskStepText(turn.task) }}</span>
+                                            <span v-if="wbTaskStepText(turn.task)" class="card-hint wb-live-hint">{{ wbTaskStepText(turn.task) }}</span>
                                             <span v-if="wbUncertainties(turn.task).length" class="badge warn"
                                                   :title="wbUncertaintyText(turn.task)">
                                                 {{ wbUncertainties(turn.task).length }} 项判断仍无法验证
@@ -571,13 +571,16 @@
                                             <!-- 任务 ID 挪进详情：时间线上只留人看得懂的信息，要排障时展开就有 -->
                                             <div class="card-hint">任务 ID <code>{{ turn.task.taskId }}</code></div>
                                             <h4>执行步骤</h4>
-                                            <div v-if="!(turn.task.steps && turn.task.steps.length)" class="empty slim">暂无步骤记录</div>
+                                            <div v-if="!wbSteps(turn.task).length" class="empty slim">暂无步骤记录</div>
                                             <div v-else>
-                                                <div v-for="(step, index) in turn.task.steps" :key="step.stepId || index" class="diagnosis-step">
+                                                <div v-for="(step, index) in wbSteps(turn.task)" :key="step.key"
+                                                     class="diagnosis-step has-duration" :class="step.state">
                                                     <span class="diagnosis-step-num">{{ index + 1 }}</span>
-                                                    <strong>{{ step.name }}</strong>
+                                                    <strong>{{ step.label }}</strong>
                                                     <span class="badge" :class="wbStepTone(step.status)">{{ wbStatusLabel(step.status) }}</span>
-                                                    <span class="muted">{{ step.error || step.outputSummary || step.inputSummary || '-' }}</span>
+                                                    <span v-if="step.duration" class="wb-step-duration">{{ step.duration }}</span>
+                                                    <span v-else class="wb-step-duration empty"></span>
+                                                    <span class="muted">{{ step.detail || '-' }}</span>
                                                 </div>
                                             </div>
 
@@ -626,6 +629,24 @@
                                             </div>
                                         </div>
                                         </div>
+                                        </div>
+
+                                        <!-- 深度思考：模型给出结论前的推理过程。思考中默认展开、实时滚动，
+                                             答案开始输出后收拢成一行把版面让给正文；点标题可随时回看 -->
+                                        <div v-if="wbThinkingText(turn.task)" class="wb-think"
+                                             :class="{ live: wbThinkingLive(turn.task) }">
+                                            <button type="button" class="wb-think-head"
+                                                    :aria-expanded="wbThinkOpen(turn.task) ? 'true' : 'false'"
+                                                    @click="wbToggleThink(turn.task.taskId)">
+                                                <span class="wb-think-spark"></span>
+                                                <strong>{{ wbThinkingLabel(turn.task) }}</strong>
+                                                <span class="wb-task-caret" :class="{ open: wbThinkOpen(turn.task) }">▸</span>
+                                            </button>
+                                            <div v-show="wbThinkOpen(turn.task)" class="wb-think-body"
+                                                 :class="{ live: wbThinkingLive(turn.task) }">
+                                                <div class="wb-md"
+                                                     v-html="mdHtml(wbThinkingText(turn.task), wbThinkingLive(turn.task))"></div>
+                                            </div>
                                         </div>
 
                                         <!-- 答案正文：与上面的过程条同属这一条回答，不再各占一条。
@@ -962,7 +983,7 @@
                 <div class="card">
                     <div class="card-head model-head">
                         <h2>模型服务</h2>
-                        <span class="card-hint">OpenAI 兼容接口；保存后立即生效，不用重启 Admin，密钥对称加密后落盘</span>
+                        <span class="card-hint">DeepSeek 与智谱 GLM 走原生协议（可展示深度思考过程），其余服务走 OpenAI 兼容接口；保存即生效、不用重启，密钥加密落盘</span>
                         <label class="switch ml-auto">
                             <input type="checkbox" v-model="modelForm.enabled">
                             <span class="slider"></span>
@@ -1026,6 +1047,7 @@
                         <span class="card-hint ml-auto" v-if="modelDirty">有未保存的改动</span>
                     </div>
                     <div class="model-key-hint muted">{{ modelKeyHint }}</div>
+                    <div class="model-key-hint muted">{{ modelThinkingHint }}</div>
                 </div>
 
                 <div class="model-grid">

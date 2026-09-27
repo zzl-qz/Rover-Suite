@@ -53,6 +53,29 @@ window.RoverAdminPages.model = {
             if (this.modelConfig && this.modelConfig.apiKeyMasked) return '已存密钥，留空表示不改动。';
             return '本地无鉴权的模型服务（Ollama / vLLM）可以留空。';
         },
+        /**
+         * 深度思考提示：说清「什么配置才能在对话里看到推理过程」。
+         *
+         * 少了这一句，配了不产出思考的模型后会以为功能没生效——那是协议与模型选择的结果，不是故障。
+         * 判断口径与后端 AdminChatModelGateway 的厂商分流保持一致。
+         */
+        modelThinkingHint() {
+            const baseUrl = String(this.modelForm.baseUrl || '').toLowerCase();
+            const model = String(this.modelForm.model || '').toLowerCase();
+            if (baseUrl.includes('deepseek.com')) {
+                return model.startsWith('deepseek-reasoner')
+                    ? '当前配置会展示深度思考过程。'
+                    : 'deepseek-chat 不产出思考内容；模型名改成 deepseek-reasoner 即可看到推理过程。';
+            }
+            if (baseUrl.includes('bigmodel.cn') || baseUrl.includes('zhipu')) {
+                const thinking = ['glm-4.5', 'glm-4.6', 'glm-4.7', 'glm-5', 'glm-z1']
+                    .some(prefix => model.startsWith(prefix));
+                return thinking
+                    ? '当前配置会展示深度思考过程。'
+                    : '该模型不产出思考内容；换成 glm-4.6 及以上即可看到推理过程。';
+            }
+            return '当前服务走 OpenAI 兼容协议，响应里没有思考内容的位置；想看推理过程请选 DeepSeek 或智谱 GLM。';
+        },
         /** 表单与已存配置是否有差异；只是提示，不阻止保存。 */
         modelDirty() {
             const config = this.modelConfig;

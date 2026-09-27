@@ -35,7 +35,7 @@ class TaskEventBusTest {
     private final Supplier<TaskSnapshot> snapshots = () -> new TaskSnapshot(
             new TaskView("task-1", "session-1", null, TaskStatus.RUNNING, null, "", ResourceTarget.unknown(),
                     "为什么失败？", 1L, 0L, List.of(), null, null, null),
-            "已产生的解读", coveredEventId.get());
+            "已产生的解读", coveredEventId.get(), "已产生的思考");
 
     @Test
     void slowSubscriberDropsItsOwnBacklogAndResyncsFromSnapshot() {

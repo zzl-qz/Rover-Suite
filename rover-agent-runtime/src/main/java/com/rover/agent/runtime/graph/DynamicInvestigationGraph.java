@@ -219,6 +219,11 @@ public final class DynamicInvestigationGraph {
         int round = state.value(STATE_ROUNDS, 0) + 1;
         this.rounds = round;
         PlanningRequest request = planningRequest();
+        // 先上报「正在规划」：这一步可能等模型给出候选步骤，沉默期正是用户觉得「没在思考」的地方。
+        // 终态上报沿用同一个步骤名，{@code InvestigationTask} 会就地补上结束时刻与结果说明。
+        if (reporter != null) {
+            reporter.step(AgentStepType.PLANNING, STEP_PLANNING, StepStatus.RUNNING, planningRunning(round));
+        }
         InvestigationPlan candidate;
         try {
             candidate = planner.plan(request);
@@ -266,6 +271,11 @@ public final class DynamicInvestigationGraph {
                     reporter.step(stepType(capability), stepName(capability), StepStatus.COMPLETED, skip);
                 }
                 continue;
+            }
+            // 取数是真实的 HTTP 调用，先上报「正在查询」：等待期能看见进度，靠的就是这一步。
+            // 结束上报沿用同一个步骤名，任务侧会就地补上耗时与结果说明，不会多出一条步骤。
+            if (reporter != null) {
+                reporter.step(stepType(capability), stepName(capability), StepStatus.RUNNING, runningText(capability));
             }
             CapabilityResult result = executor.execute(capability, step.target(), path, taskId, route);
             if (result.executed()) {
@@ -330,6 +340,11 @@ public final class DynamicInvestigationGraph {
 
     /** 合成节点：只依据已采集的只读事实逐条确认或排除候选故障原因。 */
     private Map<String, Object> synthesise(OverAllState state) {
+        // 判定本身是纯内存计算，但它是「从证据到结论」的那一步，值得在时间线上单独可见。
+        if (reporter != null) {
+            reporter.step(AgentStepType.DIAGNOSIS, STEP_SYNTHESIS, StepStatus.RUNNING,
+                    "正在按已采集的证据逐条判定候选故障原因");
+        }
         FindingsInput input = new FindingsInput(path, route, routeRead, discovery, instances, traces, routeUpstreams);
         Findings result = InvestigationRules.evaluate(input);
         if (reporter != null) {
@@ -411,24 +426,62 @@ public final class DynamicInvestigationGraph {
         return result.limitations().isEmpty() ? "能力执行未产出证据" : result.limitations().get(0);
     }
 
+    /**
+     * 能力对应的步骤类型。
+     *
+     * 刻意穷举、不写 default：步骤名与类型必须与 {@code CapabilityRegistry} 注册的一致，
+     * 否则「执行中」与「已完成」两次上报会因步骤名不同而无法合并，时间线上会留下一条永远在转的步骤。
+     * 将来新增能力时，这里不补分支就编译不过——把「对齐」交给编译器而不是靠人记得。
+     */
     private static AgentStepType stepType(AgentCapability capability) {
         return switch (capability) {
             case ROUTE_QUERY -> AgentStepType.ROUTE_INVESTIGATION;
             case INSTANCE_QUERY -> AgentStepType.INSTANCE_INVESTIGATION;
             case GATEWAY_METRICS_QUERY -> AgentStepType.METRIC_INVESTIGATION;
             case TRACE_QUERY -> AgentStepType.TRACE_INVESTIGATION;
-            default -> AgentStepType.ANSWER;
+            case CONFIG_READ -> AgentStepType.CONFIG_INVESTIGATION;
+            case EVENT_QUERY -> AgentStepType.EVENT_INVESTIGATION;
         };
     }
 
+    /** 能力对应的步骤名；必须与 {@code CapabilityRegistry} 的 {@code stepName} 逐字一致，见上。 */
     private static String stepName(AgentCapability capability) {
         return switch (capability) {
             case ROUTE_QUERY -> "读取路由";
             case INSTANCE_QUERY -> "读取实例";
             case GATEWAY_METRICS_QUERY -> "读取指标";
             case TRACE_QUERY -> "读取追踪";
-            default -> capability.name();
+            case CONFIG_READ -> "读取配置";
+            case EVENT_QUERY -> "读取事件";
         };
+    }
+
+    /**
+     * 取数中的说明：等待期要让人看见「正在查什么」，而不是只有一个转圈。
+     *
+     * 这里是能力级别的具体动作，与步骤名（简短标签）互补——标签给进度，这句给内容。
+     */
+    private static String runningText(AgentCapability capability) {
+        return switch (capability) {
+            case ROUTE_QUERY -> "正在读取 Gateway 路由表与目标服务";
+            case INSTANCE_QUERY -> "正在读取注册中心实例与健康状态";
+            case GATEWAY_METRICS_QUERY -> "正在读取网关指标与按上游实例的窗口观测";
+            case TRACE_QUERY -> "正在读取该路径的抽样追踪";
+            case CONFIG_READ -> "正在读取 Gateway 与 NameServer 生效配置";
+            case EVENT_QUERY -> "正在读取注册中心近期事件";
+        };
+    }
+
+    /**
+     * 规划中的说明：第 1 轮是从零规划，之后是按已采到的证据决定补查什么。
+     *
+     * 说明里带上已采集的证据条数，等待期看到的就是「它现在手里有什么、正在想什么」。
+     */
+    private String planningRunning(int round) {
+        if (round <= 1) {
+            return "正在根据问题与目标规划需要查询的只读能力";
+        }
+        return "已采集 " + evidence.size() + " 条证据，正在判断还需要补充哪些事实";
     }
 
     private static String cut(String text) {

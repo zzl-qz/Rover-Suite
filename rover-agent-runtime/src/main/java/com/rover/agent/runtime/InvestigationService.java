@@ -229,7 +229,7 @@ public final class InvestigationService {
         try {
             task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.RUNNING, AI_RUNNING);
             ModelExplainer.Explanation explanation = explainer.explainStreaming(task.path(), task.question(),
-                    outcome.evidence(), outcome.findings().hypotheses(), task::appendAnalysis);
+                    outcome.evidence(), outcome.findings().hypotheses(), task::appendAnalysis, task::appendThinking);
             // 步骤里区分「运行时预读」与「模型另调」：解释的依据可追溯到具体快照，而不是一句「已生成解释」。
             task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.COMPLETED, completedDetail(explanation));
             return new InvestigationReport(report.summary(), report.confidence(), report.evidence(),

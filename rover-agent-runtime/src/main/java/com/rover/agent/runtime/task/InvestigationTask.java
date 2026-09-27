@@ -48,6 +48,8 @@ public final class InvestigationTask implements InvestigationReporter {
     private final long createdAtMillis = System.currentTimeMillis();
     private final List<Step> steps = new ArrayList<>();
     private final StringBuilder analysis = new StringBuilder();
+    /** 模型思考增量缓冲：与解读分开存放，前端要把两者放在不同位置。 */
+    private final StringBuilder thinking = new StringBuilder();
     private final List<AgentCapability> executedCapabilities = new ArrayList<>();
     private TaskStatus status = TaskStatus.PENDING;
     private AgentStepType currentStage;
@@ -303,6 +305,20 @@ public final class InvestigationTask implements InvestigationReporter {
     }
 
     /**
+     * 推送模型思考增量：与解读增量同构，但走独立缓冲与事件。
+     *
+     * 分开是刻意的——思考与答案是两段不同内容，界面上也占两个位置（思考收在折叠面板里，
+     * 答案才是正文），混成一条流会让前端不得不自己判断哪一段是思考。
+     */
+    public synchronized void appendThinking(String chunk) {
+        if (chunk == null || chunk.isEmpty() || status.terminal()) {
+            return;
+        }
+        thinking.append(chunk);
+        publish(TaskEventType.THINKING_DELTA, Map.of("text", chunk));
+    }
+
+    /**
      * 订阅任务事件：先补发全量快照（含已产生的解读文本），再按增量投递。
      *
      * 快照读取与订阅登记在同一同步块内完成，因此增量既不会漏发也不会重复；
@@ -322,9 +338,9 @@ public final class InvestigationTask implements InvestigationReporter {
                 taskType, intent, plan, List.copyOf(executedCapabilities), actionPlan);
     }
 
-    /** 任务快照：视图 + 已产生的解读全文 + 已发布的最新事件序号（订阅者的对齐依据）。 */
+    /** 任务快照：视图 + 已产生的解读与思考全文 + 已发布的最新事件序号（订阅者的对齐依据）。 */
     private synchronized TaskSnapshot snapshot() {
-        return new TaskSnapshot(view(), analysis.toString(), eventSeq);
+        return new TaskSnapshot(view(), analysis.toString(), eventSeq, thinking.toString());
     }
 
     /** 把最新快照推给任务记录存储；调研期间读到的始终是一致视图。 */
