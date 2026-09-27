@@ -11,7 +11,11 @@ dependency-reduced-pom.xml
 # config/admin-model.properties（含 api-key-enc 密文）与 config/master.key。
 # 程序在文件缺失时会自动创建，因此新克隆的仓库不需要它。
 # 如需入库示例配置，用 !config/xxx.example.yml 单独放行。
-config/
+# 注意：只锚定仓库根与各模块根下的运行时 config/（如 config/、rover-admin/config/），
+# 不能写无锚定的 config/ —— 那会连 src 里的 Java 源码包 com/rover/admin/config/ 一起忽略，
+# 新增的配置类会静默不进版本库（IDEA 里文件名变橄榄黄）。
+/config/
+/*/config/
 
 # ===== 日志文件 =====
 *.log
@@ -20,6 +24,13 @@ logs/
 *.log.*
 *.out.log
 nohup.out
+
+# ===== H2 落盘记录库（本地数据，绝不入库）=====
+# 默认路径 ./rover-logs/rover（由 rover.admin.log-store-path 配置），会生成 rover.mv.db / rover.trace.db
+# 这些是本机运行数据，含历史日志/证据，不应进入版本库
+rover-logs/
+*.mv.db
+*.trace.db
 
 # ===== 敏感信息 / 凭据 =====
 .env

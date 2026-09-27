@@ -28,6 +28,8 @@ public final class AdminApiPaths {
     public static final String EVENTS = "/events";
     public static final String TRACES = "/traces";
     public static final String CONFIGS = "/configs";
+    /** 落盘记录库历史区间查询（配置变更/回滚/部署/实例事件等证据）。 */
+    public static final String LOGS = "/logs";
 
     /** 当前登录态与 CSRF 令牌下发。 */
     public static final String AUTH_STATUS = "/auth/status";

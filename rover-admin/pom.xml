@@ -52,6 +52,14 @@
             <groupId>com.rover</groupId>
             <artifactId>rover-common</artifactId>
         </dependency>
+        <!-- 落盘记录库（H2）：显式锁 2.2.224。Admin 自带 spring-boot 4.1.1 BOM 会把 h2 解析到
+             不一致的 2.4.240（离线环境未缓存），这里用显式版本覆盖 BOM 管理。 -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>2.2.224</version>
+            <scope>runtime</scope>
+        </dependency>
         <!-- Agent 运行层（Spring AI 2.0.x 线，与本模块同版本边界）；领域层由运行层传递可见 -->
         <dependency>
             <groupId>com.rover</groupId>

@@ -154,6 +154,20 @@ public class AdminConfigController {
         return configService.loadEvents();
     }
 
+    /**
+     * 落盘记录库的历史区间查询：配置变更/回滚/部署/实例事件等证据，回答「上周还好好的现在为什么挂了」。
+     * 不传 target/type 则按全量时间范围查；limit 默认 200，上限 5000。
+     */
+    @GetMapping(AdminApiPaths.LOGS)
+    public List<Map<String, Object>> logs(
+            @RequestParam(required = false) String target,
+            @RequestParam(required = false) Long from,
+            @RequestParam(required = false) Long to,
+            @RequestParam(required = false) List<String> type,
+            @RequestParam(defaultValue = "200") int limit) {
+        return configService.queryLogs(target, from, to, type, limit);
+    }
+
     /** Gateway 请求链路时间线，支持 traceId/path/slow 过滤。 */
     @GetMapping(AdminApiPaths.TRACES)
     public JsonNode traces(@RequestParam(required = false) String traceId,
