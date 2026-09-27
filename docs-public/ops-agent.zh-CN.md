@@ -52,9 +52,9 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 ### Level A：Observe（看）
 
-Agent 能查询 Route、Instance、Metrics、Trace、Config、Events 等运行态数据，全程只读。
+Agent 能查询 Route、Instance、Metrics、Trace、Config、Events、Logs（历史日志）、Knowledge（运维知识）等运行态数据，全程只读。
 
-**状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）由 `AgentOrchestrator` 驱动，采集路由、实例、指标、追踪、配置、注册事件六类快照，返回结论、证据来源和采集时间。其中指标除全局窗口外，还能按「路由 × 上游实例」取到窗口请求数、状态码、错误率与延迟，用于指出是哪台实例在出错。
+**状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）由 `AgentOrchestrator` 驱动，采集路由、实例、指标、追踪、配置、注册事件、历史日志、运维知识八类快照，返回结论、证据来源和采集时间。其中指标除全局窗口外，还能按「路由 × 上游实例」取到窗口请求数、状态码、错误率与延迟，用于指出是哪台实例在出错；历史日志按类型 / 目标 / 时间范围过滤（配置变更、回滚、错误、实例上下线、指标采样、慢与错误链路），运维知识回答「怎么配置 / 怎么接入 / 怎么排查」。
 
 ### Level B：Reason（调查 + 推理）
 
@@ -214,9 +214,9 @@ Session（一次连续对话）─┬─ Incident（一个被调查的问题，�
 - 单一编排入口 `AgentOrchestrator`：Controller 不再直接编排 route/metrics/chatClient 调用，只做参数校验与结果映射。
 - 存储已抽象成 4 个 Repository 接口，当前只有线程安全内存实现，**重启即清空**；业务代码不直接依赖 Map。
 - 用户身份一律取自后端认证上下文（`Authentication.getName()`），请求体不接受前端提交的 `userId`；会话、任务与事件按身份过滤。
-- 只读采集路由、实例、指标（含「路由 × 上游实例」窗口观测）、追踪、配置、注册事件，产出结论、置信度、证据来源、采集时间和局限说明。
+- 只读采集路由、实例、指标（含「路由 × 上游实例」窗口观测）、追踪、配置、注册事件、历史日志、运维知识，产出结论、置信度、证据来源、采集时间和局限说明。
 - 已拆成 `rover-agent-core` / `rover-agent-runtime` / `rover-admin` 三层，依赖单向；只读由端口结构保证。
-- 意图识别与分流：消息先判定意图（`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` / `ACTION_REQUEST` / 未开放的 `CREATE_INSPECTION`、`KNOWLEDGE_QUERY`），
+- 意图识别与分流：消息先判定意图（`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` / `ACTION_REQUEST` / `KNOWLEDGE_QUERY` / 未开放的 `CREATE_INSPECTION`），
   再按需解析资源对象；状态查询只调少量只读能力直接回答，能力说明问题按注册表返回真实能力清单，未开放的请求如实回复而不硬走调查；
   识别不出意图时先看问题里有没有可解析对象，没有就回一句「我没太明白您的意思」+ 现在能做什么 + 两三条示例提问（完整能力清单只留给明确问
   「你能做什么」的人），不向用户追问「请给出请求路径」。
@@ -229,7 +229,7 @@ Session（一次连续对话）─┬─ Incident（一个被调查的问题，�
   两处不会各自描述一遍系统。模型侧的策略是「只要与系统有关就必须选最接近的一类并如实给 MEDIUM / LOW」，`UNKNOWN` 只留给
   与运维完全无关的输入，不再把「说不准但明显在域内」的输入判死。规则层同时补了口语化故障词表（扛不住 / 时好时坏 / 无响应 / 502 …），
   确定性那层不漏，模型才是在补位而不是在填坑。
-- 能力注册表与只读执行器：可用能力（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件查询）统一登记为 READ_ONLY 能力，规划只能从中选择，
+- 能力注册表与只读执行器：可用能力（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件 / 历史日志 / 运维知识检索）统一登记为 READ_ONLY 能力，规划只能从中选择，
   执行器是模型与生产数据之间唯一的取数口；未接入数据适配器的能力标记为不可选，处置类请求只生成不可执行的处置计划（`executable` 恒为 `false`）。
 - 调查链由 Spring AI Alibaba StateGraph 编排：调查计划由规划器产出（规则打底、模型只提候选，越界步骤被丢弃），
   按「PLAN → EXECUTE → EVALUATE」循环推进，评估节点按证据决定继续规划、澄清还是出结论，触顶（`rover.agent.planning.*`）时停止并在结论中标注。
