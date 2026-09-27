@@ -53,6 +53,41 @@ class EvidenceNarratorTest {
                 "既没有服务也没有静态地址时必须明确说出来");
     }
 
+    /**
+     * 不存在的服务必须说「没注册」，不能说成「0 个健康实例」。
+     *
+     * <p>后者读起来是「服务挂了」，而前者是「查错了对象」——两者的处置完全不同。
+     * 这条来自一次真实误判：问一个没注册的服务，回答里出现「健康实例 0 个」，
+     * 于是模型给出「唯一实例不健康」的确定结论。
+     */
+    @Test
+    void unknownServiceIsReportedAsNotRegisteredInsteadOfZeroHealthy() {
+        List<InstanceSnapshot> rows = List.of(
+                new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L));
+
+        EvidenceNarration narration = EvidenceNarrator.instances(rows, "order-service", "");
+
+        assertTrue(narration.detail().contains("没有服务 order-service 的任何实例"),
+                "实际为 " + narration.detail());
+        assertTrue(narration.detail().contains("当前已注册的服务：demo-service"),
+                "要顺带告诉调用方有哪些服务可查，实际为 " + narration.detail());
+        assertTrue(!narration.detail().contains("健康实例 0 个"),
+                "不能说成「0 个健康实例」，那读起来是服务挂了，实际为 " + narration.detail());
+        assertTrue(narration.limitations().stream().anyMatch(item -> item.contains("不存在")),
+                "要给出判断边界，提示这是查错了对象");
+    }
+
+    /** 服务存在但没有健康实例：这才是真的「都不可用」，要如实报出来。 */
+    @Test
+    void serviceWithOnlyUnhealthyInstancesReportsZeroHealthy() {
+        List<InstanceSnapshot> rows = List.of(
+                new InstanceSnapshot("order-service", "", "", "10.0.0.8", 8080, false, 100, true, 0L));
+
+        String detail = EvidenceNarrator.instances(rows, "order-service", "").detail();
+
+        assertTrue(detail.contains("注册实例 1 个，其中健康 0 个"), "实际为 " + detail);
+    }
+
     /** 路由清单：一次给出全部路由，模型不必靠猜前缀逐个探测（猜不到的前缀会被漏掉）。 */
     @Test
     void routeListReportsEveryRouteWithItsUpstream() {
@@ -75,7 +110,8 @@ class EvidenceNarratorTest {
 
         assertTrue(EvidenceNarrator.route(route).detail().contains("分组=全部分组"));
         assertTrue(EvidenceNarrator.instances(instances, route).detail().contains("demo/默认组@127.0.0.1:8081(健康)"));
-        assertTrue(EvidenceNarrator.instances(instances, route).detail().contains("目标 demo/全部分组 的健康实例 1 个"));
+        assertTrue(EvidenceNarrator.instances(instances, route).detail()
+                .contains("目标 demo/全部分组 的注册实例 1 个，其中健康 1 个"));
     }
 
     @Test

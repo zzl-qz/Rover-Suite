@@ -99,24 +99,45 @@ public final class EvidenceNarrator {
     /**
      * 实例快照的证据表述（按服务/分组口径）。
      *
-     * 能力执行器不持有路由对象（能力之间彼此独立），因此这里以服务名与分组作为口径入参，
-     * 与按路由对象取数的重载共用同一份表述逻辑。样本量即注册实例总数：健康实例数是按这批实例数出来的。
+     * <p>「这个服务没注册」与「这个服务注册了但没有健康实例」必须分开说：前者是查错了对象，
+     * 后者才是一个需要处置的故障。混为一谈时，读的人（和模型）会把一个不存在的服务
+     * 当成一个挂掉的服务，并给出一个确定的错误结论。
      */
     public static EvidenceNarration instances(List<InstanceSnapshot> instances, String serviceName, String group) {
         List<InstanceSnapshot> rows = instances == null ? List.of() : instances;
-        String sample = rows.stream().limit(5)
-                .map(item -> text(item.serviceName()) + "/" + groupLabel(item.group()) + "@" + text(item.host())
-                        + ":" + item.port() + "(" + (item.healthy() ? "健康" : "不健康") + ")")
-                .reduce((left, right) -> left + "、" + right).orElse("无");
         String service = text(serviceName);
         String groupName = text(group);
         if (service.isBlank()) {
-            return new EvidenceNarration("注册实例共 " + rows.size() + " 个；样本：" + sample, List.of(),
-                    rows.size(), 0);
+            return new EvidenceNarration("注册实例共 " + rows.size() + " 个；样本：" + sample(rows),
+                    List.of(), rows.size(), 0);
         }
-        long healthy = healthyCount(rows, service, groupName);
-        return new EvidenceNarration("目标 " + service + "/" + routeGroupLabel(groupName) + " 的健康实例 " + healthy
-                + " 个；注册实例共 " + rows.size() + " 个；样本：" + sample, List.of(), rows.size(), 0);
+        List<InstanceSnapshot> matched = rows.stream()
+                .filter(item -> service.equals(text(item.serviceName())))
+                .filter(item -> groupName.isBlank() || groupName.equals(text(item.group())))
+                .toList();
+        if (matched.isEmpty()) {
+            return new EvidenceNarration("注册中心没有服务 " + service + " 的任何实例；当前已注册的服务："
+                            + registeredServices(rows),
+                    List.of("注册中心不存在该服务名，请确认名称拼写或该服务是否已上线。"), rows.size(), 0);
+        }
+        long healthy = matched.stream().filter(InstanceSnapshot::healthy).count();
+        return new EvidenceNarration("目标 " + service + "/" + routeGroupLabel(groupName) + " 的注册实例 "
+                + matched.size() + " 个，其中健康 " + healthy + " 个；样本：" + sample(matched),
+                List.of(), matched.size(), 0);
+    }
+
+    /** 实例样本行：服务/分组@地址:端口(健康状态)，最多 5 条。 */
+    private static String sample(List<InstanceSnapshot> rows) {
+        return rows.stream().limit(5)
+                .map(item -> text(item.serviceName()) + "/" + groupLabel(item.group()) + "@" + text(item.host())
+                        + ":" + item.port() + "(" + (item.healthy() ? "健康" : "不健康") + ")")
+                .reduce((left, right) -> left + "、" + right).orElse("无");
+    }
+
+    /** 当前注册的全部服务名；用于告诉调用方「有哪些服务可查」，而不是让它对着空结果猜。 */
+    private static String registeredServices(List<InstanceSnapshot> rows) {
+        return rows.stream().map(item -> text(item.serviceName())).filter(name -> !name.isBlank())
+                .distinct().reduce((left, right) -> left + "、" + right).orElse("无");
     }
 
     /**
