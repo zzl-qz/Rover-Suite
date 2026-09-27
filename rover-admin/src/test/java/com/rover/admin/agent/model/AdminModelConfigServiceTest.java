@@ -56,14 +56,17 @@ class AdminModelConfigServiceTest {
     void saveRejectsEnabledWithoutBaseUrlOrModel() {
         AdminModelConfigService service = service(store(environment()));
 
+        // 自定义厂商下，地址与模型名是用户手填的，缺一不可。
         Map<String, Object> missingUrl = new HashMap<>();
         missingUrl.put("enabled", true);
+        missingUrl.put("vendor", "custom");
         missingUrl.put("model", "deepseek-chat");
         assertEquals("启用模型时必须填写服务地址",
                 assertThrows(IllegalArgumentException.class, () -> service.save(missingUrl)).getMessage());
 
         Map<String, Object> missingModel = new HashMap<>();
         missingModel.put("enabled", true);
+        missingModel.put("vendor", "custom");
         missingModel.put("baseUrl", "https://api.deepseek.com");
         assertEquals("启用模型时必须填写模型名",
                 assertThrows(IllegalArgumentException.class, () -> service.save(missingModel)).getMessage());
@@ -75,6 +78,7 @@ class AdminModelConfigServiceTest {
 
         Map<String, Object> badScheme = new HashMap<>();
         badScheme.put("enabled", true);
+        badScheme.put("vendor", "custom");
         badScheme.put("baseUrl", "api.deepseek.com");
         badScheme.put("model", "deepseek-chat");
         assertTrue(assertThrows(IllegalArgumentException.class, () -> service.save(badScheme))
@@ -82,6 +86,7 @@ class AdminModelConfigServiceTest {
 
         Map<String, Object> tooLong = new HashMap<>();
         tooLong.put("enabled", true);
+        tooLong.put("vendor", "custom");
         tooLong.put("baseUrl", "https://api.deepseek.com");
         tooLong.put("model", "m".repeat(200));
         assertEquals("服务地址或模型名过长",
@@ -95,15 +100,62 @@ class AdminModelConfigServiceTest {
         AdminModelConfigService service = new AdminModelConfigService(store, gateway);
         service.save(enabledSettings("deepseek-chat"));
 
-        // 只改模型名、不带 apiKey：不能把已存的密钥抹掉。
+        // 只切厂商、不带 apiKey：不能把已存的密钥抹掉；模型由新厂商映射，不再让用户手填。
         Map<String, Object> body = new HashMap<>();
         body.put("enabled", true);
-        body.put("baseUrl", "https://api.deepseek.com");
-        body.put("model", "deepseek-reasoner");
+        body.put("vendor", "zhipu");
         service.save(body);
 
         assertEquals(SECRET, gateway.appliedSettings().apiKey());
-        assertEquals("deepseek-reasoner", gateway.appliedSettings().model());
+        assertEquals("glm-4.6", gateway.appliedSettings().model());
+    }
+
+    /** 厂商收敛：用户只选厂商，地址 / 主模型 / 快速模型都由后台映射。 */
+    @Test
+    void vendorMapsModelsWithoutRequiringTheUserToFillThem() {
+        ModelConfigStore store = store(environment());
+        AdminChatModelGateway gateway = gateway(store);
+        AdminModelConfigService service = new AdminModelConfigService(store, gateway);
+
+        // 智谱：主模型 glm-4.6（思考）+ 快速模型 glm-4-air（廉价调用）
+        Map<String, Object> zhipu = new HashMap<>();
+        zhipu.put("enabled", true);
+        zhipu.put("vendor", "zhipu");
+        zhipu.put("apiKey", SECRET);
+        service.save(zhipu);
+        assertEquals("glm-4.6", gateway.appliedSettings().model());
+        assertEquals("https://open.bigmodel.cn/api/paas/v4", gateway.appliedSettings().baseUrl());
+        assertTrue(gateway.appliedSettings().fastConfigured());
+        assertEquals("glm-4-air", gateway.appliedSettings().fast().model());
+
+        // DeepSeek：deepseek-chat 本身不思考，无需单独快速模型。
+        Map<String, Object> deepseek = new HashMap<>();
+        deepseek.put("enabled", true);
+        deepseek.put("vendor", "deepseek");
+        deepseek.put("apiKey", SECRET);
+        service.save(deepseek);
+        assertEquals("deepseek-chat", gateway.appliedSettings().model());
+        assertFalse(gateway.appliedSettings().fastConfigured());
+    }
+
+    /** 自定义厂商：本地 / 代理没有「厂商」概念，地址与模型名仍由用户手填。 */
+    @Test
+    void customVendorKeepsManualAddressAndModel() {
+        ModelConfigStore store = store(environment());
+        AdminChatModelGateway gateway = gateway(store);
+        AdminModelConfigService service = new AdminModelConfigService(store, gateway);
+
+        Map<String, Object> custom = new HashMap<>();
+        custom.put("enabled", true);
+        custom.put("vendor", "custom");
+        custom.put("baseUrl", "http://127.0.0.1:11434/v1");
+        custom.put("model", "qwen2.5:7b");
+        custom.put("apiKey", "");
+        service.save(custom);
+
+        assertEquals("http://127.0.0.1:11434/v1", gateway.appliedSettings().baseUrl());
+        assertEquals("qwen2.5:7b", gateway.appliedSettings().model());
+        assertFalse(gateway.appliedSettings().fastConfigured());
     }
 
     @Test
