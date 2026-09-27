@@ -148,7 +148,7 @@ routes:
 | :--- | :--- |
 | `id` | 唯一路由标识 |
 | `businessPrefix` | 匹配入站请求的路径前缀 |
-| `targets` | 版本化上游：`{serviceName, group, weight}`；`group` 是版本号，`weight: 0` 表示暂停该版本 |
+| `targets` | 版本化上游：`{serviceName, group, weight}`；复用注册中心的 `group`（通用业务分组）作为灰度维度，`weight: 0` 表示暂停该版本 |
 | `stickyHeader` | 可选的粘性键请求头；不写则回退客户端 IP |
 | `targetUrl` / `targetUrls` | 静态路由的固定上游列表 |
 | `stripPrefix` | 转发前移除的前缀；设为 `""` 保留完整路径 |
@@ -194,7 +194,7 @@ Bearer 协议 token 不能代替管理请求头，管理请求头也不能访问
 | Gateway | `POST /_manage/routes/preview` | 只回逐条差异（`ADDED` / `REMOVED` / `MODIFIED`）与校验结果，不落盘、不生效 |
 | Gateway | `POST /_manage/routes/targets/weight` | 放量 / 停推一个版本的权重（`routeId`、`serviceName`、`group`、`weight`）；内部仍走整表乐观锁变更 |
 | Gateway | `POST /_manage/routes/rollback` | 回滚到最近某次已应用的 `toRevision`；回滚本身是一次新变更，不会覆盖别人的并发修改 |
-| Gateway | `GET /_manage/routes/operations/{operationId}` | 请求超时后确认是否已执行：`APPLIED` / `CONFLICT` / `REJECTED` / `UNKNOWN`，并回带 `currentRevision` |
+| Gateway | `GET /_manage/routes/operations/{operationId}` | 请求超时后确认是否已执行：`APPLIED` / `CONFLICT` / `REJECTED` / `FAILED`（提交过但落盘失败）/ `UNKNOWN`（没有记录），并回带 `currentRevision` |
 | Gateway | `GET /_manage/discovery/snapshot` | 网关**自己观察到的** `service@group` 视图：`revision`、`epoch`、实例数与健康数；静态发现时 `supported=false` |
 | Gateway | `GET/POST /_manage/configs` | 查看或更新已登记的运行时配置 |
 | Gateway | `GET /_manage/metrics`、`/metrics/live`、`/metrics/selfcheck`、`/prometheus` | JSON 指标、轻量 live（`range=60/300`；无 p99/上游 Top，路由 Top 短缓存）、自检与 Prometheus 文本 |
@@ -256,11 +256,13 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
 ## 9. 当前运行边界
 
 - 当前是单节点 `1.0.0-SNAPSHOT`，不提供 Nameserver 高可用或在线实例持久化恢复。
-- 发现链路是“推送优先、周期查询对账兜底”，不是强实时一致。最后一个实例注销或过期时，空推送当前会被 Gateway 保护，
-  本地缓存最迟在下一次对账时清空，默认最长约 30 秒；窗口内请求可能命中刚退出的地址。
-  本地 Compose 本场（`demo-fault.sh`）：停最后一个实例后立刻 502，约 17 秒后变为 `503 NO_UPSTREAM`。
+- 发现链路是“推送优先、周期查询对账兜底”，不是强实时一致。最后一个实例注销或过期时，服务端会 bump `revision`
+  并推空名单，Gateway 认下这包空推送后**立即清空该组**，请求随即转为 `503 NO_UPSTREAM`；只有“不比本地新”的空包
+  才会被当作乱序旧包丢弃（推空保护），那种情况才需要等下一次对账补齐（兜底对账默认最长约 30 秒）。
+  本地 Compose 场景（`demo-fault.sh`）旧的实测是“停最后一个实例后立刻 502、约 17 秒后才变成 `503`”，
+  这正是空推送被拒造成的；该数字需按新行为重新实测。
 - 如果 Gateway 启动时 Nameserver 不可用，初始订阅失败后可能等到下一次对账才补齐，默认最长约 30 秒。
-- `group` 现在就是版本化路由（`targets`）的版本号，按 group 路由可用：Gateway 按 `serviceName + group` 订阅与查询。多组**推送隔离**仍在完善，所以把 `group` 当作路由/版本维度，而不是硬租户边界。具体说明见[服务注册指南](./service-registration.zh-CN.md#23-当前分组边界)。
+- `group` 是注册中心的通用业务分组（可隔离环境/租户/机房），版本化路由（`targets`）只是**复用它作为灰度维度**，它不是专门的版本字段。按 group 路由可用：Gateway 按 `serviceName + group` 订阅与查询，多组推送按 `serviceName + group` 分键彼此隔离且互不回落。它仍是业务分组维度，不是硬租户边界。具体说明见[服务注册指南](./service-registration.zh-CN.md#23-当前分组边界)。
 - Gateway 只返回健康实例。当某服务的所有实例都不健康时，候选列表为空，请求得到 `503 NO_UPSTREAM`，**没有**「全不健康就退回全部缓存」的 fail-open 兜底。某个 `group`（版本）没有健康实例时同样严格 503，绝不静默改投另一个版本，因此「没有可接流实例」与「上游返回 5xx」在指标上始终可区分。
 - Gateway 面向普通 HTTP/1.1：入站头到了就开始转发，请求体走管道；默认 Netty 出站按块回写上游响应。不支持 WebSocket、SSE。默认请求体上限 1 MiB，响应体硬上限 16 MiB。
 - 网关进程不终止客户端 HTTPS，也不在默认出站路径上对上游做 TLS。
