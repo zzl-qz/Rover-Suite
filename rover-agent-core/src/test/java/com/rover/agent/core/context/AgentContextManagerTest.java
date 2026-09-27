@@ -11,7 +11,6 @@ import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.EvidenceType;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
-import com.rover.agent.core.model.IncidentSeverity;
 import com.rover.agent.core.model.IncidentStatus;
 import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.MessageRole;
@@ -57,8 +56,8 @@ class AgentContextManagerTest {
             return DiscoveryMode.UNKNOWN;
         }
     };
-    private final InstanceReadPort instancePort = () -> List.of(new InstanceSnapshot("demo-service", "",
-            "10.0.0.7", 8080, true));
+    private final InstanceReadPort instancePort = () -> List.of(
+            new InstanceSnapshot("demo-service", "", "", "10.0.0.7", 8080, true, 100, true, 0L));
 
     private AgentContextManager manager(int limit) {
         return new AgentContextManager(sessions, incidents, messages, tasks, routePort, instancePort, limit);
@@ -248,7 +247,7 @@ class AgentContextManagerTest {
         Incident open(String sessionId, ResourceTarget target) {
             long now = System.currentTimeMillis();
             Incident incident = new Incident("incident-" + (values.size() + 1), sessionId, IncidentOrigin.USER,
-                    target.value(), IncidentStatus.OPEN, IncidentSeverity.UNKNOWN, target, TimeRange.unspecified(),
+                    target.value(), IncidentStatus.OPEN, target, TimeRange.unspecified(),
                     "", now, now, List.of());
             values.put(incident.incidentId(), incident);
             return incident;
@@ -259,7 +258,7 @@ class AgentContextManagerTest {
             List<String> taskIds = new ArrayList<>(incident.taskIds());
             taskIds.add(taskId);
             values.put(incidentId, new Incident(incident.incidentId(), incident.sessionId(), incident.origin(),
-                    incident.title(), incident.status(), incident.severity(), incident.target(),
+                    incident.title(), incident.status(), incident.target(),
                     incident.timeRange(), incident.summary(), incident.createdAtMillis(), incident.updatedAtMillis(),
                     List.copyOf(taskIds)));
         }

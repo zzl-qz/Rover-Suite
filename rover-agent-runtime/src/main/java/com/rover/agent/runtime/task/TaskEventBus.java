@@ -1,7 +1,6 @@
 package com.rover.agent.runtime.task;
 
 import com.rover.agent.core.event.TaskEvent;
-import com.rover.agent.core.event.TaskEventSink;
 import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
@@ -30,7 +29,7 @@ import java.util.function.Supplier;
  * 通道按任务创建，任务离开登记表（被淘汰或回滚）时由 {@link #close(String)} 关闭；
  * 内存占用因而随任务容量有界。
  */
-public final class TaskEventBus implements TaskEventSink {
+public final class TaskEventBus {
 
     /** 单个订阅者的积压上限：约等于「一个页面上千条事件」的观察窗口，超过即判定为慢订阅者。 */
     static final int DEFAULT_SUBSCRIBER_QUEUE_CAPACITY = 256;
@@ -51,7 +50,11 @@ public final class TaskEventBus implements TaskEventSink {
         this.queueCapacity = queueCapacity;
     }
 
-    @Override
+    /**
+     * 发布一个事件：只在任务状态锁内做非阻塞入队，不做任何网络 IO。
+     *
+     * 慢订阅者或写阻塞只能丢弃它自己的积压，绝不能拖慢模型调用与 Agent Worker。
+     */
     public void publish(TaskEvent event) {
         Channel channel = channels.get(event.taskId());
         if (channel != null) {

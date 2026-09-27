@@ -68,6 +68,19 @@ class CapabilityRegistryTest {
     }
 
     @Test
+    void briefIntroductionStaysShortAndStillOffersExamples() {
+        String brief = registry.introduceBriefly();
+
+        assertTrue(brief.contains("我没太明白您的意思"));
+        assertTrue(brief.contains("您可以这样问我"));
+        // 能做什么仍取自同一份注册表，不另写一份说法
+        registry.selectable().forEach(item -> assertTrue(brief.contains(item.name())));
+        // 简短版不铺开完整清单：枚举 ID 与风险级别只出现在完整版里
+        assertFalse(brief.contains("风险级别"));
+        assertTrue(brief.length() < registry.introduce().length());
+    }
+
+    @Test
     void selectableCapabilitiesReturnedAsSetMatchesDescriptors() {
         assertEquals(registry.selectable().stream().map(CapabilityDescriptor::id).toList(),
                 List.copyOf(registry.selectableCapabilities()));

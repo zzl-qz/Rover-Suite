@@ -68,8 +68,8 @@ class AdminReadAdaptersTest {
         List<InstanceSnapshot> instances = new AdminInstanceReadAdapter(admin).instances();
 
         assertEquals(2, instances.size());
-        assertEquals(new InstanceSnapshot("demo", "11", "127.0.0.1", 9100, true), instances.get(0));
-        assertEquals(new InstanceSnapshot("", "", "", 0, false), instances.get(1));
+        assertEquals(new InstanceSnapshot("demo", "11", "", "127.0.0.1", 9100, true, 0, false, 0L), instances.get(0));
+        assertEquals(new InstanceSnapshot("", "", "", "", 0, false, 0, false, 0L), instances.get(1));
     }
 
     @Test
@@ -135,7 +135,7 @@ class AdminReadAdaptersTest {
         assertThrows(SnapshotUnavailableException.class, () -> new AdminTraceReadAdapter(admin).byPath("/api/demo/tt"));
 
         verify(admin, never()).saveRoute(any());
-        verify(admin, never()).deleteRoute(anyString());
+        verify(admin, never()).deleteRoute(anyString(), anyInt());
         verify(admin, never()).updateConfig(anyString(), anyString(), anyString());
     }
 
@@ -143,8 +143,7 @@ class AdminReadAdaptersTest {
         Map<String, Object> route = new LinkedHashMap<>();
         route.put("id", "demo-tt");
         route.put("businessPrefix", "/api/demo/tt");
-        route.put("serviceName", "demo");
-        route.put("group", "全部");
+        route.put("targets", List.of(Map.of("serviceName", "demo", "group", "全部", "weight", 100)));
         route.put("targetUrl", "http://127.0.0.1:9100");
         return route;
     }

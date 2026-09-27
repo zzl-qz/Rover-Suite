@@ -6,6 +6,9 @@ import com.rover.agent.core.model.Confidence;
 import com.rover.agent.core.model.IntentDecision;
 import com.rover.agent.core.model.IntentTopic;
 import com.rover.agent.core.model.TimeRange;
+import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 意图判定入口：规则分类是底线，模型辅助只补「规则说不清」的场合。
@@ -19,10 +22,19 @@ import com.rover.agent.core.model.TimeRange;
  * </ul>
  *
  * 因此「无模型环境下意图仍然可判」不是降级，而是常态。
+ *
+ * <p>每次判定都打一条 INFO 日志，用标签标明结论是哪一层产出的，便于在控制台核对
+ * 「这次到底走没走模型」：{@code 意图识别[规则直接]} 表示规则高置信度命中、根本没调模型；
+ * {@code 意图识别[模型]} 表示采用了模型判断；{@code 意图识别[规则兜底]} 表示问过模型但退回规则。
  */
 public final class IntentService {
 
+    private static final Logger log = LoggerFactory.getLogger(IntentService.class);
+
     private static final int MAX_CONTEXT_SUMMARY_LENGTH = 600;
+
+    /** 日志里的问题预览长度：只用于把日志和刚提的问题对上号，不做全文记录。 */
+    private static final int MAX_QUESTION_PREVIEW_LENGTH = 40;
 
     private final IntentInterpreter interpreter;
     private final IntentClassifier classifier;
@@ -42,12 +54,38 @@ public final class IntentService {
         String asked = question == null ? "" : question.trim();
         IntentDecision byRules = classifier.classify(asked);
         if (byRules.confidence() == Confidence.HIGH && byRules.intent() != AgentIntent.UNKNOWN) {
+            log.info("意图识别[规则直接] 规则高置信度命中，未调用模型：问题=\"{}\" 意图={} 置信度={} 依据={}",
+                    preview(asked), byRules.intent(), byRules.confidence(), byRules.reason());
             return byRules;
         }
-        return interpreter.interpret(asked, trim(contextSummary))
-                .filter(IntentService::usable)
-                .map(candidate -> merge(candidate, byRules))
-                .orElse(byRules);
+        Optional<IntentDecision> byModel = interpreter.interpret(asked, trim(contextSummary));
+        if (byModel.isEmpty()) {
+            log.info("意图识别[规则兜底] 模型未给出结果（未配置模型、调用失败或输出越界）：问题=\"{}\" 规则结果={} 置信度={} 依据={}",
+                    preview(asked), byRules.intent(), byRules.confidence(), byRules.reason());
+            return byRules;
+        }
+        IntentDecision candidate = byModel.get();
+        if (!usable(candidate)) {
+            log.info("意图识别[规则兜底] 模型结果不可用（要求澄清或未给出确定意图）：问题=\"{}\" 模型结果={} 置信度={} 要求澄清={} 规则结果={}",
+                    preview(asked), candidate.intent(), candidate.confidence(), candidate.needsClarification(),
+                    byRules.intent());
+            return byRules;
+        }
+        IntentDecision merged = merge(candidate, byRules);
+        log.info("意图识别[模型] 采用模型判断{}：问题=\"{}\" 模型意图={} 最终意图={} 置信度={} 目标线索=\"{}\" 依据={}",
+                merged.intent() == candidate.intent() ? "" : "（被规则修正为处置请求，文本中存在明确处置动作）",
+                preview(asked), candidate.intent(), merged.intent(), merged.confidence(), merged.targetHint(),
+                merged.reason());
+        return merged;
+    }
+
+    /** 日志里的问题预览：压平换行并截断，避免一条日志被多行内容撑开。 */
+    private static String preview(String question) {
+        String flat = question.replaceAll("\\s+", " ").trim();
+        if (flat.length() <= MAX_QUESTION_PREVIEW_LENGTH) {
+            return flat;
+        }
+        return flat.substring(0, MAX_QUESTION_PREVIEW_LENGTH) + "…";
     }
 
     /** 模型判断是否可用：必须给出确定意图，且不要求澄清（澄清一律回退到规则与编排层的兜底）。 */

@@ -97,10 +97,10 @@ class IntentFlowTest {
             }
         };
         InstanceReadPort instances = () -> List.of(
-                new InstanceSnapshot("demo-service", "", "10.0.0.7", 8080, true),
-                new InstanceSnapshot("order-service", "", "10.0.0.8", 8080, true),
-                new InstanceSnapshot("order-service", "", "10.0.0.9", 8080, true),
-                new InstanceSnapshot("order-service", "", "10.0.0.10", 8080, false));
+                new InstanceSnapshot("demo-service", "", "", "10.0.0.7", 8080, true, 100, true, 0L),
+                new InstanceSnapshot("order-service", "", "", "10.0.0.8", 8080, true, 100, true, 0L),
+                new InstanceSnapshot("order-service", "", "", "10.0.0.9", 8080, true, 100, true, 0L),
+                new InstanceSnapshot("order-service", "", "", "10.0.0.10", 8080, false, 100, true, 0L));
         MetricReadPort metrics = windowSeconds -> new GatewayMetricSnapshot(120, 3, 5, System.currentTimeMillis());
         TraceReadPort traces = path -> {
             throw new SnapshotUnavailableException("测试桩未提供追踪");
@@ -179,7 +179,7 @@ class IntentFlowTest {
         assertTrue(task.executedCapabilities().isEmpty(), "能力咨询不读生产数据");
     }
 
-    /** 识别不出意图的闲聊（也包含「你是谁」这类问法）：回自我介绍 + 能力清单，不追问资源路径。 */
+    /** 识别不出意图的闲聊：一句没听懂 + 能做什么 + 示例提问，既不追问资源路径也不甩长清单。 */
     @Test
     void unrecognisedMessageIntroducesIdentityAndCapabilities() throws Exception {
         Session session = orchestrator.startSession("admin");
@@ -192,9 +192,12 @@ class IntentFlowTest {
         assertNull(task.incidentId(), "兜底说明不新建事件");
         assertTrue(task.executedCapabilities().isEmpty(), "兜底说明不调用任何能力");
         String answer = task.result().summary();
-        assertTrue(answer.contains("我是 Rover Ops Agent"), "先自我介绍，实际为 " + answer);
-        assertTrue(answer.contains("ROUTE_QUERY"), "自我介绍要带上真实能力清单");
+        assertTrue(answer.contains("我没太明白您的意思"), "先说没听懂，实际为 " + answer);
+        assertTrue(answer.contains("路由查询"), "要讲清现在能做什么（能力名取自注册表）");
+        assertTrue(answer.contains("您可以这样问我"), "要给可以直接照抄的问法");
         assertTrue(answer.contains("不执行任何写操作"), "边界声明必须保留");
+        assertFalse(answer.contains("ROUTE_QUERY"), "闲聊不该被一整份枚举清单挡住");
+        assertFalse(answer.contains("风险级别"), "风险级别只出现在明确问「你能做什么」的完整清单里");
     }
 
     /** 验收 Case 6：处置请求产出可人工审核的不可执行计划，预检只读。 */
@@ -251,6 +254,49 @@ class IntentFlowTest {
         assertEquals(first.incidentId(), second.incidentId(), "追问沿用同一事件");
         assertEquals(ResourceTarget.route("/api/demo/tt"), second.target());
         assertEquals(TaskType.INVESTIGATION, second.taskType());
+    }
+
+    /**
+     * 证据驱动的路径纠正：问法落在「状态查询」但说不出查哪一类事实，点名的对象却真实存在。
+     * 这时回答「口径不明」是把话堵死，应按故障调查执行，并在步骤里写明换了形态。
+     */
+    @Test
+    void stateQueryWithoutSubjectFallsBackToInvestigationWhenTargetResolves() throws Exception {
+        Session session = orchestrator.startSession("admin");
+
+        TaskView task = submitAndAwait(session, "admin", "order-service 现在什么状态？");
+
+        assertEquals(TaskType.INVESTIGATION, task.taskType(), "口径判不出但对象可解析，应改走故障调查");
+        assertEquals(AgentIntent.INVESTIGATE, task.intent().intent());
+        assertNotNull(task.incidentId(), "纠正后的调查要建事件");
+        assertEquals(ResourceTarget.service("order-service"), task.target());
+        assertTrue(task.steps().stream().anyMatch(step -> "路径纠正".equals(step.name())),
+                "换了执行形态必须在步骤里写明，避免用户看到意图是查询却跑了调查");
+    }
+
+    /** 路径纠正的反例：解释类问题没有对象线索时，仍如实说「还没有可解释的结论」。 */
+    @Test
+    void explainWithoutConclusionStaysExplainWhenNoTargetClue() throws Exception {
+        Session session = orchestrator.startSession("admin");
+
+        TaskView task = submitAndAwait(session, "admin", "帮我总结一下");
+
+        assertEquals(TaskType.EXPLAIN, task.taskType(), "没有对象线索的解释不该被升级成调查");
+        assertTrue(task.result().summary().contains("还没有可解释的调查结论"),
+                "实际为 " + task.result().summary());
+    }
+
+    /** 路径纠正的边界：缺少宾语的问法不从会话沿用对象重启调查，该说清「要查哪一类事实」。 */
+    @Test
+    void stateQueryWithoutSubjectAndWithoutClueKeepsAskingForSubject() throws Exception {
+        Session session = orchestrator.startSession("admin");
+        submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
+
+        TaskView task = submitAndAwait(session, "admin", "现在什么状态？");
+
+        assertEquals(TaskType.QUERY, task.taskType(), "没点名对象的问法不该拿上一轮的对象重启调查");
+        assertTrue(task.result().summary().contains("未能从问题中识别出要查询的状态口径"),
+                "实际为 " + task.result().summary());
     }
 
     private TaskView submitAndAwait(Session session, String userId, String message) throws InterruptedException {

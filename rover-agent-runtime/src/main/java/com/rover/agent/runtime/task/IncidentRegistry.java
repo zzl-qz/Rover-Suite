@@ -2,7 +2,6 @@ package com.rover.agent.runtime.task;
 
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
-import com.rover.agent.core.model.IncidentSeverity;
 import com.rover.agent.core.model.IncidentStatus;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
@@ -64,16 +63,16 @@ public final class IncidentRegistry {
         return session;
     }
 
-    /** 在会话下开启一个事件；新事件即成为该会话的当前事件，后续追问默认落到它上面。 */
+    /** 在会话下开启一个事件，时间范围取默认值；新事件即成为该会话的当前事件，后续追问默认落到它上面。 */
     public Incident openIncident(String sessionId, IncidentOrigin origin, ResourceTarget target) {
         return openIncident(sessionId, origin, target, TimeRange.unspecified());
     }
 
-    /** 在会话下开启一个带指定时间范围的事件；其余语义同 {@link #openIncident(String, IncidentOrigin, ResourceTarget)}。 */
+    /** 在会话下开启一个带指定时间范围的事件；语义同 {@link #openIncident(String, IncidentOrigin, ResourceTarget)}。 */
     public Incident openIncident(String sessionId, IncidentOrigin origin, ResourceTarget target, TimeRange timeRange) {
         long now = System.currentTimeMillis();
         Incident incident = new Incident(UUID.randomUUID().toString(), sessionId, origin, target.value(),
-                IncidentStatus.OPEN, IncidentSeverity.UNKNOWN, target,
+                IncidentStatus.OPEN, target,
                 timeRange == null ? TimeRange.unspecified() : timeRange, "",
                 now, now, List.of());
         if (retention == null) {
@@ -92,7 +91,7 @@ public final class IncidentRegistry {
             return null;
         }
         Incident updated = new Incident(incident.incidentId(), incident.sessionId(), incident.origin(),
-                incident.title(), incident.status(), incident.severity(), incident.target(),
+                incident.title(), incident.status(), incident.target(),
                 timeRange == null ? TimeRange.unspecified() : timeRange, incident.summary(),
                 incident.createdAtMillis(), System.currentTimeMillis(), incident.taskIds());
         incidents.save(updated);
@@ -103,7 +102,7 @@ public final class IncidentRegistry {
     public void attachTask(String incidentId, String taskId) {
         incidents.find(incidentId).ifPresent(incident -> incidents.save(new Incident(
                 incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
-                IncidentStatus.INVESTIGATING, incident.severity(), incident.target(), incident.timeRange(),
+                IncidentStatus.INVESTIGATING, incident.target(), incident.timeRange(),
                 incident.summary(), incident.createdAtMillis(), System.currentTimeMillis(),
                 SessionLinks.append(incident.taskIds(), taskId))));
     }
@@ -117,7 +116,7 @@ public final class IncidentRegistry {
     public void summarise(String incidentId, String summary) {
         incidents.find(incidentId).ifPresent(incident -> incidents.save(new Incident(
                 incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
-                IncidentStatus.RESOLVED, incident.severity(), incident.target(), incident.timeRange(),
+                IncidentStatus.RESOLVED, incident.target(), incident.timeRange(),
                 summary == null ? "" : summary, incident.createdAtMillis(), System.currentTimeMillis(),
                 incident.taskIds())));
     }

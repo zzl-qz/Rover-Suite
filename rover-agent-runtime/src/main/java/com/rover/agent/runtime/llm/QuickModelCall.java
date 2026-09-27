@@ -1,5 +1,6 @@
 package com.rover.agent.runtime.llm;
 
+import com.rover.agent.runtime.metrics.ModelCallOutcome;
 import java.io.InterruptedIOException;
 import java.util.function.Function;
 import org.slf4j.Logger;
@@ -37,6 +38,16 @@ final class QuickModelCall {
             log.warn("Agent 模型调用超时（{}），重试一次", scene);
             return call.apply(gateway.chatClient(timeoutSeconds));
         }
+    }
+
+    /**
+     * 把一次失败的调用归类：超时归 TIMEOUT，其余归 ERROR。
+     *
+     * 两者要分开数：超时是链路与容量问题，重试与服务端扩容有意义；ERROR 是凭证、模型名、参数问题，
+     * 重试不会变好。调用方按这个分类决定日志级别与指标标签，不必再自己判异常链。
+     */
+    static ModelCallOutcome classify(Throwable failure) {
+        return timedOut(failure) ? ModelCallOutcome.TIMEOUT : ModelCallOutcome.ERROR;
     }
 
     /** 沿异常链找超时：okhttp 的超时最终是 InterruptedIOException("timeout")，SocketTimeoutException 是其子类。 */

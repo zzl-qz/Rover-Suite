@@ -82,7 +82,11 @@ public final class QueryStateService {
         }
     }
 
-    /** 查询口径到只读能力的映射：口径决定取哪一类事实，不做任何推断。 */
+    /**
+     * 查询口径到只读能力的映射：口径决定取哪一类事实，不做任何推断。
+     *
+     * {@link QuerySubject#NONE} 在 {@link #run} 入口就已被拦下并如实答复，走到这里说明调用方绕过入口，属于编程错误。
+     */
     private static AgentCapability capabilityOf(QuerySubject subject) {
         return switch (subject) {
             case METRIC -> AgentCapability.GATEWAY_METRICS_QUERY;
@@ -90,7 +94,7 @@ public final class QueryStateService {
             case ROUTE -> AgentCapability.ROUTE_QUERY;
             case CONFIG -> AgentCapability.CONFIG_READ;
             case EVENT -> AgentCapability.EVENT_QUERY;
-            case NONE -> AgentCapability.ROUTE_QUERY;
+            case NONE -> throw new IllegalStateException("状态查询口径为 NONE 时不应取数");
         };
     }
 
@@ -100,7 +104,7 @@ public final class QueryStateService {
             case INSTANCE -> instanceAnswer(task.target(), result);
             case ROUTE -> routeAnswer(task.path(), result);
             case CONFIG, EVENT -> joinEvidence(result);
-            case NONE -> fact(result);
+            case NONE -> throw new IllegalStateException("状态查询口径为 NONE 时不应生成回答");
         };
     }
 

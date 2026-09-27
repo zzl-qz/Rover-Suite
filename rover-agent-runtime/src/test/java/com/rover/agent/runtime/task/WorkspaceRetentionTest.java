@@ -9,7 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
-import com.rover.agent.core.model.IncidentSeverity;
 import com.rover.agent.core.model.IncidentStatus;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
@@ -153,7 +152,7 @@ class WorkspaceRetentionTest {
 
     private static Incident incident(String incidentId, String sessionId, long createdAtMillis) {
         return new Incident(incidentId, sessionId, IncidentOrigin.USER, "/api/demo/tt",
-                IncidentStatus.OPEN, IncidentSeverity.UNKNOWN, ResourceTarget.route("/api/demo/tt"),
+                IncidentStatus.OPEN, ResourceTarget.route("/api/demo/tt"),
                 TimeRange.unspecified(), "", createdAtMillis, createdAtMillis, List.of());
     }
 

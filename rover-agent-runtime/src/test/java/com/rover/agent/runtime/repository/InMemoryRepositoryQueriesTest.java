@@ -7,7 +7,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
-import com.rover.agent.core.model.IncidentSeverity;
 import com.rover.agent.core.model.IncidentStatus;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
@@ -102,7 +101,7 @@ class InMemoryRepositoryQueriesTest {
 
     private static Incident incident(String incidentId, String sessionId) {
         return new Incident(incidentId, sessionId, IncidentOrigin.USER, "/api/demo/tt",
-                IncidentStatus.OPEN, IncidentSeverity.UNKNOWN, ResourceTarget.route("/api/demo/tt"),
+                IncidentStatus.OPEN, ResourceTarget.route("/api/demo/tt"),
                 TimeRange.unspecified(), "", 1L, 1L, List.of());
     }
 

@@ -174,16 +174,6 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
         workers.shutdownNow();
     }
 
-    /** 当前执行参数，供诊断与测试读取。 */
-    public AgentExecutionSettings settings() {
-        return settings;
-    }
-
-    /** 当前等待队列深度。 */
-    public int queueSize() {
-        return workers.getQueue().size();
-    }
-
     private int retire(List<TaskView> tasks) {
         int retired = 0;
         for (TaskView view : tasks) {

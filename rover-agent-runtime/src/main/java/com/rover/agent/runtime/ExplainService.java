@@ -41,9 +41,6 @@ public final class ExplainService {
 
     private static final String STEP_ANSWER = "回答";
 
-    private static final String UNKNOWN_LEAD =
-            "没能识别出具体想问什么——先说清我是谁、能做什么；也可以带上具体路径或服务名再问一次。\n";
-
     private static final String CAPABILITY_NOTE = "能力清单来自代码注册表：未开放的能力不会被 Agent 调用。";
 
     private static final String NO_CONCLUSION =
@@ -74,7 +71,7 @@ public final class ExplainService {
                 answer(task, registry.introduce(), Confidence.HIGH, List.of(), List.of(CAPABILITY_NOTE));
                 return;
             }
-            Optional<TaskView> conclusion = latestConclusion(task);
+            Optional<TaskView> conclusion = latestConclusion(task.sessionId(), task.incidentId());
             if (conclusion.isEmpty()) {
                 answer(task, NO_CONCLUSION, Confidence.LOW, List.of(), List.of(NO_CONCLUSION_NOTE));
                 return;
@@ -90,16 +87,16 @@ public final class ExplainService {
     }
 
     /**
-     * 意图识别不出时的兜底说明：说明没理解，再给自我介绍与能力清单。
+     * 意图识别不出时的兜底说明：一句没听懂，再讲能做什么、可以怎么问。
      *
      * 闲聊型输入（「你好」「今天天气怎么样」）追问「请给出请求路径」是答非所问；
-     * 讲清身份、能做什么与怎么问，用户才有下一句话可说。置信度标 MEDIUM：
-     * 这是兜底说明而不是对问题的回答。
+     * 但也不该甩一整份能力清单过来——这里用 {@link CapabilityRegistry#introduceBriefly()}，
+     * 完整清单留给明确问「你能做什么」的人。置信度标 MEDIUM：这是兜底说明而不是对问题的回答。
      */
     public void introduce(InvestigationTask task) {
         task.start();
         try {
-            answer(task, UNKNOWN_LEAD + registry.introduce(), Confidence.MEDIUM, List.of(), List.of(CAPABILITY_NOTE));
+            answer(task, registry.introduceBriefly(), Confidence.MEDIUM, List.of(), List.of(CAPABILITY_NOTE));
         } catch (Exception ex) {
             log.error("Agent 兜底说明执行异常", ex);
             task.fail("兜底说明执行失败");
@@ -107,15 +104,14 @@ public final class ExplainService {
     }
 
     /**
-     * 会话内最近一次有结论的调查：先看当前事件下的任务（新的在前），再退回会话内最近任务。
+     * 会话里最近一次有结论的调查：先看当前事件下的任务（新的在前），再退回会话内最近任务。
      *
      * 只认已产出结论的任务：正在跑的调查还没有结论可解释，把它当成答案等于抢跑。
      */
-    private Optional<TaskView> latestConclusion(InvestigationTask task) {
-        String incidentId = task.incidentId();
+    private Optional<TaskView> latestConclusion(String sessionId, String incidentId) {
         if (incidentId == null) {
             incidentId = incidents == null ? null
-                    : incidents.session(task.sessionId()).map(Session::activeIncidentId).orElse(null);
+                    : incidents.session(sessionId).map(Session::activeIncidentId).orElse(null);
         }
         if (incidentId != null && incidents != null) {
             List<String> taskIds = incidents.incident(incidentId).map(Incident::taskIds).orElse(List.of());
@@ -126,9 +122,19 @@ public final class ExplainService {
                 }
             }
         }
-        return tasks.recentBySession(task.sessionId(), RECENT_TASK_SCAN).stream()
+        return tasks.recentBySession(sessionId, RECENT_TASK_SCAN).stream()
                 .filter(view -> view.result() != null)
                 .findFirst();
+    }
+
+    /**
+     * 会话里是否有可解释的结论。
+     *
+     * 供编排层判断「解释这条路有没有东西可讲」：没有结论时不是解释得不好，而是还没有那次调查，
+     * 编排层据此决定是否改走证据驱动的路径纠正。
+     */
+    public boolean hasConclusion(String sessionId) {
+        return latestConclusion(sessionId, null).isPresent();
     }
 
     private static void answer(InvestigationTask task, String summary, Confidence confidence,

@@ -44,39 +44,57 @@ public final class SnapshotTools {
                 (first, second) -> first));
     }
 
-    @Tool(description = "读取当前请求路径匹配到的 Gateway 路由配置快照")
+    @Tool(description = "读取当前请求路径匹配到的 Gateway 路由配置快照：匹配前缀、目标服务、超时等转发规则。"
+            + "问「这条路径打到哪个服务」「路由是怎么配的」时用它。"
+            + "它只说明转发规则本身，没有流量与错误数据；要判断请求是否失败，请配合实例快照、指标或追踪快照。")
     public String routeSnapshot() {
         calls.addIfAbsent(TOOL_ROUTE);
         return routeText();
     }
 
-    @Tool(description = "读取 Nameserver 注册实例及目标服务健康实例快照")
+    @Tool(description = "读取 Nameserver 的注册实例以及目标服务的健康实例快照：实例地址、健康状态、所属服务。"
+            + "问「某个服务有几个健康实例」「实例还在不在」时用它。"
+            + "它只说明注册与健康事实，不说明实例响应快慢或返回码；后者要用上游实例窗口观测或追踪快照。")
     public String instanceSnapshot() {
         calls.addIfAbsent(TOOL_INSTANCE);
         return instanceText();
     }
 
-    @Tool(description = "读取最近一分钟 Gateway 全局流量和拒绝计数快照；不是单一路由指标")
+    @Tool(description = "读取最近一分钟 Gateway 的全局流量与拒绝计数快照（请求数、拒绝数、观测时间）。"
+            + "问「网关整体 QPS / 拒绝多少」这类全局口径时用它。"
+            + "它是整个网关的合计值，不是单一路由或单一实例；要看某条路由或某台实例的失败情况，"
+            + "请用上游实例窗口观测，那里的样本量与统计窗口才可比。")
     public String metricsSnapshot() {
         return read(TOOL_METRICS, LIVE_REFERENCE, "实时指标不可用");
     }
 
-    @Tool(description = "读取该路由各上游实例的窗口请求数、5xx、连接失败、超时与延迟快照；用于定位是哪台实例异常")
+    @Tool(description = "读取该路由各上游实例在统计窗口内的请求数、5xx 数、连接失败数、超时数与延迟，每台实例一行。"
+            + "定位「是哪台实例异常」「是不是个别实例拖慢了整条路由」时用它。"
+            + "每行都带统计窗口与样本量，样本很少时不能据此下结论；窗口内没有转发记录时应如实说无数据，"
+            + "不要当成「没有问题」。")
     public String upstreamSnapshot() {
         return readJoined(TOOL_UPSTREAM, UPSTREAM_REFERENCE_PREFIX, "按上游实例的指标不可用");
     }
 
-    @Tool(description = "读取当前请求路径的 Gateway 抽样追踪快照")
+    @Tool(description = "读取当前请求路径的 Gateway 抽样追踪记录：一次调用经过的各跳及其阶段耗时与状态码。"
+            + "需要看清「一次调用是在哪一跳慢下来或失败的」时用它。"
+            + "追踪是抽样的，采样率可能很低，也可能一条都没有；没有记录不等于没有发生故障，"
+            + "此时应改用实例快照或上游实例窗口观测来判断。")
     public String traceSnapshot() {
         return readJoined(TOOL_TRACE, TRACE_REFERENCE_PREFIX, "追踪数据不可用");
     }
 
-    @Tool(description = "读取 Gateway 与 Nameserver 当前生效配置快照；只说明生效值，不代表运行态已按该配置工作")
+    @Tool(description = "读取 Gateway 与 Nameserver 当前生效配置快照（限流、熔断、超时、采样率等）。"
+            + "问「阈值是多少」「是不是配置把请求挡下来了」时用它。"
+            + "它只说明配置的生效值，不代表运行态真的按该配置工作，也不含变更历史；"
+            + "要确认实际生效效果，请配合指标或追踪快照。")
     public String configSnapshot() {
         return read(TOOL_CONFIG, CONFIG_REFERENCE, "配置快照不可用");
     }
 
-    @Tool(description = "读取 Nameserver 最近注册事件快照（注册、注销、剔除、标记不健康）")
+    @Tool(description = "读取 Nameserver 最近的注册事件快照（注册、注销、剔除、标记不健康）。"
+            + "问「最近有没有实例上下线」「实例是什么时候掉的」时用它。"
+            + "它只记录注册中心的变更经过，不含请求失败原因，也不含 Gateway 侧的转发异常。")
     public String eventSnapshot() {
         return read(TOOL_EVENT, EVENT_REFERENCE, "注册事件不可用");
     }

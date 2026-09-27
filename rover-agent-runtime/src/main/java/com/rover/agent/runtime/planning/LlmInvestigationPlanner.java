@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.capability.CapabilityDescriptor;
 import com.rover.agent.core.capability.CapabilityRegistry;
+import com.rover.agent.core.capability.UntrustedText;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.planning.InvestigationPlanner;
@@ -40,7 +41,8 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
     private static final String SYSTEM_PROMPT = "你是 Rover 运维 Agent 的调查规划模块。"
             + "根据用户问题、可用只读能力与已采集证据，给出下一步要做的只读查询。"
             + "只能从给出的能力名里选择，不要编造能力、不要输出命令、URL、SQL 或任何写操作。"
-            + "只输出一个 JSON 对象，不要输出解释文字，也不要用代码块包裹。";
+            + "只输出一个 JSON 对象，不要输出解释文字，也不要用代码块包裹。"
+            + UntrustedText.contract();
 
     private static final int MAX_EVIDENCE_LINES = 8;
     private static final int MAX_LINE_LENGTH = 160;
@@ -72,9 +74,9 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
     /** 请模型给出计划建议；返回空表示「没有可用建议」，调用方沿用确定性计划。 */
     private Optional<InvestigationPlan> proposal(PlanningRequest request, InvestigationPlan base) {
         String user = userPrompt(request);
-        return completion.complete(SYSTEM_PROMPT, user)
-                .flatMap(ModelJson::object)
-                .map(node -> merge(node, request, base));
+        // 契约：必须是合法 JSON 对象；能力名越界由 merge 丢弃（那是内容级校验，不影响整条采纳）。
+        return completion.complete(SYSTEM_PROMPT, user,
+                raw -> ModelJson.object(raw).map(node -> merge(node, request, base)));
     }
 
     /**
@@ -118,8 +120,8 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
     }
 
     private String userPrompt(PlanningRequest request) {
-        StringBuilder prompt = new StringBuilder("用户问题：").append(request.question())
-                .append("\n目标对象：").append(request.target().type()).append(" ").append(request.target().value())
+        StringBuilder prompt = new StringBuilder(UntrustedText.block("用户问题", request.question()))
+                .append("目标对象：").append(request.target().type()).append(" ").append(request.target().value())
                 .append("\n请求路径：").append(request.path().isBlank() ? "（未确定）" : request.path())
                 .append("\n可用只读能力（只能从这些名字里选）：");
         for (CapabilityDescriptor descriptor : registry.selectable()) {
@@ -131,15 +133,18 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
         if (request.evidence().isEmpty()) {
             prompt.append("\n已采集证据：暂无（这是第一轮规划）");
         } else {
-            prompt.append("\n已采集证据：");
+            // 证据摘要来自网关与注册中心的事实（可能含外部写入的名称、错误文本），按不可信数据围起来。
+            StringBuilder evidenceLines = new StringBuilder();
             int count = 0;
             for (Evidence evidence : request.evidence()) {
                 if (count++ >= MAX_EVIDENCE_LINES) {
-                    prompt.append("\n- …（其余证据略）");
+                    evidenceLines.append("- …（其余证据略）\n");
                     break;
                 }
-                prompt.append("\n- [").append(evidence.type()).append("] ").append(cut(evidence.summary()));
+                evidenceLines.append("- [").append(evidence.type()).append("] ")
+                        .append(cut(evidence.summary())).append('\n');
             }
+            prompt.append("\n已采集证据：\n").append(UntrustedText.block("已采集证据", evidenceLines.toString()));
         }
         if (!request.limitations().isEmpty()) {
             prompt.append("\n已知判断边界：").append(cut(String.join("；", request.limitations())));

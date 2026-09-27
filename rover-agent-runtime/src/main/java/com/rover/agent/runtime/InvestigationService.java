@@ -32,6 +32,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -104,7 +105,7 @@ public final class InvestigationService {
         this.limits = limits == null ? PlanningLimits.defaults() : limits;
     }
 
-    /** 旧入口：新建会话与事件后提交一次「目标已确定」的调查。 */
+    /** 一次性调查入口：新建会话与事件后提交一次「目标已确定」的调查，不需要连续追问时用它最省事。 */
     public TaskView submit(String path, String question) {
         String target = validatePath(path);
         String asked = validateQuestion(question);
@@ -143,13 +144,21 @@ public final class InvestigationService {
         tasks.discard(taskId);
     }
 
+    /** 执行一次已解析目标的调查；不回调结论，行为与旧入口一致。 */
+    public void run(InvestigationTask task) {
+        run(task, null);
+    }
+
     /**
      * 执行一次已解析目标的调查：调查图 → 规则结论 → 模型解读 → 结论回写事件。
      *
      * 调用前必须已通过 {@code task.bind(...)} 绑定事件、取数路径与结构化目标。
      * 本方法只在 Agent Worker 线程里调用，绝不占用 Servlet 请求线程。
+     *
+     * {@code onReport} 在任务定型之前回调：客户端收到 TASK_COMPLETED 就会重新拉取会话，
+     * 结论若在此之后才落库，它会先看到一条只有「已继续调查…」的时间线。
      */
-    public void run(InvestigationTask task) {
+    public void run(InvestigationTask task, Consumer<InvestigationReport> onReport) {
         task.start();
         try {
             DynamicInvestigationGraph graph =
@@ -165,12 +174,25 @@ public final class InvestigationService {
                     outcome.findings().summary(), outcome.findings().confidence(), outcome.evidence(),
                     outcome.limitations(), outcome.findings().hypotheses(), null);
             report = explain(task, report, outcome);
+            publish(onReport, report);
             task.complete(report);
             // 结论回写到事件：事件因此成为「一个问题的多次调查」的聚合点，追问时能继承最新结论。
             incidents.summarise(task.incidentId(), report.summary());
         } catch (Exception ex) {
             log.error("Agent 诊断任务异常", ex);
             task.fail("诊断任务执行失败");
+        }
+    }
+
+    /** 结论回调失败只损失可追溯性，不该把一次已经跑完的调查判成失败。 */
+    private static void publish(Consumer<InvestigationReport> onReport, InvestigationReport report) {
+        if (onReport == null) {
+            return;
+        }
+        try {
+            onReport.accept(report);
+        } catch (RuntimeException ex) {
+            log.warn("调查结论落库失败，不影响本次调查结果", ex);
         }
     }
 
