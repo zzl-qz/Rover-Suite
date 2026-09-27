@@ -223,7 +223,7 @@ Built-in management endpoints:
 | Gateway | `GET/POST /_manage/configs` | List or update registered runtime settings |
 | Gateway | `GET /_manage/metrics`, `/metrics/live`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, slim live snapshot (`range=60/300`; no p99/upstream Top; route Top short-cached), self-check, and Prometheus text |
 | Gateway | `GET /_manage/metrics/routes` | One route's per-upstream window observation plus declared `targets`, aggregated `byVersion`, and `versionCheck` (`routeId`, `range=60/300`); only upstreams that forwarded traffic in the window are listed, and with metrics collection off it returns `enabled=false` with an empty `rows` |
-| Gateway | `GET /_manage/traces` | Bounded request timeline with `traceId`, `path`, and `slow` filters |
+| Gateway | `GET /_manage/traces` | Bounded request timeline with `traceId`, `path`, `slow`, and `error` filters (`error` set to `1` or `true` returns only traces whose status code is ≥ 500) |
 | Nameserver | `GET /_manage/status`, `/instances` | Runtime status and current in-memory instances |
 | Nameserver | `GET /_manage/instances/snapshot` | Verifiable instance view grouped by `service+group`, with `revision`/`epoch` and per-instance id, host, port, group, weight, health, ephemeral flag, and last heartbeat |
 | Nameserver | `GET/POST /_manage/configs` | List or update registered runtime settings |

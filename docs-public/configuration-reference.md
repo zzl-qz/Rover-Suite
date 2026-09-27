@@ -32,6 +32,12 @@ Health probe: `GET /_manage/health` → `{"status":"UP","component":"..."}`
 | `rover.admin.auth.max-login-failures` | `5` | Failed sign-ins allowed per source within the window; env `ROVER_ADMIN_MAX_LOGIN_FAILURES` | Restart |
 | `rover.admin.auth.failure-window-seconds` | `600` | Failure-counting window in seconds; env `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | Restart |
 | `rover.admin.auth.trust-forwarded-headers` | `false` | Source used for sign-in rate limiting: by default only the TCP peer `remoteAddr`; the first `X-Forwarded-For` segment is used only when this is explicitly enabled. Enable it only when Admin really runs behind a trusted reverse proxy — otherwise forged headers bypass the failure limit | Restart |
+| `rover.admin.log-store-path` | `./rover-logs/rover` | Location of the local H2 record store (real file `<path>.mv.db`); missing directories are created. It holds the operational evidence the Agent reads back through the `queryLogs` tool | Restart |
+| `rover.admin.log-retention-days` | `30` | Retention for diagnostic evidence (config change / rollback / error / instance health flip); purged when older | Restart |
+| `rover.admin.log-telemetry-retention-days` | `3` | Retention for high-volume telemetry (metric samples / slow and 5xx traces). Shorter on purpose so the store does not bloat | Restart |
+| `rover.admin.log-collect-interval-seconds` | `30` | Telemetry collection interval: how often Gateway / Nameserver status, metrics, instances and traces are sampled into the record store (minimum 5; the first round is delayed by one cycle) | Restart |
+| `rover.admin.log-queue-capacity` | `8192` | Normal (telemetry) queue capacity; best-effort — writes are dropped when full and never make a business request wait | Restart |
+| `rover.admin.log-critical-capacity` | `16384` | Critical (diagnostic evidence) queue capacity; full queue waits briefly instead of dropping records | Restart |
 | `rover.admin.model.config-file` | empty = `config/admin-model.properties` under the working directory | Model config file path (UTF-8 properties, holds the `api-key-enc` ciphertext); an empty config is created on startup when the file is missing, and the whole `config/` directory is gitignored; env `ROVER_ADMIN_MODEL_CONFIG_FILE` | Restart |
 | `rover.admin.model.master-key` | empty | Base64 that decodes to 32 bytes is used directly as the AES key; otherwise a password is run through PBKDF2-HMAC-SHA256 (65536 rounds); env `ROVER_ADMIN_MASTER_KEY` | Restart |
 | `rover.admin.model.master-key-file` | empty = `master.key` next to the config file | Master key file; a 32-byte random master key is generated and persisted on first encryption; env `ROVER_ADMIN_MASTER_KEY_FILE` | Restart |
@@ -61,6 +67,16 @@ removes the auto-generation mechanism). For production, do one of two things: se
 environment variable (or `rover.admin.model.master-key`), or point `rover.admin.model.master-key-file` at a
 separate directory or mounted volume. Keys, plaintext passwords, and ciphertext never appear in logs or responses.
 
+### Record store (`rover.admin.log-*`)
+
+The six keys above configure the local H2 record store inside the Admin process: config changes / rollbacks / failed
+writes, component and instance health flips, per-cycle aggregated metric samples, and slow or 5xx traces all land there,
+whether or not anyone asks a question. Writes are asynchronous and dual-queued (diagnostic evidence first, telemetry
+best-effort), and a purge task runs every 60 minutes with one retention window per category. **This data is local**
+(`rover-logs/` is gitignored): wipe the directory or move hosts and it is gone, and replicated Admin instances each write
+their own history — it is not a cross-host audit source. What gets written and how the Agent reads it is documented in
+[Rover Ops Agent §6.3](./ops-agent.md#63-record-store-and-telemetry-collection).
+
 ## Agent Workbench configuration
 
 | Configuration | Default | Description | Applied |
@@ -73,6 +89,9 @@ separate directory or mounted volume. Keys, plaintext passwords, and ciphertext 
 | `rover.agent.planning.max-tool-calls` | `10` | Maximum read-only capability calls per investigation (>0); after the limit no further call is made and skipped steps are reported honestly | Restart |
 | `rover.agent.planning.max-plan-steps` | `6` | Maximum steps in a single round's plan (>0); extra steps are truncated by plan validation, and any unregistered write capability is dropped | Restart |
 | `rover.agent.llm.quick-timeout-seconds` | `10` | Wait cap for cheap calls that can always fall back — intent recognition, target resolution, investigation planning (seconds; `0` = use the model config timeout); retried once on timeout only, and the AI interpretation is unaffected | Restart |
+| `spring.ai.tools.limits.max-total-tool-calls` | `30` | Total tool-call budget for one task on the conversation path; keep it in sync with `OpsTools.MAX_CALLS`. Too small and a sentence asking three things gets cut off mid-collection | Restart |
+| `spring.ai.tools.limits.max-calls-per-tool-default` | `10` | Per-tool call limit within that budget | Restart |
+| `spring.ai.openai.fast-base-url` / `fast-model` / `fast-api-key` | empty | Optional small model for cheap structured calls (intent / target / planning); falls back to the main model with thinking off when unset | Restart |
 | `rover.agent.metrics.enabled` | `true` | Master switch for Agent runtime metrics; `false` (emergency degradation) registers no meters and changes no business logic | Restart |
 | `management.metrics.export.prometheus.enabled` | `false` | 指标对外出口开关：置 `true` 后注册表切换为 `PrometheusMeterRegistry`，由 `/actuator/prometheus` 供抓取；指标名与标签口径不变（`rover.agent.*`）。需同步在 `management.endpoints.web.exposure.include` 中加入 `prometheus` | Restart |
 | `management.endpoints.web.exposure.include` | `health,info` | Actuator 暴露的端点；加入 `prometheus` 即可抓取指标 | Restart |

@@ -21,6 +21,10 @@ All notable changes to Rover-Suite are documented here. Releases follow
 - Added Agent historical-log query and built-in operational-knowledge
   retrieval capabilities (`LOG_QUERY` / `KNOWLEDGE_RETRIEVAL`), answering
   "what changed / what failed" and "how to configure / onboard" questions.
+- Documented the model-driven conversation path (`ToolLoopService` with nine
+  read-only tools), the record store and telemetry collector, the task-cancel
+  API, and the alert-ingestion API across the bilingual Ops Agent guide,
+  configuration reference, Admin API reference, and user guide.
 - Fixed Admin configuration type detection for `gateway.loadbalance.strategy`.
 
 ## Release process

@@ -31,6 +31,8 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | POST | `/api/agent/sessions/{sessionId}/messages` | 发一条消息（新问题或对当前事件的追问），`202` 返回任务句柄 |
 | GET | `/api/agent/tasks/{taskId}` | 任务详情：步骤、证据与结论 |
 | GET | `/api/agent/tasks/{taskId}/events` | 任务事件流（SSE）：先补发 `SNAPSHOT`，再按增量推送结构化事件 |
+| POST | `/api/agent/tasks/{taskId}/cancel` | 协作式取消仍在执行的任务：404=任务不存在或不属于当前用户，409=`TASK_NOT_CANCELLABLE`（已结束），200=已标记取消并中断执行线程 |
+| POST | `/api/agent/events/ingest` | 事件接入：把一条告警转成一次自动调查（路由 + 窗口 + 怀疑点），`202` 返回任务句柄 |
 | GET | `/api/auth/status` | 登录态与 CSRF 令牌；免登录 |
 | POST | `/login` | 表单登录（`username`、`password`、`_csrf`）；成功 302 到 `redirect` 或 `/`，失败 302 到 `/login.html?error=1` |
 | POST | `/api/logout` | 登出，成功后回 200；只认 POST |
@@ -54,8 +56,11 @@ Agent 任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED` 或 
 并明确说明「不能据此认定异常已恢复」。
 
 P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/tasks/{taskId}` 与 SSE 快照都带以下字段：
-`taskType`（`QUERY` / `INVESTIGATION` / `EXPLAIN` / `ACTION_PLAN` / `UNSUPPORTED`）、`intent`（`intent`、`confidence`、
-`reason`、`targetHint`、`requestedAction`）、`plan`（`goal`、`hypotheses`、`steps`；每步含 `capability`、`reason`、
+`taskType`（`CONVERSATION` / `QUERY` / `INVESTIGATION` / `EXPLAIN` / `ACTION_PLAN` / `UNSUPPORTED`）。
+其中 `CONVERSATION` 是工作台对话主路径的默认形态：由模型自己决定查哪些只读工具、查几次，因此不预分类意图、
+也不预先产出计划（`plan` 为空，`executedCapabilities` 仍如实列出实际跑过的能力）；`taskType` 是给用户看的执行形态，
+必须与实际发生的动作一致。事件接入产生的调查仍是 `INVESTIGATION`，下面这些字段也主要出现在它身上：
+`intent`（`intent`、`confidence`、`reason`、`targetHint`、`requestedAction`）、`plan`（`goal`、`hypotheses`、`steps`；每步含 `capability`、`reason`、
 `target`、`required`）、`executedCapabilities`（实际调用或按事实跳过的只读能力）与 `actionPlan`（处置计划）。
 同一句话按意图走不同形态：状态查询只调用一个只读能力、不建事件；能力咨询由能力注册表回答、不进入目标解析；
 处置请求只产出可人工审核的计划、不执行写操作；定时巡检等未开放请求如实说明边界、不跑空调查。
@@ -104,7 +109,7 @@ P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/t
 | `order-service 几个健康实例？` | 状态查询：只调 `INSTANCE_QUERY`，按解析出的服务统计健康实例数 |
 | `/api/demo/tt 命中了哪条路由？` | 状态查询：只调 `ROUTE_QUERY`，回答命中的路由事实 |
 | `为什么 /api/demo/tt 调用失败？` | 故障调查：按动态计划（路由 → 实例 → 指标 → 追踪）执行只读调查，产出假设验证结论 |
-| `你能做什么？` | 解释：由 `CapabilityRegistry` 列出真实能力清单（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件），不解析资源；`你是谁` / `介绍一下你自己` 同义 |
+| `你能做什么？` | 解释：由 `CapabilityRegistry` 列出真实能力清单（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件 / 历史日志 / 运维知识），不解析资源；`你是谁` / `介绍一下你自己` 同义 |
 | `你好` / 看不出意图的闲聊 | 兜底：不追问资源路径，回一段自我介绍 + 能力清单（同一份注册表），告诉用户可以怎么问 |
 | `把 order-03 摘掉` | 处置计划：只读预检 + 不可执行的 `ActionPlan`，`executable=false` |
 | `每天 9 点自动巡检并发邮件` | 未开放：如实说明「定时巡检尚未开放」，不进入调查 |
@@ -135,6 +140,29 @@ P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/t
 
 `userId` 一律取自后端认证上下文（`Authentication.getName()`），未启用登录或匿名访问时为空；请求体里没有也不接受
 `userId` 字段，前端提交同名 JSON 字段会被忽略。会话、任务与事件的查询都按该身份过滤，默认用户只能看到自己的记录。
+
+### 事件接入（告警 → 自动调查）
+
+`POST /api/agent/events/ingest` 是给监控系统用的机器入口：把一条告警转成「哪条路由 + 什么时间窗 + 怀疑什么」，
+Admin 为它独立开会话、记一笔 `ALERT` 来源的事件，并复用与人工提问完全相同的取数链路开展调查。
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `path` | 是 | 要排查的路由前缀，例如 `/api/demo/tt`；缺失或空白回 `400` |
+| `message` | 否 | 告警文本（含现象与怀疑点） |
+| `fromMillis` / `toMillis` | 否 | 观测窗口（毫秒时间戳）；两者必须成对给出，只给一个回 `400` |
+
+- 响应 `202` + 任务视图（`sessionId`、`taskId`、`status`），接入方凭 `taskId` 轮询详情或订阅 SSE，
+  与人工提问的用法完全一致。
+- 需要登录（建议专用的服务账号）；产生的会话**不归属任何人工用户**，因此不与人工会话争「单活跃任务」锁，
+  也便于在事件视图里单独聚合。会话与任务仍留在 Admin 内存里，重启后不可查询，接入方应自行保存 `taskId` 与结论。
+- Agent 不会主动去监控源头拉取：主动巡检（定时自巡检、自建 `INSPECTION` 事件）尚未实现，这一步仍由监控系统推送。
+
+```bash
+curl -s -X POST -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
+  -d '{"path":"/api/demo/tt","message":"5xx 突增多","fromMillis":1735689600000,"toMillis":1735776000000}' \
+  "http://127.0.0.1:9090/api/agent/events/ingest"
+```
 
 ### 调用示例
 
