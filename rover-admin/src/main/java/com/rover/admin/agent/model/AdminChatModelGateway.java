@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import jakarta.annotation.PostConstruct;
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
@@ -28,7 +29,7 @@ import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -49,9 +50,13 @@ public class AdminChatModelGateway implements ChatModelGateway {
 
     private volatile ModelSettings applied = ModelSettings.none();
     private volatile ChatClient client;
+    /** 快速模型客户端：承接廉价调用；未配置或构建失败时为 null（回退主模型）。 */
+    private volatile ChatClient fastClient;
     private volatile String lastError;
     /** 场景超时客户端按超时秒数缓存；配置每次成功生效时整体换新，避免复用旧配置建出的客户端。 */
     private volatile Map<Integer, ChatClient> sceneClients = new ConcurrentHashMap<>();
+    /** 快速模型的场景超时客户端缓存。 */
+    private volatile Map<Integer, ChatClient> fastSceneClients = new ConcurrentHashMap<>();
     private final AtomicLong buildSequence = new AtomicLong();
     private volatile long buildId;
     private volatile Instant appliedAt;
@@ -77,23 +82,38 @@ public class AdminChatModelGateway implements ChatModelGateway {
         if (!candidate.configured()) {
             this.applied = candidate;
             this.client = null;
+            this.fastClient = null;
             this.sceneClients = new ConcurrentHashMap<>();
+            this.fastSceneClients = new ConcurrentHashMap<>();
             this.lastError = null;
             return;
         }
         if (candidate.keyState() == ModelSettings.KeyState.UNREADABLE) {
             this.applied = candidate;
             this.client = null;
+            this.fastClient = null;
             this.sceneClients = new ConcurrentHashMap<>();
+            this.fastSceneClients = new ConcurrentHashMap<>();
             this.lastError = "API 密钥无法解密，请重新填写";
             log.warn("模型 API 密钥无法解密，模型停用");
             return;
         }
         try {
             ChatClient built = build(candidate);
+            ChatClient fastBuilt = null;
+            if (candidate.fastConfigured()) {
+                try {
+                    fastBuilt = buildFast(candidate, candidate.timeoutSeconds());
+                } catch (RuntimeException | LinkageError ex) {
+                    // 快速模型只是加速项：构建失败只降级（fastClient=null → 回退主模型），不拖累主诊断链。
+                    log.warn("快速模型客户端构建失败，廉价调用回退主模型：{}", ex.toString());
+                }
+            }
             this.applied = candidate;
             this.client = built;
+            this.fastClient = fastBuilt;
             this.sceneClients = new ConcurrentHashMap<>();
+            this.fastSceneClients = new ConcurrentHashMap<>();
             this.lastError = null;
             this.buildId = buildSequence.incrementAndGet();
             this.appliedAt = Instant.now();
@@ -141,8 +161,12 @@ public class AdminChatModelGateway implements ChatModelGateway {
      */
     @Override
     public ChatClient chatClient(int timeoutSeconds) {
-        ChatClient current = chatClient();
         ModelSettings settings = applied;
+        // 配置了快速模型：廉价调用（意图/目标/规划）一律路由到快速模型，不再用思考模型硬扛。
+        if (settings.fastConfigured()) {
+            return fastScene(timeoutSeconds);
+        }
+        ChatClient current = chatClient();
         int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
         if (timeoutSeconds <= 0 || timeoutSeconds >= configured) {
             return current;
@@ -157,12 +181,45 @@ public class AdminChatModelGateway implements ChatModelGateway {
         return scene;
     }
 
+    /** 配置了快速模型时的廉价调用入口：走快速模型；构建失败则回退主模型场景客户端。 */
+    private ChatClient fastScene(int timeoutSeconds) {
+        ChatClient current = fastClient;
+        if (current == null) {
+            return transientClient(applied, timeoutSeconds);
+        }
+        int configured = ModelSettings.clampTimeout(applied.timeoutSeconds());
+        if (timeoutSeconds <= 0 || timeoutSeconds >= configured) {
+            return current;
+        }
+        Map<Integer, ChatClient> cache = fastSceneClients;
+        ChatClient cached = cache.get(timeoutSeconds);
+        if (cached != null) {
+            return cached;
+        }
+        ChatClient scene = buildFast(applied, timeoutSeconds);
+        cache.put(timeoutSeconds, scene);
+        return scene;
+    }
+
+    /** 用快速模型配置建客户端：不做深度思考，也不落盘、不改当前生效配置。 */
+    private ChatClient buildFast(ModelSettings settings, int timeoutSeconds) {
+        FastModel fast = settings.fast();
+        ModelSettings fastSettings = new ModelSettings(true, fast.baseUrl(), fast.apiKey(), fast.model(),
+                ModelSettings.clampTimeout(timeoutSeconds), settings.source(), ModelSettings.keyStateOf(fast.apiKey()));
+        return build(fastSettings, false);
+    }
+
     @Override
     public String description() {
         if (!applied.configured()) {
             return "未配置模型";
         }
-        return applied.model() + " @ " + host(applied.baseUrl());
+        String main = applied.model() + " @ " + host(applied.baseUrl());
+        if (applied.fastConfigured()) {
+            FastModel fast = applied.fast();
+            return main + " / 快速 " + fast.model() + " @ " + host(fast.baseUrl());
+        }
+        return main;
     }
 
     /** 当前生效的配置（含明文密钥，仅供服务层做差异与掩码，不得直接返回给页面）。 */
@@ -260,8 +317,15 @@ public class AdminChatModelGateway implements ChatModelGateway {
     private ChatModel thinkingCapableModel(ModelSettings settings, boolean thinking) {
         DeepSeekChatOptions.Builder options = DeepSeekChatOptions.builder();
         options.model(settings.model());
-        if (thinking && supportsThinking(settings.model())) {
-            options.enableThinking();
+        if (supportsThinking(settings.model())) {
+            if (thinking) {
+                options.enableThinking();
+            } else {
+                // 关键：glm 系列不传 thinking 参数时是「默认开启思考」的。意图识别、目标解析、规划
+                // 这些廉价调用都走 thinking=false，若不显式禁用，会背上 11 秒以上的思考时间，
+                // 撞上 10 秒的场景超时，表现就是「每次都超时、重试后转澄清」。显式禁用后降到约 3 秒。
+                options.disableThinking();
+            }
         }
         DeepSeekApi api = DeepSeekApi.builder()
                 .baseUrl(settings.baseUrl())
@@ -317,13 +381,20 @@ public class AdminChatModelGateway implements ChatModelGateway {
      * 带超时的 HTTP 客户端：原生协议的选项里没有超时字段，等待上限只能落在 HTTP 层。
      *
      * 这层超时是必要的——意图识别这类场景靠 {@code chatClient(timeoutSeconds)} 收紧等待，
-     * 底层不设超时那层收紧就形同虚设。读超时按「两次数据之间的间隔」计，
-     * 持续输出的流式解读不会被它误杀。
+     * 底层不设超时那层收紧就形同虚设。这条 RestClient 只服务非流式调用（意图识别、目标解析、
+     * 规划、连接测试），流式对话走另一条 WebClient 路径，不经过这里。
+     *
+     * 用 {@link JdkClientHttpRequestFactory}（JDK 的 {@link HttpClient}）而不是
+     * {@code SimpleClientHttpRequestFactory}：后者基于 {@code HttpURLConnection}，读超时后
+     * keep-alive 连接可能被复用为半开连接，重试会读到上一个请求的残留响应、把
+     * content-type 解析成 {@code application/octet-stream}。JDK 客户端连接管理更稳，不会复用坏连接。
      */
     private static RestClient.Builder restClient(ModelSettings settings) {
         Duration timeout = Duration.ofSeconds(ModelSettings.clampTimeout(settings.timeoutSeconds()));
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(timeout);
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(timeout)
+                .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
         factory.setReadTimeout(timeout);
         return RestClient.builder().requestFactory(factory);
     }

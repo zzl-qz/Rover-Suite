@@ -39,12 +39,18 @@ public class ModelConfigStore {
     private static final String KEY_MODEL = "model";
     private static final String KEY_TIMEOUT_SECONDS = "timeout-seconds";
     private static final String KEY_API_KEY_ENC = "api-key-enc";
+    private static final String KEY_FAST_BASE_URL = "fast-base-url";
+    private static final String KEY_FAST_MODEL = "fast-model";
+    private static final String KEY_FAST_API_KEY_ENC = "fast-api-key-enc";
 
     private static final String SEED_CHAT = "spring.ai.model.chat";
     private static final String SEED_BASE_URL = "spring.ai.openai.base-url";
     private static final String SEED_API_KEY = "spring.ai.openai.api-key";
     private static final String SEED_MODEL = "spring.ai.openai.chat.model";
     private static final String SEED_TIMEOUT = "spring.ai.openai.timeout";
+    private static final String SEED_FAST_BASE_URL = "spring.ai.openai.fast-base-url";
+    private static final String SEED_FAST_MODEL = "spring.ai.openai.fast-model";
+    private static final String SEED_FAST_API_KEY = "spring.ai.openai.fast-api-key";
 
     private final AdminModelProperties properties;
     private final Environment environment;
@@ -82,6 +88,7 @@ public class ModelConfigStore {
      */
     public void persist(ModelSettings settings) {
         int timeout = ModelSettings.clampTimeout(settings.timeoutSeconds());
+        FastModel fast = settings.fast() == null ? FastModel.none() : settings.fast();
         Map<String, String> entries = new LinkedHashMap<>();
         entries.put(KEY_ENABLED, Boolean.toString(settings.enabled()));
         entries.put(KEY_BASE_URL, nullToEmpty(settings.baseUrl()));
@@ -90,10 +97,15 @@ public class ModelConfigStore {
         if (settings.apiKey() != null && !settings.apiKey().isBlank()) {
             entries.put(KEY_API_KEY_ENC, cipher.encrypt(settings.apiKey()));
         }
+        entries.put(KEY_FAST_BASE_URL, nullToEmpty(fast.baseUrl()));
+        entries.put(KEY_FAST_MODEL, nullToEmpty(fast.model()));
+        if (fast.apiKey() != null && !fast.apiKey().isBlank()) {
+            entries.put(KEY_FAST_API_KEY_ENC, cipher.encrypt(fast.apiKey()));
+        }
         write(entries);
         this.current = new ModelSettings(settings.enabled(), nullToEmpty(settings.baseUrl()), settings.apiKey(),
                 nullToEmpty(settings.model()), timeout, ModelSettings.Source.FILE,
-                ModelSettings.keyStateOf(settings.apiKey()));
+                ModelSettings.keyStateOf(settings.apiKey()), fast);
     }
 
     /**
@@ -149,10 +161,22 @@ public class ModelConfigStore {
                     log.warn("模型 API 密钥无法解密，需要在控制台重新填写：{}（{}）", target, ex.getMessage());
                 }
             }
+            // 快速模型（可选）：解密失败只降级为空密钥（等价于未配置快模型），不回退整个主配置。
+            String fastEncrypted = trim(props.getProperty(KEY_FAST_API_KEY_ENC));
+            String fastApiKey = "";
+            if (!fastEncrypted.isEmpty()) {
+                try {
+                    fastApiKey = cipher.decrypt(fastEncrypted);
+                } catch (RuntimeException ex) {
+                    log.warn("快速模型 API 密钥无法解密，本次按未配置处理：{}（{}）", target, ex.getMessage());
+                }
+            }
+            FastModel fast = new FastModel(trim(props.getProperty(KEY_FAST_BASE_URL)),
+                    fastApiKey, trim(props.getProperty(KEY_FAST_MODEL)));
             return Optional.of(new ModelSettings(
                     Boolean.parseBoolean(trim(props.getProperty(KEY_ENABLED, "true"))), baseUrl, apiKey, model,
                     ModelSettings.clampTimeout(parseSeconds(props.getProperty(KEY_TIMEOUT_SECONDS))),
-                    ModelSettings.Source.FILE, keyState));
+                    ModelSettings.Source.FILE, keyState, fast));
         } catch (IOException | IllegalArgumentException ex) {
             log.warn("模型配置文件读取失败，本次回退为环境变量播种：{}（{}）", target, ex.getMessage());
             return Optional.empty();
@@ -162,11 +186,14 @@ public class ModelConfigStore {
     private ModelSettings seedFromEnvironment() {
         boolean enabled = "openai".equalsIgnoreCase(trim(environment.getProperty(SEED_CHAT)));
         String apiKey = trim(environment.getProperty(SEED_API_KEY));
+        FastModel fast = new FastModel(trim(environment.getProperty(SEED_FAST_BASE_URL)),
+                trim(environment.getProperty(SEED_FAST_API_KEY)),
+                trim(environment.getProperty(SEED_FAST_MODEL)));
         return new ModelSettings(enabled, trim(environment.getProperty(SEED_BASE_URL)),
                 apiKey, trim(environment.getProperty(SEED_MODEL)),
                 ModelSettings.clampTimeout(parseSeconds(environment.getProperty(SEED_TIMEOUT))),
                 enabled ? ModelSettings.Source.ENV : ModelSettings.Source.NONE,
-                ModelSettings.keyStateOf(apiKey));
+                ModelSettings.keyStateOf(apiKey), fast);
     }
 
     private void write(Map<String, String> entries) {

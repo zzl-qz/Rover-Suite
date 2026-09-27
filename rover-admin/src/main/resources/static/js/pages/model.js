@@ -1,8 +1,10 @@
 /**
- * 模型配置页：预设 + 自定义、保存即生效、连接测试与效果验证。
+ * 模型配置页：厂商收敛 + 保存即生效 + 连接测试与效果验证。
+ *
+ * 用户只选「厂商」+ 填 key，服务地址 / 主模型 / 快速模型都由后台按厂商映射，不再要求用户
+ * 理解「glm-4.6 和 glm-4-air 的区别」。本地部署（Ollama / vLLM）没有厂商概念，走「自定义」。
  *
  * 密钥只在这里被"写"一次，读回来永远是掩码：留空 = 不改，显式点「清除已存密钥」才会清除。
- * 这样即使用户只是想改模型名，也不会因为表单里没有密钥而把已存的密钥抹掉。
  */
 window.RoverAdminPages = window.RoverAdminPages || {};
 window.RoverAdminPages.model = {
@@ -10,14 +12,16 @@ window.RoverAdminPages.model = {
         return {
             modelConfig: null,
             modelError: null,
+            modelVendor: 'custom',
+            modelAdvanced: false,
             modelForm: {
                 enabled: false,
-                baseUrl: '',
-                model: '',
                 apiKey: '',
                 timeoutSeconds: 30,
+                customBaseUrl: '',
+                customModel: '',
+                customFastModel: '',
             },
-            modelPresetIndex: '',
             modelClearKey: false,
             modelSaving: false,
             modelTesting: false,
@@ -28,8 +32,17 @@ window.RoverAdminPages.model = {
     },
 
     computed: {
-        modelPresets() {
-            return (this.modelConfig && this.modelConfig.presets) || [];
+        /** 厂商清单（含映射出的 baseUrl / 主模型 / 快速模型）。 */
+        modelVendors() {
+            return (this.modelConfig && this.modelConfig.vendors) || [];
+        },
+        /** 当前厂商的映射项；找不到返回空对象。 */
+        currentVendorMap() {
+            return this.modelVendors.find(v => v.code === this.modelVendor) || {};
+        },
+        /** 是否自定义厂商（本地 / 代理，需手填地址与模型名）。 */
+        isCustom() {
+            return this.modelVendor === 'custom';
         },
         modelConfigured() { return Boolean(this.modelConfig && this.modelConfig.configured); },
         modelAvailable() { return Boolean(this.modelConfig && this.modelConfig.available); },
@@ -54,27 +67,18 @@ window.RoverAdminPages.model = {
             return '本地无鉴权的模型服务（Ollama / vLLM）可以留空。';
         },
         /**
-         * 深度思考提示：说清「什么配置才能在对话里看到推理过程」。
-         *
-         * 少了这一句，配了不产出思考的模型后会以为功能没生效——那是协议与模型选择的结果，不是故障。
+         * 深度思考提示：厂商收敛后主模型由映射决定，这里按厂商说明「能否看到推理过程」。
          * 判断口径与后端 AdminChatModelGateway 的厂商分流保持一致。
          */
         modelThinkingHint() {
-            const baseUrl = String(this.modelForm.baseUrl || '').toLowerCase();
-            const model = String(this.modelForm.model || '').toLowerCase();
-            if (baseUrl.includes('deepseek.com')) {
-                return model.startsWith('deepseek-reasoner')
-                    ? '当前配置会展示深度思考过程。'
-                    : 'deepseek-chat 不产出思考内容；模型名改成 deepseek-reasoner 即可看到推理过程。';
+            if (this.isCustom) return '自定义模型走 OpenAI 兼容协议，是否产出思考内容取决于模型本身。';
+            if (this.modelVendor === 'zhipu') {
+                return '主模型 glm-4.6 是思考模型，对话里能看到推理过程；快速模型 glm-4-air 不思考。';
             }
-            if (baseUrl.includes('bigmodel.cn') || baseUrl.includes('zhipu')) {
-                const thinking = ['glm-4.5', 'glm-4.6', 'glm-4.7', 'glm-5', 'glm-z1']
-                    .some(prefix => model.startsWith(prefix));
-                return thinking
-                    ? '当前配置会展示深度思考过程。'
-                    : '该模型不产出思考内容；换成 glm-4.6 及以上即可看到推理过程。';
+            if (this.modelVendor === 'deepseek') {
+                return 'deepseek-chat 不产出思考内容。';
             }
-            return '当前服务走 OpenAI 兼容协议，响应里没有思考内容的位置；想看推理过程请选 DeepSeek 或智谱 GLM。';
+            return '';
         },
         /** 表单与已存配置是否有差异；只是提示，不阻止保存。 */
         modelDirty() {
@@ -82,9 +86,13 @@ window.RoverAdminPages.model = {
             if (!config) return false;
             const form = this.modelForm;
             if (Boolean(form.enabled) !== Boolean(config.enabled)) return true;
-            if (String(form.baseUrl || '').trim() !== String(config.baseUrl || '')) return true;
-            if (String(form.model || '').trim() !== String(config.model || '')) return true;
+            if (this.modelVendor !== (config.vendor || 'custom')) return true;
             if (Number(form.timeoutSeconds) !== Number(config.timeoutSeconds)) return true;
+            if (this.isCustom) {
+                if (String(form.customBaseUrl || '').trim() !== String(config.baseUrl || '')) return true;
+                if (String(form.customModel || '').trim() !== String(config.model || '')) return true;
+                if (String(form.customFastModel || '').trim() !== String(config.fastModel || '')) return true;
+            }
             return Boolean(form.apiKey) || this.modelClearKey;
         },
     },
@@ -102,34 +110,22 @@ window.RoverAdminPages.model = {
         },
         /** 用服务端状态重置表单：密钥永远留空，避免把掩码当成真密钥发回去。 */
         syncModelForm(config) {
+            this.modelVendor = config.vendor || 'custom';
+            this.modelAdvanced = false;
             this.modelForm = {
                 enabled: Boolean(config.enabled),
-                baseUrl: config.baseUrl || '',
-                model: config.model || '',
                 apiKey: '',
                 timeoutSeconds: config.timeoutSeconds || 30,
+                customBaseUrl: config.baseUrl || '',
+                customModel: config.model || '',
+                customFastModel: config.fastModel || '',
             };
-            this.modelPresetIndex = '';
             this.modelClearKey = false;
-        },
-        /**
-         * 套用预设后立刻把下拉复位：否则再选同一个预设不会触发 change，
-         * 而且下拉会一直显示某个"看起来还在生效"的服务商，与手改后的地址矛盾。
-         */
-        applyModelPreset() {
-            const index = this.modelPresetIndex;
-            if (index === '' || index === null) return;
-            const preset = this.modelPresets[Number(index)];
-            if (!preset) return;
-            this.modelForm.baseUrl = preset.baseUrl;
-            this.modelForm.model = preset.model;
-            this.modelPresetIndex = '';
         },
         modelPayload() {
             const payload = {
                 enabled: Boolean(this.modelForm.enabled),
-                baseUrl: String(this.modelForm.baseUrl || '').trim(),
-                model: String(this.modelForm.model || '').trim(),
+                vendor: this.modelVendor,
                 timeoutSeconds: Number(this.modelForm.timeoutSeconds) || 30,
             };
             // 留空 = 不改：不把空串发过去，否则服务端会当成"清空密钥"
@@ -137,6 +133,14 @@ window.RoverAdminPages.model = {
                 payload.clearApiKey = true;
             } else if (this.modelForm.apiKey) {
                 payload.apiKey = this.modelForm.apiKey;
+            }
+            // 仅自定义厂商才提交地址与模型名；其余厂商由后端映射。
+            if (this.isCustom) {
+                payload.baseUrl = String(this.modelForm.customBaseUrl || '').trim();
+                payload.model = String(this.modelForm.customModel || '').trim();
+                // 快速模型与主模型同源：地址复用主模型地址，只填快速模型名（留空则不配快速模型）。
+                payload.fastBaseUrl = String(this.modelForm.customBaseUrl || '').trim();
+                payload.fastModel = String(this.modelForm.customFastModel || '').trim();
             }
             return payload;
         },
