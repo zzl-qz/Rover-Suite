@@ -15,6 +15,7 @@ import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
+import com.rover.agent.core.port.KnowledgeReadPort;
 import com.rover.agent.core.port.LogQueryPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
@@ -23,6 +24,7 @@ import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
+import com.rover.agent.runtime.knowledge.InMemoryKnowledgeStore;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ConversationModel;
 import com.rover.agent.runtime.llm.LlmIntentInterpreter;
@@ -169,15 +171,21 @@ public class AgentRuntimeConfiguration {
         return CapabilityRegistry.standard();
     }
 
+    /** 运维知识库：内存 FAQ 种子，回答「怎么配置 / 怎么接入 / 怎么排查」；换落盘或向量检索时替换此实现。 */
+    @Bean
+    public KnowledgeReadPort knowledgeReadPort() {
+        return new InMemoryKnowledgeStore(InMemoryKnowledgeStore.seedFaq());
+    }
+
     /** 只读能力执行器：模型与生产数据之间唯一的执行口，所有取数都经过它。 */
     @Bean
     public CapabilityExecutor agentCapabilityExecutor(RouteReadPort routeReadPort, InstanceReadPort instanceReadPort,
                                                      MetricReadPort metricReadPort, TraceReadPort traceReadPort,
                                                      ConfigReadPort configReadPort, EventReadPort eventReadPort,
-                                                     LogQueryPort logQueryPort,
+                                                     LogQueryPort logQueryPort, KnowledgeReadPort knowledgeReadPort,
                                                      CapabilityRegistry agentCapabilityRegistry) {
         return new CapabilityExecutor(routeReadPort, instanceReadPort, metricReadPort, traceReadPort,
-                configReadPort, eventReadPort, logQueryPort, agentCapabilityRegistry);
+                configReadPort, eventReadPort, logQueryPort, knowledgeReadPort, agentCapabilityRegistry);
     }
 
     /**

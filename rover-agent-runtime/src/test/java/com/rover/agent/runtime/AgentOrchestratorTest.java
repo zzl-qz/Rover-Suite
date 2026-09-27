@@ -28,6 +28,7 @@ import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
+import com.rover.agent.core.port.KnowledgeReadPort;
 import com.rover.agent.core.port.LogQueryPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
@@ -323,14 +324,15 @@ class AgentOrchestratorTest {
         ConfigReadPort configPort = () -> List.of();
         EventReadPort eventPort = () -> List.of();
         LogQueryPort logPort = r -> List.of();
+        KnowledgeReadPort knowledgePort = (q, limit) -> List.of();
         InvestigationService investigations = new InvestigationService(routes, instancePort, metricPort,
-                tracePort, configPort, eventPort, logPort, registry, tasks,
+                tracePort, configPort, eventPort, logPort, knowledgePort, registry, tasks,
                 new ModelExplainer(new NoopChatModelGateway()));
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instancePort, 8);
         CapabilityRegistry capabilities = CapabilityRegistry.standard();
         CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort,
-                configPort, eventPort, logPort, capabilities);
+                configPort, eventPort, logPort, knowledgePort, capabilities);
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
                 new IntentService(), new QueryStateService(executor),

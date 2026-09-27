@@ -1,5 +1,6 @@
 package com.rover.agent.core.investigation;
 
+import com.rover.agent.core.port.KnowledgeEntry;
 import com.rover.agent.core.port.LogEntry;
 import com.rover.agent.core.snapshot.ConfigEntrySnapshot;
 import com.rover.agent.core.snapshot.DiscoveryMode;
@@ -334,6 +335,29 @@ public final class EvidenceNarrator {
 
     public static String logsUnavailable() {
         return "落盘历史日志不可用，无法确认配置变更、实例事件与错误经过。";
+    }
+
+    public static String knowledgeUnavailable() {
+        return "运维知识库不可用，无法回答使用方式类问题。";
+    }
+
+    /**
+     * 知识检索的证据表述：逐条给标题与正文摘要，回答「怎么配置 / 怎么接入」。
+     * 知识条目回答「方法」，不读实时数据，因此不是窗口口径（windowSeconds=0）。
+     */
+    public static EvidenceNarration knowledge(List<KnowledgeEntry> entries, String query) {
+        List<KnowledgeEntry> rows = entries == null ? List.of() : entries;
+        if (rows.isEmpty()) {
+            return new EvidenceNarration("知识库中没有与「" + text(query) + "」相关的条目",
+                    List.of("知识库未收录该问题；建议说清具体是哪一项（限流、熔断、超时、采样率等），"
+                            + "或让我读当前生效配置值。"));
+        }
+        List<String> lines = new ArrayList<>();
+        for (KnowledgeEntry entry : rows) {
+            lines.add(entry.title() + "：" + truncate(entry.content(), 200));
+        }
+        return new EvidenceNarration("命中 " + rows.size() + " 条相关知识：" + String.join("；", lines),
+                List.of(), rows.size(), 0);
     }
 
     /**

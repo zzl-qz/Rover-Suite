@@ -27,6 +27,7 @@ public final class CapabilityRegistry {
     private static final String SOURCE_CONFIGS = "Gateway / Nameserver 生效配置";
     private static final String SOURCE_EVENTS = "Nameserver 事件流";
     private static final String SOURCE_LOGS = "落盘历史日志";
+    private static final String SOURCE_KNOWLEDGE = "运维知识库";
 
     private final List<CapabilityDescriptor> descriptors;
 
@@ -35,10 +36,10 @@ public final class CapabilityRegistry {
     }
 
     /**
-     * 本阶段的标准注册表：七个已接入的只读能力。
+     * 本阶段的标准注册表：八个已接入的只读能力。
      *
      * 未接入数据适配器的能力照样登记（用户问「有哪些能力」时看得到边界），但不可被 Planner 选择。
-     * 目前七个能力全部接入，因此没有「已登记但未开放」项——一旦某个适配器被移除，把对应能力改为
+     * 目前八个能力全部接入，因此没有「已登记但未开放」项——一旦某个适配器被移除，把对应能力改为
      * {@code available=false} 即可，Planner 与能力清单会自动跟着收口。
      */
     public static CapabilityRegistry standard() {
@@ -75,7 +76,12 @@ public final class CapabilityRegistry {
                                 + "支持按类型、目标实体与时间范围过滤",
                         CapabilityRisk.READ_ONLY,
                         List.of(TargetType.UNKNOWN, TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
-                        true, AgentStepType.LOG_INVESTIGATION, "读取历史日志")));
+                        true, AgentStepType.LOG_INVESTIGATION, "读取历史日志"),
+                new CapabilityDescriptor(AgentCapability.KNOWLEDGE_RETRIEVAL, "知识检索",
+                        "检索运维知识库：怎么配置限流/熔断/超时/采样率、怎么接入服务、常见问题怎么排查",
+                        CapabilityRisk.READ_ONLY,
+                        List.of(TargetType.UNKNOWN, TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
+                        true, AgentStepType.KNOWLEDGE_INVESTIGATION, "检索知识")));
     }
 
     /** 全部已登记能力（含未开放的）。 */
@@ -139,7 +145,7 @@ public final class CapabilityRegistry {
      */
     public String introduce() {
         return "我是 Rover Ops Agent：一个只读的运维诊断 Agent，基于 Gateway 路由、服务实例、实时指标、抽样追踪、"
-                + "生效配置、注册事件与历史日志回答状态问题、调查调用失败；知识检索与网关写操作尚未接入。\n"
+                + "生效配置、注册事件、历史日志与运维知识回答状态问题、调查调用失败与使用方式；网关写操作尚未接入。\n"
                 + "可以直接这样问我：\n"
                 + "- 「网关 QPS 多少」「order-service 有几个健康实例」——状态查询；\n"
                 + "- 「为什么 /api/demo/tt 调用失败」——只读故障调查；\n"
@@ -172,6 +178,6 @@ public final class CapabilityRegistry {
     /** 供证据来源说明使用（与既有数据源命名保持一致）。 */
     public String describeSources() {
         return String.join("、", SOURCE_ROUTES, SOURCE_INSTANCES, SOURCE_METRICS, SOURCE_TRACES,
-                SOURCE_CONFIGS, SOURCE_EVENTS, SOURCE_LOGS);
+                SOURCE_CONFIGS, SOURCE_EVENTS, SOURCE_LOGS, SOURCE_KNOWLEDGE);
     }
 }

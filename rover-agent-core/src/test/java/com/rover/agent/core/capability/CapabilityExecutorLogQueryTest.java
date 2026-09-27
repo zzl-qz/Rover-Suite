@@ -19,7 +19,8 @@ import org.junit.jupiter.api.Test;
 class CapabilityExecutorLogQueryTest {
 
     private CapabilityExecutor executor(LogQueryPort logs) {
-        return new CapabilityExecutor(null, null, null, null, null, null, logs, CapabilityRegistry.standard());
+        return new CapabilityExecutor(null, null, null, null, null, null, logs, null,
+                CapabilityRegistry.standard());
     }
 
     @Test

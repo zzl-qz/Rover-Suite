@@ -10,6 +10,8 @@ import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
+import com.rover.agent.core.port.KnowledgeEntry;
+import com.rover.agent.core.port.KnowledgeReadPort;
 import com.rover.agent.core.port.LogEntry;
 import com.rover.agent.core.port.LogQueryPort;
 import com.rover.agent.core.port.LogRequest;
@@ -58,6 +60,9 @@ public final class CapabilityExecutor {
     /** 历史日志单次查询最多取回条数：证据要能复核，但不能把整表塞进结论。 */
     private static final int LOG_LIMIT = 50;
 
+    /** 知识检索单次最多返回条数：回答「怎么配置」时给出最相关几条即可。 */
+    private static final int KNOWLEDGE_LIMIT = 5;
+
     private static final String SOURCE_ROUTES = "Gateway 路由表";
     private static final String SOURCE_OVERVIEW = "Gateway 概览";
     private static final String SOURCE_INSTANCES = "Nameserver 实例注册表";
@@ -66,6 +71,7 @@ public final class CapabilityExecutor {
     private static final String SOURCE_CONFIGS = "Gateway / Nameserver 生效配置";
     private static final String SOURCE_EVENTS = "Nameserver 事件流";
     private static final String SOURCE_LOGS = "落盘历史日志";
+    private static final String SOURCE_KNOWLEDGE = "运维知识库";
 
     private static final String KEY_WINDOW_SECONDS = "windowSeconds";
     private static final String KEY_SAMPLE_SIZE = "sampleSize";
@@ -81,11 +87,12 @@ public final class CapabilityExecutor {
     private final ConfigReadPort configs;
     private final EventReadPort events;
     private final LogQueryPort logs;
+    private final KnowledgeReadPort knowledge;
     private final CapabilityRegistry registry;
 
     public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                               TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
-                              LogQueryPort logs, CapabilityRegistry registry) {
+                              LogQueryPort logs, KnowledgeReadPort knowledge, CapabilityRegistry registry) {
         this.routes = routes;
         this.instances = instances;
         this.metrics = metrics;
@@ -93,6 +100,7 @@ public final class CapabilityExecutor {
         this.configs = configs;
         this.events = events;
         this.logs = logs;
+        this.knowledge = knowledge;
         this.registry = registry == null ? CapabilityRegistry.standard() : registry;
     }
 
@@ -135,6 +143,7 @@ public final class CapabilityExecutor {
             // 规划路径无法表达类型/时间范围，按「最近 24 小时、全部类型、按目标过滤」兜底；
             // 精确的 type/hours 由对话工具的 queryLogs 直接提供。
             case LOG_QUERY -> queryLogs(lookup, null, System.currentTimeMillis() - 24L * 3_600_000L, null, taskId);
+            case KNOWLEDGE_RETRIEVAL -> readKnowledge(capability, descriptor, lookup, taskId);
             default -> CapabilityResult.unavailable(capability, descriptor);
         };
     }
@@ -424,6 +433,30 @@ public final class CapabilityExecutor {
         } catch (Exception ex) {
             log.warn("Agent 查询历史日志失败", ex);
             return CapabilityResult.failed(AgentCapability.LOG_QUERY, descriptor, EvidenceNarrator.logsUnavailable());
+        }
+    }
+
+    /**
+     * 检索运维知识库：回答「怎么配置 / 怎么接入 / 怎么排查」类问题。
+     *
+     * <p>与状态查询不同：知识条目回答的是「方法」，不读任何实时数据，因此证据不带统计窗口口径。
+     */
+    private CapabilityResult readKnowledge(AgentCapability capability, CapabilityDescriptor descriptor,
+                                          String query, String taskId) {
+        if (query == null || query.isBlank()) {
+            return CapabilityResult.failed(capability, descriptor, "缺少要检索的问题，无法查询知识库。");
+        }
+        long observedAt = System.currentTimeMillis();
+        try {
+            List<KnowledgeEntry> entries = knowledge.search(query, KNOWLEDGE_LIMIT);
+            EvidenceNarration narration = EvidenceNarrator.knowledge(entries, query);
+            return CapabilityResult.success(capability, descriptor,
+                    List.of(Evidence.of(taskId, EvidenceType.KNOWLEDGE, SOURCE_KNOWLEDGE, "知识检索",
+                            narration.detail(), "/api/knowledge", metadata(narration, observedAt), observedAt)),
+                    narration.limitations());
+        } catch (Exception ex) {
+            log.warn("Agent 检索知识失败", ex);
+            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.knowledgeUnavailable());
         }
     }
 

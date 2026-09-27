@@ -27,5 +27,8 @@ public enum AgentCapability {
     EVENT_QUERY,
 
     /** 查询落盘历史日志（配置变更/回滚/错误/实例事件/指标采样/慢与错误链路） */
-    LOG_QUERY
+    LOG_QUERY,
+
+    /** 检索运维知识库（怎么配置/怎么接入/怎么排查等文档与经验） */
+    KNOWLEDGE_RETRIEVAL
 }
