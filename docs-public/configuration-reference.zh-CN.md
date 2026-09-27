@@ -69,9 +69,14 @@
 三个执行参数与三个规划限制越界时启动直接失败，让配置错误在启动期暴露，而不是运行期表现为「任务莫名被拒」或「调查提前收尾」。
 
 指标口径（前缀 `rover.agent.`，写在宿主进程的同一个 `MeterRegistry` 上）：`task.submitted` / `task.completed` /
-`task.failed` / `task.rejected` 为计数，`task.active` / `task.queue.size` / `sse.connections` 为当前值，
-`task.duration`（标签 `status`）与 `model.duration` / `model.error`（标签 `model`）为耗时与失败数。
-标签只允许 `status`、`reason`、`model` 三种有限取值，模型名会规范化并截断，不引入标签基数风险。
+`task.failed` / `task.rejected` 为计数，`task.active` / `task.queue.size` / `sse.connections` 为当前值；
+`task.duration`（标签 `status`）、`model.duration`（标签 `model`、`scene`）、`model.calls`（标签 `model`、`scene`、`outcome`）
+与 `model.tokens`（标签 `model`、`scene`、`kind`，取值 `prompt` / `completion`；拿不到用量就不上报、不记 0）分别记录耗时、
+调用次数与 token 用量。原 `model.error` 已移除：单一 failed 布尔只能回答「失败几次」，回答不了「失败在哪一环」，
+现由 `model.calls` 的 `outcome` 标签（`ok` / `not_configured` / `unavailable` / `timeout` / `error` / `empty` / `rejected`）区分失败原因，
+其中 `rejected` 表示「模型返回了文本但不符合输出契约」。`scene` 取有限中文取值（`意图识别`、`目标解析`、`调查规划`、`解读`），
+空白归一为 `unknown`，超 24 字符截断。
+标签只允许 `status`、`reason`、`model`、`scene`、`outcome`、`kind` 六种有限取值，模型名会规范化并截断，不引入标签基数风险。
 
 ## Gateway 启动配置
 
@@ -148,9 +153,52 @@ YAML `server.maxInflight` 或 `-Drover.gateway.maxInflight` 覆盖）、`NO_UPST
 
 ### 路由字段
 
-`rover.gateway.routes` 是路由数组，不是单值配置。每项支持：`id`、`businessPrefix`、`serviceName`、`group`、
-`targetUrl`、`targetUrls`、`stripPrefix`。一条路由二选一：`serviceName`（可配 `group`）走注册中心，或 `targetUrl`/`targetUrls` 走静态地址。整机 `discovery.type` 是 `nameserver`/`nacos` 时，个别路由仍可只写静态地址。不要在同一条上两套都写。`targetUrls` 的元素可使用 `http://host:port|weight` 指定权重。默认 `outbound=netty` 时上游必须是 `http://`。写入 `https://` 会在启动或热更新时被拒绝，避免配置通过、请求才失败；若上游确实是 HTTPS，先把 `proxy.outbound` 设为 `jdk` 再重启。Admin 保存的路由会写入
-`config/routes.overlay.json`，并整体替换启动 YAML 中的路由列表。Nacos 整机示例见 `deploy/docker/config/rover-gateway-nacos.yml`。
+`rover.gateway.routes` 是路由数组，不是单值配置。每项支持：`id`、`businessPrefix`、`targetUrl`、
+`targetUrls`、`targets`、`stickyHeader`、`stripPrefix`。
+
+一条路由的上游二选一：
+
+- **静态** —— `targetUrl` 或 `targetUrls`，元素可用 `http://host:port|weight` 指定权重；
+- **动态 / 版本化** —— `targets`，元素为 `{serviceName, group, weight}`。
+
+两者**互斥**，同一条上都写会被校验拒绝。旧的扁平 `serviceName` / `group` 字段已删除。整机
+`discovery.type` 是 `nameserver`/`nacos` 时，个别路由仍可只写静态地址，只要这条路由只用静态地址。
+
+版本目标按「同一服务的多个版本」收窄校验：
+
+- 每个 target 的 `serviceName` 非空；
+- 同一条路由的所有 target 必须**同一个** `serviceName`——这条路由不是通用的多服务聚合，
+  这样按版本看指标、按版本回滚才有单一语义；
+- `weight ∈ 0~10000`；`weight: 0` 表示「注册但不接流」，这是暂停一个版本而不删掉它的方式；
+- `(serviceName, group)` 不重复；
+- 权重之和必须**大于 0**。
+
+`group` 就是版本号（`v1` / `v2` / …），没有单独的版本字段。可选的 `stickyHeader` 指定粘性路由用的请求头，
+必须是合法的 HTTP 头名 `[A-Za-z0-9-]+`；不写则回退客户端 IP，两者都为空时按权重路由。
+
+95/5 灰度示例：
+
+```yaml
+routes:
+  - id: order-api
+    businessPrefix: /api/orders
+    targets:
+      - serviceName: order-service
+        group: v1
+        weight: 95
+      - serviceName: order-service
+        group: v2
+        weight: 5
+    stripPrefix: /api
+```
+
+把 `v2` 从 `5` 调到 `20`（`v1` 从 `95` 调到 `80`）时，原先落 `v2` 的键一个都不会被打回 `v1`：
+权重区间只向左侧扩张。分流算法与管理流程见 [Gateway 版本化灰度发布](./gateway-gray-release.zh-CN.md)。
+
+默认 `outbound=netty` 时上游必须是 `http://`。写入 `https://` 会在启动或热更新时被拒绝，避免配置通过、
+请求才失败；若上游确实是 HTTPS，先把 `proxy.outbound` 设为 `jdk` 再重启。Admin 保存的路由会写入
+`config/routes.overlay.json`（文件同时带 `revision` 与 `appliedOperationId`），并整体替换启动 YAML 中的
+路由列表。Nacos 整机示例见 `deploy/docker/config/rover-gateway-nacos.yml`。
 
 ## Gateway 运行时配置
 

@@ -112,7 +112,7 @@ rover:
 `round_robin`、`random`、`weighted_round_robin`、`ip_hash`、`least_connections` 五种负载均衡策略。
 当前静态上游只使用 URL 的 scheme、host 与 port；避免在 `targetUrl` / `targetUrls` 中配置基路径，路径变换统一使用路由的 `stripPrefix`。
 
-整机只选一种注册中心：`static` / `nameserver` / `nacos`。选了 `nameserver` 或 `nacos` 后，个别路由仍可只写 `targetUrls`，不必再开一个静态网关。一条路由不要同时写 `serviceName` 和 `targetUrl`/`targetUrls`。
+整机只选一种注册中心：`static` / `nameserver` / `nacos`。选了 `nameserver` 或 `nacos` 后，个别路由仍可只写 `targetUrls`，不必再开一个静态网关。一条路由不要同时写 `targets` 和 `targetUrl`/`targetUrls`。
 
 Nacos 发现需要 `-Pnacos` 打包，示例见 [`deploy/docker/config/rover-gateway-nacos.yml`](../deploy/docker/config/rover-gateway-nacos.yml)。整机静态见 [`deploy/docker/config/rover-gateway-static.yml`](../deploy/docker/config/rover-gateway-static.yml)。
 
@@ -128,13 +128,19 @@ Nacos 发现需要 `-Pnacos` 打包，示例见 [`deploy/docker/config/rover-gat
 
 ## 5. 定义路由
 
-Nameserver 动态路由示例：
+Nameserver 动态路由示例（同一服务两个版本）：
 
 ```yaml
 routes:
   - id: order-api
     businessPrefix: /api/orders
-    serviceName: order-service
+    targets:
+      - serviceName: order-service
+        group: v1
+        weight: 95
+      - serviceName: order-service
+        group: v2
+        weight: 5
     stripPrefix: /api
 ```
 
@@ -142,12 +148,15 @@ routes:
 | :--- | :--- |
 | `id` | 唯一路由标识 |
 | `businessPrefix` | 匹配入站请求的路径前缀 |
-| `serviceName` | 走注册中心时的服务名 |
-| `group` | 可选分组过滤；当前版本多组推送隔离仍在完善，建议留空 |
-| `targetUrls` | 静态路由的固定上游列表 |
+| `targets` | 版本化上游：`{serviceName, group, weight}`；`group` 是版本号，`weight: 0` 表示暂停该版本 |
+| `stickyHeader` | 可选的粘性键请求头；不写则回退客户端 IP |
+| `targetUrl` / `targetUrls` | 静态路由的固定上游列表 |
 | `stripPrefix` | 转发前移除的前缀；设为 `""` 保留完整路径 |
 
-一条路由二选一：写 `serviceName` 走注册中心，或写 `targetUrls` 走静态地址。动态模式下可以混这两种路由，但不能写在同一条上。
+一条路由二选一：写 `targets` 走注册中心，或写 `targetUrl`/`targetUrls` 走静态地址，不能写在同一条上。旧的扁平
+`serviceName` / `group` 字段已删除。动态模式下可以混这两种路由，但不能混在同一条上。同一条路由的所有 target
+必须是同一个 `serviceName`；详见[配置项参考：路由字段](./configuration-reference.zh-CN.md#路由字段)与
+[Gateway 版本化灰度发布](./gateway-gray-release.zh-CN.md)。
 
 ## 6. 注册服务提供方
 
@@ -181,14 +190,37 @@ Bearer 协议 token 不能代替管理请求头，管理请求头也不能访问
 | 组件 | 路径与方法 | 用途 |
 | :--- | :--- | :--- |
 | Gateway | `GET /_manage/status` | 监听端口、发现类型、路由与运行时状态 |
-| Gateway | `GET/PUT/POST/DELETE /_manage/routes` | 查看、整表替换、新增/更新或删除路由 |
+| Gateway | `GET/PUT/POST/DELETE /_manage/routes` | 查看路由表（含 `revision`、`appliedOperationId`），或整表替换、新增/更新、删除路由。所有写路径都必须带 `revision`；版本过期会返回 `409` 并带回 `currentRevision` |
+| Gateway | `POST /_manage/routes/preview` | 只回逐条差异（`ADDED` / `REMOVED` / `MODIFIED`）与校验结果，不落盘、不生效 |
+| Gateway | `POST /_manage/routes/targets/weight` | 放量 / 停推一个版本的权重（`routeId`、`serviceName`、`group`、`weight`）；内部仍走整表乐观锁变更 |
+| Gateway | `POST /_manage/routes/rollback` | 回滚到最近某次已应用的 `toRevision`；回滚本身是一次新变更，不会覆盖别人的并发修改 |
+| Gateway | `GET /_manage/routes/operations/{operationId}` | 请求超时后确认是否已执行：`APPLIED` / `CONFLICT` / `REJECTED` / `UNKNOWN`，并回带 `currentRevision` |
+| Gateway | `GET /_manage/discovery/snapshot` | 网关**自己观察到的** `service@group` 视图：`revision`、`epoch`、实例数与健康数；静态发现时 `supported=false` |
 | Gateway | `GET/POST /_manage/configs` | 查看或更新已登记的运行时配置 |
-| Gateway | `GET /_manage/metrics`、`/metrics/live`、`/metrics/selfcheck`、`/prometheus` | JSON 指标、轻量 live（`range=60|300`；无 p99/上游 Top，路由 Top 短缓存）、自检与 Prometheus 文本 |
-| Gateway | `GET /_manage/metrics/routes` | 单条路由下各上游实例的窗口观测（`routeId`、`range=60|300`）；只输出窗口内有转发的实例行，指标采集关闭时回 `enabled=false` 且 `rows` 为空 |
+| Gateway | `GET /_manage/metrics`、`/metrics/live`、`/metrics/selfcheck`、`/prometheus` | JSON 指标、轻量 live（`range=60/300`；无 p99/上游 Top，路由 Top 短缓存）、自检与 Prometheus 文本 |
+| Gateway | `GET /_manage/metrics/routes` | 单条路由下各上游实例的窗口观测，外加声明的 `targets`、按版本聚合的 `byVersion` 与 `versionCheck`（`routeId`、`range=60/300`）；只输出窗口内有转发的实例行，指标采集关闭时回 `enabled=false` 且 `rows` 为空 |
 | Gateway | `GET /_manage/traces` | 有界请求时间线；支持 `traceId`、`path`、`slow` 查询参数 |
 | Nameserver | `GET /_manage/status`、`/instances` | 运行状态与当前内存实例 |
+| Nameserver | `GET /_manage/instances/snapshot` | 按 `service+group` 归并的可核对实例视图，带 `revision`/`epoch` 及每个实例的 id、host、port、group、weight、健康、临时标记与最近心跳 |
 | Nameserver | `GET/POST /_manage/configs` | 查看或更新已登记的运行时配置 |
 | Nameserver | `GET /_manage/metrics`、`/metrics/live`、`/events` | 注册指标、轻量实时快照与近期事件 |
+
+版本维度指标**不新增存储**，而是复用既有的「路由 × 上游实例」维度：每个转发过的实例带上自己的 `group`，
+`/_manage/metrics/routes` 把这些行按版本汇总。因此它仍然遵守 5 分钟滑动窗口与
+`route_upstream_sum_equals_instance_sum` 不变式。`targets` 是配置声明的版本清单（`serviceName`、`group`、
+`weight`、`label`、`clusterKey`）；`byVersion` 给出每个版本的 `windowRequests`、`status5xx`、`connectFail`、
+`timeout`、`avgMillis`、`p95Millis`、`sampleSize`、`sufficient`、`errorRate` 与 `capacityProblem`；
+`versionCheck` 用 `sampleThreshold`（`5`）、`declaredGroups`、`observedGroups`、`missingGroups`、
+`unexpectedGroups` 核对「声明版本」与「观测版本」。
+
+**时间口径是刻意混用的，务必分清。** `windowRequests`、`status5xx`、`connectFail`、`timeout`、`avgMillis`、
+`p95Millis`、`sampleSize`、`sufficient`、`errorRate` 都是**窗口内**口径（`range=60/300`）；而
+`noUpstreamRejects` 与 `circuitOpenRejects` 取自路由维度的**累计**拒绝计数（与 `resources.rejects.noUpstream`
+/ `circuitOpen` 同一套累计口径），**不带时间衰减**——这样就不必为版本维度再建一套按时间环的存储。因此
+`capacityProblem` 表示「该版本自启动以来出现过无实例 / 全熔断的 503」，是一个**保守信号**，不等于「当前窗口内一定有问题」。
+判断某个版本当前是否异常，应以 `windowRequests`、`status5xx`、`sampleSize` 为主；窗口样本数低于
+`sampleThreshold`（`5`）时不足以据此判定（`sufficient=false`）。另外 `p95Millis` 是版本内各实例 p95 的**最大值**
+（保守上界），没有做跨实例样本合并，不要当成该版本真实的 p95。
 
 Rover-Admin 是可选组件：
 
@@ -228,8 +260,8 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
   本地缓存最迟在下一次对账时清空，默认最长约 30 秒；窗口内请求可能命中刚退出的地址。
   本地 Compose 本场（`demo-fault.sh`）：停最后一个实例后立刻 502，约 17 秒后变为 `503 NO_UPSTREAM`。
 - 如果 Gateway 启动时 Nameserver 不可用，初始订阅失败后可能等到下一次对账才补齐，默认最长约 30 秒。
-- 同一服务多组推送隔离仍在完善，当前建议 `group` 留空。具体说明见[服务注册指南](./service-registration.zh-CN.md#23-当前分组边界)。
-- 持久实例全部被标记为不健康时，Gateway 当前会退回全部缓存实例继续尝试，属于 fail-open 行为。
+- `group` 现在就是版本化路由（`targets`）的版本号，按 group 路由可用：Gateway 按 `serviceName + group` 订阅与查询。多组**推送隔离**仍在完善，所以把 `group` 当作路由/版本维度，而不是硬租户边界。具体说明见[服务注册指南](./service-registration.zh-CN.md#23-当前分组边界)。
+- Gateway 只返回健康实例。当某服务的所有实例都不健康时，候选列表为空，请求得到 `503 NO_UPSTREAM`，**没有**「全不健康就退回全部缓存」的 fail-open 兜底。某个 `group`（版本）没有健康实例时同样严格 503，绝不静默改投另一个版本，因此「没有可接流实例」与「上游返回 5xx」在指标上始终可区分。
 - Gateway 面向普通 HTTP/1.1：入站头到了就开始转发，请求体走管道；默认 Netty 出站按块回写上游响应。不支持 WebSocket、SSE。默认请求体上限 1 MiB，响应体硬上限 16 MiB。
 - 网关进程不终止客户端 HTTPS，也不在默认出站路径上对上游做 TLS。
 - 静态上游 URL 只保留 scheme、host 与 port，不保留 URL 基路径。

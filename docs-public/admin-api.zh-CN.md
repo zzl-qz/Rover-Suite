@@ -26,15 +26,10 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | POST | `/api/configs` | 更新一个配置项 |
 | GET | `/api/agent/sessions` | 当前用户的会话列表 |
 | POST | `/api/agent/sessions` | 新建会话；请求体 `{"title":"..."}`，标题可选 |
-| GET | `/api/agent/sessions/{sessionId}` | 会话详情：会话本体 + 对话记录 + 当前事件 |
 | GET | `/api/agent/sessions/{sessionId}/workspace` | 工作台聚合视图：会话 + 对话 + 事件 + 最近任务（`limit` 默认 20，上限 100） |
 | POST | `/api/agent/sessions/{sessionId}/messages` | 发一条消息（新问题或对当前事件的追问），`202` 返回任务句柄 |
 | GET | `/api/agent/tasks/{taskId}` | 任务详情：步骤、证据与结论 |
 | GET | `/api/agent/tasks/{taskId}/events` | 任务事件流（SSE）：先补发 `SNAPSHOT`，再按增量推送结构化事件 |
-| GET | `/api/agent/incidents/{incidentId}` | 事件详情：目标、时间范围与最新结论 |
-| POST | `/api/agent/diagnoses` | **已废弃**：单次诊断；改用 `POST /api/agent/sessions/{sessionId}/messages` |
-| GET | `/api/agent/diagnoses/{taskId}` | **已废弃**：改用 `GET /api/agent/tasks/{taskId}`（归属校验一致） |
-| GET | `/api/agent/diagnoses/{taskId}/stream` | **已废弃**：改用 `GET /api/agent/tasks/{taskId}/events` |
 | GET | `/api/auth/status` | 登录态与 CSRF 令牌；免登录 |
 | POST | `/login` | 表单登录（`username`、`password`、`_csrf`）；成功 302 到 `redirect` 或 `/`，失败 302 到 `/login.html?error=1` |
 | POST | `/api/logout` | 登出，成功后回 200；只认 POST |
@@ -43,7 +38,7 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | POST | `/api/model/test` | 用请求体里的候选值做连接测试，不落盘 |
 | POST | `/api/model/verify` | 对当前已生效的配置做效果验证 |
 
-诊断任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED` 或 `FAILED`（另有协议预留的 `CANCELLED`）。
+Agent 任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED` 或 `FAILED`（另有协议预留的 `CANCELLED`）。
 `WAITING_INPUT` 表示目标无法从问题与会话上下文确定，任务停在澄清点等待用户补充，不算执行中，也不占用会话的并发位；
 澄清提问在任务的 `clarification` 字段里，用户补充信息后由会话的下一次任务继续。结果包含 `summary`、`confidence`、
 带来源和采集时间的 `evidence`、`limitations`，以及假设验证 `hypotheses`：每条含 `id`、`statement`、
@@ -75,19 +70,13 @@ P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/t
 中途接入或断线重连的客户端都能还原「识别成什么意图、计划查什么、实际查了什么、处置计划是什么」。
 事实来源始终是 `GET /api/agent/tasks/{taskId}`：任何事件表达的信息都必须能查到，丢事件、断连接都不影响任务继续执行。
 连接空闲超时 180 秒，超时或断线后前端重连并靠补发快照对齐，不会丢内容。任务不存在、已不可观察或不属于当前用户时回 `404`。
-旧入口 `GET /api/agent/diagnoses/{taskId}/stream` 仍可用（只推 `snapshot`/`delta`/`end` 三个文本事件），已废弃。
 
 ## Agent Workbench 接口
-
-`POST /api/agent/diagnoses` 是单次诊断时代的入口，现仅保留兼容：它由 `AgentOrchestrator` 内部转成
-「一个会话 + 一个事件 + 一个任务」，因此返回结构里的 `taskId` 依然可直接用于 `GET /api/agent/diagnoses/{taskId}`。
-新前端一律走下面的会话式接口。
 
 ### 会话与消息
 
 - `POST /api/agent/sessions`：新建会话，返回 `Session`（`sessionId`、`userId`、`title`、`activeIncidentId`、`status`、时间戳、`incidentIds`）。标题留空时由第一句提问推导。
 - `GET /api/agent/sessions`：返回**当前用户**的会话列表（按创建顺序）。
-- `GET /api/agent/sessions/{sessionId}`：返回 `{"session":...,"messages":[...],"activeIncident":...}`。没有事件时 `activeIncident` 为 `null`；会话不属于当前用户时回 `404`。
 - `POST /api/agent/sessions/{sessionId}/messages`：请求体只有 `message` 必填：
 
 | 字段 | 说明 |
@@ -139,8 +128,7 @@ P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/t
 这一轮不产生事件、也不发起调查。
 事件上的 `summary` 与 `status` 是「最近一轮结论」的聚合口径：有新调查挂上来即转 `INVESTIGATING`，出结论即转 `RESOLVED` 并更新摘要。
 
-`message` 为空或超过 1000 字回 `400`。`GET /api/agent/tasks/{taskId}` 与 `GET /api/agent/incidents/{incidentId}`
-都只返回属于当前用户的记录，否则回 `404`。
+`message` 为空或超过 1000 字回 `400`。`GET /api/agent/tasks/{taskId}` 只返回属于当前用户的记录，否则回 `404`。
 
 ### 用户身份
 

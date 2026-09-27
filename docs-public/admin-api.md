@@ -31,15 +31,10 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | POST | `/api/configs` | Update one configuration entry |
 | GET | `/api/agent/sessions` | Sessions owned by the current user |
 | POST | `/api/agent/sessions` | Create a session; body `{"title":"..."}`, title optional |
-| GET | `/api/agent/sessions/{sessionId}` | Session detail: session + conversation + active incident |
 | GET | `/api/agent/sessions/{sessionId}/workspace` | Workbench aggregate: session + conversation + incidents + recent tasks (`limit` default 20, max 100) |
 | POST | `/api/agent/sessions/{sessionId}/messages` | Send a message (a new question or a follow-up on the active incident); `202` returns a task handle |
 | GET | `/api/agent/tasks/{taskId}` | Task detail: steps, evidence, conclusion |
 | GET | `/api/agent/tasks/{taskId}/events` | Task event stream (SSE): replay `SNAPSHOT`, then push structured events |
-| GET | `/api/agent/incidents/{incidentId}` | Incident detail: target, time range, latest conclusion |
-| POST | `/api/agent/diagnoses` | **Deprecated**: one-shot diagnosis; use `POST /api/agent/sessions/{sessionId}/messages` |
-| GET | `/api/agent/diagnoses/{taskId}` | **Deprecated**: use `GET /api/agent/tasks/{taskId}` (same ownership checks) |
-| GET | `/api/agent/diagnoses/{taskId}/stream` | **Deprecated**: use `GET /api/agent/tasks/{taskId}/events` |
 | GET | `/api/auth/status` | Sign-in state and CSRF token; public |
 | POST | `/login` | Form sign-in (`username`, `password`, `_csrf`); on success 302 to `redirect` or `/`, on failure 302 to `/login.html?error=1` |
 | POST | `/api/logout` | Sign out; returns 200. POST only |
@@ -48,7 +43,7 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | POST | `/api/model/test` | Connectivity test with the submitted candidate values; nothing is persisted |
 | POST | `/api/model/verify` | Effect verification against the currently applied configuration |
 
-Diagnosis tasks are `PENDING`, `RUNNING`, `WAITING_INPUT`, `COMPLETED`, or `FAILED` (`CANCELLED` is
+Agent tasks are `PENDING`, `RUNNING`, `WAITING_INPUT`, `COMPLETED`, or `FAILED` (`CANCELLED` is
 reserved by the protocol but has no entry point yet). `WAITING_INPUT` means the target could not be
 determined from the question and session context: the task stops at the clarification point, which does not
 count as running and does not hold the session's concurrency slot; the question to answer is in the task's
@@ -93,23 +88,14 @@ reconstruct "which intent was recognized, what the plan was, what actually ran, 
 remains the source of truth: everything an event carries must be queryable there, and lost events or dropped
 connections never affect the investigation. The connection idles out after 180 seconds; a reconnect replays the
 snapshot, so nothing is lost. An unknown, no-longer-observable, or not-owned task returns `404`.
-The legacy `GET /api/agent/diagnoses/{taskId}/stream` still works (it emits only the textual
-`snapshot`/`delta`/`end` events) but is deprecated.
 
 ## Agent Workbench API
-
-`POST /api/agent/diagnoses` is the one-shot diagnosis entry point and is kept for compatibility only: the
-`AgentOrchestrator` internally turns it into "one session + one incident + one task", so the returned
-`taskId` still works with `GET /api/agent/diagnoses/{taskId}`. New front ends use the conversational
-endpoints below.
 
 ### Sessions and messages
 
 - `POST /api/agent/sessions`: creates a session and returns a `Session` (`sessionId`, `userId`, `title`,
   `activeIncidentId`, `status`, timestamps, `incidentIds`). An empty title is derived from the first question.
 - `GET /api/agent/sessions`: returns the **current user's** sessions in creation order.
-- `GET /api/agent/sessions/{sessionId}`: returns `{"session":...,"messages":[...],"activeIncident":...}`.
-  `activeIncident` is `null` when the session has no incident; a session owned by someone else returns `404`.
 - `POST /api/agent/sessions/{sessionId}/messages`: only `message` is required:
 
 | Field | Description |
@@ -171,8 +157,7 @@ user to supply details, without opening an incident or starting an investigation
 investigation moves it to `INVESTIGATING`, producing a conclusion moves it to `RESOLVED` and updates the summary.
 
 An empty `message`, or one longer than 1000 characters, returns `400`.
-`GET /api/agent/tasks/{taskId}` and `GET /api/agent/incidents/{incidentId}` return records owned by the
-current user only, otherwise `404`.
+`GET /api/agent/tasks/{taskId}` returns records owned by the current user only, otherwise `404`.
 
 ### User identity
 

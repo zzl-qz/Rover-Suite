@@ -122,7 +122,7 @@ Static upstreams currently use only the URL scheme, host, and port. Do not put a
 
 The process uses one registry: `static`, `nameserver`, or `nacos`. After
 `nameserver` or `nacos`, a route may still use only `targetUrls`. Do not set
-both `serviceName` and `targetUrl`/`targetUrls` on the same route.
+both `targets` and `targetUrl`/`targetUrls` on the same route.
 
 Nacos needs a `-Pnacos` build; see
 [`deploy/docker/config/rover-gateway-nacos.yml`](../deploy/docker/config/rover-gateway-nacos.yml).
@@ -147,13 +147,19 @@ first request.
 
 ## 5. Define routes
 
-Nameserver-backed route:
+Nameserver-backed route (one service, two versions):
 
 ```yaml
 routes:
   - id: order-api
     businessPrefix: /api/orders
-    serviceName: order-service
+    targets:
+      - serviceName: order-service
+        group: v1
+        weight: 95
+      - serviceName: order-service
+        group: v2
+        weight: 5
     stripPrefix: /api
 ```
 
@@ -161,13 +167,17 @@ routes:
 | :--- | :--- |
 | `id` | Unique route identifier |
 | `businessPrefix` | Incoming path prefix used for matching |
-| `serviceName` | Nameserver service name for dynamic discovery |
-| `group` | Optional group filter; keep it empty while multi-group push isolation is being finalized |
-| `targetUrls` | Fixed upstream list for a static route |
+| `targets` | Versioned upstreams: `{serviceName, group, weight}`; `group` is the version, `weight: 0` pauses a version |
+| `stickyHeader` | Optional header used as the sticky key; falls back to the client IP |
+| `targetUrl` / `targetUrls` | Fixed upstream list for a static route |
 | `stripPrefix` | Prefix removed before proxying; use `""` to preserve the full path |
 
-A route uses either `serviceName` (registry) or `targetUrls` (static). Dynamic
-mode may mix those route kinds, but not on the same route.
+A route uses either `targets` (registry) or `targetUrl`/`targetUrls` (static) —
+never both on the same route. The old flat `serviceName` / `group` fields were
+removed. Dynamic mode may mix those route kinds across routes, but not on one
+route. All targets on a route must share one `serviceName`; see
+[Configuration Reference: Route fields](./configuration-reference.md#route-fields)
+and [Gateway versioned gray release](./gateway-gray-release.md).
 
 ## 6. Register providers
 
@@ -204,14 +214,47 @@ Built-in management endpoints:
 | Component | Path and method | Purpose |
 | :--- | :--- | :--- |
 | Gateway | `GET /_manage/status` | Listener, discovery, route, and runtime status |
-| Gateway | `GET/PUT/POST/DELETE /_manage/routes` | List, replace, add/update, or delete routes |
+| Gateway | `GET/PUT/POST/DELETE /_manage/routes` | Read the route table (with `revision` and `appliedOperationId`), or replace, add/update, or delete routes. Every write must carry `revision`; a stale value returns `409` with `currentRevision` |
+| Gateway | `POST /_manage/routes/preview` | Per-route diff (`ADDED` / `REMOVED` / `MODIFIED`) and validation result only; nothing is persisted or applied |
+| Gateway | `POST /_manage/routes/targets/weight` | Raise or pause one version's weight (`routeId`, `serviceName`, `group`, `weight`); internally still a full-table optimistic-lock change |
+| Gateway | `POST /_manage/routes/rollback` | Roll back to a recent applied `toRevision`; the rollback itself is a new revision and cannot overwrite a concurrent change |
+| Gateway | `GET /_manage/routes/operations/{operationId}` | Confirm whether a write was applied after a timeout: `APPLIED` / `CONFLICT` / `REJECTED` / `UNKNOWN`, plus `currentRevision` |
+| Gateway | `GET /_manage/discovery/snapshot` | What the Gateway itself observes per `service@group`: `revision`, `epoch`, instance and healthy counts; `supported=false` under static discovery |
 | Gateway | `GET/POST /_manage/configs` | List or update registered runtime settings |
-| Gateway | `GET /_manage/metrics`, `/metrics/live`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, slim live snapshot (`range=60|300`; no p99/upstream Top; route Top short-cached), self-check, and Prometheus text |
-| Gateway | `GET /_manage/metrics/routes` | Per-upstream window observation for one route (`routeId`, `range=60|300`); only upstreams that forwarded traffic in the window are listed, and with metrics collection off it returns `enabled=false` with an empty `rows` |
+| Gateway | `GET /_manage/metrics`, `/metrics/live`, `/metrics/selfcheck`, `/prometheus` | JSON metrics, slim live snapshot (`range=60/300`; no p99/upstream Top; route Top short-cached), self-check, and Prometheus text |
+| Gateway | `GET /_manage/metrics/routes` | One route's per-upstream window observation plus declared `targets`, aggregated `byVersion`, and `versionCheck` (`routeId`, `range=60/300`); only upstreams that forwarded traffic in the window are listed, and with metrics collection off it returns `enabled=false` with an empty `rows` |
 | Gateway | `GET /_manage/traces` | Bounded request timeline with `traceId`, `path`, and `slow` filters |
 | Nameserver | `GET /_manage/status`, `/instances` | Runtime status and current in-memory instances |
+| Nameserver | `GET /_manage/instances/snapshot` | Verifiable instance view grouped by `service+group`, with `revision`/`epoch` and per-instance id, host, port, group, weight, health, ephemeral flag, and last heartbeat |
 | Nameserver | `GET/POST /_manage/configs` | List or update registered runtime settings |
 | Nameserver | `GET /_manage/metrics`, `/metrics/live`, `/events` | Registration metrics, live snapshot, and recent events |
+
+Version-level metrics reuse the existing `route × instance` dimension rather than
+adding a second store: each forwarded instance carries its `group`, and
+`/_manage/metrics/routes` rolls those rows up per version. It therefore still
+honors the 5-minute sliding window and the `route_upstream_sum_equals_instance_sum`
+invariant. `targets` is the declared version list from config (`serviceName`,
+`group`, `weight`, `label`, `clusterKey`); `byVersion` reports per-version
+`windowRequests`, `status5xx`, `connectFail`, `timeout`, `avgMillis`, `p95Millis`,
+`sampleSize`, `sufficient`, `errorRate`, and `capacityProblem`; `versionCheck`
+compares declared vs observed versions through `sampleThreshold` (`5`),
+`declaredGroups`, `observedGroups`, `missingGroups`, and `unexpectedGroups`.
+
+Read the time semantics carefully — they are deliberately mixed.
+`windowRequests`, `status5xx`, `connectFail`, `timeout`, `avgMillis`, `p95Millis`,
+`sampleSize`, `sufficient`, and `errorRate` are **window** values
+(`range=60/300`). In contrast, `noUpstreamRejects` and `circuitOpenRejects` come
+from the route's **cumulative** reject counters (the same counters as
+`resources.rejects.noUpstream` / `circuitOpen`); they are not windowed, so that
+no second per-version time-ring store is added. As a result `capacityProblem`
+means "this version has hit a no-instance or all-circuit-open 503 at some point
+since startup" — a conservative hint, not "the current window is broken". Judge
+the current health of a version from `windowRequests` / `status5xx` /
+`sampleSize`; a version with fewer than `sampleThreshold` (`5`) window samples is
+not enough to draw a conclusion (`sufficient=false`). Note also that `p95Millis`
+is the **maximum** of that version's instance p95 values (a conservative upper
+bound); no cross-instance sample merge is done, so it is not the version's true
+p95.
 
 Rover-Admin is optional:
 
@@ -258,10 +301,9 @@ public control plane. The deployer chooses hardening when exposing control ports
   (`demo-fault.sh`), stopping the last instance produced 502 immediately and `503 NO_UPSTREAM` after about 17 seconds.
 - If Nameserver is unavailable when Gateway starts, the failed initial subscription may not be recovered until the
   next reconciliation, again up to about 30 seconds by default.
-- Multi-group push isolation is still being finalized; keep `group` empty for the current build. See
+- `group` is now the version label for versioned routes (`targets`), and per-group routing works: Gateway subscribes and queries per `serviceName + group`. Multi-group *push isolation* inside discovery is still being finalized, so treat `group` as a routing/version dimension rather than a hard tenant boundary. See
   [Service Registration](./service-registration.md#23-current-group-boundary).
-- When all persistent instances are marked unhealthy, Gateway currently falls back to the complete cached list — a
-  fail-open policy.
+- Gateway returns only healthy instances. When every instance of a service is unhealthy the candidate list is empty and the request gets `503 NO_UPSTREAM`; there is no fail-open fallback to the full cached list. A `group` (version) with no healthy instance is rejected the same way and is never silently diverted to another version, so "no instance to route to" and "upstream returned 5xx" stay distinguishable in metrics.
 - Gateway targets ordinary HTTP/1.1: inbound headers start the proxy and the request body is piped; default Netty
   outbound writes the upstream response in chunks. WebSocket and SSE are not supported. The default request-body
   limit is 1 MiB and the hard response-body limit is 16 MiB.

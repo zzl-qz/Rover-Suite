@@ -64,5 +64,8 @@ rover:
     routes:
       - id: demo-api
         businessPrefix: /api
-        serviceName: demo-service
+        targets:
+          - serviceName: demo-service
+            # 灰度时再加一条：group: v2, weight: 5，并把这条降到 95
+            weight: 100
         stripPrefix: ""

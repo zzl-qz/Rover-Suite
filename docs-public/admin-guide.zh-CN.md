@@ -45,9 +45,10 @@ Agent 工作台主输入框只要求用自然语言描述问题（如「为什�
 
 密钥不要写入仓库。调查任务与工作台会话存于 Admin 内存，重启后消失。Agent 只读取管理快照，不会向业务路径发请求，也不会修改路由和配置。
 
-配置模型后，工作台里调查卡片的「AI 解读」会边生成边显示（控制台用 SSE 订阅增量，卡片上显示「实时生成中...」；
-连接断开时不影响调查，页面轮询会把最终全文补齐）。解读结束后以任务结果里的 `aiAnalysis` 为准；模型不可用或
-未配置时该区块不出现，只展示规则诊断。调查卡片可展开「查看调查详情」查看每一步的执行情况、调查过程与结构化证据。
+配置模型后，答案会边生成边写进回答气泡（控制台用 SSE 订阅增量；连接断开不影响调查，页面轮询会把最终全文补齐）。
+一次提问只有一条回答：步骤、计划、证据与假设收在气泡上方默认收起的过程条里，点「查看调查过程」展开。
+调查跑完时结论会作为一条 Agent 回复落进会话，气泡优先显示模型解读（任务结果里的 `aiAnalysis`），
+没有解读时退回规则结论；「已开始 / 已继续调查…」这类受理播报只留在过程里，不再占着答案的位置。
 
 ## 首次登录
 
@@ -169,17 +170,35 @@ Gateway 的记录和内存开销也越大。
 
 ![路由列表](images/admin/05-routes-list.png)
 
-路由列表展示 `businessPrefix`、服务名、静态目标和 `stripPrefix`。保存后会请求 Gateway 热更新并落盘；修改前应确认前缀
-不会与其他路由重叠。
+路由列表展示 `businessPrefix`、版本目标及其权重、静态目标和 `stripPrefix`。保存后会请求 Gateway 热更新并落盘；
+修改前应确认前缀不会与其他路由重叠。
 
 ![路由编辑抽屉](images/admin/06-route-editor.png)
 
 编辑时最重要的是：
 
-- 动态发现时先选「注册中心」或「静态地址」。选注册中心填 `serviceName`；选静态地址填 `targetUrl` / `targetUrls`。
+- 动态发现时先选「注册中心」或「静态地址」。选注册中心填 `targets`，每项是 `{serviceName, group, weight}`：
+  `group` 就是版本号，`weight: 0` 表示暂停该版本而不删掉它；同一条路由的所有 target 必须同一个 `serviceName`。
+- 选静态地址填 `targetUrl` / `targetUrls`。
 - 整机是 `static` 时只填静态地址。
-- 同一条路由不要两套字段都留着。
+- 同一条路由不要 `targets` 和静态地址两套都留着。
+- `stickyHeader` 可选，指定粘性选版本用的请求头（默认回退客户端 IP）。
 - `stripPrefix` 决定转发给上游时是否移除匹配前缀。建议每条自己写，不要依赖全局 `rewrite.stripPrefix`。
+
+保存前编辑器会先预览逐条差异（`ADDED` / `REMOVED` / `MODIFIED`）。每次保存都带上它读到的 `revision`；
+如果别人先改了路由，Gateway 返回 `409`，页面会刷新到最新 `revision` 并要求重新保存，而不是静默覆盖。
+
+### 3.1 版本指标
+
+对版本化路由，`GET /_manage/metrics/routes?routeId=..&range=60|300` 返回声明版本 `targets`、按版本聚合的
+`byVersion`，以及核对「声明版本 vs 观测版本」的 `versionCheck`。版本指标复用「路由 × 实例」维度（每个转发过的
+实例带上自己的 `group`），因此不新增第二套存储，仍遵守 5 分钟滑动窗口。
+
+时间口径是**刻意混用**的：`windowRequests`、`status5xx`、`connectFail`、`timeout`、`avgMillis`、`p95Millis`、
+`sampleSize`、`sufficient`、`errorRate` 是窗口口径；而 `noUpstreamRejects` / `circuitOpenRejects` 是路由维度的
+**累计**拒绝计数。因此 `capacityProblem`（「该版本自启动以来出现过无实例 / 全熔断的 503」）只是保守信号，
+不等于当前窗口一定有问题。窗口样本数低于 `sampleThreshold`（`5`）的版本不足以据此判定（`sufficient=false`）；
+`p95Millis` 是版本内各实例 p95 的最大值（保守上界），不是版本真实的 p95。
 
 ### 4. 实例管理：确认 Nameserver 是否有可用后端
 

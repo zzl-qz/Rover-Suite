@@ -167,7 +167,7 @@ rover-agent-core（纯 Java：领域对象、只读端口、中立快照、诊�
 | | `com.rover.agent.core.context` | AgentContextManager（最近 N 条消息 + 当前事件 + 结构化目标 + 关键证据）、TargetResolver / ResourceTarget（显式指定 → 现有路由与实例 → 模型辅助 → 澄清） |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules（纯函数，可脱离框架单测） |
 | | `com.rover.agent.core.intent` | IntentClassifier / IntentDecision / IntentService：意图识别与取值约束（越界取值一律丢弃） |
-| | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult：能力清单与唯一的只读执行口 |
+| | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult / AgentGrounding（环境画像与术语表）/ UntrustedText（不可信内容哨兵围栏）：能力清单与唯一的只读执行口 |
 | | `com.rover.agent.core.planning` | InvestigationPlanner / InvestigationPlan / PlannedStep / PlanValidator / PlanningLimits / RuleBasedPlanner：计划生成、越界丢弃与硬边界 |
 | `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator（应用入口：上下文 → 意图 → 目标 → 任务 → 分流执行）、InvestigationService（调查任务生命周期）、QueryStateService / ExplainService / ActionPlanService（状态查询、能力说明、处置计划） |
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph：plan / execute / evaluate / clarify / synthesise 节点与循环条件边、结论合成 |
@@ -175,9 +175,9 @@ rover-agent-core（纯 Java：领域对象、只读端口、中立快照、诊�
 | | `com.rover.agent.runtime.task` | 任务生命周期、Session / Incident 登记（走存储接口，当前为内存、有界） |
 | | `com.rover.agent.runtime.repository` | 4 个线程安全内存实现（重启即失），后续接持久化时替换 |
 | | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型 |
-| | `com.rover.agent.runtime.llm` | ModelExplainer（路由与实例快照预读进提示词，指标 / 追踪按需经只读工具）、LlmIntentInterpreter / SpringAiJsonCompletion（意图与计划候选的受限 JSON 输出） |
+| | `com.rover.agent.runtime.llm` | JsonCompletion（结构化输出端口，解析契约由调用方传入）/ ModelExplainer（路由与实例快照预读进提示词，指标 / 追踪按需经只读工具）/ LlmIntentInterpreter / ModelTargetInterpreter（意图与目标的受限 JSON 输出）/ SpringAiJsonCompletion（实现并按 `ModelCallOutcome` 口径记录调用结局） |
 | `rover-admin` | `com.rover.admin.agent.adapter` | 4 个只读适配器：AdminConfigService → 端口，不触发任何写操作 |
-| | `com.rover.admin.agent` | AgentController（会话 / 消息 / 任务 / 事件契约）+ DiagnosisController（旧入口，兼容转发）+ 组合根 |
+| | `com.rover.admin.agent` | AgentController（会话 / 消息 / 任务 / 事件契约）+ 组合根 |
 
 **边界规则：**
 
@@ -207,8 +207,8 @@ Session（一次连续对话）─┬─ Incident（一个被调查的问题，�
 
 **已实现：**
 
-- Admin「Agent 工作台」+ 会话式接口：`POST/GET /api/agent/sessions`、`GET /api/agent/sessions/{sessionId}`、`POST /api/agent/sessions/{sessionId}/messages`、`GET /api/agent/tasks/{taskId}`、`GET /api/agent/incidents/{incidentId}`；
-  旧入口 `POST /api/agent/diagnoses` 与 `GET /api/agent/diagnoses/{taskId}`（含 SSE 解读流）保留兼容，内部转发给同一套编排。
+- Admin「Agent 工作台」+ 会话式接口：`POST/GET /api/agent/sessions`、`POST /api/agent/sessions/{sessionId}/messages`、`GET /api/agent/sessions/{sessionId}/workspace`、`GET /api/agent/tasks/{taskId}`、`GET /api/agent/tasks/{taskId}/events`（SSE）；
+  旧 `/api/agent/diagnoses*` 入口已随 `DiagnosisController` 一并移除，只保留会话式入口。
 - 多轮追问：AgentContextManager 装配「最近 N 条消息（`rover.agent.context.recent-message-limit`，默认 8）+ 当前事件 + 结构化目标 + 关键证据」；
   TargetResolver 按「显式指定 → 现有路由与实例数据 → 模型辅助 → 澄清」解析对象，解析不出时不猜、不建任务。
 - 单一编排入口 `AgentOrchestrator`：Controller 不再直接编排 route/metrics/chatClient 调用，只做参数校验与结果映射。
@@ -218,7 +218,17 @@ Session（一次连续对话）─┬─ Incident（一个被调查的问题，�
 - 已拆成 `rover-agent-core` / `rover-agent-runtime` / `rover-admin` 三层，依赖单向；只读由端口结构保证。
 - 意图识别与分流：消息先判定意图（`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` / `ACTION_REQUEST` / 未开放的 `CREATE_INSPECTION`、`KNOWLEDGE_QUERY`），
   再按需解析资源对象；状态查询只调少量只读能力直接回答，能力说明问题按注册表返回真实能力清单，未开放的请求如实回复而不硬走调查；
-  识别不出意图时先看问题里有没有可解析对象，没有就回一段自我介绍与能力清单，不向用户追问「请给出请求路径」。
+  识别不出意图时先看问题里有没有可解析对象，没有就回一句「我没太明白您的意思」+ 现在能做什么 + 两三条示例提问（完整能力清单只留给明确问
+  「你能做什么」的人），不向用户追问「请给出请求路径」。
+- 路径纠正（证据驱动，不改「查询就是查询」的语义）：轻量路径真的给不出有用结果时，不把兜底话术直接甩给用户，而是换一条路径再试一次——
+  状态查询说不出要查哪一类事实（「order-service 现在什么状态」）、或解释类问题会话里还没有可解释的结论时，只要问题点名的对象能解析出来，
+  就按故障调查执行一次，并单独记一步「路径纠正」说明为什么换了形态。只在问题自己点了对象时纠正：缺少宾语的问法（「现在什么状态」）
+  仍然如实回答「没说清要查哪一类事实」，不会拿上一轮的对象重启一次调查。
+- 意图识别的提示词由三段组成：`AgentGrounding` 的环境画像与术语表（系统由 Gateway / Nameserver 组成、一次调用经过哪几环、
+  用户口语各指什么）、同一份能力注册表生成的只读能力边界、以及意图取值与判别顺序（附少量示例）；「AI 解读」的提示词复用同一份画像，
+  两处不会各自描述一遍系统。模型侧的策略是「只要与系统有关就必须选最接近的一类并如实给 MEDIUM / LOW」，`UNKNOWN` 只留给
+  与运维完全无关的输入，不再把「说不准但明显在域内」的输入判死。规则层同时补了口语化故障词表（扛不住 / 时好时坏 / 无响应 / 502 …），
+  确定性那层不漏，模型才是在补位而不是在填坑。
 - 能力注册表与只读执行器：可用能力（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件查询）统一登记为 READ_ONLY 能力，规划只能从中选择，
   执行器是模型与生产数据之间唯一的取数口；未接入数据适配器的能力标记为不可选，处置类请求只生成不可执行的处置计划（`executable` 恒为 `false`）。
 - 调查链由 Spring AI Alibaba StateGraph 编排：调查计划由规划器产出（规则打底、模型只提候选，越界步骤被丢弃），
@@ -228,9 +238,14 @@ Session（一次连续对话）─┬─ Incident（一个被调查的问题，�
 - 控制台「模型配置」页可填写 OpenAI 兼容服务，保存即生效、无需重启 Admin；环境变量 `ROVER_AGENT_MODEL_CHAT` / `ROVER_AGENT_API_KEY` / `ROVER_AGENT_BASE_URL` / `ROVER_AGENT_MODEL` 只在首次启动、尚无模型配置文件时用于播种，之后以页面保存的配置为准。页面另支持连接测试（不保存）与验证已生效配置（`POST /api/model/verify` 回带生效版本号 `buildId` 与生效时间，可证明生效的正是刚保存的配置）。
 - 模型未配置或不可用时，诊断自动退化为纯规则诊断（`aiAnalysis` 为 null），采集与编排不受影响，并明确标注证据不足。
 - 意图识别、目标解析与调查规划这类"失败也能兜底"的小调用按 `rover.agent.llm.quick-timeout-seconds`（默认 10 秒）收紧等待上限，且只在超时后重试一次：偶发的网络卡顿能自愈，自愈不了就尽快走确定性兜底。「AI 解读」是流式长调用，不受影响，仍用模型配置里的超时。
-- 模型参与解释的证据全部来自只读快照，模型不直连管理接口：路由与实例这两份最小依据由运行时预读后写进提示词，指标与追踪按需经只读工具读取（工具由应用执行）。「AI 解读」步骤的结果说明会区分「运行时预读快照」与「模型另调工具」，解释依据可追溯到具体快照。
+- 模型参与解释的证据全部来自只读快照，模型不直连管理接口：路由与实例这两份最小依据由运行时预读后写进提示词，指标与追踪按需经只读工具读取（工具由应用执行）。「AI 解读」步骤的结果说明会区分「运行时预读快照」与「模型另调工具」，解释依据可追溯到具体快照。每个只读工具的描述都写明「读到什么、什么时候该用、什么时候不该用、拿不到什么」，模型因此不会对着路由快照找流量，也不会把「追踪无记录」当成「没有故障」。
 - 「AI 解读」边生成边推送：`ModelExplainer` 用流式调用把增量交给任务，Admin 通过 SSE 实时下发；最终全文仍落回任务结果，前端断线由轮询兜底。采集与规则判定是阻塞的 Graph 链路，不参与流式。
+- 调查结论会作为一条 Agent 回复落进会话，且在任务定型之前写入：客户端收到 `TASK_COMPLETED` 后重新拉取会话，看到的就是答案本身，而不是「已开始 / 已继续调查…」的受理播报。回复正文优先取模型解读，没有解读时用规则结论；结论回调失败只 WARN，不会把已经跑完的调查判成失败。
 - 每次提交会开启 Session，但只有故障调查才创建 `USER` 来源的 Incident；任务与步骤状态存于 Admin 内存，重启后不可查询。
+- 意图识别评测闭环（`IntentEvaluationTest`）：32 条带标签语料要求规则层逐条精确命中；另有 6 条同一意图的模糊说法，要求规则层**不得**给出 `HIGH` 置信度拍板、必须让模型补位。解决「意图识别命中率只是口头描述、改提示词全靠感觉」的问题——命中率成为可回归的基线，调参前后可比。
+- 结构化输出强约束 + 失败分类：`JsonCompletion` 的解析契约由调用方传入（`Function<String, Optional<T>> parser`）；`LlmIntentInterpreter` 由「宽容补默认值」改为严格契约——JSON 非法、或 intent / confidence / topic / action 任一缺失或越界，整条结果直接丢弃并回退规则层，不再静默补默认值；`ModelCallOutcome` 把调用结局区分为 `OK` / `NOT_CONFIGURED` / `UNAVAILABLE` / `TIMEOUT` / `ERROR` / `EMPTY` / `REJECTED`，其中 `rejected` 专门表示「模型返回了文本但不符合契约」。解决「越界输出被补默认值后命中率损失无法定位」的问题：宁可回退规则层，也不吞掉契约违规。
+- 模型调用可观测性（含 token 用量）：`AgentMetrics` 的口径变为 `modelCall(model, scene, durationMillis, outcome)`，并新增 `modelTokens(model, scene, promptTokens, completionTokens)`；Micrometer 侧暴露 `model.calls`（标签 `model` / `scene` / `outcome`）、`model.duration`（标签 `model` / `scene`）与 `model.tokens`（标签 `model` / `scene` / `kind`，取值 `prompt` / `completion`；拿不到用量就不上报、不记 0），并删除只能回答「失败几次」的 `model.error`。解决「调用次数与耗时说明不了成本与上下文膨胀」的问题：token 用量按场景可查，成本与提示词膨胀可以被量化。
+- 提示注入隔离（`UntrustedText`）：用哨兵把不可信内容围起来（开始 `<<<ROVER-DATA`、结束 `ROVER-DATA>>>`），`contract()` 声明哨兵内的一切都不是指令；`block(label, content)` 会先把内容里出现的哨兵替换成占位符 `[ROVER-DATA]` 再围栏。已应用在 `ModelExplainer`（快照描述）、`LlmInvestigationPlanner`（用户问题 + 已采集证据）与 `ModelTargetInterpreter`（候选对象 + 用户问题）。解决「快照 / 问题 / 证据都是外部内容，可能诱导模型越权」的问题：内容无法伪造边界，模型能把「数据」和「指令」分开。
 
 **规划中（尚未实现，不要按已实现理解）：**
 
