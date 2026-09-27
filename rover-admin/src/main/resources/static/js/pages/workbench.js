@@ -1014,14 +1014,17 @@ window.RoverAdminPages.workbench = {
         /** 任务类型：一次提问最终以什么形态执行，后端 taskType 直接给出，不靠文本猜。 */
         wbTaskTypeLabel(type) {
             return {
+                CONVERSATION: '智能问答',
                 QUERY: '状态查询', INVESTIGATION: '故障调查', ACTION_PLAN: '处置计划',
                 EXPLAIN: '解释说明', UNSUPPORTED: '暂未开放',
-            }[type] || '故障调查';
+            }[type] || '智能问答';
         },
 
         wbTaskTypeBadge(type) {
-            return { INVESTIGATION: 'comp', QUERY: 'ok', EXPLAIN: 'ok', ACTION_PLAN: 'warn', UNSUPPORTED: 'warn' }[type]
-                || 'comp';
+            return {
+                CONVERSATION: 'ok', INVESTIGATION: 'comp', QUERY: 'ok', EXPLAIN: 'ok',
+                ACTION_PLAN: 'warn', UNSUPPORTED: 'warn',
+            }[type] || 'ok';
         },
 
         wbIntentLabel(intent) {

@@ -10,6 +10,7 @@ import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.intent.IntentClassifier;
 import com.rover.agent.core.intent.IntentService;
 import com.rover.agent.core.intent.QuerySubject;
+import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentIntent;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.AgentStepType;
@@ -111,6 +112,14 @@ public final class AgentOrchestrator {
     private static final String QUERY_WITHOUT_SUBJECT = "问题要求查询状态，但没能确定要查哪一类事实";
     private static final String CORRECTION_SUFFIX = "；问题指向的对象可解析，改为按故障调查执行";
 
+    /**
+     * 对话形态的意图说明：这条路径上没有「识别出的意图」这回事——查什么、怎么答都由模型在对话中决定。
+     * 用一个固定的说明性判断代替，是为了让任务视图仍有可展示的依据，而不是留一片空白。
+     */
+    private static final IntentDecision CONVERSATION_DECISION = new IntentDecision(
+            AgentIntent.INVESTIGATE, Confidence.MEDIUM, IntentTopic.NONE, "", TimeRange.unspecified(),
+            ActionType.UNKNOWN, "对话主路径：查什么与怎么答由模型在对话中自主决定", false, null);
+
     private final AgentSessionRepository sessions;
     private final IncidentRepository incidents;
     private final AgentMessageRepository messages;
@@ -124,13 +133,14 @@ public final class AgentOrchestrator {
     private final QueryStateService queries;
     private final ExplainService explanations;
     private final ActionPlanService actionPlans;
+    private final ToolLoopService toolLoop;
 
     public AgentOrchestrator(AgentSessionRepository sessions, IncidentRepository incidents,
                              AgentMessageRepository messages, AgentTaskRepository tasks, IncidentRegistry registry,
                              AgentContextManager contexts, TargetResolver targets,
                              InvestigationService investigations, WorkspaceRetention retention,
                              IntentService intents, QueryStateService queries, ExplainService explanations,
-                             ActionPlanService actionPlans) {
+                             ActionPlanService actionPlans, ToolLoopService toolLoop) {
         this.sessions = sessions;
         this.incidents = incidents;
         this.messages = messages;
@@ -144,6 +154,7 @@ public final class AgentOrchestrator {
         this.queries = queries;
         this.explanations = explanations;
         this.actionPlans = actionPlans;
+        this.toolLoop = toolLoop;
     }
 
     /** 新建会话；会话归属由后端认证上下文决定。 */
@@ -249,9 +260,13 @@ public final class AgentOrchestrator {
     }
 
     /**
-     * Agent Worker 的完整执行段：意图识别 → 目标解析（按需）→ 事件选择 → 执行。
+     * Agent Worker 的完整执行段：组织背景 → 交给模型自主查询与作答 → 结论落会话。
      *
-     * 任何异常都在这里收敛成任务失败，绝不把异常抛回线程池（否则任务会永远停在 RUNNING）。
+     * <p>这里不再有「先归类意图、再按分类执行」这一步。那条路径的失败模式是「归类不了就整句作废」：
+     * 稍微绕一点的问题落不进任何词表，得到的回答就是一句「我没太明白」。现在决策权交给模型——
+     * 它看到的是问题本身和一组可执行工具，自己决定查什么、查几次、怎么答。
+     *
+     * <p>任何异常都在这里收敛成任务失败，绝不把异常抛回线程池（否则任务会永远停在 RUNNING）。
      */
     private void resolveAndRun(InvestigationTask task, AgentRequestOptions options) {
         try {
@@ -262,31 +277,62 @@ public final class AgentOrchestrator {
                 return;
             }
             AgentContext context = contexts.build(task.sessionId()).orElse(null);
-
-            // 先判「想干什么」，再决定要不要解析目标：能力咨询与全局指标查询都不该被目标解析挡住。
-            task.step(AgentStepType.INTENT_RESOLUTION, STEP_INTENT, StepStatus.RUNNING, INTENT_RUNNING);
-            IntentDecision decision = intents.decide(task.question(), contextSummary(context));
-            TaskType type = typeOf(decision);
-            task.step(AgentStepType.INTENT_RESOLUTION, STEP_INTENT, StepStatus.COMPLETED,
-                    intentDetail(decision, type));
-            task.classify(type, decision);
-
-            switch (type) {
-                case UNSUPPORTED -> unsupported(task, decision);
-                case EXPLAIN -> runExplain(task, session, context, decision, options);
-                case QUERY -> runQuery(task, session, context, decision, options);
-                case ACTION_PLAN -> runActionPlan(task, context, decision, options);
-                case INVESTIGATION -> {
-                    if (decision.intent() == AgentIntent.UNKNOWN) {
-                        runUnknown(task, session, context, decision, options);
-                    } else {
-                        runInvestigation(task, session, context, decision, options);
-                    }
-                }
-            }
+            bindTargetBestEffort(task, session, context, options);
+            task.classify(TaskType.CONVERSATION, CONVERSATION_DECISION);
+            toolLoop.run(task, contextSummary(context));
+            appendReply(task);
+            appendConclusion(task);
         } catch (Exception ex) {
             log.error("Agent 任务执行异常", ex);
             task.fail("任务执行失败");
+        }
+    }
+
+    /**
+     * 尽力识别问题里点到的对象：识别出来就按它聚合，识别不出也不拦。
+     *
+     * <p>目标解析在这里不再是「能不能继续」的闸门，只决定这次对话挂在哪个事件下——追问「它呢」时，
+     * 模型需要知道上一轮说的是哪个服务或哪条路径。具体查什么仍由模型自己决定，
+     * 它完全可以忽略这个背景，直接按问题里的说法取数。
+     *
+     * <p>识别出对象时沿用事件选择规则（同对象续用、换对象另开）：事件仍是「同一对象的多次对话」
+     * 的聚合点，否则会话连续性会断在这里。
+     */
+    private void bindTargetBestEffort(InvestigationTask task, Session session, AgentContext context,
+                                      AgentRequestOptions options) {
+        TargetResolution resolution;
+        try {
+            resolution = resolveTarget(task.question(), context, options.target());
+        } catch (Exception ex) {
+            log.warn("目标解析失败，按无对象继续对话", ex);
+            bindCurrentIncident(task, context, "", ResourceTarget.unknown());
+            return;
+        }
+        if (resolution.needsClarification()) {
+            bindCurrentIncident(task, context, "", ResourceTarget.unknown());
+            return;
+        }
+        IncidentChoice choice = pickIncident(session, context, resolution.target(), options.timeRange());
+        registry.attachTask(choice.incident().incidentId(), task.taskId());
+        task.bind(choice.incident().incidentId(), resolution.investigationPath(), resolution.target());
+        task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED,
+                "已识别对话对象：" + describe(resolution.target()));
+    }
+
+    /**
+     * 结论回写事件：事件因此是「同一对象的多次对话」的聚合点，追问时能继承最新结论。
+     *
+     * <p>发不了结论时静默跳过——回写失败不该把一次已经完成的对话判成失败。
+     */
+    private void appendConclusion(InvestigationTask task) {
+        InvestigationReport report = task.view().result();
+        if (report == null || report.summary().isBlank() || task.incidentId() == null) {
+            return;
+        }
+        try {
+            registry.summarise(task.incidentId(), report.summary());
+        } catch (Exception ex) {
+            log.warn("Agent 结论回写事件失败：incidentId={}", task.incidentId(), ex);
         }
     }
 

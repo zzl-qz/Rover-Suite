@@ -1,5 +1,7 @@
 package com.rover.admin.agent;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -15,7 +17,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.rover.admin.agent.model.AdminChatModelGateway;
 import com.rover.admin.client.ManageHttpClient;
+import com.rover.agent.runtime.llm.ConversationModel;
 import com.rover.common.constants.ManageApiPaths;
 import java.util.List;
 import java.util.Map;
@@ -24,24 +28,49 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Bean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 /**
- * 无模型环境下的一次端到端调查：从 Workbench 入口提问，最终拿到规则结论与证据。
+ * 一次端到端对话：从 Workbench 入口提问，模型调工具取真实数据，结论与证据回到任务上。
  *
- * 这里刻意不装配任何 {@link ChatModel}——「模型没配上也能给出可用结论」是本项目的硬约定，
- * 只能靠真实编排链（意图识别 → 目标解析 → 事件选择 → 只读工具取数 → 规则综合）验证，
- * 单测某个环节替代不了。
+ * <p>这里刻意不装配任何 {@link ChatModel}——「模型说什么」由下面的脚本给定，因此这条用例验证的是
+ * <b>编排链本身</b>：HTTP 入口 → 会话与任务 → 目标解析 → 事件绑定 → 工具执行 → 真实取数
+ * （经管理口客户端读到 mock 的路由与实例）→ 证据随结论落库。这一段单测替代不了，
+ * 而它恰好是最容易在重构中悄悄断掉的部分。
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 class AgentContextTest {
 
+    /** 脚本化的模型侧：真实编排链完整执行，只有「模型说什么」是固定的。 */
+    @TestConfiguration
+    static class ScriptedModelConfig {
+
+        @Bean
+        ConversationModel conversationModel() {
+            return (systemPrompt, userMessage, tools, onDelta, onThinking) -> {
+                String facts = tools.listInstances("demo-service");
+                return "demo-service 的注册实例情况：\n" + facts;
+            };
+        }
+    }
+
     @MockitoBean
     private ManageHttpClient manageHttpClient;
+
+    /**
+     * 声称可用的模型网关：真实客户端不会被调用，模型侧由脚本承担。
+     *
+     * <p>按具体类型覆盖（而不是按接口）：同一个 bean 也被模型配置服务按具体类型注入，
+     * 换成接口的 Mock 会让那一步的类型要求落空。
+     */
+    @MockitoBean
+    private AdminChatModelGateway chatModelGateway;
 
     @Autowired
     private MockMvc mockMvc;
@@ -53,8 +82,11 @@ class AgentContextTest {
     private ObjectProvider<ChatModel> models;
 
     @Test
-    void workbenchQuestionIsDiagnosedWithoutModelCredentials() throws Exception {
-        assertNull(models.getIfAvailable());
+    void workbenchQuestionReachesRealDataThroughTheToolLoop() throws Exception {
+        assertNull(models.getIfAvailable(), "本用例刻意不配置真实模型，模型侧由脚本承担");
+        when(chatModelGateway.configured()).thenReturn(true);
+        when(chatModelGateway.available()).thenReturn(true);
+        when(chatModelGateway.description()).thenReturn("scripted");
         ObjectNode target = JsonNodeFactory.instance.objectNode();
         target.put("serviceName", "demo").put("group", "11").put("weight", 100);
         ObjectNode route = JsonNodeFactory.instance.objectNode();
@@ -103,7 +135,11 @@ class AgentContextTest {
             Thread.sleep(10);
         } while (System.currentTimeMillis() < deadline);
 
-        assertTrue(task.path("result").path("summary").asText().contains("demo / 11"), task.toString());
-        assertTrue(task.path("result").path("evidence").size() >= 2, task.toString());
+        assertEquals("CONVERSATION", task.path("taskType").asText(), task.toString());
+        assertTrue(task.path("result").path("summary").asText().contains("demo-service"), task.toString());
+        assertEquals(1, task.path("executedCapabilities").size(),
+                "工具必须真的被执行，而不是只写在提示词里：" + task);
+        assertEquals("INSTANCE_QUERY", task.path("executedCapabilities").get(0).asText());
+        assertFalse(task.path("result").path("evidence").isEmpty(), "取到的事实必须随结论落库：" + task);
     }
 }
