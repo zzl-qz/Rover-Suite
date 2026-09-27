@@ -122,4 +122,56 @@ class AdminConfigControllerWebTest {
                 .andExpect(status().isOk())
                 .andExpect(content().json("{\"operationId\":\"op-1\",\"status\":\"APPLIED\",\"revision\":3}"));
     }
+
+    /**
+     * 灰度放量 / 停推：只改一个版本权重的专用通道。
+     *
+     * 与「保存整条路由」走不同的管理口原语（更窄，不会误动同一条路由上的其它目标），
+     * 但 revision 乐观锁与 operationId 超时回查的语义一致，因此错误透传也完全一致。
+     */
+    @Test
+    void adjustsSingleTargetWeight() throws Exception {
+        when(configService.adjustTargetWeight(Map.of(
+                "routeId", "/orders",
+                "serviceName", "order-service",
+                "group", "v2",
+                "weight", 20,
+                "revision", 3,
+                "operationId", "op-1")))
+                .thenReturn(Map.of("ok", true, "message", "已调整版本权重"));
+
+        mockMvc.perform(post("/api/routes/targets/weight")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"routeId\":\"/orders\",\"serviceName\":\"order-service\","
+                                + "\"group\":\"v2\",\"weight\":20,\"revision\":3,\"operationId\":\"op-1\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"ok\":true}"));
+    }
+
+    /** 回滚到指定版本：网关以「产生新版本」的方式回滚，终态同样可回查。 */
+    @Test
+    void rollsBackRoutesToRevision() throws Exception {
+        when(configService.rollbackRoutes(Map.of("toRevision", 2, "revision", 3, "operationId", "op-2")))
+                .thenReturn(Map.of("ok", true, "message", "已回滚到版本 2"));
+
+        mockMvc.perform(post("/api/routes/rollback")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toRevision\":2,\"revision\":3,\"operationId\":\"op-2\"}"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"ok\":true}"));
+    }
+
+    /** 回滚目标不在快照窗口内：网关的拒绝原因原样透出，操作者才知道该换哪个版本号。 */
+    @Test
+    void keepsRollbackRejectionFromDownstream() throws Exception {
+        when(configService.rollbackRoutes(Map.of("toRevision", 99, "revision", 3, "operationId", "op-3")))
+                .thenThrow(new ManageApiCallException(400, "回滚目标版本不在最近 5 次已应用快照内: 99"));
+
+        mockMvc.perform(post("/api/routes/rollback")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"toRevision\":99,\"revision\":3,\"operationId\":\"op-3\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().json(
+                        "{\"code\":400,\"message\":\"回滚目标版本不在最近 5 次已应用快照内: 99\"}"));
+    }
 }

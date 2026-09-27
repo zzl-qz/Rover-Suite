@@ -496,7 +496,7 @@
                                             <span v-if="wbTaskStepText(turn.task)" class="card-hint wb-live-hint">{{ wbTaskStepText(turn.task) }}</span>
                                             <span v-if="wbUncertainties(turn.task).length" class="badge warn"
                                                   :title="wbUncertaintyText(turn.task)">
-                                                {{ wbUncertainties(turn.task).length }} 项判断仍无法验证
+                                                {{ wbUncertainties(turn.task).length }} 处没能确认
                                             </span>
                                             <span class="card-hint">{{ wbTaskToggleHint(turn.task) }}</span>
                                         </button>
@@ -506,6 +506,11 @@
                                             <span v-if="turn.task.intent" class="badge comp">{{ wbIntentLabel(turn.task.intent.intent) }}</span>
                                             <span v-if="wbCurrentStage(turn.task)" class="card-hint">当前阶段：{{ wbCurrentStage(turn.task) }}</span>
                                             <span class="card-hint">{{ fmtTime(turn.task.createdAtMillis) }}</span>
+                                            <button v-if="wbCanCancel(turn.task)" type="button"
+                                                    class="btn mini danger ml-auto" :disabled="turn.task._cancelling"
+                                                    @click="wbCancelTask(turn.task)">
+                                                {{ turn.task._cancelling ? '取消中…' : '取消' }}
+                                            </button>
                                         </div>
                                         <!-- 没有对象时不摆一个「未限定对象」的空标签，直接说明按全局取值 -->
                                         <div class="diagnosis-target">
@@ -546,7 +551,7 @@
                                                 <span v-if="turn.task.completedAtMillis"> · 完成于 {{ fmtTime(turn.task.completedAtMillis) }}</span>
                                             </div>
                                             <div v-if="wbUncertainties(turn.task).length" class="wb-uncertain">
-                                                <span class="badge warn">{{ wbUncertainties(turn.task).length }} 项判断仍无法验证</span>
+                                                <span class="badge warn">{{ wbUncertainties(turn.task).length }} 处没能确认</span>
                                                 <span class="muted">{{ wbUncertaintyText(turn.task) }}</span>
                                             </div>
                                         </div>
@@ -762,7 +767,7 @@
                                 <div class="diagnosis-summary wb-md" v-html="mdHtml(wbLatestResultTask.result.summary)"></div>
                                 <div class="card-hint">置信度：{{ wbConfidenceLabel(wbLatestResultTask.result.confidence) }}</div>
                                 <div v-if="wbUncertainties(wbLatestResultTask).length" class="wb-uncertain">
-                                    <span class="badge warn">{{ wbUncertainties(wbLatestResultTask).length }} 项判断仍无法验证</span>
+                                    <span class="badge warn">{{ wbUncertainties(wbLatestResultTask).length }} 处没能确认</span>
                                     <span class="muted">{{ wbUncertaintyText(wbLatestResultTask) }}</span>
                                 </div>
                                 <div v-if="wbLatestResultTask.result.limitations && wbLatestResultTask.result.limitations.length" class="diagnosis-limitations">
@@ -998,23 +1003,41 @@
                     </div>
 
                     <div class="model-form">
-                        <div class="field">
-                            <label>快捷预设</label>
-                            <select v-model="modelPresetIndex" class="nice-select" @change="applyModelPreset">
-                                <option value="">— 选一个预设（选定后仍可改） —</option>
-                                <option v-for="(p, i) in modelPresets" :key="p.label" :value="String(i)">
-                                    {{ p.label }} · {{ p.model }}
+                        <div class="field wide">
+                            <label>模型厂商</label>
+                            <select v-model="modelVendor" class="nice-select">
+                                <option v-for="v in modelVendors" :key="v.code" :value="v.code">
+                                    {{ v.label }}
                                 </option>
                             </select>
                         </div>
-                        <div class="field wide">
-                            <label>服务地址 baseUrl</label>
-                            <input v-model="modelForm.baseUrl" placeholder="https://api.deepseek.com">
-                        </div>
-                        <div class="field">
-                            <label>模型名</label>
-                            <input v-model="modelForm.model" placeholder="deepseek-chat">
-                        </div>
+
+                        <template v-if="!isCustom">
+                            <div class="field wide">
+                                <label>主模型（后台指定）</label>
+                                <div class="muted"><code>{{ currentVendorMap.mainModel }}</code> <span class="card-hint">{{ currentVendorMap.baseUrl }}</span></div>
+                            </div>
+                            <div class="field wide" v-if="currentVendorMap.fastModel">
+                                <label>快速模型（后台指定）</label>
+                                <div class="muted"><code>{{ currentVendorMap.fastModel }}</code> <span class="card-hint">承接意图/目标/规划等廉价调用</span></div>
+                            </div>
+                        </template>
+
+                        <template v-else>
+                            <div class="field wide">
+                                <label>服务地址 baseUrl</label>
+                                <input v-model="modelForm.customBaseUrl" placeholder="http://127.0.0.1:11434/v1">
+                            </div>
+                            <div class="field">
+                                <label>主模型名</label>
+                                <input v-model="modelForm.customModel" placeholder="qwen2.5:7b">
+                            </div>
+                            <div class="field">
+                                <label>快速模型名（可选）</label>
+                                <input v-model="modelForm.customFastModel" placeholder="留空则不配快速模型">
+                            </div>
+                        </template>
+
                         <div class="field">
                             <label>API Key</label>
                             <input v-model="modelForm.apiKey" type="password" autocomplete="new-password"
@@ -1034,7 +1057,7 @@
                             {{ modelSaving ? '保存中...' : '保存并生效' }}
                         </button>
                         <button class="btn ghost" @click="testModelConfig"
-                                :disabled="modelTesting || !modelForm.baseUrl || !modelForm.model">
+                                :disabled="modelTesting || (!isCustom ? !currentVendorMap.mainModel : (!modelForm.customBaseUrl || !modelForm.customModel))">
                             {{ modelTesting ? '测试中...' : '测试连接（不保存）' }}
                         </button>
                         <button class="btn ghost" @click="verifyModelConfig" :disabled="modelVerifying">
@@ -1164,11 +1187,28 @@
                     <input v-model.number="t.weight" type="number" min="0" step="1" class="w-weight" title="权重">
                     <span class="target-share">{{ targetShare(t) }}</span>
                     <button class="btn mini ghost" @click="removeTarget(i)">移除</button>
+                    <!-- 编辑已有路由时，才能用「只改这一个版本」的专用原语 -->
+                    <button v-if="editingPrefix" class="btn mini" @click="applyTargetWeight(t)"
+                            title="只调整这一个版本的权重，不动同一条路由上的其它目标">调权重</button>
+                    <button v-if="editingPrefix && t.weight > 0" class="btn mini danger" @click="stopTarget(t)"
+                            title="把这个版本的权重归零，即停推">停推</button>
                 </div>
                 <button class="btn mini" @click="addTarget">加一个版本</button>
                 <p class="field-hint">
                     权重只表示相对比例：v1=95、v2=5 就是 5% 放量。把某个版本改成 0 即停推该版本；
                     没有可接流实例的版本会让这条路由直接返回 503，不会偷偷改投其它版本。
+                    上面的「调权重 / 停推」只改你这一个版本，不会误动同一条路由上的其它目标。
+                </p>
+            </div>
+            <div class="field" v-if="editingPrefix">
+                <label>灰度运维</label>
+                <div class="target-row">
+                    <input v-model="rollbackRevision" type="number" min="1" step="1" placeholder="回滚到版本号">
+                    <button class="btn mini danger" @click="rollbackRoutes" :disabled="savingRoute">回滚</button>
+                </div>
+                <p class="field-hint">
+                    当前路由表版本 {{ routesRevision }}。网关以「产生新版本」的方式回滚，只保留最近 5 次已应用快照，
+                    越界的版本号会被网关明确拒绝（原因原样透出）。回滚和放量一样带操作号，超时后会自动回查是否生效。
                 </p>
             </div>
             <div class="field" v-if="showDiscoveryFields">
