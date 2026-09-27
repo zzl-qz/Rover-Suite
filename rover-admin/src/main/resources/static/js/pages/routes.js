@@ -183,7 +183,8 @@ window.RoverAdminPages.routes = {
         async saveRoute() {
             const route = this.buildRoutePayload();
             if (!route) return;
-            const payload = { revision: this.routesRevision, ...route };
+            const operationId = newOperationId();
+            const payload = { revision: this.routesRevision, operationId, ...route };
             this.savingRoute = true;
             try {
                 const result = await RoverAdminApi.api('/api/routes', {
@@ -196,8 +197,9 @@ window.RoverAdminPages.routes = {
                 await this.fetchRoutes();
             } catch (e) {
                 this.toast('error', e.message);
-                // 冲突时本地快照已经过期，立刻刷新，避免用户反复提交同一个旧版本
-                if (String(e.message || '').includes('版本冲突')) {
+                // 冲突或超时后本地快照都可能已经过期，立刻刷新，避免用户反复提交同一个旧版本
+                if (await this.recoverWriteOutcome(operationId, e)
+                        || String(e.message || '').includes('版本冲突')) {
                     await this.fetchRoutes();
                 }
             } finally {
@@ -249,21 +251,69 @@ window.RoverAdminPages.routes = {
         },
         async deleteRoute(prefix) {
             if (!confirm(`确定删除路由 ${prefix} 吗？`)) return;
+            const operationId = newOperationId();
             try {
                 const query = '?businessPrefix=' + encodeURIComponent(prefix)
-                    + '&revision=' + this.routesRevision;
+                    + '&revision=' + this.routesRevision
+                    + '&operationId=' + encodeURIComponent(operationId);
                 const result = await RoverAdminApi.api('/api/routes' + query, { method: 'DELETE' });
                 this.toast('success', result.message || '路由已删除');
                 await this.fetchRoutes();
             } catch (e) {
                 this.toast('error', e.message);
-                if (String(e.message || '').includes('版本冲突')) {
+                if (await this.recoverWriteOutcome(operationId, e)
+                        || String(e.message || '').includes('版本冲突')) {
                     await this.fetchRoutes();
                 }
             }
         },
+        /**
+         * 写请求失败后的对账：用同一个 operationId 问网关「这次写到底执行了没有」。
+         *
+         * <p>Admin 调网关有 5 秒超时，超时的响应可能已经落盘、也可能没有；靠重提是猜，
+         * 而重提可能真的多改一次。网关保留了操作记录，所以每次写都自带 operationId，
+         * 超时/下游 5xx 后立刻按号回查，把真实终态告诉操作者。
+         *
+         * @returns {boolean} 是否已经回查到了终态（false 表示还需按普通失败处理）
+         */
+        async recoverWriteOutcome(operationId, error) {
+            // 4xx 是网关明确拒绝（校验失败/版本冲突），状态已经确定，不必回查
+            if (error && error.status >= 400 && error.status < 500) {
+                return false;
+            }
+            let record;
+            try {
+                record = await RoverAdminApi.api('/api/routes/operations/' + encodeURIComponent(operationId));
+            } catch (queryError) {
+                this.toast('error',
+                    `提交结果未知，且回查失败：${queryError.message}。可用操作号 ${operationId} 稍后再查`);
+                return false;
+            }
+            const label = {
+                APPLIED: '已生效',
+                CONFLICT: '未生效（版本冲突）',
+                REJECTED: '未生效（校验失败）',
+                FAILED: '未生效（落盘失败）',
+                UNKNOWN: '网关没有这条记录',
+            }[record.status] || record.status;
+            const message = `提交结果未知，已按操作号回查：${label}。${record.message || ''}`;
+            if (record.status === 'APPLIED') {
+                this.toast('success', message);
+            } else {
+                this.toast('error', message);
+            }
+            return true;
+        },
     },
 };
+
+/** 生成一次路由写操作的幂等号：超时后靠它回查，因此必须由发起方生成。 */
+function newOperationId() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+    }
+    return 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+}
 
 /** 权重取整，坏值按 0 处理，避免把 NaN 提交给网关。 */
 function weightOf(target) {

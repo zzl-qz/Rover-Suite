@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -99,6 +100,17 @@ public class AdminConfigController {
     public Map<String, Object> deleteRoute(@RequestParam(ManageApiPaths.PARAM_BUSINESS_PREFIX) String businessPrefix,
                                           @RequestParam(ManageApiPaths.PARAM_REVISION) int revision) {
         return configService.deleteRoute(businessPrefix, revision);
+    }
+
+    /**
+     * 查一次路由写操作的终态：APPLIED / CONFLICT / REJECTED / FAILED / UNKNOWN。
+     *
+     * <p>存在的意义是「请求超时后确认到底执行了没有」：超时的那次写可能已经生效，
+     * 也可能没有，只有网关的操作记录能回答，靠重提是猜。
+     */
+    @GetMapping(AdminApiPaths.ROUTE_OPERATION)
+    public Map<String, Object> routeOperation(@PathVariable String operationId) {
+        return configService.routeOperation(operationId);
     }
 
     /** 注册实例列表（Nameserver 管理口）。 */
