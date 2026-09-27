@@ -170,11 +170,11 @@
                                 </tr>
                                 <tr v-if="selectedRoute && selectedRoute.instances">
                                     <td colspan="5" class="expand-cell">
-                                        <div class="upstream-note">该路由近窗打到各上游的次数（看负载是否均匀）</div>
+                                        <div class="upstream-note">该路由近窗打到各上游的次数（带版本，看灰度放量与负载是否均匀）</div>
                                         <div class="upstream-chips">
                                             <span v-for="(cnt, host) in selectedRoute.instances" :key="host" class="chip"
-                                                  :title="host + ' 近窗命中 ' + cnt + ' 次'">
-                                                {{ host }} · {{ cnt }}
+                                                  :title="host + (groupOf(selectedRoute, host) ? '（版本 ' + groupOf(selectedRoute, host) + '）' : '') + ' 近窗命中 ' + cnt + ' 次'">
+                                                <span v-if="groupOf(selectedRoute, host)" class="muted">{{ groupOf(selectedRoute, host) }} · </span>{{ host }} · {{ cnt }}
                                             </span>
                                             <span v-if="!instanceEntries(selectedRoute).length" class="muted">还没有上游命中</span>
                                         </div>
@@ -345,23 +345,23 @@
                 <div class="card">
                     <div class="card-head">
                         <h2>路由列表</h2>
-                        <span class="card-hint">共 {{ routes.length }} 条，保存后立即热替换并落盘</span>
+                        <span class="card-hint">共 {{ routes.length }} 条，版本 revision={{ routesRevision }}；保存后立即热替换并落盘</span>
                         <button class="btn primary ml-auto" @click="openRouteDrawer(null)">新增路由</button>
                     </div>
                     <div v-if="routesError" class="banner warn">{{ routesError }}</div>
                     <div v-else-if="!routes.length" class="empty">还没有路由，点右上角加一条。</div>
                     <table v-else class="table">
                         <thead><tr>
-                            <th>ID</th><th>前缀</th><th>serviceName</th><th>targetUrl</th>
-                            <th>targetUrls</th><th>stripPrefix</th><th class="w-actions"></th>
+                            <th>ID</th><th>前缀</th><th>版本（group 权重）</th><th>serviceName</th>
+                            <th>targetUrl / targetUrls</th><th>stripPrefix</th><th class="w-actions"></th>
                         </tr></thead>
                         <tbody>
                         <tr v-for="r in routes" :key="r.businessPrefix + r.id">
                             <td>{{ r.id || '-' }}</td>
                             <td><code>{{ r.businessPrefix }}</code></td>
-                            <td>{{ r.serviceName || '-' }}</td>
-                            <td class="ellipsis" :title="r.targetUrl">{{ r.targetUrl || '-' }}</td>
-                            <td class="ellipsis" :title="r.targetUrls">{{ r.targetUrls || '-' }}</td>
+                            <td>{{ routeVersionLabel(r) || '-' }}</td>
+                            <td>{{ routeServiceName(r) || '-' }}</td>
+                            <td class="ellipsis" :title="r.targetUrl || r.targetUrls">{{ r.targetUrl || r.targetUrls || '-' }}</td>
                             <td>{{ r.stripPrefix || '-' }}</td>
                             <td class="row-actions">
                                 <button class="btn mini" @click="openRouteDrawer(r)">编辑</button>
@@ -567,15 +567,6 @@
                                                 <div class="wide"><span>回滚方式</span><b>{{ turn.task.actionPlan.rollbackPlan || '-' }}</b></div>
                                             </div>
                                         </div>
-                                        <div v-if="wbAnalysisText(turn.task)" class="wb-ai">
-                                            <h4>AI 解读
-                                                <span v-if="wbIsStreaming(turn.task)" class="wb-stream-flag">
-                                                    <span class="dot"></span>实时生成中
-                                                </span>
-                                            </h4>
-                                            <p class="diagnosis-ai">{{ wbAnalysisText(turn.task) }}<span
-                                                    v-if="wbIsStreaming(turn.task)" class="wb-caret"></span></p>
-                                        </div>
                                         <div class="wb-detail">
                                             <!-- 任务 ID 挪进详情：时间线上只留人看得懂的信息，要排障时展开就有 -->
                                             <div class="card-hint">任务 ID <code>{{ turn.task.taskId }}</code></div>
@@ -637,8 +628,11 @@
                                         </div>
                                         </div>
 
-                                        <!-- 答案正文：与上面的过程条同属这一条回答，不再各占一条 -->
-                                        <div v-if="turn.message" class="wb-bubble agent">{{ turn.message.content }}</div>
+                                        <!-- 答案正文：与上面的过程条同属这一条回答，不再各占一条。
+                                             正文按 Markdown 渲染（列表/标题/代码块），流式光标由渲染器贴在末字之后 -->
+                                        <div v-if="turn.message" class="wb-bubble agent">
+                                            <div class="wb-md" v-html="mdHtml(wbAnswerText(turn), wbIsStreaming(turn.task))"></div>
+                                        </div>
                                         <div v-if="turn.message" class="wb-meta">
                                             Rover Ops Agent · {{ fmtTime(turn.message.createdAtMillis) }}
                                         </div>
@@ -721,7 +715,6 @@
                                 <div class="wb-kv">
                                     <div class="wide"><span>标题</span><b>{{ wbActiveIncident.title || '-' }}</b></div>
                                     <div><span>对象类型</span><b>{{ wbTargetTypeLabel(wbActiveIncident.target.type) }}</b></div>
-                                    <div><span>严重度</span><b>{{ wbSeverityLabel(wbActiveIncident.severity) }}</b></div>
                                     <div class="wide"><span>对象取值</span><b><code>{{ wbActiveIncident.target.value || '(未确定)' }}</code></b></div>
                                     <div><span>时间范围</span><b>{{ wbTimeRangeText(wbActiveIncident.timeRange) }}</b></div>
                                     <div><span>来源</span><b>{{ wbOriginLabel(wbActiveIncident.origin) }}</b></div>
@@ -745,7 +738,7 @@
                                 <div class="empty-hint">调查完成后这里会显示最近一次的结论摘要。</div>
                             </div>
                             <template v-else>
-                                <p class="diagnosis-summary">{{ wbLatestResultTask.result.summary }}</p>
+                                <div class="diagnosis-summary wb-md" v-html="mdHtml(wbLatestResultTask.result.summary)"></div>
                                 <div class="card-hint">置信度：{{ wbConfidenceLabel(wbLatestResultTask.result.confidence) }}</div>
                                 <div v-if="wbUncertainties(wbLatestResultTask).length" class="wb-uncertain">
                                     <span class="badge warn">{{ wbUncertainties(wbLatestResultTask).length }} 项判断仍无法验证</span>
@@ -1142,12 +1135,23 @@
                 </select>
             </div>
             <div class="field" v-if="showDiscoveryFields">
-                <label>serviceName *</label>
-                <input v-model="routeForm.serviceName" placeholder="demo-service">
+                <label>版本目标（同一服务的不同 group，权重决定放量比例）*</label>
+                <div class="target-row" v-for="(t, i) in routeForm.targets" :key="i">
+                    <input v-model="t.serviceName" :placeholder="serviceNameHint()">
+                    <input v-model="t.group" placeholder="版本，如 v1">
+                    <input v-model.number="t.weight" type="number" min="0" step="1" class="w-weight" title="权重">
+                    <span class="target-share">{{ targetShare(t) }}</span>
+                    <button class="btn mini ghost" @click="removeTarget(i)">移除</button>
+                </div>
+                <button class="btn mini" @click="addTarget">加一个版本</button>
+                <p class="field-hint">
+                    权重只表示相对比例：v1=95、v2=5 就是 5% 放量。把某个版本改成 0 即停推该版本；
+                    没有可接流实例的版本会让这条路由直接返回 503，不会偷偷改投其它版本。
+                </p>
             </div>
             <div class="field" v-if="showDiscoveryFields">
-                <label>group</label>
-                <input v-model="routeForm.group" placeholder="可选">
+                <label>stickyHeader（灰度粘性键的请求头）</label>
+                <input v-model="routeForm.stickyHeader" placeholder="留空则按客户端 IP 粘住同一版本">
             </div>
             <div class="field" v-if="showStaticFields">
                 <label>targetUrl</label>
@@ -1159,8 +1163,18 @@
             </div>
         </div>
         <div class="form-actions">
+            <button class="btn" @click="previewRoute" :disabled="previewingRoute">预览差异</button>
             <button class="btn primary" @click="saveRoute" :disabled="savingRoute">保存并热更新</button>
             <button class="btn ghost" @click="closeRouteDrawer">取消</button>
+        </div>
+        <div class="field" v-if="routePreview">
+            <label>预览结果（只看差异，未落盘、未生效）</label>
+            <p class="field-hint" v-if="!routePreview.changeCount">与当前版本一致，无差异</p>
+            <div class="preview-item" v-for="(c, i) in routePreview.changes" :key="i">
+                <span class="preview-kind">{{ changeKindLabel(c.kind) }}</span>
+                <code class="preview-prefix">{{ c.businessPrefix }}</code>
+                <span class="preview-detail">{{ c.detail }}</span>
+            </div>
         </div>
     </aside>
 

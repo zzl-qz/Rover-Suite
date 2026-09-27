@@ -1,15 +1,21 @@
 /** 路由管理页。 */
 window.RoverAdminPages = window.RoverAdminPages || {};
 const EMPTY_ROUTE_FORM = {
-    id: '', businessPrefix: '', serviceName: '', targetUrl: '', targetUrls: '', group: '', stripPrefix: '',
+    id: '', businessPrefix: '', targetUrl: '', targetUrls: '',
+    targets: [], stickyHeader: '', stripPrefix: '',
     upstreamKind: 'discovery',
 };
 window.RoverAdminPages.routes = {
     data() {
         return {
             routes: [],
+            // 读路由表时一起拿到的版本号；提交时必须原样回传，网关用它判并发冲突
+            routesRevision: 0,
             routesError: null,
             savingRoute: false,
+            previewingRoute: false,
+            // 网关返回的预览差异；为空表示还没预览过，供抽屉里的结果区渲染
+            routePreview: null,
             editingPrefix: null,
             routeDrawerOpen: false,
             routeForm: { ...EMPTY_ROUTE_FORM },
@@ -19,7 +25,7 @@ window.RoverAdminPages.routes = {
     computed: {
         routeUpstreamOptions() {
             return [
-                { label: '注册中心（服务名）', value: 'discovery' },
+                { label: '注册中心（按版本分流）', value: 'discovery' },
                 { label: '静态地址', value: 'static' },
             ];
         },
@@ -29,13 +35,19 @@ window.RoverAdminPages.routes = {
         showStaticFields() {
             return !this.dynamicDiscovery || this.routeForm.upstreamKind === 'static';
         },
+        /** 权重总和，用于把权重换算成真实流量百分比。 */
+        targetWeightTotal() {
+            return this.routeForm.targets.reduce((sum, t) => sum + weightOf(t), 0);
+        },
     },
 
     methods: {
         async fetchRoutes() {
             this.routesError = null;
             try {
-                this.routes = await RoverAdminApi.api('/api/routes');
+                const state = await RoverAdminApi.api('/api/routes');
+                this.routes = state.routes || [];
+                this.routesRevision = state.revision || 0;
             } catch (e) {
                 this.routesError = e.message;
             }
@@ -43,64 +55,135 @@ window.RoverAdminPages.routes = {
         resetRouteForm() {
             this.routeForm = {
                 ...EMPTY_ROUTE_FORM,
+                targets: [],
                 upstreamKind: this.dynamicDiscovery ? 'discovery' : 'static',
             };
             this.editingPrefix = null;
+            this.routePreview = null;
         },
         openRouteDrawer(route) {
             if (route) {
                 this.editingPrefix = route.businessPrefix;
                 const hasStatic = Boolean(route.targetUrl || route.targetUrls);
+                const targets = (route.targets || []).map(t => ({
+                    serviceName: t.serviceName || '',
+                    group: t.group || '',
+                    weight: weightOf(t),
+                }));
                 this.routeForm = {
                     id: route.id || '',
                     businessPrefix: route.businessPrefix || '',
-                    serviceName: route.serviceName || '',
                     targetUrl: route.targetUrl || '',
                     targetUrls: route.targetUrls || '',
-                    group: route.group || '',
+                    targets: targets.length ? targets : [{ serviceName: '', group: '', weight: 100 }],
+                    stickyHeader: route.stickyHeader || '',
                     stripPrefix: route.stripPrefix || '',
                     upstreamKind: hasStatic ? 'static' : (this.dynamicDiscovery ? 'discovery' : 'static'),
                 };
             } else {
                 this.resetRouteForm();
+                this.routeForm.targets = [{ serviceName: '', group: '', weight: 100 }];
             }
+            this.routePreview = null;
             this.routeDrawerOpen = true;
         },
         closeRouteDrawer() {
             this.routeDrawerOpen = false;
             this.resetRouteForm();
         },
-        async saveRoute() {
+        addTarget() {
+            this.routeForm.targets.push({ serviceName: '', group: '', weight: 0 });
+        },
+        removeTarget(index) {
+            if (this.routeForm.targets.length <= 1) {
+                this.toast('error', '至少保留一个版本目标');
+                return;
+            }
+            this.routeForm.targets.splice(index, 1);
+        },
+        /** 单个版本的实际流量占比，让「权重」看起来是可信的放量刻度。 */
+        targetShare(target) {
+            const total = this.targetWeightTotal;
+            if (!total) return '0%';
+            return (weightOf(target) / total * 100).toFixed(1) + '%';
+        },
+        /** 只填 serviceName 的第二列及以后的目标，用来提示「同服务不同版本」。 */
+        serviceNameHint() {
+            const first = this.routeForm.targets.find(t => t.serviceName);
+            return first ? first.serviceName : 'demo-service';
+        },
+        /** 列表里展示版本与权重，例如「v1 95 / v2 5」。 */
+        routeVersionLabel(route) {
+            const targets = route && route.targets;
+            if (!targets || !targets.length) {
+                return '';
+            }
+            return targets.map(t => `${t.group || '默认'} ${weightOf(t)}`).join(' / ');
+        },
+        /** 列表里的服务名：取第一个版本目标（校验保证同一条路由只有一个服务）。 */
+        routeServiceName(route) {
+            const targets = route && route.targets;
+            return targets && targets.length ? (targets[0].serviceName || '') : '';
+        },
+        /**
+         * 校验抽屉表单并组装成一条网关认识的路由对象（不带 revision）。
+         *
+         * <p>「保存」和「预览差异」必须走同一套校验与字段组装：否则会出现「预览说没问题、
+         * 保存却被网关拒绝」，或者反过来预览的内容跟真正提交的不是同一条路由。
+         * 校验不过时就地 toast 并返回 null，由调用方决定要不要继续。
+         */
+        buildRoutePayload() {
             const form = this.routeForm;
             if (!form.businessPrefix) {
                 this.toast('error', 'businessPrefix 必填');
-                return;
+                return null;
             }
             const payload = {
                 id: form.id,
                 businessPrefix: form.businessPrefix,
                 stripPrefix: form.stripPrefix,
-                group: form.group,
-                serviceName: '',
                 targetUrl: '',
                 targetUrls: '',
+                targets: [],
+                stickyHeader: '',
             };
             if (this.showDiscoveryFields) {
-                if (!form.serviceName) {
-                    this.toast('error', '请填服务名');
-                    return;
+                const targets = form.targets
+                    .filter(t => t.serviceName && String(t.serviceName).trim())
+                    .map(t => ({
+                        serviceName: String(t.serviceName).trim(),
+                        group: String(t.group || '').trim(),
+                        weight: weightOf(t),
+                    }));
+                if (!targets.length) {
+                    this.toast('error', '至少填一个版本目标的服务名');
+                    return null;
                 }
-                payload.serviceName = form.serviceName;
-                payload.group = form.group;
+                const names = new Set(targets.map(t => t.serviceName));
+                if (names.size > 1) {
+                    this.toast('error', '同一条路由的版本目标必须属于同一个服务，只区分 group');
+                    return null;
+                }
+                if (!targets.some(t => t.weight > 0)) {
+                    this.toast('error', '至少一个版本权重大于 0，否则这条路由没有版本可接流');
+                    return null;
+                }
+                payload.targets = targets;
+                payload.stickyHeader = String(form.stickyHeader || '').trim();
             } else {
                 if (!form.targetUrl && !form.targetUrls) {
                     this.toast('error', '请填静态地址');
-                    return;
+                    return null;
                 }
-                payload.group = '';
                 payload.targetUrl = form.targetUrl;
                 payload.targetUrls = form.targetUrls;
             }
+            return payload;
+        },
+        async saveRoute() {
+            const route = this.buildRoutePayload();
+            if (!route) return;
+            const payload = { revision: this.routesRevision, ...route };
             this.savingRoute = true;
             try {
                 const result = await RoverAdminApi.api('/api/routes', {
@@ -113,19 +196,77 @@ window.RoverAdminPages.routes = {
                 await this.fetchRoutes();
             } catch (e) {
                 this.toast('error', e.message);
+                // 冲突时本地快照已经过期，立刻刷新，避免用户反复提交同一个旧版本
+                if (String(e.message || '').includes('版本冲突')) {
+                    await this.fetchRoutes();
+                }
             } finally {
                 this.savingRoute = false;
             }
         },
+        /**
+         * 预览当前表单改动：只回差异，不落盘、不生效。
+         *
+         * <p>网关按整表比对，所以要拿「未改动的其它路由 + 本表单」拼成候选整表，否则别的路由
+         * 会被误报成「删除」。被编辑的那条按 id（没有 id 才用 businessPrefix）替换，与网关的
+         * 路由标识口径保持一致。网关不可达时同样落到 catch，靠 finally 摘掉 loading。
+         */
+        async previewRoute() {
+            const candidate = this.buildRoutePayload();
+            if (!candidate) return;
+            this.previewingRoute = true;
+            try {
+                // 先拉一次最新路由表：拿过期的本地快照拼候选整表，会把别人刚改的增删算成
+                // 「我的差异」；顺带把 revision 刷到最新，预览通过后再保存也不容易撞 409
+                await this.fetchRoutes();
+                const key = r => (r.id ? 'id:' + r.id : 'prefix:' + (r.businessPrefix || ''));
+                const candidateKey = key(candidate);
+                const merged = this.routes
+                    .filter(r => key(r) !== candidateKey)
+                    .map(r => ({ ...r }));
+                merged.push(candidate);
+                const result = await RoverAdminApi.api('/api/routes/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ routes: merged }),
+                });
+                this.routePreview = result;
+                if (result.changeCount) {
+                    this.toast('success', result.message || `预览通过，共 ${result.changeCount} 处差异`);
+                } else {
+                    this.toast('success', '与当前版本一致，无差异');
+                }
+            } catch (e) {
+                this.routePreview = null;
+                this.toast('error', e.message);
+            } finally {
+                this.previewingRoute = false;
+            }
+        },
+        /** 预览差异类型的中文名，网关回的是 ADDED / REMOVED / MODIFIED。 */
+        changeKindLabel(kind) {
+            return { ADDED: '新增', REMOVED: '删除', MODIFIED: '修改' }[kind] || kind;
+        },
         async deleteRoute(prefix) {
             if (!confirm(`确定删除路由 ${prefix} 吗？`)) return;
             try {
-                const result = await RoverAdminApi.api('/api/routes?businessPrefix=' + encodeURIComponent(prefix), { method: 'DELETE' });
+                const query = '?businessPrefix=' + encodeURIComponent(prefix)
+                    + '&revision=' + this.routesRevision;
+                const result = await RoverAdminApi.api('/api/routes' + query, { method: 'DELETE' });
                 this.toast('success', result.message || '路由已删除');
                 await this.fetchRoutes();
             } catch (e) {
                 this.toast('error', e.message);
+                if (String(e.message || '').includes('版本冲突')) {
+                    await this.fetchRoutes();
+                }
             }
         },
     },
 };
+
+/** 权重取整，坏值按 0 处理，避免把 NaN 提交给网关。 */
+function weightOf(target) {
+    const value = Number(target && target.weight);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
