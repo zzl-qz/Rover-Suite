@@ -666,11 +666,20 @@ window.RoverAdminPages.workbench = {
             if (sessionId) this.wbLoadSession(sessionId);
         },
 
-        /** 任务卡上的解读文本：落库全文优先（终态后以它为准），生成中显示流式增量。 */
-        wbAnalysisText(task) {
-            const final = task && task.result && task.result.aiAnalysis;
-            if (final) return final;
-            return (task && this.wbStreamTexts[task.taskId]) || '';
+        /**
+         * 回答正文：一次提问只对应这一个气泡，里面就是模型（或规则）产出的那段话。
+         *
+         * 生成中优先显示流式增量、边推边出；定型后以任务结论为准，最后才退回这条 Agent 回复本身。
+         * 「已继续调查…」这类受理播报属于过程，不是答案——它只在结论还没落到时间线上时临时兜底。
+         */
+        wbAnswerText(turn) {
+            const task = turn && turn.task;
+            if (task && this.wbIsStreaming(task)) {
+                const streamed = this.wbStreamTexts[task.taskId];
+                if (streamed) return streamed;
+            }
+            const analysis = task && task.result && task.result.aiAnalysis;
+            return analysis || (turn.message && turn.message.content) || '';
         },
 
         wbTaskTerminal(status) {
@@ -824,8 +833,7 @@ window.RoverAdminPages.workbench = {
         },
 
         wbTaskToggleHint(task) {
-            if (this.wbTaskOpen(task)) return '收起过程';
-            return this.wbAnalysisText(task) ? '查看调查过程 · 含 AI 解读' : '查看调查过程';
+            return this.wbTaskOpen(task) ? '收起过程' : '查看调查过程';
         },
 
         wbSessionAt(session) {
@@ -851,10 +859,6 @@ window.RoverAdminPages.workbench = {
 
         wbIncidentBadge(status) {
             return { RESOLVED: 'ok', INVESTIGATING: 'warn', OPEN: 'comp' }[status] || 'comp';
-        },
-
-        wbSeverityLabel(severity) {
-            return { UNKNOWN: '未判定', LOW: '低', MEDIUM: '中', HIGH: '高', CRITICAL: '严重' }[severity] || severity || '-';
         },
 
         wbOriginLabel(origin) {

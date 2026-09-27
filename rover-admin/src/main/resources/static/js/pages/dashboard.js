@@ -263,6 +263,10 @@ window.RoverAdminPages.dashboard = {
         instanceEntries(route) {
             return route && route.instances ? Object.keys(route.instances) : [];
         },
+        /** 实例所属版本（group）；静态路由或未知时返回空串。 */
+        groupOf(route, host) {
+            return (route && route.instanceGroups && route.instanceGroups[host]) || '';
+        },
         /** 指标里的特殊路由 id 换成可读文案。 */
         routeLabel(routeId) {
             if (!routeId) return '-';
