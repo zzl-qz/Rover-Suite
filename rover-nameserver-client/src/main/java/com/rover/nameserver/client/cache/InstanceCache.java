@@ -15,7 +15,8 @@ import java.util.function.Consumer;
 /**
  * Author: Daylight
  * Created: 2026-08-05 10:12:00
- * Description: 客户端本地实例缓存：推送按 epoch+revision 拒旧并带推空保护，查询对账以服务端快照为准全量覆盖
+ * Description: 客户端本地实例缓存：按 service+group 各自成键互不回落，推送按 epoch+revision 拒旧，
+ * 推空保护只在「不比本地新」时生效，查询对账以服务端快照为准全量覆盖
  */
 public class InstanceCache {
 
@@ -72,18 +73,22 @@ public class InstanceCache {
         ApplyOutcome[] outcome = {ApplyOutcome.APPLIED};
         CacheEntry[] notifyEntry = new CacheEntry[1];
         cache.compute(key, (ignored, current) -> {
-            // 推空保护：疑似误推空，先保住本地，并累计拒绝次数触发强制对账
-            if (incoming.isEmpty() && current != null && !current.instances.isEmpty()) {
-                outcome[0] = ApplyOutcome.REJECTED_EMPTY_PROTECT;
+            // 乱序旧包：同世代更小 revision，丢弃
+            if (isOlderSameEpoch(current, epoch, revision)) {
+                outcome[0] = ApplyOutcome.REJECTED_STALE;
                 if (incrementReject(current)) {
                     notifyEntry[0] = current;
                 }
                 return current;
             }
 
-            // 同世代且更旧 → 拒（乱序旧包）；epoch 为空视为老协议，不做拒旧
-            if (isOlderSameEpoch(current, epoch, revision)) {
-                outcome[0] = ApplyOutcome.REJECTED_STALE;
+            // 推空保护只在「这一包并不比本地新」时生效。
+            // 比本地更新却推空是真实事件——某组最后一台实例下线、或整服务实例清空。
+            // 服务端每次真实变更都会 bump revision，所以「更新 + 空」必须认下来；
+            // 否则本地会一直留着已经下线的实例继续转发（v2 最后一台下线后仍打到它）。
+            if (incoming.isEmpty() && current != null && !current.instances.isEmpty()
+                    && !isNewerThan(current, epoch, revision)) {
+                outcome[0] = ApplyOutcome.REJECTED_EMPTY_PROTECT;
                 if (incrementReject(current)) {
                     notifyEntry[0] = current;
                 }
@@ -128,11 +133,16 @@ public class InstanceCache {
         putSnapshotFromQuery(serviceName, group, null, revision, instances);
     }
 
+    /**
+     * 读某个 service+group 的本地缓存。
+     *
+     * <p>刻意不做「具体组没有就退回整服务缓存」的兜底：整服务缓存里含所有组的实例，
+     * 退回它会让 v2 的请求打到 v1 的实例上——灰度比例直接失真，而且指标上只表现为
+     * 「v2 的上游是 v1 的地址」，很难一眼看出来。没有该组的缓存就如实返回空，
+     * 由调用方按「没有可用上游」处理，等该组的订阅快照到位后自然恢复。
+     */
     public List<ServiceInstance> get(String serviceName, String group) {
         CacheEntry entry = cache.get(cacheKey(serviceName, group));
-        if (entry == null && group != null && !group.isBlank()) {
-            entry = cache.get(cacheKey(serviceName, null));
-        }
         if (entry == null) {
             return List.of();
         }
@@ -203,6 +213,17 @@ public class InstanceCache {
                 && !epoch.isBlank()
                 && epoch.equals(current.epoch)
                 && revision < current.revision;
+    }
+
+    /** 这一包是否比本地缓存更新：世代变了算新，同世代比 revision。 */
+    private boolean isNewerThan(CacheEntry current, String epoch, long revision) {
+        if (current == null) {
+            return true;
+        }
+        if (epoch != null && !epoch.isBlank() && !epoch.equals(current.epoch)) {
+            return true;
+        }
+        return revision > current.revision;
     }
 
     private String cacheKey(String serviceName, String group) {

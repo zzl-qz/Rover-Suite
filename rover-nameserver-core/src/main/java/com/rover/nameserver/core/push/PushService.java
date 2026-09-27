@@ -67,13 +67,14 @@ public class PushService {
     /**
      * 按订阅组分别推送。
      * 通配订阅收到整份名单；订了具体组的连接只收到这一组，避免和查询结果不一致。
+     *
+     * <p>每个组都要推：实例可能在组之间迁移，旧组的名单同样变了，而快照只带得动新组。
      */
     public void pushSnapshot(RegistrySnapshot snapshot) {
         if (!pushEnabled.get() || snapshot == null) {
             return;
         }
-        List<String> groups = subscriptionManager.groupsToNotify(
-                snapshot.getServiceName(), snapshot.getGroup());
+        List<String> groups = subscriptionManager.groupsToNotify(snapshot.getServiceName());
         if (groups.isEmpty()) {
             return;
         }
