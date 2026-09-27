@@ -10,6 +10,7 @@ import com.rover.common.log.RecordStore;
 import com.rover.common.log.RecordType;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import org.springframework.stereotype.Component;
 
 /**
@@ -33,7 +34,9 @@ public class H2LogQueryAdapter implements LogQueryPort {
                 types = new ArrayList<>();
                 for (String t : request.types()) {
                     try {
-                        types.add(RecordType.valueOf(t));
+                        // 工具描述里写的是 config_change 这类小写名，枚举是大写：统一按大写解析，
+                        // 免得模型照抄描述传参时被当成「未知类型」静默忽略。
+                        types.add(RecordType.valueOf(t.trim().toUpperCase(Locale.ROOT)));
                     } catch (IllegalArgumentException ignored) {
                         // 未知类型跳过
                     }

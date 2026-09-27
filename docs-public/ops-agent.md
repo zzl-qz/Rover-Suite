@@ -50,8 +50,8 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 | Stage | Owner | Status |
 | :--- | :--- | :--- |
-| Detect | Monitoring / alerting, and future event ingestion | Planned |
-| Investigate → Diagnose | **Core value of the agent** | In progress (read-only chain orchestrated by a graph, with hypothesis verification) |
+| Detect | Monitoring / alerting sends through `POST /api/agent/events/ingest` | Implemented (passive ingestion); proactive periodic inspection is not implemented |
+| Investigate → Diagnose | **Core value of the agent** | In progress (model-driven conversation path plus a read-only graph chain with hypothesis verification) |
 | Recommend | Agent | In progress (produces non-executable action plans) |
 | Approve / Execute / Verify | Agent, with a governance layer | Planned |
 
@@ -81,11 +81,11 @@ eliminates candidate causes one by one (for example "the path matches no route",
 "all matching instances are unhealthy", "downstream calls failed recently", "one upstream instance of this route returned 5xx"),
 each bound to its evidence sources.
 
-Dynamic capability selection and evidence-adaptive investigation plans are now live: the orchestrator first decides the
-intent, then selects read-only capabilities from the capability registry; a planner produces the plan, an executor runs it,
-and an evaluate node decides whether to keep planning, ask for clarification, or conclude. The three hard limits — planning
-rounds, capability calls, and plan steps — are enforced by code rather than the prompt; hitting them stops collection and
-is stated plainly in the conclusion. Action requests only produce a non-executable action plan (`executable` is always
+The two paths differ in *who chooses*, and agree on the boundary: on the investigation path the planner produces the plan,
+the executor runs it, and an evaluate node decides whether to keep planning, ask for clarification, or conclude; on the
+conversation path that choice belongs to the model. What does not change is that both may pick only READ_ONLY capabilities
+that are actually wired up in the registry, and the three hard limits — planning rounds, capability calls, and plan steps —
+are enforced by code rather than the prompt; hitting them stops collection and is stated plainly in the conclusion. Action requests only produce a non-executable action plan (`executable` is always
 `false`); execution is deferred to Level C.
 
 ### Level C: Act
@@ -99,37 +99,44 @@ verification.
 ## 5. Two entry points
 
 ```text
-Engineer-initiated (implemented)     Event / alert triggered (planned)
-        │                              │
-        └──────────┬───────────────────┘
-                   ↓
-         Intent decision
-                   │
-     ┌─────────────┼──────────────┬──────────────┬─────────────┐
-     ↓             ↓              ↓              ↓             ↓
-  QUERY_STATE  INVESTIGATE     EXPLAIN     ACTION_REQUEST  unsupported
-(few read-only  (dynamic     (capability   (non-executable  (answered
- capabilities) investigation)  summary)        plan)        honestly)
-                   ↓
-             Incident Task
-                   ↓
-   Investigation graph: PLAN → EXECUTE → EVALUATE (loops on evidence, stops at limits)
-                   ↓
-   synthesise (confirm / eliminate / unverifiable → conclusion)
-                   ↓
-   Events / Logs / Change / SOP (planned)
-                   ↓
-             Root Cause
-                   ↓
-            Action Plan (produced, not executed)
+Engineer-initiated (implemented)                     Event / alert triggered (implemented)
+        │                                                        │
+        ↓                                                        ↓
+  Target resolution (best effort)                          Incident Task
+  explicit → existing routes/instances → model                   │
+  unresolved still answers (it just lacks an object)              ↓
+        │                                          Investigation graph DynamicInvestigationGraph
+        ↓                                          (PLAN → EXECUTE → EVALUATE, loops on evidence,
+  Conversation path ToolLoopService                 stops at the limits)
+  the model decides what to query, how many times,                ↓
+  and in which order                                     synthesise (confirm / eliminate /
+        │                                                unverifiable → conclusion)
+        ↓                                                        ↓
+  9 read-only tools (see §7) → facts + evidence +          Hypothesis-driven root cause
+        │                     limitations                        ↓
+        ↓                                                 Action Plan (produced, not executed)
+  answered while querying; the answer is written back
+  to the session as one Agent reply
 ```
 
-State queries, capability questions, and action plans create no incident; only fault investigations land under one.
+Both paths read data through the same `CapabilityExecutor`: neither the model nor an alert can reach management APIs
+directly. The difference is *who decides what to query* — the model on the conversation path (9 tools plus a call
+budget), the planner on the investigation path (picks available capabilities from the registry, with hypothesis
+verification).
+
+The conversation path no longer pre-classifies the question into "state query / investigation / capability summary"
+and then runs a different pipeline per shape: a sentence asking three things triggers three lines of querying, and a
+part it cannot answer is reported as "this part was not found" rather than abandoning the whole reply.
 
 - **Engineer-initiated:** ask in one sentence on the Admin Agent Workbench (e.g. "why does /api/demo/tt fail?"), with an
   optional collapsible "advanced context" for route / service / instance and a time range; follow-ups reuse the active
   incident. **Implemented.**
-- **Alert / event initiated:** an Alert or Gateway event creates an Incident and starts the investigation automatically. **Planned.**
+- **Alert / event initiated: implemented.** `POST /api/agent/events/ingest` turns one alert into three things — which
+  route, which window, what is suspected — and needs login (machine-to-machine entry point, ideally a service account).
+  It opens its own session, records an `ALERT`-sourced incident, reuses exactly the same read path as a human question,
+  and returns `202` with a task handle. Sessions are isolated per event and owned by no human user, so they never compete
+  with human sessions for the "one active task" lock. What is still missing is the **proactive** half: periodic
+  self-inspection that raises its own `INSPECTION` incidents.
 
 ## 6. Architecture choices
 
@@ -182,22 +189,24 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | Module | Package | Responsibility |
 | :--- | :--- | :--- |
 | `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget / AgentIntent / IntentDecision / TaskType / ActionPlan |
-| | `com.rover.agent.core.snapshot` | Neutral read-only snapshots: RouteSnapshot / InstanceSnapshot / GatewayMetricSnapshot / TraceSnapshot / DiscoveryMode |
-| | `com.rover.agent.core.port` | Read-only ports: RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort; unavailable data raises SnapshotUnavailableException |
+| | `com.rover.agent.core.snapshot` | Neutral read-only snapshots: RouteSnapshot / RouteUpstreamSnapshot / InstanceSnapshot / GatewayMetricSnapshot / TraceSnapshot / TraceRow / ConfigEntrySnapshot / RegistryEventSnapshot / DiscoveryMode |
+| | `com.rover.agent.core.port` | Read-only ports: RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort / ConfigReadPort / EventReadPort / LogQueryPort / KnowledgeReadPort (the latter two with LogRequest / LogEntry / KnowledgeEntry); unavailable data raises SnapshotUnavailableException |
 | | `com.rover.agent.core.repository` | Storage interfaces: AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository (in-memory or persistent implementations are swappable) |
 | | `com.rover.agent.core.context` | AgentContextManager (N most recent messages + active incident + structured target + key evidence); TargetResolver / ResourceTarget (explicit input → existing routes and instances → model assistance → clarification) |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules (pure functions, unit-testable without the framework) |
 | | `com.rover.agent.core.intent` | IntentClassifier / IntentDecision / IntentService: intent recognition with constrained values (out-of-range values are dropped) |
 | | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult / AgentGrounding (environment profile and glossary) / UntrustedText (sentinel fencing for untrusted content): capability catalogue and the single read-only execution point |
 | | `com.rover.agent.core.planning` | InvestigationPlanner / InvestigationPlan / PlannedStep / PlanValidator / PlanningLimits / RuleBasedPlanner: plan production, out-of-scope dropping, hard limits |
-| `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator (application entry: context → intent → target → task → dispatch); InvestigationService (investigation task lifecycle); QueryStateService / ExplainService / ActionPlanService (state queries, capability summary, action plans) |
+| `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator (application entry: context → target → task → conversation path); InvestigationService (investigation task lifecycle, still used by alert ingestion); QueryStateService / ExplainService / ActionPlanService (state queries, capability summary, action plans); ToolLoopService (model-driven conversation path) |
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph: plan / execute / evaluate / clarify / synthesise nodes, looping conditional edges, conclusion synthesis |
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner: rule-based baseline plus model candidates, out-of-scope steps dropped by PlanValidator |
 | | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces; in-memory and bounded today) |
 | | `com.rover.agent.runtime.repository` | Four thread-safe in-memory implementations (lost on restart), replaced when persistence lands |
-| | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model |
-| | `com.rover.agent.runtime.llm` | JsonCompletion (structured-output port; the parsing contract is supplied by the caller) / ModelExplainer (route and instance snapshots pre-read into the prompt, metrics / traces on demand through read-only tools) / LlmIntentInterpreter / ModelTargetInterpreter (constrained JSON output for intent and target) / SpringAiJsonCompletion (the implementation, which records each call's outcome against `ModelCallOutcome`) |
-| `rover-admin` | `com.rover.admin.agent.adapter` | Four read-only adapters: AdminConfigService → ports, never triggering a write |
+| | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 9 read-only tools (data entry point of the conversation path) |
+| | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`: the built-in operations knowledge base, default `KnowledgeReadPort` implementation |
+| | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / LlmIntentInterpreter / ModelTargetInterpreter / SpringAiJsonCompletion, plus the conversation-side ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway (model adapter and honest degradation when no model exists) |
+| `rover-admin` | `com.rover.admin.agent.adapter` | Six read-only adapters: Route / Instance / Metric / Trace / Config / Event → ports, never triggering a write |
+| | `com.rover.admin.log` | `H2LogQueryAdapter` (the `LogQueryPort` implementation, mapping string types back to `RecordType`) and TelemetryCollector (periodic sampling of Gateway / Nameserver into the record store, see 6.2) |
 | | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + composition root |
 
 **Boundary rules:**
@@ -272,8 +281,62 @@ project's "clarify rather than guess" stance. The eval is a standalone program (
 because it depends on a live model; the 30-case size is a stated limit, not a claim of
 statistical significance.
 
-Degradation holds without a model: when no model is configured or the model is unavailable,
-diagnosis falls back to pure rule-based (`aiAnalysis` is null) and collection continues.
+Degradation holds without a model: on the investigation graph, diagnosis falls back to pure rule-based (`aiAnalysis` is
+null) and collection continues. The conversation path deliberately does **not** fake a graceful degradation: its every
+query and every sentence of its answer come from the model, so it replies "no usable model is configured, please fill one
+in on the model configuration page" and closes the task with `LOW`.
+
+## 6.3 Record store and telemetry collection
+
+"What happened earlier" cannot be answered from live monitoring alone, so Admin keeps a local record store
+(`RecordStore`). Data is written continuously while Admin runs, whether or not anyone asks a question — even without a
+model configured.
+
+```text
+Writers                                     Storage                                Readers
+Admin config writes (change/rollback/err)─┐              ┌→ LogQueryPort ──→ CapabilityExecutor ──→ tool queryLogs
+                                          ├→ RecordStore (local H2, dual-queue async write)
+Telemetry collector (polls manage APIs)───┘              └→ (retention cleaned per category)
+Built-in FAQ (InMemoryKnowledgeStore)─────────────────────── KnowledgeReadPort ──→ tool searchKnowledge
+```
+
+**Write path (`RecordStore` / `H2RecordStore` in `rover-common`):**
+
+- Dual-queue async write: diagnostic evidence (critical) is kept as much as possible and waits briefly when the queue is
+  full; high-volume telemetry is best-effort and dropped when full, so no business request ever waits on storage.
+- Location comes from `rover.admin.log-store-path` (default `./rover-logs/rover`, real file `rover-logs/rover.mv.db`); the
+  JDBC URL carries `AUTO_SERVER=TRUE`, so another process can open the same URL read-only while the app is running.
+- Schema changes run through versioned migrations (`schema_migrations`, forward-only): an existing old database gets
+  incremental `ALTER`s instead of being skipped wholesale like `CREATE TABLE IF NOT EXISTS`.
+- The data lives only on local disk: wipe the directory or move hosts and it is gone. It is not a cross-host audit source.
+
+**What gets written (`RecordType`):**
+
+| Record type | Meaning | Producer | Category and retention |
+| :--- | :--- | :--- | :--- |
+| `CONFIG_CHANGE` | Admin config write succeeded: route save / delete, dynamic config change | AdminConfigService | Diagnostic evidence (`log-retention-days`, 30 days) |
+| `ROLLBACK` | Rollback succeeded (a rollback is itself a change) | AdminConfigService | same as above |
+| `ERROR` | Config write failed (including delivery to Gateway) | AdminConfigService | same as above |
+| `INSTANCE_EVENT` | Component reachability flip, instance register / deregister / health flip | TelemetryCollector | same as above |
+| `METRICS_SAMPLE` | One aggregated metric snapshot per component per cycle, for time series rather than a single point | TelemetryCollector | Telemetry (`log-telemetry-retention-days`, 3 days) |
+| `REQUEST_TRACE` | Slow requests and 5xx traces, deduplicated by traceId | TelemetryCollector | same as above |
+
+Reserved with no producer yet: `DEPLOY` / `AGENT_ACTION` / `MEMORY` / `HEARTBEAT` / `GENERIC`. Raw heartbeats and
+per-request logs are deliberately not stored: too noisy for a model, and the normal state is already covered by the
+metric-sample time series.
+
+**Telemetry (`TelemetryCollector`):** interval `rover.admin.log-collect-interval-seconds` (default 30s, minimum 5s; the
+first run is delayed by one cycle so beans are ready). Each round pulls STATUS / METRICS / INSTANCES / TRACES from the
+Gateway and Nameserver manage APIs: components are checked for a reachability flip; instances keep a health baseline (the
+**first round only seeds it and writes no events**, so startup does not flood the store with "everything registered"
+events), after which only register / remove / up / down flips are recorded; metrics are written as one aggregate snapshot
+per component per cycle; traces keep only slow requests and 5xx under the `error` filter, deduplicated by traceId in a
+bounded set (10 000). A retention task runs every 60 minutes and purges each category with its own retention window.
+
+**The two read-only capabilities exposed to the model:** historical evidence via `LogQueryPort` (`queryLogs` filters by
+type / target / time range) and operational knowledge via `KnowledgeReadPort` (`searchKnowledge`, backed by the built-in
+FAQ in `InMemoryKnowledgeStore`, not by the record store). Both are registered as available READ_ONLY capabilities in the
+catalogue described in §7.
 
 ## 7. Current implementation status
 
@@ -281,8 +344,30 @@ diagnosis falls back to pure rule-based (`aiAnalysis` is null) and collection co
 
 - Admin Agent Workbench plus the conversational API: `POST/GET /api/agent/sessions`,
   `POST /api/agent/sessions/{sessionId}/messages`, `GET /api/agent/sessions/{sessionId}/workspace`,
-  `GET /api/agent/tasks/{taskId}`, `GET /api/agent/tasks/{taskId}/events` (SSE). The legacy `/api/agent/diagnoses*`
-  entries were removed together with `DiagnosisController`; only the conversational entries remain.
+  `GET /api/agent/tasks/{taskId}`, `GET /api/agent/tasks/{taskId}/events` (SSE), `POST /api/agent/tasks/{taskId}/cancel`,
+  `POST /api/agent/events/ingest`. The legacy `/api/agent/diagnoses*` entries were removed together with
+  `DiagnosisController`; only the conversational entries remain.
+- Conversation path `ToolLoopService` (model-driven evidence collection): once a question arrives, **the model itself
+  decides what to query, how many times, and in what order** — rather than first classifying the question into "state
+  query / investigation / capability summary" and running a different pipeline per shape. Every tool call is a real read,
+  and all tools run through the same `CapabilityExecutor`: the model never sees management-API credentials and has no
+  write capability at all. There are 9 read-only tools, one per capability in the registry:
+
+  | Tool | What it reads | Capability |
+  | :--- | :--- | :--- |
+  | `listRoutes` / `getRoute(path)` | Routes with prefixes, target service and group, static targets, prefix stripping | ROUTE_QUERY |
+  | `listInstances(serviceName)` | Registered instances, address and port, health | INSTANCE_QUERY |
+  | `getGatewayMetrics(path)` | Global window plus per route × upstream instance: requests, status codes, error rate, latency | GATEWAY_METRICS_QUERY |
+  | `getTraces(path)` | Sampled traces (phases, durations, status codes, traceId) | TRACE_QUERY |
+  | `getConfigs()` | Effective Gateway / Nameserver configuration | CONFIG_READ |
+  | `listRegistryEvents()` | Recent register / deregister / evict / health-mark events | EVENT_QUERY |
+  | `queryLogs(type, target, hours)` | Recorded evidence: CONFIG_CHANGE / ROLLBACK / ERROR / INSTANCE_EVENT / METRICS_SAMPLE / REQUEST_TRACE | LOG_QUERY |
+  | `searchKnowledge(query)` | Built-in operations FAQ: how to configure, onboard, and troubleshoot | KNOWLEDGE_RETRIEVAL |
+
+  Each tool description states what it returns, when to use it, when not to, and what it cannot provide, so the model does
+  not ask a route snapshot for traffic or read "no traces" as "no problem". The call budget is enforced on both sides:
+  `OpsTools.MAX_CALLS` (30) and `spring.ai.tools.limits.max-total-tool-calls` (30) are kept in sync, with a per-tool
+  default limit of 10.
 - Multi-turn follow-ups: AgentContextManager assembles "N most recent messages
   (`rover.agent.context.recent-message-limit`, default 8) + active incident + structured target + key evidence";
   TargetResolver resolves the object as "explicit input → existing routes and instances → model assistance →
@@ -300,16 +385,21 @@ diagnosis falls back to pure rule-based (`aiAnalysis` is null) and collection co
   **everything is lost on restart**; business code does not depend on maps directly.
 - User identity always comes from the backend authentication context (`Authentication.getName()`) and a `userId` in the
   request body is never accepted; sessions, tasks, and incidents are filtered by that identity.
-- Read-only collection of routes, instances, metrics, and traces, producing a conclusion, confidence, evidence sources,
-  collection timestamps, and limitations.
+- Read-only collection of routes, instances, metrics, traces, configuration, registry events, historical logs, and
+  operational knowledge, producing a conclusion, confidence, evidence sources, collection timestamps, and limitations.
+- Recorded evidence and telemetry collection (see §6.3): config changes / rollbacks / failed writes, component and
+  instance health flips, per-cycle aggregated metric samples, and slow or 5xx traces are written to the local record
+  store whether or not anyone asks a question. Live data still comes from manage APIs; only historical evidence goes
+  through `queryLogs`.
 - Split into `rover-agent-core` / `rover-agent-runtime` / `rover-admin` with one-way dependencies; read-only access is
   guaranteed structurally by the ports.
-- Intent recognition and dispatch: a message is first classified (`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` /
+- Intent recognition and dispatch (**side branch; the conversation path no longer goes through here**): a message is first classified (`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` /
   `ACTION_REQUEST` / `KNOWLEDGE_QUERY` / the not-yet-open `CREATE_INSPECTION`), and a resource target is resolved only
   when needed; state queries run a couple of read-only capabilities, capability questions answer from the registry's
   real list, and unsupported requests are answered honestly instead of forced into an investigation. Unrecognised
   messages with no resolvable target get a self-introduction plus the capability list instead of a path clarification.
-- Evidence-driven path correction (without changing the "a query stays a query" semantics): when a lightweight path
+- Evidence-driven path correction (**side branch; the conversation path no longer goes through here**; without changing
+  the "a query stays a query" semantics): when a lightweight path
   genuinely has nothing useful to produce, the fallback wording is not handed straight to the user — another path is
   tried instead. A state query that cannot tell which kind of fact is being asked for ("what is the state of
   order-service right now") or an explanation question with no conclusion in the session yet is escalated to a
@@ -362,9 +452,11 @@ diagnosis falls back to pure rule-based (`aiAnalysis` is null) and collection co
   state: a client that reloads the session on `TASK_COMPLETED` sees the answer itself instead of the
   "investigation started / continued" notice. The reply prefers the model's interpretation and falls back to the
   rule-based conclusion; a failed conclusion callback only logs a warning and never marks a finished investigation
-  as failed.
-- Task state lives in Admin memory and is gone after restart. Every question opens a Session, but only a fault
-  investigation creates a `USER`-origin Incident.
+  as failed. On the conversation path the conclusion *is* the model's full answer, and its confidence is recorded as
+  `MEDIUM` — the facts are checkable, but the reasoning still comes from the model.
+- Every question lands under a Session and its task is best-effort attached to an Incident (same target reuses the
+  incident, a clearly different target opens a new one, chit-chat creates none). Task state lives in Admin memory and is
+  gone after restart; the record store (§6.3) is independent of it and survives a restart.
 - Intent recognition evaluation loop (`IntentEvaluationTest`): 32 labelled utterances must be matched exactly,
   one by one, by the rule layer; another 6 fuzzy phrasings of the same intents must **not** be settled by the rule
   layer with `HIGH` confidence — the model has to step in. This solves "the intent hit rate is only a verbal claim
@@ -398,9 +490,14 @@ diagnosis falls back to pure rule-based (`aiAnalysis` is null) and collection co
 
 - Persistence for sessions / incidents / tasks (Lite ↔ Standard storage modes): Redis for caching and short-term
   context, MySQL for tasks and audit; only in-memory implementations exist today.
-- Alert / event ingestion with automatic investigation.
+- Proactive inspection: periodic self-inspection that raises its own `INSPECTION` incidents. `POST
+  /api/agent/events/ingest` already lets an external alert drive an automatic investigation; what is missing is the
+  agent going out to look on a schedule.
+- Record store off-box: today it is a local H2 per Admin instance, so replicas each write their own history; a shared
+  time-series / log backend is needed before it counts as cross-host audit.
 - Graph checkpoint recovery and interrupt-based human approval.
-- Log, change-history, and SOP / Runbook retrieval (RAG).
+- External SOP / Runbook retrieval: historical logs (`queryLogs`) and the built-in FAQ (`searchKnowledge`) are live, but
+  loading a team's own runbooks and change records in bulk — real RAG with chunking, embeddings, and citations — is not.
 - Write actions, approval flow, audit, and post-execution verification.
 
 ## 8. Difference from data-analytics agents
@@ -409,18 +506,21 @@ diagnosis falls back to pure rule-based (`aiAnalysis` is null) and collection co
 | :--- | :--- | :--- |
 | Role | Data analyst | SRE / operations diagnostician |
 | Typical question | Why did sales drop? | Why is the service returning 5xx? |
-| Core data | Database | Gateway + Metrics + Trace (Logs planned) |
-| Core tools | SQL / Python | Route / Instance / Metrics / Trace |
+| Core data | Database | Gateway + Instances + Metrics + Trace + record store + operations knowledge |
+| Core tools | SQL / Python | 9 read-only tools: Route / Instance / Metrics / Trace / Config / Events / Logs / Knowledge |
 | Output | Data analysis report | Incident diagnosis |
 | Action | Data analysis | Remediation (planned) |
 | Risk surface | SQL / data | Production infrastructure |
 | Goal | Insight | Diagnose + Remediate |
 
-Both use a similar architecture idea — one agent plus graph orchestration with multiple nodes, rather than stacked
-multi-agents — but their product goals are entirely different.
+Both use a similar architecture idea — Rover Ops Agent is likewise a single agent: the conversation path lets the model
+decide what to query within one round, and only the investigations that need orchestration go to the StateGraph
+(plan / execute / evaluate loop) — rather than splitting the problem among stacked sub-agents. The product goals,
+however, are entirely different.
 
 ## 9. Related documents
 
 - [Admin User Guide](./admin-guide.md): Agent Workbench usage and console model configuration
 - [Admin API](./admin-api.md): session / task / event API contract
+- [Configuration reference](./configuration-reference.md): every Agent and record-store setting
 - [Architecture](./architecture.md): existing Gateway and Nameserver design

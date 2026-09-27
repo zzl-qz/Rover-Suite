@@ -36,6 +36,8 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | POST | `/api/agent/sessions/{sessionId}/messages` | Send a message (a new question or a follow-up on the active incident); `202` returns a task handle |
 | GET | `/api/agent/tasks/{taskId}` | Task detail: steps, evidence, conclusion |
 | GET | `/api/agent/tasks/{taskId}/events` | Task event stream (SSE): replay `SNAPSHOT`, then push structured events |
+| POST | `/api/agent/tasks/{taskId}/cancel` | Cooperative cancel of a task that is still running: 404 when the task is unknown or not owned, 409 `TASK_NOT_CANCELLABLE` when it has finished, 200 once it is marked cancelled and its thread is interrupted |
+| POST | `/api/agent/events/ingest` | Event ingestion: turn one alert into an automatic investigation (route + window + suspicion); `202` returns a task handle |
 | GET | `/api/auth/status` | Sign-in state and CSRF token; public |
 | POST | `/login` | Form sign-in (`username`, `password`, `_csrf`); on success 302 to `redirect` or `/`, on failure 302 to `/login.html?error=1` |
 | POST | `/api/logout` | Sign out; returns 200. POST only |
@@ -64,8 +66,12 @@ real 5xx among them; `REJECTED` when the sample is adequate and 5xx-free; `UNKNO
 forwarded request at all, explicitly noting that this cannot be read as recovery.
 
 Since P2 a task snapshot is no longer always a fault investigation. `GET /api/agent/tasks/{taskId}` and SSE
-snapshots carry `taskType` (`QUERY` / `INVESTIGATION` / `EXPLAIN` / `ACTION_PLAN` / `UNSUPPORTED`), `intent`
-(`intent`, `confidence`, `reason`, `targetHint`, `requestedAction`), `plan` (`goal`, `hypotheses`, `steps`;
+snapshots carry `taskType` (`CONVERSATION` / `QUERY` / `INVESTIGATION` / `EXPLAIN` / `ACTION_PLAN` / `UNSUPPORTED`),
+where `CONVERSATION` is the default shape of the workbench conversation path: the model decides by itself which
+read-only tools to call and how many times, so no intent is pre-classified and no plan is produced up front
+(`plan` stays empty, `executedCapabilities` still lists what actually ran). `taskType` is the shape users see, so it
+always matches what actually happened. Ingest-sourced investigations remain `INVESTIGATION`, and that is also where
+`intent` (`intent`, `confidence`, `reason`, `targetHint`, `requestedAction`), `plan` (`goal`, `hypotheses`, `steps`;
 each step has `capability`, `reason`, `target`, `required`), `executedCapabilities` (capabilities actually
 called or skipped on facts), and `actionPlan` (the proposed remediation plan). The same sentence takes
 different shapes by intent: a state query calls exactly one read-only capability and opens no incident; a
@@ -128,7 +134,7 @@ Supported phrasings and where they land (all triggered by one natural-language s
 | `order-service 几个健康实例？` | State query: one `INSTANCE_QUERY` call, healthy-instance count of the resolved service |
 | `/api/demo/tt 命中了哪条路由？` | State query: one `ROUTE_QUERY` call, answers the matched route facts |
 | `为什么 /api/demo/tt 调用失败？` | Fault investigation: dynamic plan (route → instances → metrics → traces) over read-only capabilities, hypothesis verdicts |
-| `你能做什么？` | Explanation: `CapabilityRegistry` lists the real capabilities (route / instance / gateway metrics / trace / configuration / registry events); no target resolution. `你是谁` / `介绍一下你自己` are equivalent |
+| `你能做什么？` | Explanation: `CapabilityRegistry` lists the real capabilities (route / instance / gateway metrics / trace / configuration / registry events / historical logs / operations knowledge); no target resolution. `你是谁` / `介绍一下你自己` are equivalent |
 | `你好` / unclear chat | Fallback: no path clarification; a self-introduction plus the same registry-backed capability list, showing how to ask |
 | `把 order-03 摘掉` | Action plan: read-only precheck + non-executable `ActionPlan`, `executable=false` |
 | `每天 9 点自动巡检并发邮件` | Unsupported: states "scheduled inspection is not available"; no investigation |
@@ -166,6 +172,33 @@ An empty `message`, or one longer than 1000 characters, returns `400`.
 sign-in is disabled or the caller is anonymous. There is no `userId` field in the request bodies and one is
 not accepted; a same-named JSON field submitted by the front end is ignored. Session, task, and incident
 lookups are filtered by that identity, so by default a user sees only their own records.
+
+### Event ingestion (alert → automatic investigation)
+
+`POST /api/agent/events/ingest` is the machine-to-machine entry point for monitoring systems: it turns one alert into
+"which route + which window + what is suspected", Admin opens a dedicated session for it, records an `ALERT`-sourced
+incident, and runs the investigation over exactly the same read path a human question would use.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `path` | yes | Route prefix to investigate, e.g. `/api/demo/tt`; missing or blank returns `400` |
+| `message` | no | Alert text (symptoms and suspicion) |
+| `fromMillis` / `toMillis` | no | Observation window (epoch millis); they must come as a pair, supplying only one returns `400` |
+
+- Response is `202` plus a task view (`sessionId`, `taskId`, `status`); the caller polls task detail or subscribes to
+  SSE with that `taskId`, exactly as for a human question.
+- Sign-in is required (a dedicated service account is recommended) and the session it creates is **owned by no human
+  user**, so it never competes with human sessions for the "one active task" lock and can be aggregated separately in
+  the incident view. Sessions and tasks still live in Admin memory and disappear on restart, so callers should keep
+  their own copy of the `taskId` and the conclusion.
+- The agent never pulls from the monitoring source on its own: proactive inspection (periodic self-inspection raising
+  `INSPECTION` incidents) is not implemented, so pushing remains the monitoring system's job.
+
+```bash
+curl -s -X POST -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
+  -d '{"path":"/api/demo/tt","message":"5xx spiking","fromMillis":1735689600000,"toMillis":1735776000000}' \
+  "http://127.0.0.1:9090/api/agent/events/ingest"
+```
 
 ### Call examples
 

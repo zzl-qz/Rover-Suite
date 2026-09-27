@@ -199,7 +199,7 @@ Bearer 协议 token 不能代替管理请求头，管理请求头也不能访问
 | Gateway | `GET/POST /_manage/configs` | 查看或更新已登记的运行时配置 |
 | Gateway | `GET /_manage/metrics`、`/metrics/live`、`/metrics/selfcheck`、`/prometheus` | JSON 指标、轻量 live（`range=60/300`；无 p99/上游 Top，路由 Top 短缓存）、自检与 Prometheus 文本 |
 | Gateway | `GET /_manage/metrics/routes` | 单条路由下各上游实例的窗口观测，外加声明的 `targets`、按版本聚合的 `byVersion` 与 `versionCheck`（`routeId`、`range=60/300`）；只输出窗口内有转发的实例行，指标采集关闭时回 `enabled=false` 且 `rows` 为空 |
-| Gateway | `GET /_manage/traces` | 有界请求时间线；支持 `traceId`、`path`、`slow` 查询参数 |
+| Gateway | `GET /_manage/traces` | 有界请求时间线；支持 `traceId`、`path`、`slow`、`error` 查询参数（后者为 `1` 或 `true` 时只回状态码 ≥ 500 的链路） |
 | Nameserver | `GET /_manage/status`、`/instances` | 运行状态与当前内存实例 |
 | Nameserver | `GET /_manage/instances/snapshot` | 按 `service+group` 归并的可核对实例视图，带 `revision`/`epoch` 及每个实例的 id、host、port、group、weight、健康、临时标记与最近心跳 |
 | Nameserver | `GET/POST /_manage/configs` | 查看或更新已登记的运行时配置 |

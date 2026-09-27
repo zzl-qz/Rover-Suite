@@ -29,6 +29,12 @@
 | `rover.admin.auth.max-login-failures` | `5` | 失败窗口内同一来源允许的失败次数上限；环境变量 `ROVER_ADMIN_MAX_LOGIN_FAILURES` | 重启 |
 | `rover.admin.auth.failure-window-seconds` | `600` | 失败计数窗口时长（秒）；环境变量 `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | 重启 |
 | `rover.admin.auth.trust-forwarded-headers` | `false` | 登录限流的来源判定：默认只认 TCP 对端 `remoteAddr`；显式开启后才取 `X-Forwarded-For` 第一段。只有 Admin 确实部署在可信反向代理后面时才开启，否则伪造请求头即可绕过失败次数限制 | 重启 |
+| `rover.admin.log-store-path` | `./rover-logs/rover` | 本地 H2 记录库位置（实际文件 `<路径>.mv.db`），目录缺失自动创建；存放 Agent 后续通过 `queryLogs` 回读的运行证据 | 重启 |
+| `rover.admin.log-retention-days` | `30` | 诊断证据类保留天数（配置变更 / 回滚 / 错误 / 实例健康翻转），超期清理 | 重启 |
+| `rover.admin.log-telemetry-retention-days` | `3` | 遥测类保留天数（指标采样 / 慢与 5xx 链路）：量大，短保留防膨胀 | 重启 |
+| `rover.admin.log-collect-interval-seconds` | `30` | 遥测采集间隔（秒）：多久拉一轮 Gateway / Nameserver 的状态、指标、实例与链路写进记录库（下限 5，首轮延迟一个周期） | 重启 |
+| `rover.admin.log-queue-capacity` | `8192` | 普通（遥测）队列容量：best-effort，满了直接丢弃，绝不让业务请求等待 | 重启 |
+| `rover.admin.log-critical-capacity` | `16384` | 高优（诊断证据）队列容量：满了短暂等待，尽量不丢 | 重启 |
 | `rover.admin.model.config-file` | 空 = 工作目录下 `config/admin-model.properties` | 模型配置文件路径（UTF-8 properties，含 `api-key-enc` 密文）；文件缺失时启动自动创建空配置，整个 `config/` 已在 `.gitignore` 中；环境变量 `ROVER_ADMIN_MODEL_CONFIG_FILE` | 重启 |
 | `rover.admin.model.master-key` | 空 | base64 解出 32 字节则直接用作 AES 密钥，否则按口令 PBKDF2-HMAC-SHA256（65536 轮）派生；环境变量 `ROVER_ADMIN_MASTER_KEY` | 重启 |
 | `rover.admin.model.master-key-file` | 空 = 配置文件同级 `master.key` | 主密钥文件；首次加密时自动生成 32 字节随机主密钥并落盘；环境变量 `ROVER_ADMIN_MASTER_KEY_FILE` | 重启 |
@@ -52,6 +58,14 @@
 生产环境二选一即可：设置环境变量 `ROVER_ADMIN_MASTER_KEY`（或 `rover.admin.model.master-key`），
 或用 `rover.admin.model.master-key-file` 把主密钥指到独立目录/独立挂载卷。密钥、明文口令与密文都不会进日志或响应。
 
+### 落盘记录库（`rover.admin.log-*`）
+
+上面六个键对应 Admin 进程内的本地 H2 记录库：配置变更 / 回滚 / 写失败、组件与实例健康翻转、按周期聚合的指标采样、
+慢与 5xx 链路都写在这里，与有没有人提问无关。写入是异步双队列（诊断证据优先、遥测 best-effort），
+清理任务每 60 分钟按上面的保留期各清一类。**它是本机数据**（`rover-logs/` 已在 `.gitignore` 中），
+换机或清目录即丢，多副本 Admin 时各写各的，不能当作跨机审计源。它写入的内容与 Agent 怎么读它，
+见 [Rover Ops Agent §6.3](./ops-agent.zh-CN.md#63-运行证据落库与遥测采集)。
+
 ## Agent Workbench 配置
 
 | 配置 | 默认值 | 说明 | 生效方式 |
@@ -65,6 +79,10 @@
 | `rover.agent.planning.max-plan-steps` | `6` | 单轮计划最多步骤数（>0）；超出部分由计划校验截断，未登记的写能力一律被丢弃 | 重启 |
 | `rover.agent.llm.quick-timeout-seconds` | `10` | 意图识别 / 目标解析 / 调查规划这类"失败也能兜底"的小调用等待上限（秒，`0`=用模型配置里的超时）；只在超时后重试一次，「AI 解读」不受影响 | 重启 |
 | `rover.agent.metrics.enabled` | `true` | Agent 运行指标总开关；`false` 为应急降级，不注册任何 Meter，业务逻辑不变 | 重启 |
+| `management.metrics.export.prometheus.enabled` | `false` | 指标对外出口开关：置 `true` 后注册表切换为 `PrometheusMeterRegistry`，由 `/actuator/prometheus` 供抓取；指标名与标签口径不变（`rover.agent.*`）。需同步在 `management.endpoints.web.exposure.include` 中加入 `prometheus` | 重启 |
+| `spring.ai.tools.limits.max-total-tool-calls` | `30` | 对话主路径单次任务的工具调用总预算，需与 `OpsTools.MAX_CALLS` 对齐；给小了会让「一句话问三件事」在取数途中被掐断 | 重启 |
+| `spring.ai.tools.limits.max-calls-per-tool-default` | `10` | 该预算内单个工具的调用上限 | 重启 |
+| `spring.ai.openai.fast-base-url` / `fast-model` / `fast-api-key` | 空 | 可选的小模型，承接意图识别 / 目标解析 / 调查规划这类廉价结构化调用；未配置时回落主模型并关闭 thinking | 重启 |
 
 三个执行参数与三个规划限制越界时启动直接失败，让配置错误在启动期暴露，而不是运行期表现为「任务莫名被拒」或「调查提前收尾」。
 
