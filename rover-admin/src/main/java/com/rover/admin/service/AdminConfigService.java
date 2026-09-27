@@ -92,10 +92,10 @@ public class AdminConfigService {
     /**
      * 新增/更新一条路由并热更新。
      *
-     * <p>调用方必须带上读到的 {@code revision}：版本不一致时网关回 409，Admin 原样抛给前端，
+     * 调用方必须带上读到的 {@code revision}：版本不一致时网关回 409，Admin 原样抛给前端，
      * 由人决定是重新拉取还是放弃，绝不做「自动重试覆盖别人」。
      *
-     * <p>{@code operationId} 优先用调用方给的：前端自己生成才能在自己的请求超时后
+     * {@code operationId} 优先用调用方给的：前端自己生成才能在自己的请求超时后
      * 用同一个号回查「到底执行了没有」。调用方没给（脚本、curl）时才补一个。
      */
     public Map<String, Object> saveRoute(Map<String, Object> route) {
@@ -113,7 +113,7 @@ public class AdminConfigService {
     /**
      * 预览候选路由表的差异：整表交给网关做校验与比对，不落盘、不生效。
      *
-     * <p>失败原因和保存/删除一样原样透给前端，不吞异常——预览的意义就是把校验错误与差异
+     * 失败原因和保存/删除一样原样透给前端，不吞异常——预览的意义就是把校验错误与差异
      * 先摊开给操作者看，吞掉就只剩一个「失败」了。
      */
     public Map<String, Object> previewRoutes(List<Map<String, Object>> routes) {
@@ -149,7 +149,7 @@ public class AdminConfigService {
     /**
      * 按 operationId 查一次路由写操作的终态。
      *
-     * <p>回答的是「我超时的这次写到底执行了没有」，所以不允许把失败吞成「查不到」：
+     * 回答的是「我超时的这次写到底执行了没有」，所以不允许把失败吞成「查不到」：
      * 网关不可达就如实报错，前端才知道「结果仍未确认、可以稍后用同一个号再查」。
      */
     public Map<String, Object> routeOperation(String operationId) {

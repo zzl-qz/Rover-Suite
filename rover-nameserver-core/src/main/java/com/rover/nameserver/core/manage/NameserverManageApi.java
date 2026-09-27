@@ -111,7 +111,7 @@ public class NameserverManageApi extends AbstractManageApi {
     /**
      * 组装 /instances/snapshot 响应：带 revision/epoch 的可核对实例视图。
      *
-     * <p>Agent 用它回答「我看到的实例、版本，和注册中心当前是不是同一份」。因此这里
+     * Agent 用它回答「我看到的实例、版本，和注册中心当前是不是同一份」。因此这里
      * 直接复用注册表自己的 revision（按服务维度单调递增），不另造版本号——两套版本号
      * 只会让「谁更新」无从判断。顶层 revision 取各服务 revision 之和，任一服务变更
      * 都会让它变化，一次比较即可判断注册视图是否变过。

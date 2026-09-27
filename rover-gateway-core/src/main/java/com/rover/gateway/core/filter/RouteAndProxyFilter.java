@@ -355,7 +355,7 @@ public class RouteAndProxyFilter implements Filter {
     /**
      * 读快照/缓存，不走 LB。
      *
-     * <p>动态路由按选中的版本去注册中心取该 group 的实例；某个版本组没有可接流实例时
+     * 动态路由按选中的版本去注册中心取该 group 的实例；某个版本组没有可接流实例时
      * 返回空列表，上层明确 503，绝不改投另一个版本——否则灰度实验的 5xx 会被静默掩盖。
      */
     private List<ServiceInstance> listInstances(RouteConfig route, RouteTarget target) {

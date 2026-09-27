@@ -74,7 +74,7 @@ public class AdminConfigController {
     /**
      * 预览路由变更差异：body 形如 {"routes":[...]}，只校验与比对，不落盘、不生效。
      *
-     * <p>语义上是只读操作，但对外仍按写请求对待——CSRF 由安全配置统一拦截，前端也照常带令牌，
+     * 语义上是只读操作，但对外仍按写请求对待——CSRF 由安全配置统一拦截，前端也照常带令牌，
      * 不给「只读接口」开后门。
      */
     @PostMapping(AdminApiPaths.ROUTES_PREVIEW)
@@ -105,7 +105,7 @@ public class AdminConfigController {
     /**
      * 查一次路由写操作的终态：APPLIED / CONFLICT / REJECTED / FAILED / UNKNOWN。
      *
-     * <p>存在的意义是「请求超时后确认到底执行了没有」：超时的那次写可能已经生效，
+     * 存在的意义是「请求超时后确认到底执行了没有」：超时的那次写可能已经生效，
      * 也可能没有，只有网关的操作记录能回答，靠重提是猜。
      */
     @GetMapping(AdminApiPaths.ROUTE_OPERATION)

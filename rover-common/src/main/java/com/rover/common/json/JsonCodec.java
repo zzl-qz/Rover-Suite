@@ -150,7 +150,7 @@ public final class JsonCodec {
     /**
      * 解析 JSON 对象数组为字段行列表（值保留原始类型，可含嵌套数组/对象）。
      *
-     * <p>路由配置的 {@code targets} 是嵌套数组，扁平字符串映射装不下，因此这里不做 String 收敛。
+     * 路由配置的 {@code targets} 是嵌套数组，扁平字符串映射装不下，因此这里不做 String 收敛。
      *
      * @param json JSON 数组字符串
      * @return 字段行列表；空串返回空列表

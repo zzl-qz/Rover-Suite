@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * 能力的注册描述：告诉 Agent 当前 Rover 到底有什么能力。
  *
- * <p>{@code available} 是诚实的开关：没有数据适配器的能力照样注册，但 Planner 不能选择它们。
+ * {@code available} 是诚实的开关：没有数据适配器的能力照样注册，但 Planner 不能选择它们。
  */
 public record CapabilityDescriptor(AgentCapability id, String name, String description, CapabilityRisk risk,
                                    List<TargetType> supportedTargetTypes, boolean available,

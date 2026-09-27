@@ -3,7 +3,7 @@ package com.rover.agent.core.model;
 /**
  * 受控处置计划：把用户想做的操作整理成一份可人工审核的建议，本阶段一律不执行。
  *
- * <p>{@code executable} 恒为 {@code false}：审批、审计与任务持久化尚未落地，任何「已执行」的表述都是谎报。
+ * {@code executable} 恒为 {@code false}：审批、审计与任务持久化尚未落地，任何「已执行」的表述都是谎报。
  */
 public record ActionPlan(ActionType actionType, String targetDescription, ResourceTarget target, String reason,
                          RiskLevel riskLevel, String currentState, String desiredState, String expectedImpact,

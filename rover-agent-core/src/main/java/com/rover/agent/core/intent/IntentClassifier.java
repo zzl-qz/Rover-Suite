@@ -81,11 +81,11 @@ public final class IntentClassifier {
     /**
      * 状态查询里「明确问一个数」的信号：命中即 HIGH，不再走模型补位。
      *
-     * <p>只收「多少 / 几个 / 数量」这类纯问值词，刻意不收「错误率」「吞吐」这类指标名——
+     * 只收「多少 / 几个 / 数量」这类纯问值词，刻意不收「错误率」「吞吐」这类指标名——
      * 指标名既能问值也能引出原因（「错误率为什么高」），而那些问法要留给调查路径，
      * 收进来会把它们一起判成状态查询。指标名本身仍由 {@link #STATE_WORDS} 兜住（中置信度）。
      *
-     * <p>判断位置在调查词之前：{@code INVESTIGATION_WORDS} 含裸词「错误」，
+     * 判断位置在调查词之前：{@code INVESTIGATION_WORDS} 含裸词「错误」，
      * 会让「最近的错误率多少」被当成追问原因；「多少」这样的问值词更具体，应当先判。
      */
     private static final List<String> STATE_QUANTITY_WORDS = List.of("多少", "几个", "数量");

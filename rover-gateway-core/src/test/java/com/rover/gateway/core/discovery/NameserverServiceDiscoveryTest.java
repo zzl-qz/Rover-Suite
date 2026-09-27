@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
  * Created: 2026-09-27 15:40:00
  * Description: Nameserver 服务发现取实例契约：只返回健康实例，全不健康返回空（严格 503 的依据）
  *
- * <p>刻意验证「不做全不健康就退回全部」的兜底：那种兜底会把不可接流的实例静默放行，
+ * 刻意验证「不做全不健康就退回全部」的兜底：那种兜底会把不可接流的实例静默放行，
  * 让「没得打」和「打得不好」在指标上无法区分。
  */
 class NameserverServiceDiscoveryTest {

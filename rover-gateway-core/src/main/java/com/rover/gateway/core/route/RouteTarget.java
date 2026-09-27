@@ -5,7 +5,7 @@ package com.rover.gateway.core.route;
  * Created: 2026-09-27 14:10:00
  * Description: 动态路由的一个「版本目标」：注册中心里的 (serviceName, group) 及它在路由内的分流权重
  *
- * <p>权重是相对值，不要求各家加总等于某个常数；{@code weight = 0} 表示「注册但不接流」，
+ * 权重是相对值，不要求各家加总等于某个常数；{@code weight = 0} 表示「注册但不接流」，
  * 这是灰度停推的实现方式——保留 target 就保留了它的配置与指标维度，不必删了再加。
  *
  * @param serviceName 目标服务名

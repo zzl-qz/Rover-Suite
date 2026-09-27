@@ -10,7 +10,7 @@ import java.util.function.Function;
  * 就能覆盖「模型给出建议」的全部路径，不需要真实模型，也不需要打桩工具调用循环。
  * 实现必须保证「未配置模型」时返回 {@link Optional#empty()}，绝不伪造模型输出。
  *
- * <p>解析交给调用方传进来的 {@code parser}，而「这次调用算成功还是失败、失败在哪一环」由实现统一记录：
+ * 解析交给调用方传进来的 {@code parser}，而「这次调用算成功还是失败、失败在哪一环」由实现统一记录：
  * 文本拿回来但解析不出来，说明输出不合契约（越界取值、缺字段），实现会把它记成
  * {@link com.rover.agent.runtime.metrics.ModelCallOutcome#REJECTED}，
  * 与「没配模型 / 超时 / 报错 / 返回空」分开计数。这样调用方只写契约，不必各自重复埋点，

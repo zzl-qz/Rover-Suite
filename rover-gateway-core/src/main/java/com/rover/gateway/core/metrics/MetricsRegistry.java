@@ -268,7 +268,7 @@ public class MetricsRegistry {
     /**
      * 记一次 503 原因，并把它归因到路由与版本。
      *
-     * <p>某版本组没有可接流实例（{@link HttpConstants#REJECT_NO_UPSTREAM}）或实例全熔断
+     * 某版本组没有可接流实例（{@link HttpConstants#REJECT_NO_UPSTREAM}）或实例全熔断
      * （{@link HttpConstants#REJECT_CIRCUIT_OPEN}）时会被记为该版本的「容量问题」，
      * 与「真实转发后上游返回 5xx」分开——后者只在 {@link #record} 里按实例状态码统计。
      * 指标关闭时只累加全局计数，不建路由维度，避免无谓内存。
@@ -351,7 +351,7 @@ public class MetricsRegistry {
      * 按版本聚合窗口观测：把「路由 × 实例」行按 group 汇总，并合并配置声明的版本目标，
      * 使「配置里声明了哪些版本」与「实际收到了哪些版本的流量」可以逐条核对。
      *
-     * <p>{@code sampleSize} 即窗口内真实转发量，低于 {@link #MIN_VERSION_SAMPLE} 时
+     * {@code sampleSize} 即窗口内真实转发量，低于 {@link #MIN_VERSION_SAMPLE} 时
      * {@code sufficient=false}，调用方据此把「样本不足」与「确实没流量」分开。
      * {@code noUpstreamRejects}/{@code circuitOpenRejects} 是该版本组「没有可接流实例」与
      * 「实例全熔断」被 503 拒绝的累计次数——这是该版本的容量问题，不是该版本的上游 5xx。

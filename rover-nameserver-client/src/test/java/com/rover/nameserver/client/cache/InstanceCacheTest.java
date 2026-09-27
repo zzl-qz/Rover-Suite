@@ -24,7 +24,7 @@ class InstanceCacheTest {
     /**
      * 某组最后一台实例下线时，服务端会 bump revision 推空包；这包必须被认下来。
      *
-     * <p>否则本地会一直留着已经下线的实例继续转发——「v2 已经全量回滚了，流量还在打 v2」就是这么来的。
+     * 否则本地会一直留着已经下线的实例继续转发——「v2 已经全量回滚了，流量还在打 v2」就是这么来的。
      */
     @Test
     void newerEmptyPushClearsInstancesOfThatGroupOnly() {
@@ -55,7 +55,7 @@ class InstanceCacheTest {
     /**
      * 具体组没有自己的缓存时如实返回空，绝不退回含其它组实例的整服务缓存。
      *
-     * <p>退回会让 v2 的请求打到 v1 的实例上：灰度比例直接失真，而且现象上极难看出是缓存回落导致的。
+     * 退回会让 v2 的请求打到 v1 的实例上：灰度比例直接失真，而且现象上极难看出是缓存回落导致的。
      */
     @Test
     void coldGroupCacheNeverFallsBackToWholeServiceCache() {
