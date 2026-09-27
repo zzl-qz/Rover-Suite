@@ -44,6 +44,9 @@ public enum AgentStepType {
     /** 读取注册中心事件 */
     EVENT_INVESTIGATION,
 
+    /** 读取落盘历史日志 */
+    LOG_INVESTIGATION,
+
     /** 合成假设验证结论 */
     DIAGNOSIS,
 

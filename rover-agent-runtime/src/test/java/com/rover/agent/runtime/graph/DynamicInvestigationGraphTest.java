@@ -175,7 +175,7 @@ class DynamicInvestigationGraphTest {
             return new GatewayMetricSnapshot(10, 0, 0, System.currentTimeMillis());
         };
         CapabilityExecutor executor = new CapabilityExecutor(routes(), instances(), metrics, traces(),
-                () -> List.of(), () -> List.of(), registry);
+                () -> List.of(), () -> List.of(), r -> List.of(), registry);
         DynamicInvestigationGraph graph = new DynamicInvestigationGraph(planner,
                 new PlanValidator(registry, limits), executor, limits, reporter);
         return graph.investigate("task-1", PATH, "为什么 " + PATH + " 调用失败？", TARGET, null);

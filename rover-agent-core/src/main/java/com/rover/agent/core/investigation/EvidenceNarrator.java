@@ -1,5 +1,6 @@
 package com.rover.agent.core.investigation;
 
+import com.rover.agent.core.port.LogEntry;
 import com.rover.agent.core.snapshot.ConfigEntrySnapshot;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
@@ -9,6 +10,10 @@ import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -31,6 +36,12 @@ public final class EvidenceNarrator {
 
     /** 事件证据里最多列举的条数。 */
     private static final int MAX_EVENT_SAMPLE = 5;
+
+    /** 历史日志证据里最多列举的条数。 */
+    private static final int MAX_LOG_SAMPLE = 8;
+
+    /** 历史日志单条 payload 的最大展示长度，超出截断，避免把结论塞满。 */
+    private static final int LOG_PAYLOAD_LIMIT = 160;
 
     private EvidenceNarrator() { }
 
@@ -321,6 +332,40 @@ public final class EvidenceNarrator {
         return "Nameserver 注册事件不可用，无法确认实例的上下线经过。";
     }
 
+    public static String logsUnavailable() {
+        return "落盘历史日志不可用，无法确认配置变更、实例事件与错误经过。";
+    }
+
+    /**
+     * 历史日志的证据表述：按时间倒序列举最近 {@value #MAX_LOG_SAMPLE} 条，payload 截断。
+     *
+     * @param types 类型过滤（如 CONFIG_CHANGE / ROLLBACK / ERROR / INSTANCE_EVENT）；空表示全部类型
+     * @param fromMillis 起始毫秒时间戳；{@code <=0} 表示不限
+     * @param toMillis   截止毫秒时间戳；{@code <=0} 表示不限
+     */
+    public static EvidenceNarration logs(List<LogEntry> entries, List<String> types, long fromMillis,
+                                         long toMillis) {
+        List<LogEntry> rows = entries == null ? List.of() : entries;
+        List<String> limitations = new ArrayList<>();
+        String typeText = types == null || types.isEmpty() ? "全部类型" : String.join("、", types);
+        long windowSeconds = windowSeconds(fromMillis, toMillis);
+        if (rows.isEmpty()) {
+            limitations.add("查询范围内没有 " + typeText + " 的历史日志记录。");
+            return new EvidenceNarration("没有 " + typeText + " 的历史日志记录", List.copyOf(limitations),
+                    0, (int) windowSeconds);
+        }
+        List<String> lines = new ArrayList<>();
+        for (LogEntry entry : rows.stream().limit(MAX_LOG_SAMPLE).toList()) {
+            lines.add(stamp(entry.ts()) + " " + entry.type() + " " + text(entry.target())
+                    + "：" + truncate(entry.payload(), LOG_PAYLOAD_LIMIT));
+        }
+        String detail = "共 " + rows.size() + " 条" + typeText + "历史日志：" + String.join("；", lines);
+        if (rows.size() > MAX_LOG_SAMPLE) {
+            limitations.add("历史日志共 " + rows.size() + " 条，只列举最近的 " + MAX_LOG_SAMPLE + " 条。");
+        }
+        return new EvidenceNarration(detail, List.copyOf(limitations), rows.size(), (int) windowSeconds);
+    }
+
     /** 按上游实例的指标取数失败：与「窗口内没有样本」严格区分。 */
     public static String routeUpstreamsUnavailable(String routeId) {
         return "路由 " + text(routeId) + " 的按上游实例指标不可用，无法确认是哪台实例异常。";
@@ -341,5 +386,26 @@ public final class EvidenceNarrator {
 
     private static String text(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    /** 时间范围换算成窗口秒数；无有效范围时为 0（非窗口口径）。 */
+    private static long windowSeconds(long fromMillis, long toMillis) {
+        if (fromMillis <= 0 || toMillis <= 0 || toMillis <= fromMillis) {
+            return 0;
+        }
+        return (toMillis - fromMillis) / 1000L;
+    }
+
+    private static String stamp(long millis) {
+        if (millis <= 0) {
+            return "";
+        }
+        return LocalDateTime.ofInstant(Instant.ofEpochMilli(millis), ZoneId.systemDefault())
+                .format(DateTimeFormatter.ofPattern("MM-dd HH:mm"));
+    }
+
+    private static String truncate(String value, int limit) {
+        String v = value == null ? "" : value.trim();
+        return v.length() <= limit ? v : v.substring(0, limit) + "…";
     }
 }

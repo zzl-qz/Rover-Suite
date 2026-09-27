@@ -10,6 +10,9 @@ import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
+import com.rover.agent.core.port.LogEntry;
+import com.rover.agent.core.port.LogQueryPort;
+import com.rover.agent.core.port.LogRequest;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
@@ -52,6 +55,9 @@ public final class CapabilityExecutor {
     /** 单条「路由 × 上游实例」能力最多列举的实例证据条数：证据要能复核，但不能把结论塞满。 */
     private static final int MAX_UPSTREAM_EVIDENCE = 10;
 
+    /** 历史日志单次查询最多取回条数：证据要能复核，但不能把整表塞进结论。 */
+    private static final int LOG_LIMIT = 50;
+
     private static final String SOURCE_ROUTES = "Gateway 路由表";
     private static final String SOURCE_OVERVIEW = "Gateway 概览";
     private static final String SOURCE_INSTANCES = "Nameserver 实例注册表";
@@ -59,6 +65,7 @@ public final class CapabilityExecutor {
     private static final String SOURCE_TRACES = "Gateway 抽样追踪";
     private static final String SOURCE_CONFIGS = "Gateway / Nameserver 生效配置";
     private static final String SOURCE_EVENTS = "Nameserver 事件流";
+    private static final String SOURCE_LOGS = "落盘历史日志";
 
     private static final String KEY_WINDOW_SECONDS = "windowSeconds";
     private static final String KEY_SAMPLE_SIZE = "sampleSize";
@@ -73,17 +80,19 @@ public final class CapabilityExecutor {
     private final TraceReadPort traces;
     private final ConfigReadPort configs;
     private final EventReadPort events;
+    private final LogQueryPort logs;
     private final CapabilityRegistry registry;
 
     public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                               TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
-                              CapabilityRegistry registry) {
+                              LogQueryPort logs, CapabilityRegistry registry) {
         this.routes = routes;
         this.instances = instances;
         this.metrics = metrics;
         this.traces = traces;
         this.configs = configs;
         this.events = events;
+        this.logs = logs;
         this.registry = registry == null ? CapabilityRegistry.standard() : registry;
     }
 
@@ -123,6 +132,9 @@ public final class CapabilityExecutor {
             case TRACE_QUERY -> readTraces(capability, descriptor, lookup, taskId);
             case CONFIG_READ -> readConfigs(capability, descriptor, taskId);
             case EVENT_QUERY -> readEvents(capability, descriptor, taskId);
+            // 规划路径无法表达类型/时间范围，按「最近 24 小时、全部类型、按目标过滤」兜底；
+            // 精确的 type/hours 由对话工具的 queryLogs 直接提供。
+            case LOG_QUERY -> queryLogs(lookup, null, System.currentTimeMillis() - 24L * 3_600_000L, null, taskId);
             default -> CapabilityResult.unavailable(capability, descriptor);
         };
     }
@@ -380,6 +392,38 @@ public final class CapabilityExecutor {
         } catch (Exception ex) {
             log.warn("Agent 读取追踪失败", ex);
             return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.tracesUnavailable());
+        }
+    }
+
+    /**
+     * 查询落盘历史日志。参数模型与其它能力不同（需要类型过滤与时间范围），因此独立于通用 {@link #execute}。
+     *
+     * <p>历史日志回答「这段时间发生了什么」：配置改了什么、回滚过没有、哪个实例什么时候上下线、
+     * 出过什么错、指标采样与慢/错误链路的经过。类型字符串由适配器映射回存储层枚举，未知类型忽略。
+     *
+     * @param target 目标实体（服务名/路由路径/实例），{@code null} 或空表示全部
+     * @param types  类型过滤（枚举名字符串），{@code null} 或空表示全部类型
+     * @param fromMillis 起始毫秒时间戳，{@code null} 表示不限
+     * @param toMillis   截止毫秒时间戳，{@code null} 表示不限
+     */
+    public CapabilityResult queryLogs(String target, List<String> types, Long fromMillis, Long toMillis,
+                                      String taskId) {
+        CapabilityDescriptor descriptor = registry.descriptor(AgentCapability.LOG_QUERY).orElse(null);
+        if (descriptor == null || !descriptor.available()) {
+            return CapabilityResult.unavailable(AgentCapability.LOG_QUERY, descriptor);
+        }
+        long observedAt = System.currentTimeMillis();
+        try {
+            List<LogEntry> entries = logs.query(new LogRequest(target, fromMillis, toMillis, types, LOG_LIMIT));
+            EvidenceNarration narration = EvidenceNarrator.logs(entries, types,
+                    fromMillis == null ? 0L : fromMillis, toMillis == null ? 0L : toMillis);
+            return CapabilityResult.success(AgentCapability.LOG_QUERY, descriptor,
+                    List.of(Evidence.of(taskId, EvidenceType.LOG, SOURCE_LOGS, "历史日志",
+                            narration.detail(), "/api/logs", metadata(narration, observedAt), observedAt)),
+                    narration.limitations());
+        } catch (Exception ex) {
+            log.warn("Agent 查询历史日志失败", ex);
+            return CapabilityResult.failed(AgentCapability.LOG_QUERY, descriptor, EvidenceNarrator.logsUnavailable());
         }
     }
 

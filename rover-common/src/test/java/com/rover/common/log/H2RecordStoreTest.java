@@ -43,6 +43,27 @@ class H2RecordStoreTest {
     }
 
     @Test
+    void purgeByTypeRemovesOnlyMatchingTypes() throws Exception {
+        RecordStore store = new H2RecordStore("./target/test-logs/purge-type-" + System.nanoTime());
+        long old = System.currentTimeMillis() - 100_000;
+
+        store.log(new Record(old, RecordType.CONFIG_CHANGE, "r", "audit"));
+        store.log(new Record(old, RecordType.HEARTBEAT, "svc", "hb"));
+        store.log(new Record(old, RecordType.METRICS_SAMPLE, "gateway", "{}"));
+        store.flush();
+
+        // 只清遥测类，诊断证据类应保留
+        long removed = store.purgeOlderThan(old + 1, List.of(RecordType.HEARTBEAT, RecordType.METRICS_SAMPLE));
+        assertEquals(2, removed);
+
+        List<Record> rest = store.query(LogQuery.of(null, null, null, null, 100));
+        assertEquals(1, rest.size());
+        assertEquals(RecordType.CONFIG_CHANGE, rest.get(0).type());
+
+        store.close();
+    }
+
+    @Test
     void queueFullDropsBestEffortWithoutBlocking() {
         // 极小队列，验证 offer 失败不抛异常（best-effort）
         RecordStore store = new H2RecordStore("./target/test-logs/drop-" + System.nanoTime(), 1);

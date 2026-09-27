@@ -26,6 +26,7 @@ public final class OpsTools {
     private static final String STEP_TRACE = "读取追踪";
     private static final String STEP_CONFIG = "读取配置";
     private static final String STEP_EVENT = "读取事件";
+    private static final String STEP_LOG = "读取历史日志";
 
     private final CapabilityExecutor executor;
     private final InvestigationTask task;
@@ -124,6 +125,37 @@ public final class OpsTools {
     public String listRegistryEvents() {
         return query(AgentCapability.EVENT_QUERY, AgentStepType.EVENT_INVESTIGATION, STEP_EVENT,
                 "正在读取注册中心近期事件", ResourceTarget.unknown(), "");
+    }
+
+    /** 查询落盘历史日志：配置变更、回滚、错误、实例上下线、指标采样、慢/错误链路。 */
+    @Tool(description = "查询落盘历史日志：配置变更、回滚、运维错误、实例上下线事件、指标采样、慢请求与错误链路。"
+            + "问「最近改过什么配置」「有没有回滚过」「这个实例是什么时候掉线的」「最近出过什么错」「哪条链路慢」时用它。"
+            + "type 精确过滤：config_change（配置变更）、rollback（回滚）、error（运维错误）、"
+            + "instance_event（实例上下线）、metrics_sample（指标采样）、request_trace（慢/错误链路）；不传表示全部类型。"
+            + "hours 表示查最近几小时，默认 24；不传 target 表示查全部实体。"
+            + "它反映历史经过，不是当前实时快照；要查当前状态请用路由、实例、指标或追踪工具。")
+    public String queryLogs(
+            @ToolParam(description = "日志类型，可选：config_change / rollback / error / instance_event / "
+                    + "metrics_sample / request_trace；留空表示全部类型") String type,
+            @ToolParam(description = "目标实体：服务名、路由路径或 ip:port；留空表示查全部实体") String target,
+            @ToolParam(description = "查最近几小时，默认 24") Integer hours) {
+        if (!withinBudget()) {
+            return "本次对话的查询次数已达上限（" + MAX_CALLS + " 次）。请立刻基于已经取回的事实作答，"
+                    + "仍不确定的部分如实说明无法确认，不要再请求新的查询。";
+        }
+        List<String> types = text(type).isBlank() ? null : List.of(text(type));
+        Long from = hours == null || hours <= 0 ? null : System.currentTimeMillis() - hours * 3_600_000L;
+        String entity = text(target);
+        task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.RUNNING,
+                entity.isBlank() ? "正在查询历史日志" : "正在查询 " + entity + " 的历史日志");
+        CapabilityResult result = executor.queryLogs(entity, types, from, null, task.taskId());
+        task.reportCapabilityExecuted(AgentCapability.LOG_QUERY);
+        evidence.addAll(result.evidence());
+        limitations.addAll(result.limitations());
+        String rendered = render(result);
+        task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.COMPLETED,
+                result.evidence().isEmpty() ? rendered : brief(result));
+        return rendered;
     }
 
     /** 本次对话取回的全部证据。 */

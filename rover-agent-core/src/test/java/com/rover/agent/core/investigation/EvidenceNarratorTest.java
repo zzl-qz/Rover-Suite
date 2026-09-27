@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.rover.agent.core.port.LogEntry;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
@@ -172,5 +173,25 @@ class EvidenceNarratorTest {
         assertEquals("Nameserver 实例数据不可用，无法确认上游健康状态。", EvidenceNarrator.instancesUnavailable());
         assertEquals("Gateway 实时指标不可用。", EvidenceNarrator.metricsUnavailable());
         assertEquals("Gateway 追踪数据不可用。", EvidenceNarrator.tracesUnavailable());
+        assertEquals("落盘历史日志不可用，无法确认配置变更、实例事件与错误经过。", EvidenceNarrator.logsUnavailable());
+    }
+
+    @Test
+    void logsListRecentEntriesAndCountTypes() {
+        List<LogEntry> rows = List.of(
+                new LogEntry(1000L, "CONFIG_CHANGE", "/api/x", "{\"action\":\"saveRoute\"}"),
+                new LogEntry(2000L, "ERROR", "/api/x", "{\"action\":\"saveRoute\",\"detail\":\"FAILED\"}"));
+        EvidenceNarration narration = EvidenceNarrator.logs(rows, List.of("CONFIG_CHANGE", "ERROR"), 0L, 0L);
+        assertTrue(narration.detail().contains("共 2 条"));
+        assertTrue(narration.detail().contains("CONFIG_CHANGE"));
+        assertTrue(narration.detail().contains("ERROR"));
+        assertEquals(2, narration.sampleSize());
+    }
+
+    @Test
+    void emptyLogsReportNoRecordsAsBoundary() {
+        EvidenceNarration narration = EvidenceNarrator.logs(List.of(), null, 0L, 0L);
+        assertTrue(narration.detail().contains("没有"));
+        assertTrue(narration.limitations().get(0).contains("没有"));
     }
 }

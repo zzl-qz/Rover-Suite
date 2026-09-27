@@ -34,6 +34,8 @@ public final class ManageApiPaths {
     public static final String PARAM_TRACE_ID = "traceId";
     public static final String PARAM_PATH = "path";
     public static final String PARAM_SLOW = "slow";
+    /** 只取错误链路（statusCode >= 500，即 5xx 服务端/上游错误）。 */
+    public static final String PARAM_ERROR = "error";
     public static final String PARAM_RANGE = "range";
     public static final String PARAM_ROUTE_ID = "routeId";
     public static final String PARAM_REVISION = "revision";

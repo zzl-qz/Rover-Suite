@@ -22,6 +22,12 @@ public interface RecordStore extends AutoCloseable {
     /** 删除 ts 早于 cutoffMillis 的记录，返回删除条数。 */
     long purgeOlderThan(long cutoffMillis);
 
+    /**
+     * 删除 ts 早于 cutoffMillis 且类型属于 {@code types} 的记录，返回删除条数。
+     * 用于按数据类型拆分保留期（遥测短、审计长）；types 为空时不删任何记录。
+     */
+    long purgeOlderThan(long cutoffMillis, List<RecordType> types);
+
     /** 阻塞直到队列中待写记录全部落盘。 */
     void flush();
 

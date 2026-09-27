@@ -85,7 +85,7 @@ class InvestigationServiceTest {
         incidentRegistry = new IncidentRegistry();
         taskRegistry = new InvestigationTaskRegistry();
         investigations = new InvestigationService(routes, instances, metrics, traces, configs, events,
-                incidentRegistry, taskRegistry, new ModelExplainer(TestGateway.notConfigured()));
+                r -> List.of(), incidentRegistry, taskRegistry, new ModelExplainer(TestGateway.notConfigured()));
         when(routes.discoveryMode()).thenReturn(DiscoveryMode.NAMESERVER);
         when(metrics.gatewayWindow(anyInt())).thenReturn(new GatewayMetricSnapshot(0, 0, 0, 1L));
         when(traces.byPath(anyString())).thenReturn(new TraceSnapshot(true, 1.0, List.of(), 1L));
@@ -369,7 +369,7 @@ class InvestigationServiceTest {
     /** 换入不同的模型端口，复用同一组只读端口桩。 */
     private void useModel(ModelExplainer modelExplainer) {
         this.investigations = new InvestigationService(routes, instances, metrics, traces, configs, events,
-                incidentRegistry, taskRegistry, modelExplainer);
+                r -> List.of(), incidentRegistry, taskRegistry, modelExplainer);
     }
 
     @Test
@@ -377,7 +377,7 @@ class InvestigationServiceTest {
         IncidentRegistry registry = spy(new IncidentRegistry());
         InvestigationTaskRegistry busy = new InvestigationTaskRegistry();
         InvestigationService service = new InvestigationService(routes, instances, metrics, traces, configs, events,
-                registry, busy, new ModelExplainer(TestGateway.notConfigured()));
+                r -> List.of(), registry, busy, new ModelExplainer(TestGateway.notConfigured()));
         CountDownLatch release = new CountDownLatch(1);
         when(routes.routes()).thenAnswer(invocation -> {
             release.await();
@@ -408,7 +408,7 @@ class InvestigationServiceTest {
         IncidentRegistry registry = spy(new IncidentRegistry());
         InvestigationTaskRegistry full = new InvestigationTaskRegistry();
         InvestigationService service = new InvestigationService(routes, instances, metrics, traces, configs, events,
-                registry, full, new ModelExplainer(TestGateway.notConfigured()));
+                r -> List.of(), registry, full, new ModelExplainer(TestGateway.notConfigured()));
         try {
             // 用未结束的任务占满登记容量：这些任务不会被执行，也不会被淘汰，submit 将在登记阶段被拒。
             // 每个占用任务挂在各自的会话下——同一会话同时只允许一个执行中任务（并发约束）。

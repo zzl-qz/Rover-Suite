@@ -28,6 +28,7 @@ import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
+import com.rover.agent.core.port.LogQueryPort;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.SnapshotUnavailableException;
@@ -321,13 +322,15 @@ class AgentOrchestratorTest {
         IncidentRegistry registry = new IncidentRegistry(sessions, incidents, retention);
         ConfigReadPort configPort = () -> List.of();
         EventReadPort eventPort = () -> List.of();
+        LogQueryPort logPort = r -> List.of();
         InvestigationService investigations = new InvestigationService(routes, instancePort, metricPort,
-                tracePort, configPort, eventPort, registry, tasks, new ModelExplainer(new NoopChatModelGateway()));
+                tracePort, configPort, eventPort, logPort, registry, tasks,
+                new ModelExplainer(new NoopChatModelGateway()));
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instancePort, 8);
         CapabilityRegistry capabilities = CapabilityRegistry.standard();
         CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort,
-                configPort, eventPort, capabilities);
+                configPort, eventPort, logPort, capabilities);
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
                 new IntentService(), new QueryStateService(executor),

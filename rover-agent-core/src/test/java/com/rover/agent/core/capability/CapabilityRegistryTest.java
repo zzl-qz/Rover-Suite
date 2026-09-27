@@ -16,10 +16,10 @@ class CapabilityRegistryTest {
     void onlyConnectedReadOnlyCapabilitiesAreSelectable() {
         assertEquals(List.of(AgentCapability.ROUTE_QUERY, AgentCapability.INSTANCE_QUERY,
                 AgentCapability.GATEWAY_METRICS_QUERY, AgentCapability.TRACE_QUERY, AgentCapability.CONFIG_READ,
-                AgentCapability.EVENT_QUERY), registry.selectable().stream()
+                AgentCapability.EVENT_QUERY, AgentCapability.LOG_QUERY), registry.selectable().stream()
                 .map(CapabilityDescriptor::id).toList());
         assertTrue(registry.selectable().stream().allMatch(item -> item.risk() == CapabilityRisk.READ_ONLY));
-        assertEquals(6, registry.all().size());
+        assertEquals(7, registry.all().size());
     }
 
     @Test
@@ -38,10 +38,10 @@ class CapabilityRegistryTest {
 
         for (AgentCapability capability : List.of(AgentCapability.ROUTE_QUERY, AgentCapability.INSTANCE_QUERY,
                 AgentCapability.GATEWAY_METRICS_QUERY, AgentCapability.TRACE_QUERY, AgentCapability.CONFIG_READ,
-                AgentCapability.EVENT_QUERY)) {
+                AgentCapability.EVENT_QUERY, AgentCapability.LOG_QUERY)) {
             assertTrue(described.contains(capability.name()), "能力清单缺少 " + capability);
         }
-        assertFalse(described.contains("尚未开放的能力"), "六个能力全部接入时不应出现未开放段落");
+        assertFalse(described.contains("尚未开放的能力"), "七个能力全部接入时不应出现未开放段落");
         // 处置边界与能力清单一起给出：不会让用户以为可以「让它去执行」。
         assertTrue(described.contains("不执行任何写操作"));
     }

@@ -24,5 +24,8 @@ public enum AgentCapability {
     CONFIG_READ,
 
     /** 查询注册中心最近事件（注册、注销、剔除、标记不健康、推送） */
-    EVENT_QUERY
+    EVENT_QUERY,
+
+    /** 查询落盘历史日志（配置变更/回滚/错误/实例事件/指标采样/慢与错误链路） */
+    LOG_QUERY
 }
