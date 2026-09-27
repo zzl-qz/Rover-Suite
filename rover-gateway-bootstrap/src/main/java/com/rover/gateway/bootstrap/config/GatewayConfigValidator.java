@@ -8,6 +8,7 @@ import com.rover.gateway.bootstrap.config.GatewayConfig.NacosProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.CircuitBreakerProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RateLimitProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
+import com.rover.gateway.bootstrap.config.GatewayConfig.RouteTargetProperties;
 import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.DiscoveryType;
 import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
@@ -205,7 +206,7 @@ final class GatewayConfigValidator {
         }
 
         boolean staticUpstream = GatewayConfigMapper.hasStaticUpstream(route);
-        boolean namedService = route.getServiceName() != null && !route.getServiceName().isBlank();
+        boolean namedService = hasNamedService(route);
         if (staticUpstream && namedService) {
             throw new IllegalStateException(
                     "一条路由不能同时写 serviceName 和 targetUrl/targetUrls，businessPrefix="
@@ -226,7 +227,7 @@ final class GatewayConfigValidator {
         } else if (discoveryType.usesServiceDiscovery()) {
             if (!namedService) {
                 throw new IllegalStateException(
-                        "请写 serviceName，或改成静态地址 targetUrl/targetUrls，businessPrefix="
+                        "请写 serviceName（targets 的每项都要有），或改成静态地址 targetUrl/targetUrls，businessPrefix="
                                 + route.getBusinessPrefix());
             }
         } else {
@@ -236,6 +237,19 @@ final class GatewayConfigValidator {
         }
 
         validateStripPrefix(config.resolveStripPrefix(route), route.getBusinessPrefix());
+    }
+
+    /** 是否声明了至少一个带服务名的动态版本目标（与 GatewayConfigMapper.toTargets 的过滤口径一致）。 */
+    private static boolean hasNamedService(RouteProperties route) {
+        if (route.getTargets() == null) {
+            return false;
+        }
+        for (RouteTargetProperties target : route.getTargets()) {
+            if (target != null && target.getServiceName() != null && !target.getServiceName().isBlank()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void validateTargetUrl(String targetUrl, String outbound) {

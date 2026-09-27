@@ -54,18 +54,15 @@ public class RouteValidator {
             throw new IllegalArgumentException("businessPrefix 重复: " + route.getBusinessPrefix());
         }
         boolean staticUpstream = StaticUpstreamCluster.hasRawTargets(route);
-        boolean namedService = route.getServiceName() != null && !route.getServiceName().isBlank();
-        if (staticUpstream && namedService) {
+        boolean versionedTargets = route.getTargets() != null && !route.getTargets().isEmpty();
+        if (staticUpstream && versionedTargets) {
             throw new IllegalArgumentException(
-                    "一条路由不能同时写 serviceName 和 targetUrl/targetUrls: " + route.getBusinessPrefix());
+                    "一条路由不能同时写 targets 和 targetUrl/targetUrls: " + route.getBusinessPrefix());
         }
         if (staticUpstream) {
             validateStaticUpstream(route);
         } else if (discoveryType.usesServiceDiscovery()) {
-            if (!namedService) {
-                throw new IllegalArgumentException(
-                        "请写 serviceName，或改成静态地址 targetUrl/targetUrls: " + route.getBusinessPrefix());
-            }
+            validateTargets(route);
         } else {
             throw new IllegalArgumentException(
                     "static 模式需要 targetUrl 或 targetUrls: " + route.getBusinessPrefix());
@@ -74,6 +71,63 @@ public class RouteValidator {
             if (!route.getStripPrefix().startsWith("/")) {
                 throw new IllegalArgumentException("stripPrefix 必须以 / 开头");
             }
+        }
+        validateStickyHeader(route);
+    }
+
+    /**
+     * 校验动态上游的版本目标列表。
+     *
+     * <p>刻意收窄成「同一服务的多个版本」：所有 target 必须同 serviceName。
+     * 否则这里会变成通用的多服务聚合路由，后续按版本看指标、按版本回滚都没有确定的语义。
+     */
+    private void validateTargets(RouteConfig route) {
+        List<RouteTarget> targets = route.getTargets();
+        if (targets == null || targets.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "动态路由需要 targets（serviceName/group/weight），或改成静态地址 targetUrl/targetUrls: "
+                            + route.getBusinessPrefix());
+        }
+        Set<String> targetKeys = new HashSet<>();
+        String serviceName = null;
+        int totalWeight = 0;
+        for (RouteTarget target : targets) {
+            if (target == null) {
+                throw new IllegalArgumentException("targets 不允许出现空元素: " + route.getBusinessPrefix());
+            }
+            if (target.serviceName() == null || target.serviceName().isBlank()) {
+                throw new IllegalArgumentException("targets 每项的 serviceName 不能为空: " + route.getBusinessPrefix());
+            }
+            if (target.weight() < 0 || target.weight() > RouteTarget.MAX_WEIGHT) {
+                throw new IllegalArgumentException(
+                        "targets 权重必须在 0~" + RouteTarget.MAX_WEIGHT + " 之间: " + target.label());
+            }
+            if (serviceName == null) {
+                serviceName = target.serviceName();
+            } else if (!serviceName.equals(target.serviceName())) {
+                throw new IllegalArgumentException(
+                        "同一条路由的 targets 必须是同一个 serviceName 的不同 group: "
+                                + serviceName + " 与 " + target.serviceName());
+            }
+            if (!targetKeys.add(target.clusterKey())) {
+                throw new IllegalArgumentException("targets 出现重复目标: " + target.label());
+            }
+            totalWeight += target.weight();
+        }
+        if (totalWeight <= 0) {
+            throw new IllegalArgumentException(
+                    "targets 权重之和必须大于 0，否则这条路由没有版本可接流: " + route.getBusinessPrefix());
+        }
+    }
+
+    /** 粘性头名要么不写，要么是合法的 HTTP 头字段名。 */
+    private void validateStickyHeader(RouteConfig route) {
+        String header = route.getStickyHeader();
+        if (header == null || header.isBlank()) {
+            return;
+        }
+        if (!header.matches("[A-Za-z0-9-]+")) {
+            throw new IllegalArgumentException("stickyHeader 不是合法的请求头名: " + header);
         }
     }
 
@@ -110,14 +164,19 @@ public class RouteValidator {
         }
     }
 
-    /** 拷贝路由并 trim 各字符串字段。 */
-    private static RouteConfig copyRoute(RouteConfig route) {
+    /**
+     * 拷贝路由并 trim 各字符串字段。
+     *
+     * <p>公开是为了让「改一个版本的权重」这类局部修改能在副本上做——
+     * 直接改 {@code RouteMatcher.listRoutes()} 返回的元素会动到正在接流的活对象，
+     * 一旦后续校验失败或版本冲突，内存就已经被改坏了。
+     */
+    public static RouteConfig copyRoute(RouteConfig route) {
         RouteConfig copy = new RouteConfig();
         copy.setId(trimToNull(route.getId()));
         copy.setBusinessPrefix(RouteConfig.normalizePrefix(route.getBusinessPrefix()));
         copy.setTargetUrl(trimToNull(route.getTargetUrl()));
-        copy.setServiceName(trimToNull(route.getServiceName()));
-        copy.setGroup(trimToNull(route.getGroup()));
+        copy.setStickyHeader(trimToNull(route.getStickyHeader()));
         copy.setStripPrefix(RouteConfig.normalizePrefix(route.getStripPrefix()));
         List<String> urls = new ArrayList<>();
         if (route.getTargetUrls() != null) {
@@ -129,6 +188,15 @@ public class RouteValidator {
             }
         }
         copy.setTargetUrls(urls);
+        List<RouteTarget> targets = new ArrayList<>();
+        if (route.getTargets() != null) {
+            for (RouteTarget target : route.getTargets()) {
+                if (target != null) {
+                    targets.add(new RouteTarget(target.serviceName(), target.group(), target.weight()));
+                }
+            }
+        }
+        copy.setTargets(targets);
         return copy;
     }
 

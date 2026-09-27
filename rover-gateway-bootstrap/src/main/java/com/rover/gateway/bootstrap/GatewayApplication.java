@@ -25,15 +25,16 @@ public class GatewayApplication {
         List<RouteConfig> routes = config.toRouteConfigs();
 
         // Admin 关闭时只认 YAML，避免历史管理面覆盖干扰部署配置。
-        if (config.isAdminEnabled()) {
-            RouteOverlayStore overlayStore = new RouteOverlayStore();
-            if (overlayStore.exists()) {
-                routes = overlayStore.loadOrEmpty();
-                log.info("使用路由覆盖文件: path={}, routeCount={}",
-                        overlayStore.getPath().toAbsolutePath(), routes.size());
-            } else {
-                log.info("使用 YAML 路由, routeCount={}", routes.size());
-            }
+        // loadOrNull 在文件缺失/为空/格式不可解析时返回 null，此时回退 YAML，
+        // 而不是把「读不出覆盖文件」当成「路由表是空的」——后者会让网关以零路由启动。
+        RouteOverlayStore overlayStore = new RouteOverlayStore();
+        RouteOverlayStore.AppliedState applied = config.isAdminEnabled() ? overlayStore.loadOrNull() : null;
+        if (applied != null) {
+            routes = applied.routes();
+            log.info("使用路由覆盖文件: path={}, routeCount={}, revision={}",
+                    overlayStore.getPath().toAbsolutePath(), routes.size(), applied.revision());
+        } else if (config.isAdminEnabled()) {
+            log.info("没有可用的路由覆盖文件，使用 YAML 路由, routeCount={}", routes.size());
         } else {
             log.info("Admin 管理面已关闭，使用 YAML 路由, routeCount={}", routes.size());
         }
@@ -86,6 +87,11 @@ public class GatewayApplication {
                 config.isDispatchOnEventLoop());
 
         Runtime.getRuntime().addShutdownHook(new Thread(server::shutdown, "gateway-shutdown"));
+        // 只对齐版本号：路由内容已由上一步决定，重启后报出的版本必须和重启前确认过的版本一致，
+        // 否则调用方拿着旧版本号重放会被误判成冲突。没有覆盖文件时回到 0 号版本。
+        server.restoreRoutesRevision(
+                applied == null ? 0 : applied.revision(),
+                applied == null ? "" : applied.appliedOperationId());
         server.start();
     }
 }

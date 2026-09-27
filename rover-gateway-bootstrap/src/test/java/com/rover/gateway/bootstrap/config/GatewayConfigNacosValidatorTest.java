@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
+import com.rover.gateway.bootstrap.config.GatewayConfig.RouteTargetProperties;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class GatewayConfigNacosValidatorTest {
@@ -36,7 +38,9 @@ class GatewayConfigNacosValidatorTest {
         RouteProperties route = new RouteProperties();
         route.setId("nacos-demo");
         route.setBusinessPrefix("/api/nacos");
-        route.setServiceName(serviceName);
+        RouteTargetProperties target = new RouteTargetProperties();
+        target.setServiceName(serviceName);
+        route.setTargets(List.of(target));
         config.gatewayProperties().getRoutes().add(route);
         return config;
     }

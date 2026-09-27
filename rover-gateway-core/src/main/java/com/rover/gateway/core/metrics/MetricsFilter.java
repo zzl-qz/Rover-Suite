@@ -5,6 +5,7 @@ import com.rover.common.spi.filter.FilterChain;
 import com.rover.common.spi.filter.RequestContext;
 import com.rover.gateway.core.filter.GatewayRequestContext;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.route.RouteTarget;
 import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 
@@ -49,6 +50,8 @@ public class MetricsFilter implements Filter {
             try {
                 long costMillis = (System.nanoTime() - gatewayContext.getStartNanos()) / 1_000_000;
                 RouteConfig route = gatewayContext.getRoute();
+                // 灰度选中的版本：静态路由或未选版本时为 null，作为版本归因维度
+                RouteTarget target = gatewayContext.getRouteTarget();
                 // 状态码为空说明链路中途异常，handler 兜底回 500，按 500 归类
                 int statusCode = gatewayContext.getStatusCode() == null
                         ? 500 : gatewayContext.getStatusCode();
@@ -59,7 +62,8 @@ public class MetricsFilter implements Filter {
                         gatewayContext.getUpstreamHostPort(),
                         gatewayContext.getUpstreamCostMillis(),
                         gatewayContext.isUpstreamConnectFail(),
-                        gatewayContext.isUpstreamTimeout());
+                        gatewayContext.isUpstreamTimeout(),
+                        target == null ? null : target.group());
             } catch (Exception recordErr) {
                 log.warn("Metrics record failed, ignore to protect request path", recordErr);
             }

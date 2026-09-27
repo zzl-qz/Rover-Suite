@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.rover.admin.service.AdminConfigService;
 import com.rover.admin.service.ConfigUpdateResult;
 import com.rover.common.constants.ManageApiPaths;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -57,23 +58,47 @@ public class AdminConfigController {
         return configService.loadLive(ManageApiPaths.clampLiveRange(range));
     }
 
-    /** 路由列表。 */
+    /** 路由表 + 当前版本号；前端提交时必须回传 revision。 */
     @GetMapping(AdminApiPaths.ROUTES)
-    public List<Map<String, Object>> routes() {
-        return configService.listRoutes();
+    public Map<String, Object> routes() {
+        return configService.routesState();
     }
 
-    /** 新增/更新一条路由，返回更新后的完整路由表响应。 */
+    /** 新增/更新一条路由（body 需带读到时的 revision），返回更新后的完整路由表。 */
     @PostMapping(AdminApiPaths.ROUTES)
-    public Map<String, Object> saveRoute(@RequestBody Map<String, String> route) {
+    public Map<String, Object> saveRoute(@RequestBody Map<String, Object> route) {
         return configService.saveRoute(route);
     }
 
-    /** 按 businessPrefix 删除路由。 */
+    /**
+     * 预览路由变更差异：body 形如 {"routes":[...]}，只校验与比对，不落盘、不生效。
+     *
+     * <p>语义上是只读操作，但对外仍按写请求对待——CSRF 由安全配置统一拦截，前端也照常带令牌，
+     * 不给「只读接口」开后门。
+     */
+    @PostMapping(AdminApiPaths.ROUTES_PREVIEW)
+    public Map<String, Object> previewRoutes(@RequestBody Map<String, Object> body) {
+        Object routes = body.get("routes");
+        if (!(routes instanceof List<?> list)) {
+            throw new IllegalArgumentException("请求体需要 routes 数组");
+        }
+        List<Map<String, Object>> rows = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> map)) {
+                throw new IllegalArgumentException("routes 元素必须是路由对象");
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            map.forEach((key, value) -> row.put(String.valueOf(key), value));
+            rows.add(row);
+        }
+        return configService.previewRoutes(rows);
+    }
+
+    /** 按 businessPrefix 删除路由，需要带读到时的 revision。 */
     @DeleteMapping(AdminApiPaths.ROUTES)
-    public Map<String, Object> deleteRoute(
-            @RequestParam(ManageApiPaths.PARAM_BUSINESS_PREFIX) String businessPrefix) {
-        return configService.deleteRoute(businessPrefix);
+    public Map<String, Object> deleteRoute(@RequestParam(ManageApiPaths.PARAM_BUSINESS_PREFIX) String businessPrefix,
+                                          @RequestParam(ManageApiPaths.PARAM_REVISION) int revision) {
+        return configService.deleteRoute(businessPrefix, revision);
     }
 
     /** 注册实例列表（Nameserver 管理口）。 */

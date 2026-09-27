@@ -5,6 +5,7 @@ import com.rover.common.model.ServiceInstance;
 import com.rover.common.util.ServiceKeys;
 import com.rover.common.protocol.QueryResponseBody;
 import com.rover.common.spi.discovery.ServiceDiscovery;
+import com.rover.nameserver.client.cache.InstanceCache;
 import com.rover.nameserver.client.connection.NameserverClient;
 import com.rover.nameserver.client.connection.NameserverClientOptions;
 import java.util.ArrayList;
@@ -112,7 +113,15 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         }
     }
 
-    /** 从本地缓存取实例，优先返回健康实例；全不健康时退回全部缓存。 */
+    /**
+     * 从本地缓存取实例：<b>只返回健康实例</b>，全部不健康就返回空列表。
+     *
+     * <p>这里刻意不做「全不健康就退回全部缓存」的兜底。那种兜底会让「实例已被标记不可接流」
+     * 被静默绕过——调用方以为拿到的是可接流实例，实际打到了一台明确不可用的机器上，
+     * 而且失败会被记成上游 5xx，与「压根没有可用上游」混成同一个现象。
+     * 返回空列表后，由 {@code RouteAndProxyFilter} 明确给出 503 与 {@code REJECT_NO_UPSTREAM}，
+     * 让「没得打」和「打得不好」在指标上是两件可区分的事。
+     */
     @Override
     public List<ServiceInstance> getInstances(String serviceName, String group) {
         List<ServiceInstance> cached = client.getCachedInstances(serviceName, group);
@@ -125,8 +134,48 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
                 healthy.add(instance);
             }
         }
-        return healthy.isEmpty() ? cached : healthy;
+        return healthy;
     }
+
+    /**
+     * 暴露底层实例缓存：管理口需要按 service+group 读到本地缓存观察到的事实（版本/实例）。
+     */
+    public InstanceCache getInstanceCache() {
+        return client.getInstanceCache();
+    }
+
+    /**
+     * 已订阅服务的只读快照：网关「自己观察到」的 service@group 及其本地缓存版本与实例计数。
+     *
+     * <p>这是网关视角的证据，用来和注册中心视角对账；健康计数按缓存里的真实 healthy 字段统计，
+     * 不做任何推断。
+     */
+    public List<SubscriptionView> subscriptions() {
+        List<SubscriptionView> rows = new ArrayList<>(subscribeServices.size());
+        InstanceCache cache = client.getInstanceCache();
+        for (DiscoverySettings.ServiceSubscribeSpec spec : subscribeServices) {
+            String serviceName = spec.getServiceName();
+            if (serviceName == null || serviceName.isBlank()) {
+                continue;
+            }
+            String group = spec.getGroup();
+            List<ServiceInstance> cached = cache.get(serviceName, group);
+            int healthy = 0;
+            for (ServiceInstance instance : cached) {
+                if (instance != null && instance.isHealthy()) {
+                    healthy++;
+                }
+            }
+            rows.add(new SubscriptionView(
+                    serviceName, group, cache.revision(serviceName, group),
+                    cache.epoch(serviceName, group), cached.size(), healthy));
+        }
+        return rows;
+    }
+
+    /** 一条订阅视图：service+group 及本地缓存观察到的版本与实例计数。 */
+    public record SubscriptionView(String serviceName, String group, long revision, String epoch,
+                                   int instanceCount, int healthyCount) { }
 
     /** 路由热更新后补订新服务：已在列表则重订，否则追加并订阅。 */
     @Override

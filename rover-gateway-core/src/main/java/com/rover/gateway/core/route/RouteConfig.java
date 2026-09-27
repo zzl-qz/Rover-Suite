@@ -7,7 +7,7 @@ import lombok.Data;
 /**
  * Author: Daylight
  * Created: 2026-08-08 14:22:00
- * Description: Gateway 路由规则：静态上游 targetUrl/targetUrls，动态上游 serviceName + group
+ * Description: Gateway 路由规则：静态上游 targetUrl/targetUrls，动态上游 targets（同服务多版本 + 权重）
  */
 @Data
 public class RouteConfig {
@@ -24,11 +24,16 @@ public class RouteConfig {
     /** 静态多上游，元素支持 http://host:port 或 http://host:port|weight。 */
     private List<String> targetUrls = new ArrayList<>();
 
-    /** 动态模式下的服务名，配合注册中心发现实例 */
-    private String serviceName;
+    /**
+     * 动态上游的版本目标列表；与静态地址互斥。
+     *
+     * <p>列表顺序参与分流计算：权重区间按此顺序首尾相接，因此放量时把权重从靠前的版本
+     * 挪给紧邻的靠后版本，只增不减（见 {@link WeightedTargetRouter}）。
+     */
+    private List<RouteTarget> targets = new ArrayList<>();
 
-    /** 动态模式下的分组，可空表示默认组 */
-    private String group;
+    /** 灰度粘性键所在的请求头；为空表示直接用客户端 IP 兜底。 */
+    private String stickyHeader;
 
     /** 转发前去前缀规则，如 /api/user 会被剥掉再拼到后端 */
     private String stripPrefix;

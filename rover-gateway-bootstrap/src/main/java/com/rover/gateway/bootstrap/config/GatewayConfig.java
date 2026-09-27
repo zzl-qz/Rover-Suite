@@ -11,6 +11,7 @@ import com.rover.gateway.core.filter.FilterSettings;
 import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.route.RouteTarget;
 import com.rover.gateway.core.server.CorsSettings;
 import java.util.ArrayList;
 import java.util.List;
@@ -416,8 +417,20 @@ public class GatewayConfig {
         private String targetUrl;
         /** 静态多上游，元素可写 http://host:port|weight */
         private List<String> targetUrls = new ArrayList<>();
-        private String serviceName;
-        private String group;
+        /** 动态多版本目标（同服务不同 group + 权重）；与 targetUrl/targetUrls 互斥 */
+        private List<RouteTargetProperties> targets = new ArrayList<>();
+        /** 灰度粘性键所在的请求头；为空时退到客户端 IP */
+        private String stickyHeader;
         private String stripPrefix;
+    }
+
+    /** 路由的一个版本目标：注册中心里的某个服务 + 分组，以及它在该路由上的权重。 */
+    @Data
+    public static class RouteTargetProperties {
+        private String serviceName;
+        /** 版本分组；为空表示默认分组 */
+        private String group;
+        /** 权重，0 表示这个版本暂不接流 */
+        private int weight = RouteTarget.DEFAULT_WEIGHT;
     }
 }

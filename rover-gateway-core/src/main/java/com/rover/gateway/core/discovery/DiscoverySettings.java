@@ -4,6 +4,7 @@ import com.rover.common.constants.NameserverConstants;
 import com.rover.common.util.ServiceKeys;
 import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.route.RouteTarget;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -57,21 +58,26 @@ public class DiscoverySettings {
         return settings;
     }
 
-    /** 从最终路由表抽订阅列表，启动时设一次即可。 */
+    /** 从最终路由表抽订阅列表（按版本目标去重），启动时设一次即可。 */
     public static List<ServiceSubscribeSpec> subscribeSpecsFrom(List<RouteConfig> routes) {
         if (routes == null || routes.isEmpty()) {
             return new ArrayList<>();
         }
         Map<String, ServiceSubscribeSpec> unique = new LinkedHashMap<>();
         for (RouteConfig route : routes) {
-            if (route == null || route.getServiceName() == null || route.getServiceName().isBlank()) {
+            if (route == null || route.getTargets() == null) {
                 continue;
             }
-            String key = ServiceKeys.serviceGroup(route.getServiceName(), route.getGroup());
-            ServiceSubscribeSpec spec = new ServiceSubscribeSpec();
-            spec.setServiceName(route.getServiceName());
-            spec.setGroup(route.getGroup());
-            unique.putIfAbsent(key, spec);
+            for (RouteTarget target : route.getTargets()) {
+                if (target == null || target.serviceName() == null || target.serviceName().isBlank()) {
+                    continue;
+                }
+                String key = ServiceKeys.serviceGroup(target.serviceName(), target.group());
+                ServiceSubscribeSpec spec = new ServiceSubscribeSpec();
+                spec.setServiceName(target.serviceName());
+                spec.setGroup(target.group());
+                unique.putIfAbsent(key, spec);
+            }
         }
         return new ArrayList<>(unique.values());
     }

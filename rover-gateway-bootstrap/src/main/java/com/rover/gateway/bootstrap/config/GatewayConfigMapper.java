@@ -8,6 +8,7 @@ import com.rover.gateway.bootstrap.config.GatewayConfig.NacosProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.CircuitBreakerProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RateLimitProperties;
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
+import com.rover.gateway.bootstrap.config.GatewayConfig.RouteTargetProperties;
 import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.discovery.DiscoverySettings;
 import com.rover.gateway.core.discovery.DiscoveryType;
@@ -16,6 +17,7 @@ import com.rover.gateway.core.filter.circuit.CircuitBreakerSettings;
 import com.rover.gateway.core.filter.ratelimit.RateLimitSettings;
 import com.rover.gateway.core.loadbalance.StaticUpstreamCluster;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.route.RouteTarget;
 import com.rover.gateway.core.server.CorsSettings;
 
 import java.util.ArrayList;
@@ -105,8 +107,9 @@ final class GatewayConfigMapper {
                 continue;
             }
             boolean staticUpstream = hasStaticUpstream(route);
-            boolean namedService = route.getServiceName() != null && !route.getServiceName().isBlank();
-            if (staticUpstream == namedService) {
+            List<RouteTarget> targets = toTargets(route.getTargets());
+            // 两条都写或两条都不写都跳过：校验器同样不接受这种路由，这里先筛掉比让它启动即失败好
+            if (staticUpstream == !targets.isEmpty()) {
                 continue;
             }
             if (!staticUpstream && !discoveryType.usesServiceDiscovery()) {
@@ -118,12 +121,27 @@ final class GatewayConfigMapper {
             routeConfig.setBusinessPrefix(route.getBusinessPrefix());
             routeConfig.setTargetUrl(route.getTargetUrl());
             routeConfig.setTargetUrls(copyTargetUrls(route.getTargetUrls()));
-            routeConfig.setServiceName(route.getServiceName());
-            routeConfig.setGroup(route.getGroup());
+            routeConfig.setTargets(targets);
+            routeConfig.setStickyHeader(route.getStickyHeader());
             routeConfig.setStripPrefix(config.resolveStripPrefix(route));
             routeConfigs.add(routeConfig);
         }
         return routeConfigs;
+    }
+
+    /** YAML 的版本目标转 core 值对象；serviceName 为空的项直接丢弃。 */
+    static List<RouteTarget> toTargets(List<RouteTargetProperties> source) {
+        List<RouteTarget> targets = new ArrayList<>();
+        if (source == null) {
+            return targets;
+        }
+        for (RouteTargetProperties item : source) {
+            if (item == null || item.getServiceName() == null || item.getServiceName().isBlank()) {
+                continue;
+            }
+            targets.add(new RouteTarget(item.getServiceName(), item.getGroup(), item.getWeight()));
+        }
+        return targets;
     }
 
     static DiscoverySettings toDiscoverySettings(GatewayConfig config) {

@@ -5,6 +5,7 @@ import com.rover.common.spi.filter.RequestContext;
 import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.proxy.InboundBodyPipe;
 import com.rover.gateway.core.route.RouteConfig;
+import com.rover.gateway.core.route.RouteTarget;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandlerContext;
@@ -105,6 +106,10 @@ public class GatewayRequestContext implements RequestContext {
     /** 命中的路由规则，路由匹配后才会有值。 */
     @Setter
     private RouteConfig route;
+
+    /** 灰度选中的版本目标；静态路由或未命中版本时为 null。 */
+    @Setter
+    private RouteTarget routeTarget;
 
     /** 最终要转发的后端 URL。 */
     @Setter

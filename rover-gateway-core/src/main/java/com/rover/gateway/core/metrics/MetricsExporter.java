@@ -6,6 +6,7 @@ import com.rover.common.json.JsonCodec;
 import com.rover.gateway.core.metrics.MetricsRegistry.RouteMetrics;
 import com.rover.gateway.core.metrics.MetricsRegistry.TimeRing;
 import com.rover.gateway.core.metrics.MetricsRegistry.UpstreamMetrics;
+import com.rover.gateway.core.route.RouteTarget;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -174,14 +175,74 @@ final class MetricsExporter {
         root.put("observedAtMillis", nowMillis);
         root.put("windowSeconds", range);
         root.put("routeId", routeId == null ? "" : routeId);
+        // 配置声明的版本清单：让调用方能对上「声明了哪些版本」与「实际收到了哪些版本的流量」
+        List<RouteTarget> declared = r.declaredTargets(routeId);
+        root.put("targets", declaredTargetsJson(declared));
         // 指标未启用时仍给出合法 JSON：用 enabled=false 把「采集关闭」与「没有样本」分开
         if (!r.settings.isEnabled()) {
             root.put("enabled", false);
             root.put("rows", List.of());
+            root.put("byVersion", List.of());
             return JsonCodec.toJson(root);
         }
-        root.put("rows", r.routeUpstreamRows(routeId, range));
+        List<Map<String, Object>> rows = r.routeUpstreamRows(routeId, range);
+        root.put("rows", rows);
+        List<Map<String, Object>> byVersion = r.routeVersionRows(routeId, rows, declared, range);
+        root.put("byVersion", byVersion);
+        root.put("versionCheck", versionCheck(declared, byVersion));
         return JsonCodec.toJson(root);
+    }
+
+    /** 声明版本清单（配置口径），与 byVersion 的观测口径逐条核对。 */
+    private static List<Map<String, Object>> declaredTargetsJson(List<RouteTarget> declared) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (RouteTarget target : declared) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("serviceName", target.serviceName());
+            row.put("group", MetricsRegistry.normalizeGroup(target.group()));
+            row.put("weight", target.weight());
+            row.put("label", target.label());
+            row.put("clusterKey", target.clusterKey());
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    /** 声明版本与观测版本的差异：声明了却没流量、没声明却有流量，都要能一眼看出。 */
+    private static Map<String, Object> versionCheck(
+            List<RouteTarget> declared, List<Map<String, Object>> byVersion) {
+        List<String> declaredGroups = new ArrayList<>();
+        for (RouteTarget target : declared) {
+            String group = MetricsRegistry.normalizeGroup(target.group());
+            if (!declaredGroups.contains(group)) {
+                declaredGroups.add(group);
+            }
+        }
+        List<String> observedGroups = new ArrayList<>();
+        for (Map<String, Object> row : byVersion) {
+            if (((Number) row.getOrDefault("windowRequests", 0)).longValue() > 0) {
+                observedGroups.add((String) row.get("group"));
+            }
+        }
+        List<String> missing = new ArrayList<>();
+        for (String group : declaredGroups) {
+            if (!observedGroups.contains(group)) {
+                missing.add(group);
+            }
+        }
+        List<String> unexpected = new ArrayList<>();
+        for (String group : observedGroups) {
+            if (!declaredGroups.contains(group)) {
+                unexpected.add(group);
+            }
+        }
+        Map<String, Object> check = new LinkedHashMap<>();
+        check.put("sampleThreshold", MetricsRegistry.MIN_VERSION_SAMPLE);
+        check.put("declaredGroups", declaredGroups);
+        check.put("observedGroups", observedGroups);
+        check.put("missingGroups", missing);
+        check.put("unexpectedGroups", unexpected);
+        return check;
     }
 
     /** 近 N 秒的平均 QPS，分母固定为窗口长度，空闲就是 0。 */
