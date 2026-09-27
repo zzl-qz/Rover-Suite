@@ -24,8 +24,8 @@ public final class ModelPresets {
 
     /** 快速模型预设：服务「意图识别 / 目标解析 / 规划」这类廉价结构化调用。 */
     public static final List<Preset> FAST_ALL = List.of(
-            new Preset("智谱 GLM-Air（快）", "https://open.bigmodel.cn/api/paas/v4", "glm-4-air"),
-            new Preset("智谱 GLM-Flash（快）", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+            new Preset("智谱 GLM-Flash（快，默认）", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+            new Preset("智谱 GLM-Air（更快）", "https://open.bigmodel.cn/api/paas/v4", "glm-4-air"),
             new Preset("DeepSeek-Chat（快）", "https://api.deepseek.com", "deepseek-chat"));
 
     private ModelPresets() {

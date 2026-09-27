@@ -19,8 +19,15 @@ public enum ModelVendor {
     /** 深度求索：deepseek-chat 本身不思考，无需单独快速模型，主/快共用同一模型。 */
     DEEPSEEK("deepseek", "DeepSeek", "https://api.deepseek.com", "deepseek-chat", ""),
 
-    /** 智谱：主模型用思考模型（解读/对话），快速模型用轻量模型（意图/目标/规划）。 */
-    ZHIPU("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4.6", "glm-4-air"),
+    /**
+     * 智谱：主模型用思考模型（解读/对话），快速模型用轻量模型（意图/目标/规划）。
+     *
+     * 快速模型在 glm-4-air 与 glm-4-flash 之间选了 flash：30 条评测集上 air 命中率略高
+     * （80% vs 76.7%），但**错误率高得多**（20% vs 13.3%），且是唯一在「简单/干扰」这类
+     * 明确场景也选错对象的（把路由/服务问题错判成实例）。flash 的失败模式是「保守转澄清」
+     * 而非「错误归因」，正好契合「宁可转澄清也不要猜」的口径，且官方标价免费。
+     */
+    ZHIPU("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4.6", "glm-4-flash"),
 
     /** 自定义 / 本地部署：地址与模型名由用户手填。 */
     CUSTOM("custom", "自定义 / 本地", "", "", "");

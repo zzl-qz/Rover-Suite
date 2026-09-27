@@ -126,7 +126,7 @@ class AdminModelConfigServiceTest {
         assertEquals("glm-4.6", gateway.appliedSettings().model());
         assertEquals("https://open.bigmodel.cn/api/paas/v4", gateway.appliedSettings().baseUrl());
         assertTrue(gateway.appliedSettings().fastConfigured());
-        assertEquals("glm-4-air", gateway.appliedSettings().fast().model());
+        assertEquals("glm-4-flash", gateway.appliedSettings().fast().model());
 
         // DeepSeek：deepseek-chat 本身不思考，无需单独快速模型。
         Map<String, Object> deepseek = new HashMap<>();
