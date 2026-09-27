@@ -7,7 +7,15 @@ package com.rover.admin.agent.model;
  * 不得把本对象直接序列化返回。
  */
 public record ModelSettings(boolean enabled, String baseUrl, String apiKey, String model,
-                            int timeoutSeconds, Source source, KeyState keyState) {
+                            int timeoutSeconds, Source source, KeyState keyState, FastModel fast) {
+
+    /**
+     * 便利构造器：不配快速模型。保留它让「只用主模型」的既有用法与测试无需改动。
+     */
+    public ModelSettings(boolean enabled, String baseUrl, String apiKey, String model,
+                         int timeoutSeconds, Source source, KeyState keyState) {
+        this(enabled, baseUrl, apiKey, model, timeoutSeconds, source, keyState, FastModel.none());
+    }
 
     /** 配置来源：文件优先，其次由环境变量播种。 */
     public enum Source {
@@ -38,6 +46,16 @@ public record ModelSettings(boolean enabled, String baseUrl, String apiKey, Stri
         return enabled && notBlank(baseUrl) && notBlank(model);
     }
 
+    /**
+     * 是否「配置了快速模型」：与主模型同启用态，且快速模型地址与模型名齐全。
+     *
+     * 配置后，意图识别 / 目标解析 / 规划这类廉价调用由网关路由到快速模型；
+     * 未配置则回退主模型 + 显式禁用思考（{@code fast} 永不为 null，缺失用 {@link FastModel#none()}）。
+     */
+    public boolean fastConfigured() {
+        return enabled && fast != null && fast.configured();
+    }
+
     /** 按密钥明文推导密钥状态，供保存时使用。 */
     public static KeyState keyStateOf(String apiKey) {
         return notBlank(apiKey) ? KeyState.OK : KeyState.ABSENT;
@@ -49,7 +67,8 @@ public record ModelSettings(boolean enabled, String baseUrl, String apiKey, Stri
 
     /** 完全没有配置模型的起点。 */
     public static ModelSettings none() {
-        return new ModelSettings(false, "", "", "", DEFAULT_TIMEOUT_SECONDS, Source.NONE, KeyState.ABSENT);
+        return new ModelSettings(false, "", "", "", DEFAULT_TIMEOUT_SECONDS, Source.NONE, KeyState.ABSENT,
+                FastModel.none());
     }
 
     private static boolean notBlank(String value) {

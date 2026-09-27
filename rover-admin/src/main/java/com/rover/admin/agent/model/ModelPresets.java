@@ -17,9 +17,16 @@ public final class ModelPresets {
     public record Preset(String label, String baseUrl, String model) {
     }
 
+    /** 主模型预设：服务「AI 解读 / 对话」这类需要推理质量的长调用。 */
     public static final List<Preset> ALL = List.of(
             new Preset("DeepSeek", "https://api.deepseek.com", "deepseek-chat"),
-            new Preset("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4.6"));
+            new Preset("智谱 GLM（思考）", "https://open.bigmodel.cn/api/paas/v4", "glm-4.6"));
+
+    /** 快速模型预设：服务「意图识别 / 目标解析 / 规划」这类廉价结构化调用。 */
+    public static final List<Preset> FAST_ALL = List.of(
+            new Preset("智谱 GLM-Air（快）", "https://open.bigmodel.cn/api/paas/v4", "glm-4-air"),
+            new Preset("智谱 GLM-Flash（快）", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+            new Preset("DeepSeek-Chat（快）", "https://api.deepseek.com", "deepseek-chat"));
 
     private ModelPresets() {
     }
