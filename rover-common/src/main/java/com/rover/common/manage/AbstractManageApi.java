@@ -59,11 +59,18 @@ public abstract class AbstractManageApi {
                 writeJson(ctx, HttpResponseStatus.NOT_FOUND,
                         JsonCodec.toJson(Map.of("message", "unknown manage path: " + path)));
             }
+        } catch (ManageApiException ex) {
+            // 自带状态码（如乐观锁 409）：把附加字段平铺进响应，调用方才知道该怎么重试
+            Map<String, Object> body = new LinkedHashMap<>(ex.getDetails());
+            body.put("message", ex.getMessage() == null ? "request failed" : ex.getMessage());
+            writeJson(ctx, ex.getStatus(), JsonCodec.toJson(body));
         } catch (IllegalArgumentException | UnsupportedOperationException ex) {
             writeJson(ctx, HttpResponseStatus.BAD_REQUEST,
                     JsonCodec.toJson(Map.of("message", ex.getMessage() == null ? "bad request" : ex.getMessage())));
-        } catch (Exception ex) {
-            log.warn("{} manage API error, path={}", componentName(), path, ex);
+        } catch (Throwable ex) {
+            // 必须兜住 Error：陈旧/错误编译产物会抛 java.lang.Error，若让它逃逸到 Netty，
+            // 客户端只会看到连接挂起（读不到任何字节），排查成本极高。
+            log.error("{} manage API error, path={}", componentName(), path, ex);
             writeJson(ctx, HttpResponseStatus.INTERNAL_SERVER_ERROR,
                     JsonCodec.toJson(Map.of("message", "manage api error")));
         }

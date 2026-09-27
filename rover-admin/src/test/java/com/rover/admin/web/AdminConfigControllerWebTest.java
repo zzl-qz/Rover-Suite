@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.rover.admin.service.AdminConfigService;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,5 +59,24 @@ class AdminConfigControllerWebTest {
                         .content("{\"businessPrefix\":\"/orders\"}"))
                 .andExpect(status().isOk())
                 .andExpect(content().json("{\"ok\":true}"));
+    }
+
+    @Test
+    void previewsRouteDiff() throws Exception {
+        // 网关响应体含 changes/changeCount/revision，Admin 只做透传，因此原样断言这几项
+        when(configService.previewRoutes(List.of(Map.of("businessPrefix", "/orders"))))
+                .thenReturn(Map.of(
+                        "revision", 3,
+                        "message", "预览通过，未落盘、未生效",
+                        "changes", List.of(Map.of(
+                                "kind", "ADDED", "routeId", "", "businessPrefix", "/orders", "detail", "")),
+                        "changeCount", 1));
+
+        mockMvc.perform(post("/api/routes/preview")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"routes\":[{\"businessPrefix\":\"/orders\"}]}"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"revision\":3,\"changeCount\":1,"
+                        + "\"changes\":[{\"kind\":\"ADDED\",\"businessPrefix\":\"/orders\"}]}"));
     }
 }

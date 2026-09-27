@@ -129,10 +129,10 @@ public final class JsonCodec {
     }
 
     /**
-     * 解析 JSON 对象数组为字符串键值对行列表。
+     * 解析 JSON 对象数组为扁平字符串映射列表（如配置覆盖文件）。
      *
      * @param json JSON 数组字符串
-     * @return 键值对行列表；空串返回空列表
+     * @return 字段行列表；空串返回空列表
      * @throws IllegalArgumentException 解析失败
      */
     public static List<Map<String, String>> parseStringMapArray(String json) {
@@ -144,6 +144,47 @@ public final class JsonCodec {
             });
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException("JSON 数组解析失败", ex);
+        }
+    }
+
+    /**
+     * 解析 JSON 对象数组为字段行列表（值保留原始类型，可含嵌套数组/对象）。
+     *
+     * <p>路由配置的 {@code targets} 是嵌套数组，扁平字符串映射装不下，因此这里不做 String 收敛。
+     *
+     * @param json JSON 数组字符串
+     * @return 字段行列表；空串返回空列表
+     * @throws IllegalArgumentException 解析失败
+     */
+    public static List<Map<String, Object>> parseObjectMapArray(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return MAPPER.readValue(json, new TypeReference<List<Map<String, Object>>>() {
+            });
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException("JSON 数组解析失败", ex);
+        }
+    }
+
+    /**
+     * 解析 JSON 对象为字段表（值保留原始类型，可含嵌套数组/对象）。
+     *
+     * @param json JSON 对象字符串
+     * @return 字段表；空串返回空表
+     * @throws IllegalArgumentException 解析失败
+     */
+    public static Map<String, Object> parseObjectMap(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            Map<String, Object> value = MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {
+            });
+            return value == null ? Map.of() : value;
+        } catch (JsonProcessingException ex) {
+            throw new IllegalArgumentException("JSON 对象解析失败", ex);
         }
     }
 

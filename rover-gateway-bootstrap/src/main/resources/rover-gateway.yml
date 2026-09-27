@@ -1,6 +1,6 @@
 # 整个网关只连一种注册中心：static / nameserver / nacos。
 # 选了 nameserver 或 nacos 后，个别路由仍可只写 targetUrls，走静态地址。
-# 一条路由不要同时写 serviceName 和 targetUrl。
+# 一条路由二选一：写 targets（注册中心，可多版本）或 targetUrl/targetUrls（静态地址）。
 # 整机静态：deploy/docker/config/rover-gateway-static.yml
 # Nacos：先 -Pnacos 打包，再看 deploy/docker/config/rover-gateway-nacos.yml
 rover:
@@ -82,10 +82,13 @@ rover:
       credentials: false
       maxAgeSeconds: 1800
     routes:
-      # 动态：按服务名找实例。demo 自带 /api 前缀，所以不剥
+      # 动态：按服务名找实例。demo 自带 /api 前缀，所以不剥。
+      # 想灰度就在 targets 里再加一个版本，权重决定放量比例（v1=95 / v2=5 就是 5%）
       - id: demo-api
         businessPrefix: /api
-        serviceName: demo-service
+        targets:
+          - serviceName: demo-service
+            weight: 100
         stripPrefix: ""
 
       # 动态模式下夹一条静态也可以，取消注释即可

@@ -7,9 +7,14 @@ public enum RouteField {
     BUSINESS_PREFIX("businessPrefix"),
     TARGET_URL("targetUrl"),
     TARGET_URLS("targetUrls"),
-    SERVICE_NAME("serviceName"),
-    GROUP("group"),
-    STRIP_PREFIX("stripPrefix");
+    TARGETS("targets"),
+    STICKY_HEADER("stickyHeader"),
+    STRIP_PREFIX("stripPrefix"),
+
+    /** targets 数组内单个元素的字段名。 */
+    TARGET_SERVICE_NAME("serviceName"),
+    TARGET_GROUP("group"),
+    TARGET_WEIGHT("weight");
 
     private final String jsonName;
 

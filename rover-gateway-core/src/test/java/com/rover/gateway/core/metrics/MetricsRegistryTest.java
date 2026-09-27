@@ -4,8 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.rover.common.constants.HttpConstants;
 import com.rover.common.constants.ManageApiPaths;
 import com.rover.common.json.JsonCodec;
+import com.rover.gateway.core.route.RouteTarget;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -109,6 +111,105 @@ class MetricsRegistryTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> status = (Map<String, Object>) row.get("status");
         return number(status.get("5xx"));
+    }
+
+    @Test
+    void versionRows_aggregatesTrafficPerVersion() {
+        MetricsRegistry registry = enabledRegistry();
+        registry.setRouteTargetsSupplier(id -> List.of(
+                new RouteTarget("order-service", "v1", 80),
+                new RouteTarget("order-service", "v2", 20)));
+        // 同一路由两个版本：v1 打 8 次，v2 打 2 次，比例应与权重方向一致
+        for (int i = 0; i < 8; i++) {
+            registry.record(ROUTE, 200, 4, "10.0.0.1:8080", 3, false, false, "v1");
+        }
+        for (int i = 0; i < 2; i++) {
+            registry.record(ROUTE, 200, 4, "10.0.0.2:8080", 3, false, false, "v2");
+        }
+
+        List<Map<String, Object>> rows = versionRows(registry);
+        assertEquals(2, rows.size());
+        Map<String, Object> v1 = versionRow(rows, "v1");
+        Map<String, Object> v2 = versionRow(rows, "v2");
+        assertEquals(8L, number(v1.get("windowRequests")));
+        assertEquals(2L, number(v2.get("windowRequests")));
+        assertEquals(Boolean.TRUE, v1.get("declared"));
+        assertEquals(Boolean.TRUE, v1.get("sufficient"));
+        assertEquals(8L, number(v1.get("sampleSize")));
+        assertEquals(Boolean.FALSE, v2.get("sufficient"), "v2 只有 2 次，低于阈值");
+        assertEquals(2L, number(v2.get("sampleSize")));
+        assertEquals(20, ((Number) v2.get("weight")).intValue());
+    }
+
+    @Test
+    void versionRows_reportsInsufficientSampleForZeroAndOutOfWindowTraffic() {
+        MetricsRegistry registry = enabledRegistry();
+        long nowSecond = System.currentTimeMillis() / 1000;
+        // 直接构造：v2 的流量落在 300s 窗口之外，v3 从未接流；两者样本量都必须是 0
+        MetricsRegistry.RouteMetrics route = new MetricsRegistry.RouteMetrics();
+        MetricsRegistry.UpstreamMetrics stale = new MetricsRegistry.UpstreamMetrics();
+        stale.record(nowSecond - 400, 5, 200, false, false);
+        route.upstreamMetrics.put("10.0.0.9:8080", stale);
+        route.instanceGroups.put("10.0.0.9:8080", "v2");
+        registry.routes.put(ROUTE, route);
+        registry.setRouteTargetsSupplier(id -> List.of(
+                new RouteTarget("order-service", "v2", 50),
+                new RouteTarget("order-service", "v3", 50)));
+
+        List<Map<String, Object>> rows = versionRows(registry);
+        Map<String, Object> v2 = versionRow(rows, "v2");
+        assertEquals(0L, number(v2.get("windowRequests")), "窗口外流量不得计入当前样本");
+        assertEquals(0L, number(v2.get("sampleSize")));
+        assertEquals(Boolean.FALSE, v2.get("sufficient"));
+
+        Map<String, Object> v3 = versionRow(rows, "v3");
+        assertEquals(Boolean.TRUE, v3.get("declared"));
+        assertEquals(0L, number(v3.get("windowRequests")));
+        assertEquals(Boolean.FALSE, v3.get("sufficient"));
+    }
+
+    @Test
+    void versionRows_separatesVersionCapacityRejectFromUpstream5xx() {
+        MetricsRegistry registry = enabledRegistry();
+        registry.setRouteTargetsSupplier(id -> List.of(
+                new RouteTarget("order-service", "v2", 100),
+                new RouteTarget("order-service", "v3", 5)));
+        // v2：真实转发后上游返回 500，算该版本的上游 5xx
+        registry.record(ROUTE, 500, 6, "10.0.0.2:8080", 5, false, false, "v2");
+        // v3：版本组没有可接流实例，网关 503 拒绝，算该版本的容量问题
+        registry.recordReject(HttpConstants.REJECT_NO_UPSTREAM, ROUTE, "v3");
+
+        List<Map<String, Object>> rows = versionRows(registry);
+        Map<String, Object> v2 = versionRow(rows, "v2");
+        assertEquals(1L, status5xxOfVersion(v2));
+        assertEquals(0L, number(v2.get("noUpstreamRejects")));
+        assertEquals(Boolean.FALSE, v2.get("capacityProblem"));
+
+        Map<String, Object> v3 = versionRow(rows, "v3");
+        assertEquals(0L, number(v3.get("status5xx")), "版本组空是容量问题，不能算成上游 5xx");
+        assertEquals(0L, number(v3.get("windowRequests")));
+        assertEquals(1L, number(v3.get("noUpstreamRejects")));
+        assertEquals(Boolean.TRUE, v3.get("capacityProblem"));
+        assertEquals(1L, registry.rejectNoUpstream.sum());
+    }
+
+    private static final String ROUTE = "order-route";
+
+    private static List<Map<String, Object>> versionRows(MetricsRegistry registry) {
+        List<Map<String, Object>> rows = registry.routeUpstreamRows(ROUTE, ManageApiPaths.LIVE_RANGE_5M);
+        return registry.routeVersionRows(
+                ROUTE, rows, registry.declaredTargets(ROUTE), ManageApiPaths.LIVE_RANGE_5M);
+    }
+
+    private static Map<String, Object> versionRow(List<Map<String, Object>> rows, String group) {
+        return rows.stream()
+                .filter(r -> group.equals(r.get("group")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("缺少版本行: " + group));
+    }
+
+    private static long status5xxOfVersion(Map<String, Object> versionRow) {
+        return number(versionRow.get("status5xx"));
     }
 
     private static Map<String, Object> rowOf(List<Map<String, Object>> rows, String hostPort) {

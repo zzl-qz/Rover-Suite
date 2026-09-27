@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.gateway.bootstrap.config.GatewayConfig.RouteProperties;
+import com.rover.gateway.bootstrap.config.GatewayConfig.RouteTargetProperties;
 import com.rover.gateway.core.route.RouteConfig;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,7 @@ class GatewayConfigRouteMixValidatorTest {
     void bothServiceNameAndTargetUrlsFail() {
         GatewayConfig config = nameserverConfig();
         RouteProperties route = staticRoute("/api/mix");
-        route.setServiceName("demo-service");
+        route.setTargets(List.of(namedTarget("demo-service")));
         config.gatewayProperties().getRoutes().add(route);
         IllegalStateException error = assertThrows(IllegalStateException.class, config::validate);
         assertTrue(error.getMessage().contains("不能同时写"));
@@ -57,7 +58,7 @@ class GatewayConfigRouteMixValidatorTest {
         RouteProperties named = new RouteProperties();
         named.setId("demo-api");
         named.setBusinessPrefix("/api");
-        named.setServiceName("demo-service");
+        named.setTargets(List.of(namedTarget("demo-service")));
         config.gatewayProperties().getRoutes().add(named);
         config.gatewayProperties().getRoutes().add(staticRoute("/api/static"));
         assertDoesNotThrow(config::validate);
@@ -84,5 +85,11 @@ class GatewayConfigRouteMixValidatorTest {
         route.setBusinessPrefix(prefix);
         route.setTargetUrls(List.of("http://127.0.0.1:8081"));
         return route;
+    }
+
+    private static RouteTargetProperties namedTarget(String serviceName) {
+        RouteTargetProperties target = new RouteTargetProperties();
+        target.setServiceName(serviceName);
+        return target;
     }
 }

@@ -293,6 +293,16 @@ public class GatewayHttpServer {
     }
 
     /**
+     * 用启动时读到的 overlay 版本元信息对齐运行时版本号。
+     *
+     * @param revision    已确认版本号
+     * @param operationId 产生该版本的操作 ID，可为空
+     */
+    public void restoreRoutesRevision(int revision, String operationId) {
+        runtime.restoreRoutesRevision(revision, operationId);
+    }
+
+    /**
      * 启动服务发现、Netty 服务端并开始监听。
      */
     public void start() {

@@ -6,12 +6,14 @@ import com.rover.admin.config.AdminProperties;
 import com.rover.common.config.ConfigApplyMode;
 import com.rover.common.constants.ManageApiPaths;
 import com.rover.common.constants.RoverComponent;
+import com.rover.common.json.JsonCodec;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -59,28 +61,76 @@ public class AdminConfigService {
         }
     }
 
-    public List<Map<String, Object>> listRoutes() {
+    /** 读取 Gateway 路由表及当前版本号（原样透传，前端要 revision 才能安全提交）。 */
+    public Map<String, Object> routesState() {
         try {
-            return httpClient.getList(properties.getGatewayUrl(), ManageApiPaths.ROUTES);
+            JsonNode node = httpClient.getJson(properties.getGatewayUrl(), ManageApiPaths.ROUTES);
+            return JsonCodec.parseObjectMap(node.toString());
         } catch (Exception ex) {
             throw new IllegalStateException("读取 Gateway 路由失败: " + ex.getMessage(), ex);
         }
     }
 
-    public Map<String, Object> saveRoute(Map<String, String> route) {
+    /** 只要路由行，给 Agent 只读适配器用。 */
+    public List<Map<String, Object>> listRoutes() {
+        Object rows = routesState().get("routes");
+        if (!(rows instanceof List<?> list)) {
+            return List.of();
+        }
+        List<Map<String, Object>> result = new ArrayList<>(list.size());
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                map.forEach((key, value) -> row.put(String.valueOf(key), value));
+                result.add(row);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 新增/更新一条路由并热更新。
+     *
+     * <p>调用方必须带上读到的 {@code revision}：版本不一致时网关回 409，Admin 原样抛给前端，
+     * 由人决定是重新拉取还是放弃，绝不做「自动重试覆盖别人」。
+     */
+    public Map<String, Object> saveRoute(Map<String, Object> route) {
+        Map<String, Object> payload = new LinkedHashMap<>(route);
+        payload.putIfAbsent(ManageApiPaths.PARAM_OPERATION_ID, UUID.randomUUID().toString());
         try {
-            return httpClient.postJson(properties.getGatewayUrl(), ManageApiPaths.ROUTES, route);
+            return httpClient.postJson(properties.getGatewayUrl(), ManageApiPaths.ROUTES, payload);
         } catch (Exception ex) {
             throw new IllegalArgumentException(ex.getMessage() == null ? "保存路由失败" : ex.getMessage(), ex);
         }
     }
 
-    public Map<String, Object> deleteRoute(String idOrPrefix) {
+    /**
+     * 预览候选路由表的差异：整表交给网关做校验与比对，不落盘、不生效。
+     *
+     * <p>失败原因和保存/删除一样原样透给前端，不吞异常——预览的意义就是把校验错误与差异
+     * 先摊开给操作者看，吞掉就只剩一个「失败」了。
+     */
+    public Map<String, Object> previewRoutes(List<Map<String, Object>> routes) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("routes", routes);
+        try {
+            return httpClient.postJson(
+                    properties.getGatewayUrl(), ManageApiPaths.ROUTES_PREVIEW, payload);
+        } catch (Exception ex) {
+            throw new IllegalArgumentException(ex.getMessage() == null ? "预览路由失败" : ex.getMessage(), ex);
+        }
+    }
+
+    /** 按 id/businessPrefix 删除路由，同样需要调用方带上读到的版本号。 */
+    public Map<String, Object> deleteRoute(String idOrPrefix, int revision) {
         try {
             String encoded = URLEncoder.encode(idOrPrefix, StandardCharsets.UTF_8);
             return httpClient.delete(
                     properties.getGatewayUrl(),
-                    ManageApiPaths.ROUTES + "?" + ManageApiPaths.PARAM_BUSINESS_PREFIX + "=" + encoded);
+                    ManageApiPaths.ROUTES
+                            + "?" + ManageApiPaths.PARAM_BUSINESS_PREFIX + "=" + encoded
+                            + "&" + ManageApiPaths.PARAM_REVISION + "=" + revision
+                            + "&" + ManageApiPaths.PARAM_OPERATION_ID + "=" + UUID.randomUUID());
         } catch (Exception ex) {
             throw new IllegalArgumentException(ex.getMessage() == null ? "删除路由失败" : ex.getMessage(), ex);
         }

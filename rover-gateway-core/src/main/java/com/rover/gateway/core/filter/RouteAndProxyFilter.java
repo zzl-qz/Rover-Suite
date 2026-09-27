@@ -17,6 +17,8 @@ import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.proxy.InboundBodyPipe;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
+import com.rover.gateway.core.route.RouteTarget;
+import com.rover.gateway.core.route.WeightedTargetRouter;
 import com.rover.gateway.core.trace.TracePhase;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import java.net.InetSocketAddress;
@@ -131,12 +133,14 @@ public class RouteAndProxyFilter implements Filter {
             return CompletableFuture.completedFuture(null);
         }
 
-        // 选出一台节点并进行请求
-        ChosenUpstream chosen = resolveUpstream(route, gatewayContext);
+        // 分级选上游：动态路由先按权重+粘性选版本，再在版本内选实例
+        RouteTarget target = resolveTarget(route, gatewayContext);
+        ChosenUpstream chosen = resolveUpstream(route, target, gatewayContext, Set.of());
         // 都熔断了，就直接会503就行
         if (chosen != null && chosen.circuitOpen()) {
             if (metricsRegistry != null) {
-                metricsRegistry.recordReject(HttpConstants.REJECT_CIRCUIT_OPEN);
+                metricsRegistry.recordReject(
+                        HttpConstants.REJECT_CIRCUIT_OPEN, route.getId(), groupOf(target));
             }
             log.warn("All upstreams circuit-open, routeId={}, path={}, reason={}",
                     route.getId(), requestPath, HttpConstants.REJECT_CIRCUIT_OPEN);
@@ -149,7 +153,8 @@ public class RouteAndProxyFilter implements Filter {
         // 没有后台
         if (chosen == null || chosen.baseUrl() == null) {
             if (metricsRegistry != null) {
-                metricsRegistry.recordReject(HttpConstants.REJECT_NO_UPSTREAM);
+                metricsRegistry.recordReject(
+                        HttpConstants.REJECT_NO_UPSTREAM, route.getId(), groupOf(target));
             }
             log.warn("No available upstream, routeId={}, path={}, reason={}",
                     route.getId(), requestPath, HttpConstants.REJECT_NO_UPSTREAM);
@@ -161,10 +166,11 @@ public class RouteAndProxyFilter implements Filter {
         }
 
         gatewayContext.setRoute(route);
-        boolean mayRetry = retry != null && retry.isEnabled() && hasSibling(route, chosen.instance());
+        gatewayContext.setRouteTarget(target);
+        boolean mayRetry = retry != null && retry.isEnabled() && hasSibling(route, target, chosen.instance());
         long proxyStartNanos = System.nanoTime();
         return forwardOnce(gatewayContext, route, requestPath, chosen, !mayRetry)
-                .thenCompose(first -> retryOrFinish(gatewayContext, route, requestPath, chosen, first, mayRetry))
+                .thenCompose(first -> retryOrFinish(gatewayContext, route, target, requestPath, chosen, first, mayRetry))
                 .thenApply(attempt -> {
                     gatewayContext.markPhase(TracePhase.PROXY.phaseName(), System.nanoTime() - proxyStartNanos);
                     gatewayContext.setStatusCode(attempt.result().statusCode());
@@ -180,6 +186,7 @@ public class RouteAndProxyFilter implements Filter {
     private CompletableFuture<Attempt> retryOrFinish(
             GatewayRequestContext gatewayContext,
             RouteConfig route,
+            RouteTarget target,
             String requestPath,
             ChosenUpstream firstChosen,
             Attempt first,
@@ -193,8 +200,9 @@ public class RouteAndProxyFilter implements Filter {
             }
             return CompletableFuture.completedFuture(first);
         }
+        // 换台只在同一版本内换：跨版本重试会污染灰度比例的观测口径
         ChosenUpstream next = resolveUpstream(
-                route, gatewayContext, Set.of(hostPortOf(firstChosen.instance())));
+                route, target, gatewayContext, Set.of(hostPortOf(firstChosen.instance())));
         if (next == null || next.circuitOpen() || next.baseUrl() == null) {
             proxyClient.writeDeferredError(gatewayContext.getChannelContext(), first.result());
             if (gatewayContext.getBodyPipe().canReplay()) {
@@ -226,10 +234,10 @@ public class RouteAndProxyFilter implements Filter {
                 route.getStripPrefix());
         gatewayContext.setTargetUrl(targetUrl);
         log.debug(
-                "Gateway route matched: routeId={}, businessPrefix={}, serviceName={}, targetUrl={}, lb={}",
+                "Gateway route matched: routeId={}, businessPrefix={}, version={}, targetUrl={}, lb={}",
                 route.getId(),
                 route.getBusinessPrefix(),
-                route.getServiceName(),
+                chosen.target() == null ? "static" : chosen.target().label(),
                 HttpProxyClient.redactTargetUrl(targetUrl),
                 loadBalancer == null ? "none" : loadBalancer.name());
 
@@ -263,36 +271,53 @@ public class RouteAndProxyFilter implements Filter {
         return body != null && body.canReplay();
     }
 
-    private ChosenUpstream resolveUpstream(RouteConfig route, GatewayRequestContext gatewayContext) {
-        return resolveUpstream(route, gatewayContext, Set.of());
+    /** 动态路由先选版本：按权重把粘性键映射到某一个 target；静态路由没有版本，返回 null。 */
+    private RouteTarget resolveTarget(RouteConfig route, GatewayRequestContext gatewayContext) {
+        List<RouteTarget> targets = route.getTargets();
+        if (targets == null || targets.isEmpty()) {
+            return null;
+        }
+        return WeightedTargetRouter.select(route, stickyKey(route, gatewayContext));
+    }
+
+    /** 粘性键：配置的请求头优先，缺失时退到客户端 IP。 */
+    private String stickyKey(RouteConfig route, GatewayRequestContext gatewayContext) {
+        String header = route.getStickyHeader();
+        if (header != null && !header.isBlank()) {
+            String value = gatewayContext.getRequest().headers().get(header);
+            if (value != null && !value.isBlank()) {
+                return value;
+            }
+        }
+        return resolveClientIp(gatewayContext);
     }
 
     // 选出一台节点
     private ChosenUpstream resolveUpstream(
-            RouteConfig route, GatewayRequestContext gatewayContext, Set<String> exclude) {
+            RouteConfig route, RouteTarget target, GatewayRequestContext gatewayContext, Set<String> exclude) {
         if (loadBalancer == null) {
             // 极端兜底：无 LB 时取第一台。写了静态地址也能走。
             long discoveryStart = System.nanoTime();
-            List<ServiceInstance> instances = listInstances(route);
+            List<ServiceInstance> instances = listInstances(route, target);
             gatewayContext.markPhase(TracePhase.DISCOVERY.phaseName(), System.nanoTime() - discoveryStart);
             if (instances == null || instances.isEmpty()) {
                 return null;
             }
             List<ServiceInstance> candidates = applyCircuitAndExclude(instances, exclude);
             if (candidates == null) {
-                return exclude.isEmpty() ? ChosenUpstream.allOpen() : null;
+                return exclude.isEmpty() ? ChosenUpstream.allOpen(target) : null;
             }
             if (candidates.isEmpty()) {
                 return null;
             }
             ServiceInstance first = candidates.get(0);
-            return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(first), first);
+            return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(first), first, target);
         }
 
         // 服务发现查询：从注册中心缓存/静态配置拉取候选实例列表
         long discoveryStart = System.nanoTime();
-        List<ServiceInstance> instances = listInstances(route);
-        String clusterKey = clusterKeyOf(route);
+        List<ServiceInstance> instances = listInstances(route, target);
+        String clusterKey = clusterKeyOf(route, target);
         gatewayContext.markPhase(TracePhase.DISCOVERY.phaseName(), System.nanoTime() - discoveryStart);
         if (instances == null || instances.isEmpty()) {
             log.warn("无可用上游: discovery={}, clusterKey={}", discoveryType, clusterKey);
@@ -301,7 +326,7 @@ public class RouteAndProxyFilter implements Filter {
 
         List<ServiceInstance> candidates = applyCircuitAndExclude(instances, exclude);
         if (candidates == null) {
-            return exclude.isEmpty() ? ChosenUpstream.allOpen() : null;
+            return exclude.isEmpty() ? ChosenUpstream.allOpen(target) : null;
         }
         if (candidates.isEmpty()) {
             return null;
@@ -319,33 +344,44 @@ public class RouteAndProxyFilter implements Filter {
         if (chosen == null) {
             return null;
         }
-        return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(chosen), chosen);
+        return ChosenUpstream.of(StaticUpstreamCluster.baseUrlOf(chosen), chosen, target);
     }
 
-    /** 读快照/缓存，不走 LB。写了静态地址就用地址，否则才问注册中心。 */
-    private List<ServiceInstance> listInstances(RouteConfig route) {
-        if (StaticUpstreamCluster.hasRawTargets(route) || !discoveryType.usesServiceDiscovery()) {
-            return StaticUpstreamCluster.instancesOf(route);
+    /**
+     * 读快照/缓存，不走 LB。
+     *
+     * <p>动态路由按选中的版本去注册中心取该 group 的实例；某个版本组没有可接流实例时
+     * 返回空列表，上层明确 503，绝不改投另一个版本——否则灰度实验的 5xx 会被静默掩盖。
+     */
+    private List<ServiceInstance> listInstances(RouteConfig route, RouteTarget target) {
+        if (target != null && discoveryType.usesServiceDiscovery()) {
+            if (serviceDiscovery == null) {
+                return null;
+            }
+            return serviceDiscovery.getInstances(target.serviceName(), target.group());
         }
-        if (serviceDiscovery == null || route.getServiceName() == null || route.getServiceName().isBlank()) {
-            return null;
-        }
-        return serviceDiscovery.getInstances(route.getServiceName(), route.getGroup());
+        return StaticUpstreamCluster.instancesOf(route);
     }
 
-    private String clusterKeyOf(RouteConfig route) {
-        if (StaticUpstreamCluster.hasRawTargets(route) || !discoveryType.usesServiceDiscovery()) {
-            return StaticUpstreamCluster.clusterKey(route);
+    /** LB 计数键：动态路由按版本隔离（service@group），静态路由沿用路由级键。 */
+    private String clusterKeyOf(RouteConfig route, RouteTarget target) {
+        if (target != null) {
+            return target.clusterKey();
         }
-        return route.getServiceName();
+        return StaticUpstreamCluster.clusterKey(route);
+    }
+
+    /** 版本归因用的分组名；静态路由（target 为空）返回 null。 */
+    private static String groupOf(RouteTarget target) {
+        return target == null ? null : target.group();
     }
 
     /** 还有没有另一台能打。只看列表，不走 LB，避免预检查把轮询指针推走。 */
-    private boolean hasSibling(RouteConfig route, ServiceInstance chosen) {
+    private boolean hasSibling(RouteConfig route, RouteTarget target, ServiceInstance chosen) {
         if (chosen == null) {
             return false;
         }
-        List<ServiceInstance> instances = listInstances(route);
+        List<ServiceInstance> instances = listInstances(route, target);
         if (instances == null || instances.isEmpty()) {
             return false;
         }
@@ -446,13 +482,15 @@ public class RouteAndProxyFilter implements Filter {
     private record Attempt(HttpProxyClient.ProxyResult result, ServiceInstance instance) {
     }
 
-    private record ChosenUpstream(String baseUrl, ServiceInstance instance, boolean circuitOpen) {
-        static ChosenUpstream of(String baseUrl, ServiceInstance instance) {
-            return new ChosenUpstream(baseUrl, instance, false);
+    /** 选中的上游；{@code target} 为空表示这是一条静态路由（没有版本概念）。 */
+    private record ChosenUpstream(String baseUrl, ServiceInstance instance, RouteTarget target,
+                                 boolean circuitOpen) {
+        static ChosenUpstream of(String baseUrl, ServiceInstance instance, RouteTarget target) {
+            return new ChosenUpstream(baseUrl, instance, target, false);
         }
 
-        static ChosenUpstream allOpen() {
-            return new ChosenUpstream(null, null, true);
+        static ChosenUpstream allOpen(RouteTarget target) {
+            return new ChosenUpstream(null, null, target, true);
         }
     }
 }

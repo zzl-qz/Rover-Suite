@@ -3,6 +3,7 @@ package com.rover.gateway.core.metrics;
 import com.rover.common.constants.HttpConstants;
 import com.rover.common.constants.ManageApiPaths;
 import com.rover.gateway.core.config.GatewayDefaults;
+import com.rover.gateway.core.route.RouteTarget;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -13,6 +14,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
+import java.util.function.Function;
 import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 
@@ -32,6 +34,13 @@ public class MetricsRegistry {
 
     /** 路由维度中"未匹配任何路由"的归类键。 */
     public static final String UNMATCHED_ROUTE = "__unmatched__";
+
+    /**
+     * 版本级汇总判定「样本是否足够」的下限，与 rover-agent-core 的
+     * {@code InvestigationRules.MIN_INSTANCE_SAMPLE} 保持一致（=5）：
+     * 低于该值只报告样本量，不据此下异常结论。
+     */
+    public static final int MIN_VERSION_SAMPLE = 5;
 
     /** 采集配置，支持热更新。 */
     final MetricsSettings settings;
@@ -80,6 +89,9 @@ public class MetricsRegistry {
     volatile IntSupplier upstreamInFlightSupplier = () -> 0;
     volatile Supplier<Map<String, Object>> discoveryStatusSupplier = () -> Map.of("supported", false);
 
+    /** 路由声明版本来源：routeId -> 配置里声明的版本目标；未注入时返回空。 */
+    volatile Function<String, List<RouteTarget>> routeTargetsSupplier = routeId -> List.of();
+
     /** live 路由 Top 缓存：降低每秒排序成本。 */
     volatile List<Map<String, Object>> liveTopRoutesCache = List.of();
     final AtomicLong liveTopRoutesCachedAtMillis = new AtomicLong(0);
@@ -103,24 +115,30 @@ public class MetricsRegistry {
         this.discoveryStatusSupplier = supplier == null ? () -> Map.of("supported", false) : supplier;
     }
 
+    /** 注入路由声明版本来源（routeId -> RouteConfig.getTargets()），供「声明版本 vs 观测版本」核对。 */
+    public void setRouteTargetsSupplier(Function<String, List<RouteTarget>> supplier) {
+        this.routeTargetsSupplier = supplier == null ? routeId -> List.of() : supplier;
+    }
+
+    /** 路由配置里声明过的版本目标；未注入来源或路由未知时返回空列表。 */
+    public List<RouteTarget> declaredTargets(String routeId) {
+        if (routeId == null || routeId.isBlank()) {
+            return List.of();
+        }
+        List<RouteTarget> targets = routeTargetsSupplier.apply(routeId);
+        return targets == null ? List.of() : targets;
+    }
+
     /**
      * 记录一次请求（无上游信息，用于路由未匹配/无可用上游等场景）。
      * 由 MetricsFilter 在请求结束时调用，内部绝不允许抛异常影响主链路。
      */
     public void record(String routeId, int statusCode, long costMillis) {
-        record(routeId, statusCode, costMillis, null, 0, false, false);
+        record(routeId, statusCode, costMillis, null, 0, false, false, null);
     }
 
     /**
-     * 记录一次请求（含上游维度）。由 MetricsFilter 在请求结束时调用。
-     *
-     * @param routeId            命中的路由 id，未匹配传 null
-     * @param statusCode         最终响应状态码
-     * @param costMillis         请求总耗时（毫秒）
-     * @param upstreamHostPort   命中的上游实例 host:port，未转发传 null
-     * @param upstreamCostMillis 上游往返耗时（毫秒）
-     * @param connectFail        上游是否连接失败
-     * @param timeout            上游是否超时
+     * 记录一次请求（含上游维度，不含版本归属）。由 MetricsFilter 在请求结束时调用。
      */
     public void record(
             String routeId,
@@ -130,6 +148,30 @@ public class MetricsRegistry {
             long upstreamCostMillis,
             boolean connectFail,
             boolean timeout) {
+        record(routeId, statusCode, costMillis, upstreamHostPort, upstreamCostMillis, connectFail, timeout, null);
+    }
+
+    /**
+     * 记录一次请求（含上游维度与版本归属）。由 MetricsFilter 在请求结束时调用。
+     *
+     * @param routeId            命中的路由 id，未匹配传 null
+     * @param statusCode         最终响应状态码
+     * @param costMillis         请求总耗时（毫秒）
+     * @param upstreamHostPort   命中的上游实例 host:port，未转发传 null
+     * @param upstreamCostMillis 上游往返耗时（毫秒）
+     * @param connectFail        上游是否连接失败
+     * @param timeout            上游是否超时
+     * @param group              本次灰度选中的版本分组；静态路由或未选版本传 null
+     */
+    public void record(
+            String routeId,
+            int statusCode,
+            long costMillis,
+            String upstreamHostPort,
+            long upstreamCostMillis,
+            boolean connectFail,
+            boolean timeout,
+            String group) {
         if (!settings.isEnabled()) {
             return;
         }
@@ -160,11 +202,16 @@ public class MetricsRegistry {
         if (upstreamHostPort != null && !upstreamHostPort.isBlank()) {
             upstreams.computeIfAbsent(upstreamHostPort, key -> new UpstreamMetrics())
                     .record(epochSecond, upstreamCostMillis, connectFail, timeout);
-            routeMetrics.recordInstance(upstreamHostPort);
+            routeMetrics.recordInstance(upstreamHostPort, normalizeGroup(group));
             // 路由 × 实例维度：按真实 statusCode 归类，才能指出是哪台实例返回了 5xx
             routeMetrics.upstreamMetrics.computeIfAbsent(upstreamHostPort, key -> new UpstreamMetrics())
                     .record(epochSecond, upstreamCostMillis, statusCode, connectFail, timeout);
         }
+    }
+
+    /** 版本键归一化：null/空白统一成空串，表示未分版本（静态路由或默认组）。 */
+    static String normalizeGroup(String group) {
+        return group == null ? "" : group.trim();
     }
 
     /** 状态码归类累加，四类互斥穷尽。 */
@@ -215,12 +262,38 @@ public class MetricsRegistry {
 
     /** 记一次 503 原因。只在拒绝路径调用，关指标也加。 */
     public void recordReject(String reason) {
+        recordReject(reason, null, null);
+    }
+
+    /**
+     * 记一次 503 原因，并把它归因到路由与版本。
+     *
+     * <p>某版本组没有可接流实例（{@link HttpConstants#REJECT_NO_UPSTREAM}）或实例全熔断
+     * （{@link HttpConstants#REJECT_CIRCUIT_OPEN}）时会被记为该版本的「容量问题」，
+     * 与「真实转发后上游返回 5xx」分开——后者只在 {@link #record} 里按实例状态码统计。
+     * 指标关闭时只累加全局计数，不建路由维度，避免无谓内存。
+     *
+     * @param reason  拒绝原因，见 {@link HttpConstants}
+     * @param routeId 命中的路由 id，未匹配传 null
+     * @param group   本次选中的版本分组；静态路由传 null
+     */
+    public void recordReject(String reason, String routeId, String group) {
         if (HttpConstants.REJECT_INFLIGHT_LIMIT.equals(reason)) {
             rejectInflightLimit.increment();
         } else if (HttpConstants.REJECT_NO_UPSTREAM.equals(reason)) {
             rejectNoUpstream.increment();
         } else if (HttpConstants.REJECT_CIRCUIT_OPEN.equals(reason)) {
             rejectCircuitOpen.increment();
+        }
+        if (!settings.isEnabled() || routeId == null || routeId.isBlank()) {
+            return;
+        }
+        String groupKey = normalizeGroup(group);
+        RouteMetrics routeMetrics = routes.computeIfAbsent(routeId, key -> new RouteMetrics());
+        if (HttpConstants.REJECT_NO_UPSTREAM.equals(reason)) {
+            routeMetrics.noUpstreamByGroup.computeIfAbsent(groupKey, key -> new LongAdder()).increment();
+        } else if (HttpConstants.REJECT_CIRCUIT_OPEN.equals(reason)) {
+            routeMetrics.circuitOpenByGroup.computeIfAbsent(groupKey, key -> new LongAdder()).increment();
         }
     }
 
@@ -266,10 +339,125 @@ public class MetricsRegistry {
                     .windowSnapshot(routeId, entry.getKey(), nowSecond, window);
             // 只输出窗口内确实有转发记录的实例，避免把历史实例当作当前观测
             if (((Number) row.get("windowRequests")).longValue() > 0) {
+                // 版本归属：实例被选中时所处的 group（空串表示无版本/默认组）
+                row.put("group", routeMetrics.instanceGroups.getOrDefault(entry.getKey(), ""));
                 rows.add(row);
             }
         }
         return rows;
+    }
+
+    /**
+     * 按版本聚合窗口观测：把「路由 × 实例」行按 group 汇总，并合并配置声明的版本目标，
+     * 使「配置里声明了哪些版本」与「实际收到了哪些版本的流量」可以逐条核对。
+     *
+     * <p>{@code sampleSize} 即窗口内真实转发量，低于 {@link #MIN_VERSION_SAMPLE} 时
+     * {@code sufficient=false}，调用方据此把「样本不足」与「确实没流量」分开。
+     * {@code noUpstreamRejects}/{@code circuitOpenRejects} 是该版本组「没有可接流实例」与
+     * 「实例全熔断」被 503 拒绝的累计次数——这是该版本的容量问题，不是该版本的上游 5xx。
+     *
+     * @param routeId      路由 id
+     * @param instanceRows {@link #routeUpstreamRows} 的结果
+     * @param declared     配置声明的版本目标
+     * @param rangeSeconds 窗口秒数（已由 {@link #clampRange} 收口）
+     */
+    public List<Map<String, Object>> routeVersionRows(
+            String routeId,
+            List<Map<String, Object>> instanceRows,
+            List<RouteTarget> declared,
+            int rangeSeconds) {
+        Map<String, Map<String, Object>> byGroup = new LinkedHashMap<>();
+        for (RouteTarget target : declared) {
+            Map<String, Object> row = byGroup.computeIfAbsent(
+                    normalizeGroup(target.group()), MetricsRegistry::newVersionRow);
+            row.put("declared", true);
+            row.put("serviceName", target.serviceName());
+            row.put("weight", target.weight());
+        }
+        for (Map<String, Object> instanceRow : instanceRows) {
+            String group = normalizeGroup((String) instanceRow.get("group"));
+            Map<String, Object> row = byGroup.computeIfAbsent(group, MetricsRegistry::newVersionRow);
+            long requests = ((Number) instanceRow.getOrDefault("windowRequests", 0)).longValue();
+            row.put("windowRequests", ((Number) row.get("windowRequests")).longValue() + requests);
+            row.put("status5xx", ((Number) row.get("status5xx")).longValue() + status5xxOf(instanceRow));
+            row.put("connectFail", ((Number) row.get("connectFail")).longValue()
+                    + ((Number) instanceRow.getOrDefault("connectFail", 0)).longValue());
+            row.put("timeout", ((Number) row.get("timeout")).longValue()
+                    + ((Number) instanceRow.getOrDefault("timeout", 0)).longValue());
+            double avgMillis = ((Number) instanceRow.getOrDefault("avgMillis", 0)).doubleValue();
+            row.put("sumMillis", ((Number) row.get("sumMillis")).doubleValue() + avgMillis * requests);
+            // 版本内多实例的 p95 取最大值，作为保守上界（不做跨实例样本合并）
+            long instanceP95 = ((Number) instanceRow.getOrDefault("p95Millis", 0)).longValue();
+            row.put("p95Millis", Math.max(((Number) row.get("p95Millis")).longValue(), instanceP95));
+        }
+        // 拒绝原因按版本归因：容量问题与上游 5xx 分开算
+        RouteMetrics routeMetrics = routeId == null ? null : routes.get(routeId);
+        if (routeMetrics != null) {
+            mergeRejects(byGroup, routeMetrics.noUpstreamByGroup, "noUpstreamRejects");
+            mergeRejects(byGroup, routeMetrics.circuitOpenByGroup, "circuitOpenRejects");
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Map.Entry<String, Map<String, Object>> entry : byGroup.entrySet()) {
+            Map<String, Object> row = entry.getValue();
+            long requests = ((Number) row.get("windowRequests")).longValue();
+            double sumMillis = ((Number) row.remove("sumMillis")).doubleValue();
+            row.put("sampleSize", requests);
+            row.put("sufficient", requests >= MIN_VERSION_SAMPLE);
+            row.put("errorRate", requests == 0
+                    ? 0 : round2(((Number) row.get("status5xx")).longValue() / (double) requests));
+            row.put("avgMillis", requests == 0 ? 0 : round2(sumMillis / requests));
+            long capacity = ((Number) row.get("noUpstreamRejects")).longValue()
+                    + ((Number) row.get("circuitOpenRejects")).longValue();
+            row.put("capacityProblem", capacity > 0);
+            rows.add(row);
+        }
+        rows.sort((a, b) -> {
+            long diff = ((Number) b.get("windowRequests")).longValue()
+                    - ((Number) a.get("windowRequests")).longValue();
+            if (diff != 0) {
+                return Long.signum(diff);
+            }
+            return ((String) a.get("group")).compareTo((String) b.get("group"));
+        });
+        return rows;
+    }
+
+    /** 版本行骨架：字段齐全，便于调用方直接读取而不必判空。 */
+    private static Map<String, Object> newVersionRow(String group) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("group", group);
+        row.put("declared", false);
+        row.put("serviceName", null);
+        row.put("weight", null);
+        row.put("windowRequests", 0L);
+        row.put("status5xx", 0L);
+        row.put("connectFail", 0L);
+        row.put("timeout", 0L);
+        row.put("p95Millis", 0L);
+        row.put("noUpstreamRejects", 0L);
+        row.put("circuitOpenRejects", 0L);
+        row.put("sumMillis", 0.0);
+        return row;
+    }
+
+    /** 把某版本维度的拒绝累计并入版本行；该版本没有流量行时也要建出来。 */
+    private static void mergeRejects(
+            Map<String, Map<String, Object>> byGroup,
+            Map<String, LongAdder> rejects,
+            String field) {
+        for (Map.Entry<String, LongAdder> entry : rejects.entrySet()) {
+            Map<String, Object> row = byGroup.computeIfAbsent(entry.getKey(), MetricsRegistry::newVersionRow);
+            row.put(field, ((Number) row.get(field)).longValue() + entry.getValue().sum());
+        }
+    }
+
+    /** 取实例行的 status.5xx，兼容字段缺失。 */
+    private static long status5xxOf(Map<String, Object> instanceRow) {
+        Object status = instanceRow.get("status");
+        if (status instanceof Map<?, ?> map && map.get("5xx") instanceof Number number) {
+            return number.longValue();
+        }
+        return 0;
     }
 
     /** 自洽性自检：校验各加和关系，返回 JSON。 */
@@ -522,6 +710,12 @@ public class MetricsRegistry {
         final ConcurrentHashMap<String, LongAdder> instanceCounts = new ConcurrentHashMap<>();
         /** 路由 × 上游实例的窗口观测，键为 host:port，用于定位是哪台实例返回了 5xx。 */
         final ConcurrentHashMap<String, UpstreamMetrics> upstreamMetrics = new ConcurrentHashMap<>();
+        /** 路由 × 实例的版本归属：host:port -> group（空串表示无版本/默认组）。 */
+        final ConcurrentHashMap<String, String> instanceGroups = new ConcurrentHashMap<>();
+        /** 版本维度的「没有可接流实例」拒绝累计，键为 group；属容量问题而非上游 5xx。 */
+        final ConcurrentHashMap<String, LongAdder> noUpstreamByGroup = new ConcurrentHashMap<>();
+        /** 版本维度的「实例全熔断」拒绝累计，键为 group。 */
+        final ConcurrentHashMap<String, LongAdder> circuitOpenByGroup = new ConcurrentHashMap<>();
 
         void record(int statusCode, long epochSecond, long costMillis) {
             total.increment();
@@ -537,8 +731,9 @@ public class MetricsRegistry {
             ring.record(epochSecond, costMillis, statusCode >= 500, statusCode);
         }
 
-        void recordInstance(String hostPort) {
+        void recordInstance(String hostPort, String group) {
             instanceCounts.computeIfAbsent(hostPort, key -> new LongAdder()).increment();
+            instanceGroups.putIfAbsent(hostPort, group);
         }
 
         boolean statusSumEqualsTotal() {
@@ -594,6 +789,12 @@ public class MetricsRegistry {
                 instances.put(entry.getKey(), entry.getValue().sum());
             }
             row.put("instances", instances);
+            // 版本归属：host:port -> group，供前端在实例旁标版本
+            Map<String, String> groups = new LinkedHashMap<>();
+            for (Map.Entry<String, String> entry : instanceGroups.entrySet()) {
+                groups.put(entry.getKey(), entry.getValue());
+            }
+            row.put("instanceGroups", groups);
             return row;
         }
     }

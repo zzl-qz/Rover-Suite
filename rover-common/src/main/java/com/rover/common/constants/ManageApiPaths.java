@@ -11,6 +11,14 @@ public final class ManageApiPaths {
     public static final String STATUS = PREFIX + "/status";
     public static final String CONFIGS = PREFIX + "/configs";
     public static final String ROUTES = PREFIX + "/routes";
+    /** 路由变更预览：只比对差异，不落盘、不生效。 */
+    public static final String ROUTES_PREVIEW = ROUTES + "/preview";
+    /** 单版本权重调整（放量/停推原语）。 */
+    public static final String ROUTES_TARGET_WEIGHT = ROUTES + "/targets/weight";
+    /** 回滚到最近某次已应用的快照。 */
+    public static final String ROUTES_ROLLBACK = ROUTES + "/rollback";
+    /** 操作记录查询前缀：/_manage/routes/operations/{operationId}。 */
+    public static final String ROUTES_OPERATIONS = ROUTES + "/operations/";
     public static final String METRICS = PREFIX + "/metrics";
     public static final String METRICS_LIVE = METRICS + "/live";
     /** 路由 × 上游实例的窗口观测（只读）。 */
@@ -28,6 +36,12 @@ public final class ManageApiPaths {
     public static final String PARAM_SLOW = "slow";
     public static final String PARAM_RANGE = "range";
     public static final String PARAM_ROUTE_ID = "routeId";
+    public static final String PARAM_REVISION = "revision";
+    public static final String PARAM_OPERATION_ID = "operationId";
+    /** 服务发现已观察快照（只读）：网关报告自己看到了哪些服务与版本。 */
+    public static final String DISCOVERY_SNAPSHOT = PREFIX + "/discovery/snapshot";
+    /** 注册中心实例快照（只读）：带 revision/epoch 的可核对视图。 */
+    public static final String INSTANCES_SNAPSHOT = PREFIX + "/instances/snapshot";
 
     /** live 默认近窗：1 分钟。 */
     public static final int LIVE_RANGE_1M = 60;
