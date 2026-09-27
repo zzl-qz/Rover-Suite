@@ -229,6 +229,48 @@ Incident live in memory only, so **everything is lost on restart**.
 Approval policy and event ingestion for Level C will be split into further sub-packages as
 they are built, rather than scaffolding empty modules now.
 
+## 6.2 Model execution strategy
+
+**Status: implemented.** The agent uses two classes of model calls, routed by task shape rather
+than by call site:
+
+| Call class | Examples | Model | Why |
+| :--- | :--- | :--- | :--- |
+| Reasoning (long, generative) | AI interpretation of an incident | Main model, thinking on | Needs deep reasoning; latency is acceptable as it is the final synthesis step |
+| Cheap (structured, candidate-selection) | Intent recognition, target resolution, investigation planning | Fast model (vendor default), thinking off | Output is constrained to a candidate list and rule-fallbackable; speed and cost dominate |
+
+The split lands on the `ChatModelGateway` port: `chatClient()` serves the main model (thinking on)
+for reasoning, while `chatClient(int timeoutSeconds)` is the dedicated cheap-call entry that routes
+to the fast model when one is configured, and falls back to the main model with thinking disabled
+otherwise. The runtime depends only on the port, so the routing is an Admin-side implementation
+change with **zero** runtime-code edits.
+
+Model selection is converged to the operator, not the end user: the console takes a **vendor + API
+key**; `baseUrl`, the main model, and the fast model are resolved by a backend `ModelVendor` map
+(e.g. Zhipu → `glm-4.6` main / `glm-4-flash` fast). A `CUSTOM` vendor keeps local deployments
+(Ollama / vLLM) unblocked. One key covers a vendor's whole model family, so the abstraction holds.
+
+Measured trade-off (real Zhipu API, 30-case labelled target-resolution eval,
+`TargetInterpreterEval.java`):
+
+| | glm-4.6 thinking (before) | glm-4-flash (chosen) |
+| :--- | :--- | :--- |
+| Target-resolution latency | 11.3 s | 1.9 s |
+| Single cheap-call cost | ~0.033 分 | ~0 (vendor-free tier) |
+| Resolution accuracy | 86.7% | 76.7% |
+| **Error rate** (wrong object, not abstain) | 10.0% | 13.3% |
+
+Accuracy does drop, but the *nature* of the error is controlled: glm-4-flash's misses fall on
+ambiguous/trap cases and degrade to clarification, whereas the faster candidate `glm-4-air`
+mis-attributed on explicit cases (e.g. read "trade-service instance down" as the instance
+`172.16.0.9:7001`). We therefore chose by **error rate, not hit rate** — aligning with the
+project's "clarify rather than guess" stance. The eval is a standalone program (not a unit test)
+because it depends on a live model; the 30-case size is a stated limit, not a claim of
+statistical significance.
+
+Degradation holds without a model: when no model is configured or the model is unavailable,
+diagnosis falls back to pure rule-based (`aiAnalysis` is null) and collection continues.
+
 ## 7. Current implementation status
 
 **Implemented:**
