@@ -1,24 +1,9 @@
 package com.rover.agent.core.model;
 
 /**
- * 受控处置计划：把「用户想做的操作」整理成一份可人工审核的建议，本阶段一律不执行。
+ * 受控处置计划：把用户想做的操作整理成一份可人工审核的建议，本阶段一律不执行。
  *
- * {@code executable} 恒为 {@code false}：这不是调用方的自觉，而是领域模型的硬约束——
- * 审批、审计与任务持久化尚未落地，任何「已执行」的表述都会是谎报。计划中的每个字段都可追溯到
- * 一次只读预检（证据留在任务报告里），因此人工照单执行前能核对当前状态。
- *
- * @param actionType        处置动作类型
- * @param targetDescription 用户表述的目标原文（如 {@code order-03}）；用于在未解析出对象时仍可追溯
- * @param target            预检尝试解析出的对象；未解析出时为 {@link ResourceTarget#unknown()}
- * @param reason            建议该动作的原因（来自用户请求与预检事实）
- * @param riskLevel         风险等级
- * @param currentState      预检看到的当前状态
- * @param desiredState      执行后应达到的状态
- * @param expectedImpact    预期影响（容量、流量口径）
- * @param verificationPlan  执行后的验证方式
- * @param rollbackPlan      回滚方式
- * @param executable        是否可执行；本阶段恒为 false
- * @param blockedReason     不可执行的原因说明
+ * <p>{@code executable} 恒为 {@code false}：审批、审计与任务持久化尚未落地，任何「已执行」的表述都是谎报。
  */
 public record ActionPlan(ActionType actionType, String targetDescription, ResourceTarget target, String reason,
                          RiskLevel riskLevel, String currentState, String desiredState, String expectedImpact,

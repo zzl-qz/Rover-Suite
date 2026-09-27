@@ -1,23 +1,9 @@
 package com.rover.agent.core.model;
 
 /**
- * 意图识别结果：对「用户想干什么」的一次结构化判断，不包含「对谁做」——那是目标解析的职责。
+ * 意图识别结果：对「用户想干什么」的一次结构化判断，不含「对谁做」。
  *
- * {@code targetHint} 只是从问题文本里抽出的对象线索（如 {@code order-03}），供目标解析与处置预检
- * 作为输入；它不是解析结果，最终目标仍由 TargetResolver 依据真实注册数据确定。
- *
- * {@code confidence} 为 {@link Confidence#LOW} 且 {@code needsClarification} 为 true 时，
- * 编排层必须向用户澄清，不允许猜一个意图硬执行。
- *
- * @param intent             识别出的意图
- * @param confidence         判断置信度
- * @param topic              意图细分主题（如能力咨询 vs 上下文解释）
- * @param targetHint         文本中抽出的对象线索；没有时为空串
- * @param timeRange          本次请求的时间范围；用户未指定时为未指定
- * @param requestedAction    处置请求对应的动作类型；非处置请求为 {@link ActionType#UNKNOWN}
- * @param reason             判断依据（展示与审计用）
- * @param needsClarification 是否需要用户补充信息后才能继续
- * @param clarification      澄清提问；不需要澄清时为 {@code null}
+ * <p>{@code targetHint} 只是从文本抽出的对象线索，不是解析结果；最终目标由 TargetResolver 依据真实数据确定。
  */
 public record IntentDecision(AgentIntent intent, Confidence confidence, IntentTopic topic, String targetHint,
                              TimeRange timeRange, ActionType requestedAction, String reason,

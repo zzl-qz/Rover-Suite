@@ -5,22 +5,9 @@ import com.rover.agent.core.model.TargetType;
 import java.util.List;
 
 /**
- * 能力的注册描述：告诉 Agent「当前 Rover 到底有什么能力」。
+ * 能力的注册描述：告诉 Agent 当前 Rover 到底有什么能力。
  *
- * {@code available} 是诚实的开关：没有数据适配器的能力照样注册（这样模型与用户都能看到
- * 「有哪些能力、哪些还没开放」），但 Planner 不能选择它们——选择与执行的边界都在代码里。
- *
- * {@code supportedTargetTypes} 里的 {@link TargetType#UNKNOWN} 表示该能力不需要具体目标
- * （全局口径，如 Gateway 全局指标）。
- *
- * @param id                  能力标识
- * @param name                展示名
- * @param description         能力说明（人读）
- * @param risk                风险级别；Planner 只能选择 READ_ONLY
- * @param supportedTargetTypes 支持的目标类型
- * @param available           当前是否已接入可用的数据适配器
- * @param stepType            执行该能力时上报的步骤类型
- * @param stepName            执行该能力时上报的步骤名
+ * <p>{@code available} 是诚实的开关：没有数据适配器的能力照样注册，但 Planner 不能选择它们。
  */
 public record CapabilityDescriptor(AgentCapability id, String name, String description, CapabilityRisk risk,
                                    List<TargetType> supportedTargetTypes, boolean available,
