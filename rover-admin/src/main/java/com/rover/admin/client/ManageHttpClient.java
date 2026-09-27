@@ -140,7 +140,7 @@ public class ManageHttpClient {
     /**
      * 非 2xx 一律抛出带上游状态码的异常。
      *
-     * <p>以前这里只把 message 包成 IllegalStateException，调用方没法知道下游到底是 400 还是 409，
+     * 以前这里只把 message 包成 IllegalStateException，调用方没法知道下游到底是 400 还是 409，
      * 最后统一被 Admin 的异常边界压成 400；前端于是把「版本冲突」当成「参数写错了」。
      */
     private void ensureOk(HttpResponse<String> response) {

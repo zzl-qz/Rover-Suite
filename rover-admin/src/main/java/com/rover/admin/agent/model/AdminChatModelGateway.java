@@ -246,14 +246,14 @@ public class AdminChatModelGateway implements ChatModelGateway {
     /**
      * 能解析思考内容的 OpenAI 兼容客户端（智谱与 DeepSeek 共用）。
      *
-     * <p>这里用 DeepSeek 的客户端实现，把它当作「一个会解析 {@code reasoning_content} 的
+     * 这里用 DeepSeek 的客户端实现，把它当作「一个会解析 {@code reasoning_content} 的
      * OpenAI 兼容客户端」，只换 baseUrl 与模型名。之所以不用智谱自己的
      * {@code ZhiPuAiChatModel}：{@code spring-ai-zhipuai} 的可用版本（2.0.0-M1～M4）
      * 都停留在 Spring AI 2.0.0-M1 的 API 上，连 {@code ModelOptionsUtils.copyToTarget/merge}
      * 这类基础方法在 2.0.1 都已被移除——补类型救不了：类加载能过，一调用就
      * {@code NoSuchMethodError}。两家的请求与响应结构一致，换 baseUrl 即可。
      *
-     * <p>等智谱模块发布与 2.0.1 对齐的版本，把它换成 {@code ZhiPuAiChatModel} 即可。
+     * 等智谱模块发布与 2.0.1 对齐的版本，把它换成 {@code ZhiPuAiChatModel} 即可。
      * 模型名支持深度思考时才带 thinking 参数——不认识的模型名一律不带，
      * 不传这个参数永远不会因参数不兼容而失败。
      */

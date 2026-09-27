@@ -144,7 +144,7 @@ public final class OpsTools {
     /**
      * 所有工具共用的执行路径：计数、上报步骤、真实取数、累积证据。
      *
-     * <p>额度用尽后不再取数，返回一段说明让模型收尾——静默丢弃会让模型以为查过了。
+     * 额度用尽后不再取数，返回一段说明让模型收尾——静默丢弃会让模型以为查过了。
      */
     private String query(AgentCapability capability, AgentStepType stepType, String stepName, String runningText,
                          ResourceTarget target, String path) {

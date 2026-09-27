@@ -444,7 +444,7 @@ public class GatewayRuntime {
     /**
      * 启动时用 overlay 里的版本元信息对齐内存版本号。
      *
-     * <p>路由内容由调用方决定（Admin 关闭时只认 YAML），这里只认版本号，
+     * 路由内容由调用方决定（Admin 关闭时只认 YAML），这里只认版本号，
      * 于是「重启后报出的版本」就是「重启前确认过的版本」。
      *
      * @param revision    已确认版本号
@@ -476,7 +476,7 @@ public class GatewayRuntime {
     /**
      * 整表替换路由：幂等重放 → 乐观锁 → 校验 → 预构建 → 先落盘 → 原子替换 → 记账。
      *
-     * <p>顺序是刻意的：所有「可能失败的步骤」都在落盘之前，落盘之后只剩不会失败的原子引用替换，
+     * 顺序是刻意的：所有「可能失败的步骤」都在落盘之前，落盘之后只剩不会失败的原子引用替换，
      * 于是「写盘成功但内存没换」这个窗口被结构性消除，而不是靠 try/catch 兜。
      *
      * @param expectedRevision 调用方以为的当前版本；与真实值不符直接冲突
@@ -493,7 +493,7 @@ public class GatewayRuntime {
     /**
      * 回滚到最近某次已应用的快照：走同一条变更协议，因此「回滚不会覆盖别人的新修改」由乐观锁天然保证。
      *
-     * <p>局限：只覆盖最近 {@value #MAX_APPLIED_HISTORY} 次已应用快照，且重启后窗口清空（当前版本仍在）。
+     * 局限：只覆盖最近 {@value #MAX_APPLIED_HISTORY} 次已应用快照，且重启后窗口清空（当前版本仍在）。
      *
      * @param expectedRevision 调用方以为的当前版本
      * @param operationId      幂等 ID
@@ -678,7 +678,7 @@ public class GatewayRuntime {
     /**
      * 按给定路由匹配器组装一条过滤器链；不替换运行态。
      *
-     * <p>拆出来是为了让路由变更能在**落盘之前**把新链构建好——构建是会失败的（加载插件等），
+     * 拆出来是为了让路由变更能在**落盘之前**把新链构建好——构建是会失败的（加载插件等），
      * 把它提前，落盘之后就不再有会失败的动作。
      */
     private List<Filter> assembleFilters(RouteMatcher matcher) {

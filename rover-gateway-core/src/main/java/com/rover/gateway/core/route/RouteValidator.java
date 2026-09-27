@@ -78,7 +78,7 @@ public class RouteValidator {
     /**
      * 校验动态上游的版本目标列表。
      *
-     * <p>刻意收窄成「同一服务的多个版本」：所有 target 必须同 serviceName。
+     * 刻意收窄成「同一服务的多个版本」：所有 target 必须同 serviceName。
      * 否则这里会变成通用的多服务聚合路由，后续按版本看指标、按版本回滚都没有确定的语义。
      */
     private void validateTargets(RouteConfig route) {
@@ -167,7 +167,7 @@ public class RouteValidator {
     /**
      * 拷贝路由并 trim 各字符串字段。
      *
-     * <p>公开是为了让「改一个版本的权重」这类局部修改能在副本上做——
+     * 公开是为了让「改一个版本的权重」这类局部修改能在副本上做——
      * 直接改 {@code RouteMatcher.listRoutes()} 返回的元素会动到正在接流的活对象，
      * 一旦后续校验失败或版本冲突，内存就已经被改坏了。
      */

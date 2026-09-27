@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Micrometer 实现：指标写在宿主进程传入的同一个 {@link MeterRegistry} 上，与其他组件共用一份注册表。
  *
- * <p>标签只允许 {@code status / reason / model / scene / outcome / kind} 六种，取值都来自枚举或规范化后的模型名，
+ * 标签只允许 {@code status / reason / model / scene / outcome / kind} 六种，取值都来自枚举或规范化后的模型名，
  * 不会随用户输入变化。
  */
 public final class MicrometerAgentMetrics implements AgentMetrics {

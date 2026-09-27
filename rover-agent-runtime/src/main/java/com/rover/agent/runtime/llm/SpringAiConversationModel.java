@@ -13,12 +13,12 @@ import org.springframework.ai.chat.model.Generation;
 /**
  * 基于 Spring AI function calling 的对话实现：工具调用循环由框架承担。
  *
- * <p>一次 {@code stream()} 调用内部会跑完整个循环——模型返回工具调用、框架执行工具、结果回灌、
+ * 一次 {@code stream()} 调用内部会跑完整个循环——模型返回工具调用、框架执行工具、结果回灌、
  * 模型继续判断，直到它给出最终回答。本类只做三件框架不做的事：把文本增量与思考增量分开推给调用方、
  * 跳过「中间轮次」的文本（那一轮模型在自言自语「我先查一下路由」，混进结论里会变成半句话）、
  * 记录用量与结局。
  *
- * <p>厂商差异仍收在 {@link ChatModelGateway#reasoningDelta} 那一层：本类只问「这一帧有没有思考内容」，
+ * 厂商差异仍收在 {@link ChatModelGateway#reasoningDelta} 那一层：本类只问「这一帧有没有思考内容」，
  * 因此换模型、换服务商都不影响这里的逻辑。
  */
 public final class SpringAiConversationModel implements ConversationModel {
@@ -79,7 +79,7 @@ public final class SpringAiConversationModel implements ConversationModel {
     /**
      * 累积一帧响应。
      *
-     * <p>携带工具调用的那一帧属于「中间步骤」而不是回答，跳过文本累积：过程本身由工具步骤展示，
+     * 携带工具调用的那一帧属于「中间步骤」而不是回答，跳过文本累积：过程本身由工具步骤展示，
      * 而模型在这里说的半句话混进结论会让回答读起来像是从中间开始的。思考增量不受此限，
      * 它本来就是关于过程的描述。
      */

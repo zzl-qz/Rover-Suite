@@ -225,15 +225,7 @@ public final class AgentOrchestrator {
         return Optional.of(task.view());
     }
 
-    /**
-     * Agent Worker 的完整执行段：组织背景 → 交给模型自主查询与作答 → 结论落会话。
-     *
-     * <p>这里不再有「先归类意图、再按分类执行」这一步。那条路径的失败模式是「归类不了就整句作废」：
-     * 稍微绕一点的问题落不进任何词表，得到的回答就是一句「我没太明白」。现在决策权交给模型——
-     * 它看到的是问题本身和一组可执行工具，自己决定查什么、查几次、怎么答。
-     *
-     * <p>任何异常都在这里收敛成任务失败，绝不把异常抛回线程池（否则任务会永远停在 RUNNING）。
-     */
+    /** Agent Worker 的执行段：组织背景后交给模型自主查询与作答；任何异常都在这里收敛成任务失败，不抛回线程池。 */
     private void resolveAndRun(InvestigationTask task, AgentRequestOptions options) {
         try {
             task.start();
@@ -254,16 +246,7 @@ public final class AgentOrchestrator {
         }
     }
 
-    /**
-     * 尽力识别问题里点到的对象：识别出来就按它聚合，识别不出也不拦。
-     *
-     * <p>目标解析在这里不再是「能不能继续」的闸门，只决定这次对话挂在哪个事件下——追问「它呢」时，
-     * 模型需要知道上一轮说的是哪个服务或哪条路径。具体查什么仍由模型自己决定，
-     * 它完全可以忽略这个背景，直接按问题里的说法取数。
-     *
-     * <p>识别出对象时沿用事件选择规则（同对象续用、换对象另开）：事件仍是「同一对象的多次对话」
-     * 的聚合点，否则会话连续性会断在这里。
-     */
+    /** 尽力识别问题里点到的对象：识别出来就挂到对应事件下（同对象续用、换对象另开），识别不出也不拦。 */
     private void bindTargetBestEffort(InvestigationTask task, Session session, AgentContext context,
                                       AgentRequestOptions options) {
         TargetResolution resolution;
@@ -285,11 +268,7 @@ public final class AgentOrchestrator {
                 "已识别对话对象：" + describe(resolution.target()));
     }
 
-    /**
-     * 结论回写事件：事件因此是「同一对象的多次对话」的聚合点，追问时能继承最新结论。
-     *
-     * <p>发不了结论时静默跳过——回写失败不该把一次已经完成的对话判成失败。
-     */
+    /** 结论回写事件，让追问能继承最新结论；回写失败静默跳过。 */
     private void appendConclusion(InvestigationTask task) {
         InvestigationReport report = task.view().result();
         if (report == null || report.summary().isBlank() || task.incidentId() == null) {

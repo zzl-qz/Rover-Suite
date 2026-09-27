@@ -116,7 +116,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
     /**
      * 从本地缓存取实例：<b>只返回健康实例</b>，全部不健康就返回空列表。
      *
-     * <p>这里刻意不做「全不健康就退回全部缓存」的兜底。那种兜底会让「实例已被标记不可接流」
+     * 这里刻意不做「全不健康就退回全部缓存」的兜底。那种兜底会让「实例已被标记不可接流」
      * 被静默绕过——调用方以为拿到的是可接流实例，实际打到了一台明确不可用的机器上，
      * 而且失败会被记成上游 5xx，与「压根没有可用上游」混成同一个现象。
      * 返回空列表后，由 {@code RouteAndProxyFilter} 明确给出 503 与 {@code REJECT_NO_UPSTREAM}，
@@ -147,7 +147,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
     /**
      * 已订阅服务的只读快照：网关「自己观察到」的 service@group 及其本地缓存版本与实例计数。
      *
-     * <p>这是网关视角的证据，用来和注册中心视角对账；健康计数按缓存里的真实 healthy 字段统计，
+     * 这是网关视角的证据，用来和注册中心视角对账；健康计数按缓存里的真实 healthy 字段统计，
      * 不做任何推断。
      */
     public List<SubscriptionView> subscriptions() {

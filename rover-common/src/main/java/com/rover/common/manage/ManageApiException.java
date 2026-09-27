@@ -9,7 +9,7 @@ import java.util.Map;
  * Created: 2026-09-27 14:40:00
  * Description: 带 HTTP 状态码的管理口异常：骨架按 status 返回，而不是一律 400
  *
- * <p>典型场景是乐观锁冲突：调用方需要区分「参数写错了」（400，改了再发）与
+ * 典型场景是乐观锁冲突：调用方需要区分「参数写错了」（400，改了再发）与
  * 「别人先改了」（409，得先刷新再决定），并把当前版本号一并带回去。
  */
 public class ManageApiException extends RuntimeException {

@@ -27,7 +27,7 @@ public class RouteConfig {
     /**
      * 动态上游的版本目标列表；与静态地址互斥。
      *
-     * <p>列表顺序参与分流计算：权重区间按此顺序首尾相接，因此放量时把权重从靠前的版本
+     * 列表顺序参与分流计算：权重区间按此顺序首尾相接，因此放量时把权重从靠前的版本
      * 挪给紧邻的靠后版本，只增不减（见 {@link WeightedTargetRouter}）。
      */
     private List<RouteTarget> targets = new ArrayList<>();

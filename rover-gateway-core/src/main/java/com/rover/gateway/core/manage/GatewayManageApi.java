@@ -126,7 +126,7 @@ public class GatewayManageApi extends AbstractManageApi {
     /**
      * 处理 /_manage/routes。
      *
-     * <p>所有写路径都必须带 {@code revision}，没有绕过乐观锁的后门：
+     * 所有写路径都必须带 {@code revision}，没有绕过乐观锁的后门：
      * GET 路由表（含当前版本）、PUT 整表、POST 单条、DELETE 按 id 或 prefix。
      */
     private void handleRoutes(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -202,7 +202,7 @@ public class GatewayManageApi extends AbstractManageApi {
     /**
      * 处理 POST /_manage/routes/targets/weight：放量/停推原语。
      *
-     * <p>语义上只改一个版本的权重，内部仍走「整表 + 乐观锁」协议——
+     * 语义上只改一个版本的权重，内部仍走「整表 + 乐观锁」协议——
      * 读当前整表、定位目标、改权重、整表提交，因此不会和别人的并发修改互相覆盖。
      */
     private void handleTargetWeight(ChannelHandlerContext ctx, FullHttpRequest request) {
@@ -377,7 +377,7 @@ public class GatewayManageApi extends AbstractManageApi {
     /**
      * 严格解析整表提交里的 {@code routes} 字段。
      *
-     * <p>这里刻意不做宽松收敛。字段缺失或拼错键名时若当成「空表」，逐条校验会全部通过，
+     * 这里刻意不做宽松收敛。字段缺失或拼错键名时若当成「空表」，逐条校验会全部通过，
      * 于是「请求体写错了」变成「清空整张路由表并落盘」——线上全站 404，重启也回不来。
      * 只有显式写 {@code []} 才算「确实要把路由表清空」。
      *
@@ -468,7 +468,7 @@ public class GatewayManageApi extends AbstractManageApi {
     /**
      * 组装 GET /_manage/discovery/snapshot：网关自己观察到哪些 service@group、本地缓存版本与实例数。
      *
-     * <p>这是「网关视角」的证据，用于和注册中心视角对账（如灰度验收时确认两边看到的是同一批实例）。
+     * 这是「网关视角」的证据，用于和注册中心视角对账（如灰度验收时确认两边看到的是同一批实例）。
      * 非动态发现或没有客户端时如实返回 supported=false 并附空列表，<b>不抛异常</b>——
      * 「没有这项能力」与「读取失败」必须在调用方那里是可区分的两件事。
      */
@@ -537,7 +537,7 @@ public class GatewayManageApi extends AbstractManageApi {
     /**
      * 路由表 + 当前版本号。
      *
-     * <p>版本号必须在路由表里一起给出：调用方拿到路由表却不知道版本，就没法安全地提交变更
+     * 版本号必须在路由表里一起给出：调用方拿到路由表却不知道版本，就没法安全地提交变更
      * （写路径要求 {@code revision}），只能再猜一次——那才是并发覆盖的根源。
      */
     private String routesStateJson() {

@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory;
 /**
  * 对话主路径：模型自主决定查什么、查几次，并逐个回答问题。
  *
- * <p>本类只管编排职责：工具从哪里来、证据往哪落、预算耗尽与模型失败如何收敛。
+ * 本类只管编排职责：工具从哪里来、证据往哪落、预算耗尽与模型失败如何收敛。
  * 模型侧与工具侧都可替换，因此这些职责能被单测完整覆盖。
  */
 public final class ToolLoopService {
@@ -137,7 +137,7 @@ public final class ToolLoopService {
     /**
      * 用户消息：当前时间 + 会话背景 + 提问本身。
      *
-     * <p>时间由运行时给出而不是让模型猜：问「现在是什么时候」时它不必承认不知道，
+     * 时间由运行时给出而不是让模型猜：问「现在是什么时候」时它不必承认不知道，
      * 而时间在诊断里是有用的事实——判断事件发生在多久前、指标窗口覆盖到哪。
      */
     private static String userMessage(String question, String contextSummary) {

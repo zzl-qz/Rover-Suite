@@ -35,7 +35,7 @@ import org.junit.jupiter.api.io.TempDir;
  * Created: 2026-09-27 15:30:00
  * Description: 版本化安全变更接口验收：乐观锁冲突、幂等重放、校验/落盘失败不改内存、重启读回与回滚
  *
- * <p>全程用 NAMESERVER 发现模式（{@code usesServiceDiscovery()==true}），因为 targets 形态的路由
+ * 全程用 NAMESERVER 发现模式（{@code usesServiceDiscovery()==true}），因为 targets 形态的路由
  * 只在走服务发现时合法；ServiceDiscovery 传 null，本类不发真实请求，只验证变更协议本身。
  */
 class GatewayRuntimeChangeTest {

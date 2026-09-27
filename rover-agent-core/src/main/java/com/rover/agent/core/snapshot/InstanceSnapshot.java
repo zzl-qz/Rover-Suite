@@ -3,7 +3,7 @@ package com.rover.agent.core.snapshot;
 /**
  * 一个注册实例的只读快照。
  *
- * <p>字段取舍服务于「能不能安全地指向一个实例」：{@code instanceId} 是注册中心内稳定的实例标识，
+ * 字段取舍服务于「能不能安全地指向一个实例」：{@code instanceId} 是注册中心内稳定的实例标识，
  * 没有它就只能在证据里看，无法对具体实例下判断；{@code lastHeartbeatMillis} 用来区分
  * 「实例不健康」与「实例已经不在了」——两者对后续处置的含义完全不同。
  *

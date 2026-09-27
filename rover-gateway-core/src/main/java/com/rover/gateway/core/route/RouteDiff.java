@@ -10,7 +10,7 @@ import java.util.Map;
  * Created: 2026-09-27 14:45:00
  * Description: 路由表差异比对，供管理口「预览变更」使用
  *
- * <p>比对以字段表（{@link RouteOverlayStore#toRow}）为准，因此预览里看到的就是将来会落盘的内容，
+ * 比对以字段表（{@link RouteOverlayStore#toRow}）为准，因此预览里看到的就是将来会落盘的内容，
  * 不会出现「预览说改了 targets、实际改的是别处」这种不一致。
  */
 public final class RouteDiff {

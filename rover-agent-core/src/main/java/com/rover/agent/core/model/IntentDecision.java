@@ -3,7 +3,7 @@ package com.rover.agent.core.model;
 /**
  * 意图识别结果：对「用户想干什么」的一次结构化判断，不含「对谁做」。
  *
- * <p>{@code targetHint} 只是从文本抽出的对象线索，不是解析结果；最终目标由 TargetResolver 依据真实数据确定。
+ * {@code targetHint} 只是从文本抽出的对象线索，不是解析结果；最终目标由 TargetResolver 依据真实数据确定。
  */
 public record IntentDecision(AgentIntent intent, Confidence confidence, IntentTopic topic, String targetHint,
                              TimeRange timeRange, ActionType requestedAction, String reason,

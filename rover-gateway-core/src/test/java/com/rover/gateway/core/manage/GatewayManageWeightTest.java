@@ -37,7 +37,7 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * /_manage/routes/targets/weight 契约测试：放量/停推只改副本。
  *
- * <p>{@code RouteMatcher.listRoutes()} 返回的列表是副本、**元素却是正在接流的活对象**。
+ * {@code RouteMatcher.listRoutes()} 返回的列表是副本、**元素却是正在接流的活对象**。
  * 若在提交前就地改这些元素，就会绕过乐观锁与落盘直接影响线上分流——
  * 冲突或校验失败时尤其危险：请求被拒了，流量却已经切了。
  * 本测试用「请求被拒后活对象权重不变」把这条守住。
@@ -131,7 +131,7 @@ class GatewayManageWeightTest {
     /**
      * 发一次 POST 并读出状态码与响应体。
      *
-     * <p>响应是引用计数对象，这里读完就释放，避免测试进程里堆积未释放缓冲区。
+     * 响应是引用计数对象，这里读完就释放，避免测试进程里堆积未释放缓冲区。
      */
     private Response post(String path, String payload, GatewayRuntime runtime) {
         ByteBuf content = Unpooled.copiedBuffer(payload, StandardCharsets.UTF_8);

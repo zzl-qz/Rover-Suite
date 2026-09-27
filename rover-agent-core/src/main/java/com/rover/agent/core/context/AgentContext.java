@@ -9,7 +9,7 @@ import java.util.List;
 /**
  * 一次提问所携带的上下文：会话、当前事件、结构化目标、最近消息与关键证据。
  *
- * <p>窗口刻意有限：{@code recentMessages} 只保留最近若干条，{@code importantEvidence} 只保留当前事件的
+ * 窗口刻意有限：{@code recentMessages} 只保留最近若干条，{@code importantEvidence} 只保留当前事件的
  * 关键证据，历史不会被无限发给模型。
  */
 public record AgentContext(String sessionId, String activeIncidentId, ResourceTarget currentTarget,

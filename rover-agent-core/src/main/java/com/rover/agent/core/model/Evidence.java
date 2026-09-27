@@ -6,7 +6,7 @@ import java.util.UUID;
 /**
  * 一条只读证据：来自某个只读数据源的观测事实，可追溯到来源。
  *
- * <p>{@code metadata} 至少含统计口径（{@code windowSeconds}、{@code sampleSize}、{@code observedAtMillis}），
+ * {@code metadata} 至少含统计口径（{@code windowSeconds}、{@code sampleSize}、{@code observedAtMillis}），
  * 「样本不足」的结论必须能从证据本身看出来。
  */
 public record Evidence(String evidenceId, String taskId, EvidenceType type, String source, String title,

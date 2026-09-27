@@ -8,7 +8,7 @@ import java.util.concurrent.ThreadLocalRandom;
  * Created: 2026-09-27 14:20:00
  * Description: 灰度分流选版本：按权重把粘性键映射到路由的某一个 target
  *
- * <p>用固定刻度 + 连续区间（weighted slab），刻度必须与权重之和无关——否则调权重会把已分流的 key
+ * 用固定刻度 + 连续区间（weighted slab），刻度必须与权重之和无关——否则调权重会把已分流的 key
  * 重新洗牌，放量不再单调，理由见 {@link #SCALE}。
  */
 public final class WeightedTargetRouter {
@@ -20,10 +20,10 @@ public final class WeightedTargetRouter {
     /**
      * 固定刻度：哈希先归一到 {@code [0, SCALE)} 的定长槽位，再按权重比例切区间。
      *
-     * <p>刻度必须与「权重之和」无关。若直接拿总权重取模，改一个 target 的权重会让 total 变化，
+     * 刻度必须与「权重之和」无关。若直接拿总权重取模，改一个 target 的权重会让 total 变化，
      * 所有 key 的槽位一起漂移（5% 放到 20% 时原落 v2 的 key 会被打回 v1）。
      *
-     * <p>取 1000 万：单条 target 权重上限 1 万（{@link RouteTarget#MAX_WEIGHT}），
+     * 取 1000 万：单条 target 权重上限 1 万（{@link RouteTarget#MAX_WEIGHT}），
      * 一条路由即使挂上千个 target 也远小于刻度，因此每个有权重的 target 至少能分到 1 格。
      */
     static final long SCALE = 10_000_000L;
