@@ -227,8 +227,12 @@ public final class AgentOrchestrator {
 
     /** Agent Worker 的执行段：组织背景后交给模型自主查询与作答；任何异常都在这里收敛成任务失败，不抛回线程池。 */
     private void resolveAndRun(InvestigationTask task, AgentRequestOptions options) {
+        task.start();
+        task.markRunning();
         try {
-            task.start();
+            if (task.cancelled()) {
+                return;
+            }
             Session session = sessions.find(task.sessionId()).orElse(null);
             if (session == null) {
                 task.fail("会话不存在");
@@ -236,14 +240,52 @@ public final class AgentOrchestrator {
             }
             AgentContext context = contexts.build(task.sessionId()).orElse(null);
             bindTargetBestEffort(task, session, context, options);
+            if (task.cancelled()) {
+                return;
+            }
             task.classify(TaskType.CONVERSATION, CONVERSATION_DECISION);
             toolLoop.run(task, contextSummary(context));
             appendReply(task);
             appendConclusion(task);
         } catch (Exception ex) {
+            if (task.cancelled()) {
+                return;
+            }
             log.error("Agent 任务执行异常", ex);
             task.fail("任务执行失败");
+        } finally {
+            task.clearRunning();
         }
+    }
+
+    /**
+     * 取消一个仍在执行中的任务；任务不存在、不属于该用户或已终态时返回 false（由调用方映射为 404 / 409）。
+     *
+     * 取消是协作式的：标记取消并中断执行线程，执行线程在下一个检查点停下，不再产出结论。
+     */
+    public boolean cancel(String taskId, String userId) {
+        return task(taskId, userId).map(view -> {
+            if (!view.status().active()) {
+                return false;
+            }
+            investigations.cancel(taskId);
+            return true;
+        }).orElse(false);
+    }
+
+    /**
+     * 事件接入：告警 / 网关切面异常等事件触发一次自动调查。
+     *
+     * 与人工提问走完全相同的取数链路，区别仅在于事件来源记为 {@code ALERT}，且可选自带观测窗口；
+     * 窗口不传则按各数据源默认窗口取数。会话按事件独立开（无归属用户），不会与人工会话争「单活跃任务」锁。
+     *
+     * @return 已受理的调查任务视图（异步执行，可凭 taskId 轮询 / 订阅事件）
+     */
+    public TaskView ingestAlert(String path, String alertMessage, Long fromMillis, Long toMillis) {
+        TimeRange range = (fromMillis != null && toMillis != null)
+                ? new TimeRange(fromMillis, toMillis)
+                : TimeRange.unspecified();
+        return investigations.submitAlert(path, alertMessage, range);
     }
 
     /** 尽力识别问题里点到的对象：识别出来就挂到对应事件下（同对象续用、换对象另开），识别不出也不拦。 */

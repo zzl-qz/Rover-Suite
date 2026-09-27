@@ -133,6 +133,24 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
         events.close(taskId);
     }
 
+    /**
+     * 取消一个仍在执行中的任务（协作式）。
+     *
+     * 标记取消并中断其执行线程；执行线程在检查点看到 {@link InvestigationTask#cancelled()} 后会停下，
+     * 不再产出结论。任务不存在或已终态时返回 false（调用方据此回 404 / 409）。
+     */
+    public boolean cancel(String taskId) {
+        InvestigationTask task = executing.get(taskId);
+        if (task == null) {
+            return false;
+        }
+        boolean cancelledNow = task.cancel("任务已被用户取消");
+        if (cancelledNow) {
+            task.interruptRunner();
+        }
+        return cancelledNow;
+    }
+
     public TaskView get(String taskId) {
         return records.find(taskId).orElse(null);
     }

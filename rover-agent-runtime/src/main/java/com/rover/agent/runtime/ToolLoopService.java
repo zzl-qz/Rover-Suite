@@ -113,6 +113,10 @@ public final class ToolLoopService {
             task.step(AgentStepType.ANSWER, STEP_ANSWER, StepStatus.RUNNING, ANSWER_RUNNING);
             String answer = model.converse(SYSTEM_PROMPT, userMessage(task.question(), contextSummary), tools,
                     task::appendAnalysis, task::appendThinking);
+            if (task.cancelled()) {
+                // 模型回答过程中被取消：不产出结论，CANCELLED 状态已由取消方发布。
+                return;
+            }
             if (answer == null || answer.isBlank()) {
                 String reason = "模型没有返回任何回答内容。";
                 task.step(AgentStepType.ANSWER, STEP_ANSWER, StepStatus.FAILED, reason);
@@ -127,6 +131,10 @@ public final class ToolLoopService {
             task.complete(new InvestigationReport(answer, Confidence.MEDIUM, tools.evidence(),
                     tools.limitations(), List.of(), null));
         } catch (Exception ex) {
+            if (task.cancelled()) {
+                // 取消过程中断：结论已被标记 CANCELLED，不要覆盖成失败。
+                return;
+            }
             log.warn("Agent 对话执行失败", ex);
             String reason = failureText(ex, tools);
             task.step(AgentStepType.ANSWER, STEP_ANSWER, StepStatus.FAILED, reason);

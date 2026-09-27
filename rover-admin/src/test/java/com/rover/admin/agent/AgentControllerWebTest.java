@@ -313,4 +313,63 @@ class AgentControllerWebTest {
         mockMvc.perform(get("/api/agent/tasks/t1/events").with(user("alice")))
                 .andExpect(status().isNotFound());
     }
+
+    /** 取消仍在执行的任务：200，结论不会再产出，事件流随 TASK_CANCELLED 收尾。 */
+    @Test
+    void cancelRunningTaskSucceeds() throws Exception {
+        TaskView running = new TaskView("t1", "s1", "inc-1", TaskStatus.RUNNING, null,
+                "/api/demo/tt", ResourceTarget.route("/api/demo/tt"), "为什么失败？", 1, 0, List.of(), null, null, null);
+        when(agent.task("t1", "alice")).thenReturn(Optional.of(running));
+        when(agent.cancel("t1", "alice")).thenReturn(true);
+
+        mockMvc.perform(post("/api/agent/tasks/t1/cancel").with(user("alice")).with(csrf()))
+                .andExpect(status().isOk());
+        verify(agent).cancel("t1", "alice");
+    }
+
+    /** 取消不属于自己或不存在的任务：与任务详情同一归属判定，只回 404，不透露它是否存在。 */
+    @Test
+    void cancelUnknownTaskIsNotFound() throws Exception {
+        when(agent.task("t9", "alice")).thenReturn(Optional.empty());
+
+        mockMvc.perform(post("/api/agent/tasks/t9/cancel").with(user("alice")).with(csrf()))
+                .andExpect(status().isNotFound());
+        verify(agent, never()).cancel(any(), any());
+    }
+
+    /** 已结束的任务取消无意义：409，让前端给出明确提示而不是假装取消成功。 */
+    @Test
+    void cancelTerminalTaskIsConflict() throws Exception {
+        TaskView done = new TaskView("t2", "s1", "inc-1", TaskStatus.COMPLETED, null,
+                "/api/demo/tt", ResourceTarget.route("/api/demo/tt"), "为什么失败？", 1, 2, List.of(), null, null, null);
+        when(agent.task("t2", "alice")).thenReturn(Optional.of(done));
+        when(agent.cancel("t2", "alice")).thenReturn(false);
+
+        mockMvc.perform(post("/api/agent/tasks/t2/cancel").with(user("alice")).with(csrf()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("TASK_NOT_CANCELLABLE"));
+    }
+
+    /** 事件接入：告警触发一次自动调查，返回 202 与任务视图，人工会话不会因此被 409 挡住。 */
+    @Test
+    void ingestAlertCreatesInvestigation() throws Exception {
+        TaskView alert = new TaskView("t3", "s1", "inc-3", TaskStatus.PENDING, null,
+                "/api/demo/tt", ResourceTarget.route("/api/demo/tt"), "告警自动调查：5xx", 1, 0, List.of(), null, null, null);
+        when(agent.ingestAlert(eq("/api/demo/tt"), any(), any(), any())).thenReturn(alert);
+
+        mockMvc.perform(post("/api/agent/events/ingest").with(user("alice")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"path\":\"/api/demo/tt\",\"message\":\"5xx 告警\"}"))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.taskId").value("t3"));
+    }
+
+    /** 事件接入缺少 path：400，让接入方立即知道请求不合法，而不是发起一次空调查。 */
+    @Test
+    void ingestAlertRequiresPath() throws Exception {
+        mockMvc.perform(post("/api/agent/events/ingest").with(user("alice")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"5xx 告警\"}"))
+                .andExpect(status().isBadRequest());
+    }
 }

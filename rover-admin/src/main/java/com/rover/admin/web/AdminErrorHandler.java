@@ -57,8 +57,24 @@ public class AdminErrorHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> serverError(Exception ex) {
+        if (isClientAbort(ex)) {
+            // 客户端已断开（关标签页 / 路由跳转），不是服务端故障：不写错误体、不打 ERROR。
+            // 若仍按异常处理，响应已提交会再抛一次 HttpMessageNotWritableException，把日志弄脏。
+            log.debug("客户端中止连接，忽略：{}", ex.getMessage());
+            return null;
+        }
         log.error("Admin 请求处理失败", ex);
         return response(HttpStatus.BAD_GATEWAY, "下游组件不可用或请求处理失败");
+    }
+
+    /** 沿异常链识别「客户端中止连接」：用类名判断，避免硬依赖 Tomcat 的具体类。 */
+    private static boolean isClientAbort(Throwable ex) {
+        for (Throwable current = ex; current != null && current != current.getCause(); current = current.getCause()) {
+            if ("ClientAbortException".equals(current.getClass().getSimpleName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private ResponseEntity<Map<String, Object>> response(HttpStatus status, String message) {
