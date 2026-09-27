@@ -64,5 +64,14 @@
             <groupId>io.protostuff</groupId>
             <artifactId>protostuff-runtime</artifactId>
         </dependency>
+        <!-- 嵌入式落盘记录库（H2）：仅通过 JDBC API 使用，运行期依赖，编译期不耦合。
+             显式锁版本：Admin 模块自带 spring-boot 4.1.1 BOM 会把 h2 解析到与其不一致的版本，
+             而该版本在离线环境未缓存；锁到 2.2.224 保证 common 与下游消费者版本一致。 -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>2.2.224</version>
+            <scope>runtime</scope>
+        </dependency>
     </dependencies>
 </project>

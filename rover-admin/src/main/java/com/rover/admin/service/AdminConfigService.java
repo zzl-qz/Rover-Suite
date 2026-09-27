@@ -8,6 +8,10 @@ import com.rover.common.config.ConfigApplyMode;
 import com.rover.common.constants.ManageApiPaths;
 import com.rover.common.constants.RoverComponent;
 import com.rover.common.json.JsonCodec;
+import com.rover.common.log.LogQuery;
+import com.rover.common.log.Record;
+import com.rover.common.log.RecordStore;
+import com.rover.common.log.RecordType;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -17,6 +21,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -35,10 +40,20 @@ public class AdminConfigService {
 
     private final ManageHttpClient httpClient;
     private final AdminProperties properties;
+    /**
+     * 落盘记录库（可选）：通过 {@code @Autowired(required = false)} 注入，避免改动构造函数签名、
+     * 不影响现有 Web 层测试。为空时查询返回空、写操作不记日志（优雅降级）。
+     */
+    private RecordStore recordStore;
 
     public AdminConfigService(ManageHttpClient httpClient, AdminProperties properties) {
         this.httpClient = httpClient;
         this.properties = properties;
+    }
+
+    @Autowired(required = false)
+    public void setRecordStore(RecordStore recordStore) {
+        this.recordStore = recordStore;
     }
 
     public Map<String, Object> loadStatus() {
@@ -101,11 +116,16 @@ public class AdminConfigService {
     public Map<String, Object> saveRoute(Map<String, Object> route) {
         Map<String, Object> payload = new LinkedHashMap<>(route);
         payload.putIfAbsent(ManageApiPaths.PARAM_OPERATION_ID, UUID.randomUUID().toString());
+        String routeId = String.valueOf(route.getOrDefault("businessPrefix", ""));
         try {
-            return httpClient.postJson(properties.getGatewayUrl(), ManageApiPaths.ROUTES, payload);
+            Map<String, Object> result = httpClient.postJson(properties.getGatewayUrl(), ManageApiPaths.ROUTES, payload);
+            recordConfig("saveRoute", routeId, "", "ok");
+            return result;
         } catch (ManageApiCallException ex) {
+            recordConfig("saveRoute", routeId, "", "FAILED:" + ex.getMessage());
             throw ex;
         } catch (Exception ex) {
+            recordConfig("saveRoute", routeId, "", "FAILED:" + ex.getMessage());
             throw new ManageApiCallException(0, "调用 Gateway 保存路由失败", ex);
         }
     }
@@ -133,15 +153,19 @@ public class AdminConfigService {
     public Map<String, Object> deleteRoute(String idOrPrefix, int revision) {
         try {
             String encoded = URLEncoder.encode(idOrPrefix, StandardCharsets.UTF_8);
-            return httpClient.delete(
+            Map<String, Object> result = httpClient.delete(
                     properties.getGatewayUrl(),
                     ManageApiPaths.ROUTES
                             + "?" + ManageApiPaths.PARAM_BUSINESS_PREFIX + "=" + encoded
                             + "&" + ManageApiPaths.PARAM_REVISION + "=" + revision
                             + "&" + ManageApiPaths.PARAM_OPERATION_ID + "=" + UUID.randomUUID());
+            recordConfig("deleteRoute", idOrPrefix, "", "ok");
+            return result;
         } catch (ManageApiCallException ex) {
+            recordConfig("deleteRoute", idOrPrefix, "", "FAILED:" + ex.getMessage());
             throw ex;
         } catch (Exception ex) {
+            recordConfig("deleteRoute", idOrPrefix, "", "FAILED:" + ex.getMessage());
             throw new ManageApiCallException(0, "调用 Gateway 删除路由失败", ex);
         }
     }
@@ -180,12 +204,18 @@ public class AdminConfigService {
     public Map<String, Object> adjustTargetWeight(Map<String, Object> body) {
         Map<String, Object> payload = new LinkedHashMap<>(body);
         payload.putIfAbsent(ManageApiPaths.PARAM_OPERATION_ID, UUID.randomUUID().toString());
+        String routeId = String.valueOf(body.getOrDefault("routeId", ""));
+        String serviceName = String.valueOf(body.getOrDefault("serviceName", ""));
         try {
-            return httpClient.postJson(
+            Map<String, Object> result = httpClient.postJson(
                     properties.getGatewayUrl(), ManageApiPaths.ROUTES_TARGET_WEIGHT, payload);
+            recordConfig("adjustTargetWeight", routeId, serviceName, "weight=" + body.get("weight"));
+            return result;
         } catch (ManageApiCallException ex) {
+            recordConfig("adjustTargetWeight", routeId, serviceName, "FAILED:" + ex.getMessage());
             throw ex;
         } catch (Exception ex) {
+            recordConfig("adjustTargetWeight", routeId, serviceName, "FAILED:" + ex.getMessage());
             throw new ManageApiCallException(0, "调用 Gateway 调整版本权重失败", ex);
         }
     }
@@ -200,12 +230,17 @@ public class AdminConfigService {
     public Map<String, Object> rollbackRoutes(Map<String, Object> body) {
         Map<String, Object> payload = new LinkedHashMap<>(body);
         payload.putIfAbsent(ManageApiPaths.PARAM_OPERATION_ID, UUID.randomUUID().toString());
+        String toRevision = String.valueOf(body.getOrDefault("toRevision", ""));
         try {
-            return httpClient.postJson(
+            Map<String, Object> result = httpClient.postJson(
                     properties.getGatewayUrl(), ManageApiPaths.ROUTES_ROLLBACK, payload);
+            recordConfig("rollbackRoutes", "", "", "toRevision=" + toRevision);
+            return result;
         } catch (ManageApiCallException ex) {
+            recordConfig("rollbackRoutes", "", "", "FAILED:" + ex.getMessage());
             throw ex;
         } catch (Exception ex) {
+            recordConfig("rollbackRoutes", "", "", "FAILED:" + ex.getMessage());
             throw new ManageApiCallException(0, "调用 Gateway 回滚路由失败", ex);
         }
     }
@@ -337,6 +372,62 @@ public class AdminConfigService {
         } catch (Exception ex) {
             throw new IllegalArgumentException(ex.getMessage() == null ? "更新失败" : ex.getMessage(), ex);
         }
+    }
+
+    /**
+     * 记录一次配置变更/操作作为诊断证据。recordStore 为空（未装配或测试）时静默跳过，
+     * 记录本身失败也只 debug，绝不影响业务写操作。
+     */
+    private void recordConfig(String action, String routeId, String serviceName, String detail) {
+        if (recordStore == null) {
+            return;
+        }
+        try {
+            String payload = "{\"action\":\"" + escape(action)
+                    + "\",\"routeId\":\"" + escape(routeId)
+                    + "\",\"serviceName\":\"" + escape(serviceName)
+                    + "\",\"detail\":\"" + escape(detail) + "\"}";
+            recordStore.log(Record.of(RecordType.CONFIG_CHANGE, routeId, payload));
+        } catch (Exception ex) {
+            log.debug("记录配置变更日志失败: action={}", action, ex);
+        }
+    }
+
+    private static String escape(String s) {
+        return s == null ? "" : s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /**
+     * 区间查询落盘记录（配置变更/回滚/部署/实例事件等证据）。
+     * recordStore 为空时返回空列表（优雅降级，不影响页面其余功能）。
+     */
+    public List<Map<String, Object>> queryLogs(String target, Long from, Long to,
+                                              List<String> types, int limit) {
+        if (recordStore == null) {
+            return List.of();
+        }
+        List<RecordType> typeEnums = null;
+        if (types != null && !types.isEmpty()) {
+            typeEnums = new ArrayList<>();
+            for (String t : types) {
+                try {
+                    typeEnums.add(RecordType.valueOf(t));
+                } catch (IllegalArgumentException ignored) {
+                    // 未知类型忽略
+                }
+            }
+        }
+        List<Record> recs = recordStore.query(new LogQuery(from, to, target, typeEnums, limit));
+        List<Map<String, Object>> out = new ArrayList<>(recs.size());
+        for (Record r : recs) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ts", r.ts());
+            m.put("type", r.type().name());
+            m.put("target", r.target());
+            m.put("payload", r.payload());
+            out.add(m);
+        }
+        return out;
     }
 
     private Map<String, Object> fetchStatus(String baseUrl, RoverComponent component) {
