@@ -146,6 +146,59 @@ public class AgentController {
     }
 
     /**
+     * 取消一个仍在执行中的任务（协作式）。
+     *
+     * <ul>
+     *   <li>404：任务不存在或不属于当前用户（与任务详情同一归属判定）；</li>
+     *   <li>409：任务已结束（{@code TASK_NOT_CANCELLABLE}），取消无意义；</li>
+     *   <li>200：已标记取消并中断执行线程，结论不会再产出，事件流随 {@code TASK_CANCELLED} 收尾。</li>
+     * </ul>
+     */
+    @PostMapping("/tasks/{taskId}/cancel")
+    public ResponseEntity<?> cancelTask(@PathVariable String taskId, Authentication authentication) {
+        if (agent.task(taskId, user(authentication)).isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        boolean cancelled = agent.cancel(taskId, user(authentication));
+        if (!cancelled) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(commandError("TASK_NOT_CANCELLABLE", "任务已结束，无法取消", taskId));
+        }
+        return ResponseEntity.ok().build();
+    }
+
+    /**
+     * 事件接入：告警 / 网关切面异常等事件触发一次自动调查。
+     *
+     * <p>接入方把一次告警转成「对哪条路由、在什么窗口、怀疑什么」三要素即可；本端点会为它独立开一个会话、
+     * 记一笔 {@code ALERT} 来源的事件、并复用与人工提问完全相同的取数链路开始调查。调查异步执行，
+     * 返回 {@code 202} 与任务视图，接入方凭 {@code taskId} 轮询详情或订阅 {@code /tasks/{taskId}/events}。
+     *
+     * <p>考虑到这是机器对机器入口，需要登录（建议用服务账号）；但产生的会话不归属任何人工用户，
+     * 以免与人工会话的并发锁冲突，也便于在事件视图里单独聚合。
+     */
+    @PostMapping("/events/ingest")
+    public ResponseEntity<?> ingestEvent(@RequestBody IngestRequest request, Authentication authentication) {
+        if (request == null || request.path() == null || request.path().isBlank()) {
+            return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", "缺少 path（要排查的路由前缀）", null));
+        }
+        if ((request.fromMillis() == null) != (request.toMillis() == null)) {
+            return ResponseEntity.badRequest()
+                    .body(commandError("BAD_REQUEST", "fromMillis 与 toMillis 需同时提供", null));
+        }
+        try {
+            TaskView task = agent.ingestAlert(request.path(), request.message(), request.fromMillis(), request.toMillis());
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(task);
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", ex.getMessage(), null));
+        }
+    }
+
+    /** 事件接入请求体：路由前缀必填；告警文本与观测窗口可选。 */
+    public record IngestRequest(String path, String message, Long fromMillis, Long toMillis) {
+    }
+
+    /**
      * 任务事件流（SSE）：事件名是事件类型（{@code SNAPSHOT}/{@code STEP_STARTED}/…），
      * 数据是完整的事件信封（{@code eventId}、{@code type}、{@code timestampMillis}、{@code payload}）。
      *

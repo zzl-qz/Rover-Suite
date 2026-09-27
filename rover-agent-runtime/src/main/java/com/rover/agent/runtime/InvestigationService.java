@@ -12,6 +12,7 @@ import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlanner;
 import com.rover.agent.core.planning.PlanValidator;
 import com.rover.agent.core.planning.PlanningLimits;
@@ -107,11 +108,29 @@ public final class InvestigationService {
 
     /** 一次性调查入口：新建会话与事件后提交一次「目标已确定」的调查，不需要连续追问时用它最省事。 */
     public TaskView submit(String path, String question) {
+        return submit(path, question, IncidentOrigin.USER, null);
+    }
+
+    /**
+     * 事件接入入口：告警 / 网关切面异常等事件触发一次自动调查。
+     *
+     * 与人工 {@link #submit(String, String)} 的差别只有两点：事件来源记为 {@link IncidentOrigin#ALERT}，
+     * 且事件自带一个观测窗口（不传则按默认窗口）。会话按事件独立开（userId 为 null），
+     * 因此不会与某个人工会话的「单活跃任务」锁冲突（不会 409）。
+     */
+    public TaskView submitAlert(String path, String alertMessage, TimeRange timeRange) {
+        String question = "告警自动调查："
+                + (alertMessage == null || alertMessage.isBlank() ? "请根据下方路径与窗口排查失败原因" : alertMessage);
+        return submit(path, question, IncidentOrigin.ALERT, timeRange);
+    }
+
+    private TaskView submit(String path, String question, IncidentOrigin origin, TimeRange timeRange) {
         String target = validatePath(path);
         String asked = validateQuestion(question);
         Session session = incidents.openSession();
-        Incident incident = incidents.openIncident(session.sessionId(), IncidentOrigin.USER,
-                ResourceTarget.route(target));
+        Incident incident = timeRange == null
+                ? incidents.openIncident(session.sessionId(), origin, ResourceTarget.route(target))
+                : incidents.openIncident(session.sessionId(), origin, ResourceTarget.route(target), timeRange);
         try {
             InvestigationTask task = register(session.sessionId(), asked);
             task.bind(incident.incidentId(), target, ResourceTarget.route(target));
@@ -160,11 +179,19 @@ public final class InvestigationService {
      */
     public void run(InvestigationTask task, Consumer<InvestigationReport> onReport) {
         task.start();
+        task.markRunning();
         try {
+            // 执行前若已被取消（例如排队期间被取消），直接退出，不再发起任何取数。
+            if (task.cancelled()) {
+                return;
+            }
             DynamicInvestigationGraph graph =
                     new DynamicInvestigationGraph(planner, validator, executor, limits, task);
             InvestigationOutcome outcome = graph.investigate(task.taskId(), task.path(), task.question(),
                     task.target(), task.intent());
+            if (task.cancelled()) {
+                return;
+            }
             if (outcome.needsClarification()) {
                 // 规划认为继续调查缺少必要信息：停在澄清点，而不是硬凑一个没有依据的结论。
                 task.waitForInput(outcome.clarification());
@@ -174,14 +201,28 @@ public final class InvestigationService {
                     outcome.findings().summary(), outcome.findings().confidence(), outcome.evidence(),
                     outcome.limitations(), outcome.findings().hypotheses(), null);
             report = explain(task, report, outcome);
+            if (task.cancelled()) {
+                return;
+            }
             publish(onReport, report);
             task.complete(report);
             // 结论回写到事件：事件因此成为「一个问题的多次调查」的聚合点，追问时能继承最新结论。
             incidents.summarise(task.incidentId(), report.summary());
         } catch (Exception ex) {
+            if (task.cancelled()) {
+                // 取消过程中断：结论已被标记 CANCELLED，不要覆盖成失败。
+                return;
+            }
             log.error("Agent 诊断任务异常", ex);
             task.fail("诊断任务执行失败");
+        } finally {
+            task.clearRunning();
         }
+    }
+
+    /** 取消一个仍在执行中的调查任务；任务不存在或已终态时返回 false。 */
+    public boolean cancel(String taskId) {
+        return tasks.cancel(taskId);
     }
 
     /** 结论回调失败只损失可追溯性，不该把一次已经跑完的调查判成失败。 */

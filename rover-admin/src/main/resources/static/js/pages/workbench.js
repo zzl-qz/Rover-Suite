@@ -468,6 +468,22 @@ window.RoverAdminPages.workbench = {
             this.wbPending = this.wbPending.filter(item => item.key !== key);
         },
 
+        /** 取消一个仍在执行中的任务：协作式——标记取消并中断执行线程，结论不会再产出。 */
+        async wbCancelTask(task) {
+            if (!task || !this.wbCanCancel(task)) return;
+            task._cancelling = true;
+            try {
+                await RoverAdminApi.api(
+                    '/api/agent/tasks/' + encodeURIComponent(task.taskId) + '/cancel',
+                    { method: 'POST' });
+                await this.wbReloadTask(task.taskId);
+            } catch (e) {
+                this.wbError = '取消失败：' + (e && e.message ? e.message : e);
+            } finally {
+                task._cancelling = false;
+            }
+        },
+
         /** Enter 发送、Shift+Enter 换行；输入法组合中的 Enter 是在选词，不能当发送。 */
         wbOnKeydown(event) {
             if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
@@ -853,6 +869,11 @@ window.RoverAdminPages.workbench = {
             return this.wbTaskTerminal(status) || status === 'WAITING_INPUT';
         },
 
+        /** 任务仍可取消：还在排队或执行中；已定型或待补充的任务取消无意义。 */
+        wbCanCancel(task) {
+            return task && (task.status === 'PENDING' || task.status === 'RUNNING');
+        },
+
         /**
          * 任务卡上的步骤：完全按后端上报的 steps 展示，后端没执行的阶段不凭空构造。
          *
@@ -1199,15 +1220,14 @@ window.RoverAdminPages.workbench = {
             return { CONFIRMED: 'bad', REJECTED: 'ok', UNKNOWN: 'warn' }[status] || 'comp';
         },
 
-        /** 「哪些判断仍不确定」的口径：只有 UNKNOWN 才算不确定，展开详情才能看到全部假设。 */
+        /** 本次没能确认的部分：取数边界随结论一起产出，折叠状态下也要能看见提示。 */
         wbUncertainties(task) {
-            const hypotheses = (task && task.result && task.result.hypotheses) || [];
-            return hypotheses.filter(item => item.status === 'UNKNOWN');
+            return (task && task.result && task.result.limitations) || [];
         },
 
-        /** 不确定判断的一句话摘要，供默认视图直接展示，不必展开调查详情。 */
+        /** 没能确认的部分的一句话摘要，供折叠状态直接展示，不必展开详情。 */
         wbUncertaintyText(task) {
-            return this.wbUncertainties(task).map(item => item.statement).join('；');
+            return this.wbUncertainties(task).join('；');
         },
 
         wbStepTone(status) {

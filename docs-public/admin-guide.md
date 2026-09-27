@@ -103,6 +103,45 @@ current user:
 icacls "<file>" /inheritance:r /grant:r "%USERNAME%:F"
 ```
 
+## Agent HTTP API
+
+调查任务的触发、查询、取消与事件接入入口（均位于 `/api/agent` 之下，需登录；CSRF 保护的写操作需带 CSRF token）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/api/agent/sessions/{sessionId}/submit` | 在会话中提问（人工排查入口） |
+| POST | `/api/agent/investigate` | 按路由前缀直接发起一次调查 |
+| GET  | `/api/agent/tasks/{taskId}` | 任务详情：步骤、证据、结论 |
+| GET  | `/api/agent/tasks/{taskId}/events` | 任务事件流（SSE），终态/澄清点自动收尾 |
+| POST | `/api/agent/tasks/{taskId}/cancel` | 取消仍在执行中的任务（协作式） |
+| POST | `/api/agent/events/ingest` | 事件接入：告警 / 网关切面异常触发一次自动调查 |
+
+### 取消任务
+
+`POST /api/agent/tasks/{taskId}/cancel` 为协作式取消：
+
+- `404`：任务不存在或不属于当前用户（与任务详情同一归属判定）；
+- `409`（`TASK_NOT_CANCELLABLE`）：任务已结束，取消无意义；
+- `200`：已标记取消并中断执行线程，结论不会再产出，事件流随 `TASK_CANCELLED` 收尾。
+
+前端的任务卡片在任务处于 `PENDING` / `RUNNING` 时显示「取消」按钮。
+
+### 事件接入（自动调查）
+
+`POST /api/agent/events/ingest` 把一次告警转成「对哪条路由、在什么窗口、怀疑什么」三要素，为该事件独立开会话、记一笔 `ALERT` 来源的事件，并复用与人工提问完全相同的取数链路开始调查。调查异步执行，返回 `202` 与任务视图，接入方凭 `taskId` 轮询详情或订阅事件流。
+
+请求体：
+
+```json
+{ "path": "/api/demo/tt", "message": "5xx 告警", "fromMillis": 0, "toMillis": 0 }
+```
+
+- `path`（必填）：要排查的路由前缀；
+- `message`（可选）：告警文本，作为调查问题上下文；
+- `fromMillis` / `toMillis`（可选，需同时给出）：观测窗口；不传则按各数据源默认窗口取数。
+
+会话按事件独立开（无归属用户），因此不会与某个人工会话争「单活跃任务」锁（不会 409）。
+
 ## Model configuration
 
 The entry point is the "Model configuration" item in the console's left

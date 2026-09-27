@@ -39,6 +39,9 @@ Monitoring / alerting (Prometheus, AlertManager, Rover Metrics)
 
 **Monitoring detects the problem; the agent investigates the problem.** Neither replaces the other.
 
+监控系统的告警可通过 `POST /api/agent/events/ingest` 直接驱动一次自动根因排查（记 `ALERT` 来源事件），从而闭合
+「监控发现问题 → Agent 调查原因」的回路；告警仍由监控系统判定的「有事发生」，Agent 负责「为什么发生」。
+
 ## 3. Target capability chain
 
 ```text
@@ -240,6 +243,13 @@ they are built, rather than scaffolding empty modules now.
   clarification" and never guesses — it creates no task when it cannot resolve one.
 - A single orchestration entry point, `AgentOrchestrator`: controllers no longer orchestrate route/metrics/chatClient
   calls themselves, only validate input and map results.
+- 任务取消：`POST /api/agent/tasks/{taskId}/cancel` 为协作式取消（标记 `CANCELLED` 并中断执行线程，结论不再产出），
+  前端任务卡片在 `PENDING` / `RUNNING` 时显示「取消」按钮；已结束的任务返回 `409 TASK_NOT_CANCELLABLE`。
+- 事件接入：`POST /api/agent/events/ingest` 把一次告警转成「路由 + 窗口 + 怀疑点」，独立开会话并记 `ALERT` 来源事件，
+  复用与人工提问完全相同的取数链路自动调查；会话按事件隔离，不与人工会话争「单活跃任务」锁。这样监控系统的告警
+  （而非只有人工提问）也能驱动一次根因排查，闭合「监控发现问题 → Agent 调查原因」的回路。
+- 指标对外出口：默认进程内 `SimpleMeterRegistry`；开启 `management.metrics.export.prometheus.enabled=true` 后
+  注册表切换为 `PrometheusMeterRegistry`，由 `/actuator/prometheus` 供抓取，指标名与标签口径不变（`rover.agent.*`）。
 - Storage is abstracted behind four repository interfaces with thread-safe in-memory implementations only, so
   **everything is lost on restart**; business code does not depend on maps directly.
 - User identity always comes from the backend authentication context (`Authentication.getName()`) and a `userId` in the

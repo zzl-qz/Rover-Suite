@@ -66,6 +66,10 @@ public final class InvestigationTask implements InvestigationReporter {
     private String clarification;
     private long eventSeq;
     private boolean settled;
+    /** 协作式取消标志：执行线程在每个检查点轮询它，置位后不再产出结论。volatile 保证跨线程可见。 */
+    private volatile boolean cancelled;
+    /** 当前执行该任务的线程；取消时用于中断阻塞中的取数/模型调用（不参与快照，故 transient）。 */
+    private transient Thread runner;
 
     InvestigationTask(String taskId, String sessionId, String question, Consumer<TaskView> snapshotSink,
                       TaskEventBus events, AgentMetrics metrics) {
@@ -210,6 +214,48 @@ public final class InvestigationTask implements InvestigationReporter {
         persist();
         publish(TaskEventType.TASK_STARTED, Map.of("status", status));
         metrics.taskStarted();
+    }
+
+    /** 协作式取消的判据：执行线程据此在检查点停下。volatile 读，允许非同步快速轮询。 */
+    public boolean cancelled() {
+        return cancelled;
+    }
+
+    /**
+     * 协作式取消：只接受仍在执行中的任务（PENDING / RUNNING）。
+     *
+     * 标记取消后把状态置为 {@link TaskStatus#CANCELLED}、发布 {@link TaskEventType#TASK_CANCELLED} 并落定指标；
+     * 执行线程看到 {@link #cancelled()} 后应在下一个检查点停下，不再产出结论。已终态或已取消的任务返回 false。
+     */
+    public synchronized boolean cancel(String reason) {
+        if (status != TaskStatus.PENDING && status != TaskStatus.RUNNING) {
+            return false;
+        }
+        cancelled = true;
+        this.completedAtMillis = System.currentTimeMillis();
+        this.status = TaskStatus.CANCELLED;
+        persist();
+        publish(TaskEventType.TASK_CANCELLED, Map.of("status", status,
+                "reason", reason == null || reason.isBlank() ? "任务已被用户取消" : reason));
+        settle();
+        return true;
+    }
+
+    /** 记录当前执行线程：取消时用来中断阻塞中的取数/模型调用。仅在 Agent Worker 线程内调用。 */
+    public synchronized void markRunning() {
+        this.runner = Thread.currentThread();
+    }
+
+    /** 执行线程退场前清除记录，避免持有线程引用。 */
+    public synchronized void clearRunning() {
+        this.runner = null;
+    }
+
+    /** 中断执行线程：最差情况是阻塞调用自然返回后由检查点兜底，不会损坏状态。 */
+    public synchronized void interruptRunner() {
+        if (runner != null) {
+            runner.interrupt();
+        }
     }
 
     /**

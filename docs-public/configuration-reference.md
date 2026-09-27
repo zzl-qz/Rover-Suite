@@ -74,11 +74,13 @@ separate directory or mounted volume. Keys, plaintext passwords, and ciphertext 
 | `rover.agent.planning.max-plan-steps` | `6` | Maximum steps in a single round's plan (>0); extra steps are truncated by plan validation, and any unregistered write capability is dropped | Restart |
 | `rover.agent.llm.quick-timeout-seconds` | `10` | Wait cap for cheap calls that can always fall back — intent recognition, target resolution, investigation planning (seconds; `0` = use the model config timeout); retried once on timeout only, and the AI interpretation is unaffected | Restart |
 | `rover.agent.metrics.enabled` | `true` | Master switch for Agent runtime metrics; `false` (emergency degradation) registers no meters and changes no business logic | Restart |
+| `management.metrics.export.prometheus.enabled` | `false` | 指标对外出口开关：置 `true` 后注册表切换为 `PrometheusMeterRegistry`，由 `/actuator/prometheus` 供抓取；指标名与标签口径不变（`rover.agent.*`）。需同步在 `management.endpoints.web.exposure.include` 中加入 `prometheus` | Restart |
+| `management.endpoints.web.exposure.include` | `health,info` | Actuator 暴露的端点；加入 `prometheus` 即可抓取指标 | Restart |
 
 An out-of-range execution parameter or planning limit fails startup on the spot, so a configuration mistake surfaces
 at startup instead of appearing later as "a task rejected for no reason" or "an investigation stopping early".
 
-Metric names (prefix `rover.agent.`, written to the host process's single `MeterRegistry`): `task.submitted` /
+Metric names (prefix `rover.agent.`, written to the host process's single `MeterRegistry` — default an in-process `SimpleMeterRegistry`, switchable to `PrometheusMeterRegistry` via `management.metrics.export.prometheus.enabled`): `task.submitted` /
 `task.completed` / `task.failed` / `task.rejected` are counters; `task.active` / `task.queue.size` /
 `sse.connections` are current values; `task.duration` (tag `status`), `model.duration` (tags `model`, `scene`),
 `model.calls` (tags `model`, `scene`, `outcome`), and `model.tokens` (tags `model`, `scene`, `kind` — `prompt` or
