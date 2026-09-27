@@ -59,12 +59,16 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 ### Level A: Observe
 
-The agent queries Route, Instance, Metrics, Trace, Config, and Events runtime data. Read-only.
+The agent queries Route, Instance, Metrics, Trace, Config, Events, Logs (historical logs), and Knowledge (operational
+knowledge) runtime data. Read-only.
 
 **Status: implemented.** `InvestigationService` (in `rover-agent-runtime`), driven by `AgentOrchestrator`, collects
-route, instance, metric, trace, configuration, and registry-event snapshots and returns a conclusion, evidence sources,
-and collection timestamps. Metrics go beyond the global window: they also expose windowed request counts, status codes,
-error rate, and latency per route × upstream instance, which is what names the instance that is failing.
+route, instance, metric, trace, configuration, registry-event, historical-log, and operational-knowledge snapshots and
+returns a conclusion, evidence sources, and collection timestamps. Metrics go beyond the global window: they also expose
+windowed request counts, status codes, error rate, and latency per route × upstream instance, which is what names the
+instance that is failing. Historical logs are filtered by type / target / time range (config change, rollback, error,
+instance up/down, metric sample, slow or error trace), and operational knowledge answers "how to configure / onboard /
+troubleshoot" questions.
 
 ### Level B: Reason
 
@@ -301,7 +305,7 @@ diagnosis falls back to pure rule-based (`aiAnalysis` is null) and collection co
 - Split into `rover-agent-core` / `rover-agent-runtime` / `rover-admin` with one-way dependencies; read-only access is
   guaranteed structurally by the ports.
 - Intent recognition and dispatch: a message is first classified (`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` /
-  `ACTION_REQUEST` / the not-yet-open `CREATE_INSPECTION`, `KNOWLEDGE_QUERY`), and a resource target is resolved only
+  `ACTION_REQUEST` / `KNOWLEDGE_QUERY` / the not-yet-open `CREATE_INSPECTION`), and a resource target is resolved only
   when needed; state queries run a couple of read-only capabilities, capability questions answer from the registry's
   real list, and unsupported requests are answered honestly instead of forced into an investigation. Unrecognised
   messages with no resolvable target get a self-introduction plus the capability list instead of a path clarification.
