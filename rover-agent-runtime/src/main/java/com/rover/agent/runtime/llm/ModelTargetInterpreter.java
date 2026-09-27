@@ -1,5 +1,6 @@
 package com.rover.agent.runtime.llm;
 
+import com.rover.agent.core.capability.UntrustedText;
 import com.rover.agent.core.context.TargetInterpreter;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
@@ -30,7 +31,8 @@ public final class ModelTargetInterpreter implements TargetInterpreter {
 
     private static final String SYSTEM_PROMPT = "你是 Rover 运维助手的调查对象识别器。"
             + "只能从候选清单里选出一个与用户问题最可能对应的对象，并把该候选行原样回复。"
-            + "没有把握就只回复 " + UNKNOWN + "。不要解释、不要补充、不要编造清单外的对象。";
+            + "没有把握就只回复 " + UNKNOWN + "。不要解释、不要补充、不要编造清单外的对象。"
+            + UntrustedText.contract();
 
     private final ChatModelGateway gateway;
     private final int timeoutSeconds;
@@ -49,8 +51,8 @@ public final class ModelTargetInterpreter implements TargetInterpreter {
         if (candidates.isEmpty() || query == null || query.isBlank() || !gateway.configured() || !gateway.available()) {
             return Optional.empty();
         }
-        String userPrompt = "候选对象：\n" + describe(candidates)
-                + "\n用户问题：" + truncate(query)
+        String userPrompt = UntrustedText.block("候选对象", describe(candidates))
+                + UntrustedText.block("用户问题", truncate(query))
                 + "\n只回复一个候选行原样内容，或 " + UNKNOWN;
         try {
             String answer = QuickModelCall.content(gateway, timeoutSeconds, "目标解析",

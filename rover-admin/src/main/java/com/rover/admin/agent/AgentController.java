@@ -5,7 +5,6 @@ import com.rover.agent.core.event.TaskEvent;
 import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
-import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TaskView;
@@ -72,23 +71,6 @@ public class AgentController {
     @GetMapping("/sessions")
     public ResponseEntity<List<Session>> sessions(Authentication authentication) {
         return ResponseEntity.ok(agent.sessions(user(authentication)));
-    }
-
-    /** 会话详情：会话本体 + 对话记录 + 当前事件（没有事件时为 null）。 */
-    @GetMapping("/sessions/{sessionId}")
-    public ResponseEntity<Map<String, Object>> session(@PathVariable String sessionId,
-                                                       Authentication authentication) {
-        String userId = user(authentication);
-        Session session = agent.session(sessionId, userId).orElse(null);
-        if (session == null) {
-            return ResponseEntity.notFound().build();
-        }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("session", session);
-        body.put("messages", agent.conversation(sessionId, userId));
-        body.put("activeIncident", session.activeIncidentId() == null
-                ? null : agent.incident(session.activeIncidentId(), userId).orElse(null));
-        return ResponseEntity.ok(body);
     }
 
     /**
@@ -190,13 +172,6 @@ public class AgentController {
         }
         subscriber.attach(subscription);
         return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM).body(emitter);
-    }
-
-    /** 事件详情：目标、时间范围与最新结论。 */
-    @GetMapping("/incidents/{incidentId}")
-    public ResponseEntity<Incident> incident(@PathVariable String incidentId, Authentication authentication) {
-        return agent.incident(incidentId, user(authentication)).map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /** 当前用户身份；未登录（含匿名）时返回空，不接受前端提交的用户名。 */

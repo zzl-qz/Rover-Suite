@@ -189,15 +189,21 @@ public class AgentRuntimeConfiguration {
         return new PlanningLimits(maxRounds, maxToolCalls, maxPlanSteps);
     }
 
-    /** 意图解释器：模型只补「规则说不清」的场合，输出取值受限，越界一律丢弃。 */
+    /**
+     * 意图解释器：模型只补「规则说不清」的场合，输出取值受限，越界一律丢弃。
+     *
+     * 提示词里的能力清单取自同一份注册表：模型判断「这条消息想问什么」时看到的能力边界，
+     * 与用户问「你能做什么」时看到的完全一致，不会出现两套说法。
+     */
     @Bean
-    public IntentInterpreter agentIntentInterpreter(ObjectProvider<ChatModelGateway> chatModelGateways,
+    public IntentInterpreter agentIntentInterpreter(CapabilityRegistry agentCapabilityRegistry,
+                                                    ObjectProvider<ChatModelGateway> chatModelGateways,
                                                     AgentMetrics agentMetrics,
                                                     @Value("${rover.agent.llm.quick-timeout-seconds:10}")
                                                     int quickTimeoutSeconds) {
         return new LlmIntentInterpreter(new SpringAiJsonCompletion(
                 chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics, "意图识别",
-                quickTimeoutSeconds));
+                quickTimeoutSeconds), agentCapabilityRegistry);
     }
 
     @Bean

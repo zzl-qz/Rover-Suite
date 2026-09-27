@@ -69,20 +69,48 @@ class MicrometerAgentMetricsTest {
                 .tag("reason", "UNKNOWN").counter().count());
     }
 
+    /** 失败必须按原因分开数：只记「失败了几次」判断不出是部署、链路还是提示词的问题。 */
     @Test
-    void modelTagIsNormalizedAndErrorsAreCounted() {
-        metrics.modelCall("DeepSeek-Chat @ api.deepseek.com", 800L, true);
-        metrics.modelCall("未配置模型", 5L, false);
+    void modelOutcomesAreCountedSeparatelyPerScene() {
+        metrics.modelCall("DeepSeek-Chat @ api.deepseek.com", "意图识别", 800L, ModelCallOutcome.OK);
+        metrics.modelCall("DeepSeek-Chat @ api.deepseek.com", "意图识别", 30L, ModelCallOutcome.TIMEOUT);
+        metrics.modelCall("未配置模型", "调查规划", 5L, ModelCallOutcome.NOT_CONFIGURED);
 
-        assertEquals(1, registry.get(MicrometerAgentMetrics.MODEL_DURATION)
-                .tag("model", "deepseek-chat").timer().count());
-        assertEquals(1.0, registry.get(MicrometerAgentMetrics.MODEL_ERROR)
-                .tag("model", "deepseek-chat").counter().count());
-        // 描述不可用时用 unknown 兜底；只有失败才计错误数，未失败的调用不会凭空多出一个错误计数。
-        assertEquals(1, registry.get(MicrometerAgentMetrics.MODEL_DURATION)
-                .tag("model", MicrometerAgentMetrics.UNKNOWN_MODEL).timer().count());
-        assertNull(registry.find(MicrometerAgentMetrics.MODEL_ERROR)
-                .tag("model", MicrometerAgentMetrics.UNKNOWN_MODEL).counter());
+        assertEquals(2, registry.get(MicrometerAgentMetrics.MODEL_DURATION)
+                .tag("model", "deepseek-chat").tag("scene", "意图识别").timer().count());
+        assertEquals(1.0, registry.get(MicrometerAgentMetrics.MODEL_CALLS)
+                .tag("outcome", "ok").tag("scene", "意图识别").counter().count());
+        assertEquals(1.0, registry.get(MicrometerAgentMetrics.MODEL_CALLS)
+                .tag("outcome", "timeout").tag("scene", "意图识别").counter().count());
+        // 描述不可用时用 unknown 兜底，场景照旧分开：两个维度都不允许出现空标签值。
+        assertEquals(1.0, registry.get(MicrometerAgentMetrics.MODEL_CALLS)
+                .tag("model", MicrometerAgentMetrics.UNKNOWN_MODEL)
+                .tag("outcome", "not_configured").tag("scene", "调查规划").counter().count());
+        assertNull(registry.find(MicrometerAgentMetrics.MODEL_CALLS)
+                .tag("outcome", "ok").tag("scene", "调查规划").counter());
+    }
+
+    /** token 分输入与输出两条线累计；拿不到用量时不报，避免把「未知」记成 0。 */
+    @Test
+    void tokenUsageIsCountedByKindAndAbsentUsageIsNotRecorded() {
+        metrics.modelTokens("gpt-4o-mini", "解读", 1200L, 300L);
+        metrics.modelTokens("gpt-4o-mini", "调查规划", 0L, 0L);
+
+        assertEquals(1200.0, registry.get(MicrometerAgentMetrics.MODEL_TOKENS)
+                .tag("kind", "prompt").counter().count());
+        assertEquals(300.0, registry.get(MicrometerAgentMetrics.MODEL_TOKENS)
+                .tag("kind", "completion").counter().count());
+        // 供应商没给用量（两个数都是 0）：不产生任何计数线，而不是记成 0。
+        assertNull(registry.find(MicrometerAgentMetrics.MODEL_TOKENS).tag("scene", "调查规划").counter());
+    }
+
+    /** 场景名进标签前也会被夹紧：空白兜底、超长截断，防止异常值把注册表撑大。 */
+    @Test
+    void sceneTagIsBounded() {
+        assertEquals("unknown", MicrometerAgentMetrics.normalizeScene(null));
+        assertEquals("unknown", MicrometerAgentMetrics.normalizeScene("   "));
+        assertEquals("意图识别", MicrometerAgentMetrics.normalizeScene(" 意图识别 "));
+        assertTrue(MicrometerAgentMetrics.normalizeScene("场".repeat(50)).length() <= 24);
     }
 
     @Test

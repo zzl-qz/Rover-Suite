@@ -76,7 +76,7 @@ class InvestigationRulesTest {
     @Test
     void unmatchedTargetServiceIsConfirmedAsMedium() {
         Findings findings = evaluate(route("/api/demo/tt", "demo", "11"), true, DiscoveryMode.NAMESERVER,
-                List.of(new InstanceSnapshot("demo-service", "", "127.0.0.1", 8081, true)), null);
+                List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)), null);
 
         assertEquals(Verdict.CONFIRMED, hypothesis(findings, "H3").status());
         assertEquals("注册表中没有 demo / 11 的实例", hypothesis(findings, "H3").detail());
@@ -102,7 +102,7 @@ class InvestigationRulesTest {
     @Test
     void missingInstanceSummaryDoesNotClaimEvidenceIsAbsentWhenTracingIsOff() {
         Findings findings = evaluate(route("/api/demo/tt", "demo", "11"), true, DiscoveryMode.NAMESERVER,
-                List.of(new InstanceSnapshot("demo-service", "", "127.0.0.1", 8081, true)),
+                List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)),
                 new TraceSnapshot(false, 1.0, List.of(), 1L));
 
         assertTrue(findings.summary().contains("追踪已关闭，无法采集该路径的失败请求证据。"));
@@ -146,7 +146,7 @@ class InvestigationRulesTest {
     @Test
     void unhealthyInstancesAreNotTreatedAsMissing() {
         Findings findings = evaluate(route("/api", "demo", ""), true, DiscoveryMode.NAMESERVER,
-                List.of(new InstanceSnapshot("demo", "blue", "127.0.0.1", 8081, false)), null);
+                List.of(new InstanceSnapshot("demo", "blue", "", "127.0.0.1", 8081, false, 100, true, 0L)), null);
 
         assertEquals(Verdict.REJECTED, hypothesis(findings, "H3").status());
         assertEquals(Verdict.CONFIRMED, hypothesis(findings, "H4").status());
@@ -156,7 +156,7 @@ class InvestigationRulesTest {
     @Test
     void healthyInstancesRejectBothFailureHypotheses() {
         Findings findings = evaluate(route("/api", "demo", ""), true, DiscoveryMode.NAMESERVER,
-                List.of(new InstanceSnapshot("demo", "blue", "127.0.0.1", 8081, true)), null);
+                List.of(new InstanceSnapshot("demo", "blue", "", "127.0.0.1", 8081, true, 100, true, 0L)), null);
 
         assertEquals(Verdict.REJECTED, hypothesis(findings, "H3").status());
         assertEquals(Verdict.REJECTED, hypothesis(findings, "H4").status());
@@ -167,7 +167,7 @@ class InvestigationRulesTest {
     @Test
     void verdictCountsDescribeInvestigationProgress() {
         Findings findings = evaluate(route("/api/demo/tt", "demo", "11"), true, DiscoveryMode.NAMESERVER,
-                List.of(new InstanceSnapshot("demo-service", "", "127.0.0.1", 8081, true)), null);
+                List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)), null);
 
         // H6 在指标能力未执行时如实记为「无法验证」，不因缺少证据而默认排除。
         assertEquals("确认 1 项 / 排除 1 项 / 无法验证 2 项", InvestigationRules.describeVerdicts(findings.hypotheses()));
@@ -207,7 +207,7 @@ class InvestigationRulesTest {
     void confirmedUpstreamInstanceDropsTheInconclusiveWording() {
         Findings findings = evaluateWithUpstreams(route("/api/order", "order-service", ""), true,
                 DiscoveryMode.NAMESERVER,
-                List.of(new InstanceSnapshot("order-service", "", "127.0.0.1", 9202, true)), null,
+                List.of(new InstanceSnapshot("order-service", "", "", "127.0.0.1", 9202, true, 100, true, 0L)), null,
                 List.of(upstream("127.0.0.1:9202", 35, 35, 2.7, 4)));
 
         assertEquals(Verdict.CONFIRMED, hypothesis(findings, "H6").status());

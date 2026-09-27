@@ -164,7 +164,7 @@ class DynamicInvestigationGraphTest {
     }
 
     private static InstanceReadPort instances() {
-        return () -> List.of(new InstanceSnapshot("demo-service", "", "10.0.0.7", 8080, true));
+        return () -> List.of(new InstanceSnapshot("demo-service", "", "", "10.0.0.7", 8080, true, 100, true, 0L));
     }
 
     private static TraceReadPort traces() {

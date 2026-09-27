@@ -27,9 +27,21 @@ public class AdminInstanceReadAdapter implements InstanceReadPort {
         }
     }
 
+    /**
+     * 逐字段搬运，不做推断：字段缺失时按 {@link AdminValues} 的统一约定收敛（空串 / 0 / false）。
+     * 这里必须保留 {@code instanceId}——它是「指向某个具体实例」的唯一稳定标识，
+     * 丢掉之后 Agent 只能看到「有一台实例有问题」，指不到操作对象。
+     */
     private static InstanceSnapshot toSnapshot(Map<String, Object> instance) {
-        return new InstanceSnapshot(AdminValues.text(instance.get("serviceName")),
-                AdminValues.text(instance.get("group")), AdminValues.text(instance.get("host")),
-                AdminValues.intValue(instance.get("port")), Boolean.TRUE.equals(instance.get("healthy")));
+        return new InstanceSnapshot(
+                AdminValues.text(instance.get("serviceName")),
+                AdminValues.text(instance.get("group")),
+                AdminValues.text(instance.get("instanceId")),
+                AdminValues.text(instance.get("host")),
+                AdminValues.intValue(instance.get("port")),
+                AdminValues.boolValue(instance.get("healthy")),
+                AdminValues.intValue(instance.get("weight")),
+                AdminValues.boolValue(instance.get("ephemeral")),
+                AdminValues.longValue(instance.get("lastHeartbeatMillis")));
     }
 }

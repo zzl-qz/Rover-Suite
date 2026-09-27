@@ -141,6 +141,26 @@ public final class CapabilityRegistry {
                 + describe();
     }
 
+    /**
+     * 未能识别意图时的简短回应：一句「没听懂」+ 现在能做什么 + 两三条示例提问。
+     *
+     * 与 {@link #introduce()} 的差别只在详略。这条路走的是「你好」「谢谢」这类没有对象的输入，
+     * 铺开完整的枚举清单与风险级别只会让人看不完；能力名仍从同一份注册表取，
+     * 因此不会出现「简短版说能做、注册表里其实没有」的分叉。
+     */
+    public String introduceBriefly() {
+        StringBuilder names = new StringBuilder();
+        for (CapabilityDescriptor item : selectable()) {
+            names.append(names.length() == 0 ? "" : "、").append(item.name());
+        }
+        return "我没太明白您的意思。我是 Rover Ops Agent，一个只读的运维诊断助手，不执行任何写操作。\n"
+                + "我可以帮您查这些：" + names + "；也能排查一次调用失败的原因。\n"
+                + "您可以这样问我：\n"
+                + "- 「网关现在 QPS 多少？」\n"
+                + "- 「order-service 有几个健康实例？」\n"
+                + "- 「为什么 /api/demo/tt 调用失败？」";
+    }
+
     /** 供证据来源说明使用（与既有数据源命名保持一致）。 */
     public String describeSources() {
         return String.join("、", SOURCE_ROUTES, SOURCE_INSTANCES, SOURCE_METRICS, SOURCE_TRACES,

@@ -34,8 +34,10 @@ import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ModelExplainer;
+import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +51,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -96,8 +100,7 @@ class InvestigationServiceTest {
     void explainsMismatchedServiceAndGroupAndKeepsTheIncidentRelation() throws Exception {
         when(routes.routes()).thenReturn(List.of(
                 route("/api", "demo-service", ""), route("/api/demo/tt", "demo", "11")));
-        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "",
-                "127.0.0.1", 8081, true)));
+        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
         TaskView task = await(investigations.submit("/api/demo/tt", "为什么失败？").taskId());
 
@@ -120,8 +123,7 @@ class InvestigationServiceTest {
     @Test
     void doesNotReportMissingUpstreamForHealthyRoute() throws Exception {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo-service", "")));
-        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "",
-                "127.0.0.1", 8081, true)));
+        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
         TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
 
@@ -175,14 +177,12 @@ class InvestigationServiceTest {
     @Test
     void blankGroupIncludesOtherGroupsAndUnhealthyInstancesAreNotMissing() throws Exception {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
-        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo", "blue",
-                "127.0.0.1", 8081, true)));
+        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo", "blue", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
         TaskView healthy = await(investigations.submit("/api/hello", "为什么失败？").taskId());
         assertTrue(healthy.result().summary().contains("1 个匹配的健康实例"));
 
-        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo", "blue",
-                "127.0.0.1", 8081, false)));
+        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo", "blue", "", "127.0.0.1", 8081, false, 100, true, 0L)));
         TaskView unhealthy = await(investigations.submit("/api/hello", "为什么失败？").taskId());
         assertEquals("LOW", unhealthy.result().confidence().name());
         assertTrue(unhealthy.result().summary().contains("可能回退"));
@@ -210,8 +210,7 @@ class InvestigationServiceTest {
     @Test
     void investigationRecordsConfirmedAndRejectedHypotheses() throws Exception {
         when(routes.routes()).thenReturn(List.of(route("/api/demo/tt", "demo", "11")));
-        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "",
-                "127.0.0.1", 8081, true)));
+        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
         TaskView task = await(investigations.submit("/api/demo/tt", "为什么失败？").taskId());
 
@@ -226,8 +225,7 @@ class InvestigationServiceTest {
     @Test
     void healthyRouteExcludesMissingInstanceAndUnhealthyHypotheses() throws Exception {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo-service", "")));
-        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "",
-                "127.0.0.1", 8081, true)));
+        when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
         TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
 
@@ -289,7 +287,37 @@ class InvestigationServiceTest {
         verify(model).stream(prompts.capture());
         String userText = prompts.getValue().getUserMessage().getText();
         assertTrue(userText.contains("运行时已读取的只读快照："));
-        assertTrue(userText.contains("路由快照："));
+        // 快照作为不可信数据被围栏标出，避免其中的文本被当成指令（提示注入隔离）。
+        assertTrue(userText.contains("快照 路由快照"));
+        assertTrue(userText.contains("ROVER-DATA"));
+    }
+
+    /**
+     * 解读是流式长调用：用量拿得到就得记下来，否则「模型花了多少钱」无从核算。
+     *
+     * 同时验证结局口径：一次成功的解读只记一条 {@code outcome=ok}，而不是靠「有没有 error」反推。
+     */
+    @Test
+    void reportsStreamingOutcomeAndTokenUsage() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
+        when(instances.instances()).thenReturn(List.of());
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+        useModel(new ModelExplainer(TestGateway.of(model), new MicrometerAgentMetrics(registry)));
+        when(model.stream(any(Prompt.class))).thenReturn(Flux.just(
+                response("先看路由"),
+                responseWithUsage("，再看实例", 1200, 64)));
+
+        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+
+        assertEquals("先看路由，再看实例", task.result().aiAnalysis());
+        assertEquals(1.0, registry.get("rover.agent.model.calls")
+                .tag("outcome", "ok").tag("scene", "解读").counter().count());
+        assertEquals(1200.0, registry.get("rover.agent.model.tokens")
+                .tag("kind", "prompt").tag("scene", "解读").counter().count());
+        assertEquals(64.0, registry.get("rover.agent.model.tokens")
+                .tag("kind", "completion").tag("scene", "解读").counter().count());
     }
 
     @Test
@@ -414,6 +442,15 @@ class InvestigationServiceTest {
     /** 一段模型增量：流式下每次只承载一小段文本。 */
     private static ChatResponse response(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    /** 带用量元数据的响应：真实服务商多数只在末帧给用量，这里按同样的形态构造。 */
+    private static ChatResponse responseWithUsage(String text, int promptTokens, int completionTokens) {
+        return ChatResponse.builder()
+                .generations(List.of(new Generation(new AssistantMessage(text))))
+                .metadata(ChatResponseMetadata.builder()
+                        .usage(new DefaultUsage(promptTokens, completionTokens)).build())
+                .build();
     }
 
     /**

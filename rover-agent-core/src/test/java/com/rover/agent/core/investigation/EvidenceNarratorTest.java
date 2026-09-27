@@ -27,7 +27,7 @@ class EvidenceNarratorTest {
     @Test
     void blankGroupIsReportedAsUnrestrictedForRouteButDefaultForInstance() {
         RouteSnapshot route = new RouteSnapshot("demo", "/api", "demo", "", "", 1L);
-        List<InstanceSnapshot> instances = List.of(new InstanceSnapshot("demo", "", "127.0.0.1", 8081, true));
+        List<InstanceSnapshot> instances = List.of(new InstanceSnapshot("demo", "", "", "127.0.0.1", 8081, true, 100, true, 0L));
 
         assertTrue(EvidenceNarrator.route(route).detail().contains("分组=全部分组"));
         assertTrue(EvidenceNarrator.instances(instances, route).detail().contains("demo/默认组@127.0.0.1:8081(健康)"));

@@ -51,10 +51,19 @@ public final class IntentClassifier {
     private static final List<String> EXPLAIN_WORDS = List.of("总结", "解释", "说明一下", "是什么意思", "什么意思",
             "展开说说", "详细说说", "这么判断", "这样判断", "依据是什么", "结论的依据", "怎么得出的", "怎么判断的");
 
+    /**
+     * 故障词表刻意收口语：用户不会说「服务不可用」，他会说「崩了」「顶不住」。
+     *
+     * 这里只登记「一旦出现就一定在问故障」的词，绝不登记「慢」「卡」这类裸字——
+     * 「卡券服务有几个实例」里的「卡」不是故障信号，判宽了会把状态查询误判成调查。
+     */
     private static final List<String> INVESTIGATION_WORDS = List.of("为什么", "失败", "报错", "异常", "错误", "问题",
-            "慢", "超时", "不通", "打不开", "没反应", "挂了", "不可用", "503", "排查", "调查", "诊断", "原因",
-            "怎么回事", "怎么了", "咋回", "怎么办", "咋办", "不对劲", "不正常", "有毛病", "崩了", "炸了",
-            "宕机", "卡顿", "抖动", "掉线", "起不来");
+            "慢", "超时", "不通", "打不开", "没反应", "挂了", "不可用", "503", "502", "504", "排查", "调查", "诊断",
+            "原因", "怎么回事", "怎么了", "咋回", "怎么办", "咋办", "不对劲", "不正常", "有毛病", "崩了", "炸了",
+            "宕机", "卡顿", "抖动", "掉线", "起不来",
+            "咋回事", "咋了", "故障", "有问题", "出问题", "顶不住", "扛不住", "撑不住", "雪崩",
+            "卡住", "卡死", "无响应", "不响应", "连不上", "打不通", "失联", "不可达", "访问不了",
+            "不稳定", "时好时坏", "丢包");
 
     private static final List<String> STATE_WORDS = List.of("多少", "几个", "数量", "状态", "有没有", "是否", "qps",
             "流量", "请求量", "请求数", "吞吐", "拒绝", "错误率", "5xx", "健康", "在线", "注册", "路由", "指向",
@@ -82,6 +91,13 @@ public final class IntentClassifier {
     private static final List<String> INCIDENT_CONTEXT_WORDS = List.of("这次", "当前", "刚才", "上一轮", "这个故障",
             "这个问题", "本次", "事件");
 
+    /**
+     * 「上线 / 下线」是处置动作词，但「上下线」是一个名词短语，问的是注册中心的变更经过。
+     * 动作词表按子串命中，「上下线」会误撞「下线」，因此要在处置判断之前先把它挑出来，
+     * 否则「最近有哪些实例上下线」会被当成一次摘除请求。
+     */
+    private static final List<String> CHANGE_HISTORY_WORDS = List.of("上下线");
+
     /** 对一条用户消息做规则意图分类；结果永远非空（识别不出时为 UNKNOWN）。 */
     public IntentDecision classify(String question) {
         String text = question == null ? "" : question.trim();
@@ -93,6 +109,10 @@ public final class IntentClassifier {
         if (mentionsInspection(text)) {
             return new IntentDecision(AgentIntent.CREATE_INSPECTION, Confidence.HIGH, IntentTopic.NONE, hint, timeRange,
                     ActionType.UNKNOWN, "问题描述了定时或周期性的巡检需求", false, null);
+        }
+        if (containsAny(text, CHANGE_HISTORY_WORDS)) {
+            return new IntentDecision(AgentIntent.QUERY_STATE, Confidence.HIGH, IntentTopic.NONE, hint, timeRange,
+                    ActionType.UNKNOWN, "问题在询问注册中心的实例变更经过", false, null);
         }
         if (containsAny(text, ACTION_WORDS)) {
             ActionType action = actionType(text);

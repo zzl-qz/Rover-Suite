@@ -91,7 +91,7 @@ class AgentOrchestratorTest {
                 return DiscoveryMode.NAMESERVER;
             }
         };
-        instancePort = () -> List.of(new InstanceSnapshot("demo-service", "", "10.0.0.7", 8080, true));
+        instancePort = () -> List.of(new InstanceSnapshot("demo-service", "", "", "10.0.0.7", 8080, true, 100, true, 0L));
 
         orchestrator = buildOrchestrator(routePort);
     }
@@ -132,8 +132,8 @@ class AgentOrchestratorTest {
         assertEquals("/api/demo/tt", second.path());
         assertEquals(ResourceTarget.route("/api/demo/tt"), second.target());
         assertEquals(TaskStatus.COMPLETED, second.status());
-        // 第二轮回复的措辞是「已继续调查」，与「已开始调查」区分。
-        assertTrue(agentReplies(session.sessionId()).get(1).content().startsWith("已继续调查"));
+        // 每轮各有两条 Agent 消息（受理播报 + 结论回复）：第二条播报的措辞是「已继续调查」。
+        assertTrue(agentReplies(session.sessionId()).get(2).content().startsWith("已继续调查"));
     }
 
     @Test
@@ -213,11 +213,16 @@ class AgentOrchestratorTest {
         TaskView task = submitAndAwait(session, "admin", "为什么 /api/demo/tt 调用失败？");
 
         List<AgentMessage> conversation = orchestrator.conversation(session.sessionId(), "admin");
-        assertEquals(2, conversation.size());
+        // 三条：提问、受理播报、结论回复——结论自己占一条，气泡里才是答案而不是播报。
+        assertEquals(3, conversation.size());
         assertEquals(MessageRole.USER, conversation.get(0).role());
         assertEquals(MessageRole.AGENT, conversation.get(1).role());
+        assertTrue(conversation.get(1).content().startsWith("已开始调查"));
+        assertEquals(MessageRole.AGENT, conversation.get(2).role());
+        assertEquals(task.result().summary(), conversation.get(2).content());
         assertEquals(task.taskId(), conversation.get(0).relatedTaskId());
         assertEquals(task.taskId(), conversation.get(1).relatedTaskId());
+        assertEquals(task.taskId(), conversation.get(2).relatedTaskId());
         // 首次提问生成会话标题，供会话列表展示。
         assertEquals("为什么 /api/demo/tt 调用失败？", orchestrator.session(session.sessionId(), "admin")
                 .orElseThrow().title());
@@ -254,7 +259,8 @@ class AgentOrchestratorTest {
                 .orElseThrow();
 
         assertEquals(session.sessionId(), workspace.session().sessionId());
-        assertEquals(4, workspace.messages().size());
+        // 两次提问各三条：提问、受理播报、结论回复。
+        assertEquals(6, workspace.messages().size());
         assertEquals(2, workspace.incidents().size());
         // limit 之外的旧任务不在聚合里，最新的排在最前。
         assertEquals(List.of(second.taskId()), workspace.tasks().stream().map(TaskView::taskId).toList());
@@ -299,16 +305,6 @@ class AgentOrchestratorTest {
 
         assertEquals(TargetType.SERVICE, task.target().type());
         assertEquals("/api/demo/tt", task.path());
-    }
-
-    @Test
-    void oneShotKeepsSingleInvestigationShape() throws Exception {
-        TaskView submitted = orchestrator.oneShot(null, ResourceTarget.route("/api/demo/tt"), "为什么失败？");
-        TaskView task = await(submitted.taskId());
-
-        assertEquals(ResourceTarget.route("/api/demo/tt"), task.target());
-        // 旧入口不带用户身份：会话同样没有归属，未启用登录时才可访问。
-        assertNull(orchestrator.session(task.sessionId(), null).orElseThrow().userId());
     }
 
     /** 用阻塞的只读端口重建编排链：用于制造「任务正在执行」的并发现场。 */

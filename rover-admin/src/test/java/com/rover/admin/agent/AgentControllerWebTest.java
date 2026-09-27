@@ -27,7 +27,6 @@ import com.rover.agent.core.event.TaskSnapshot;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
-import com.rover.agent.core.model.IncidentSeverity;
 import com.rover.agent.core.model.IncidentStatus;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
@@ -68,7 +67,7 @@ class AgentControllerWebTest {
             SessionStatus.ACTIVE, 1, 2, List.of("inc-1"));
 
     private static final Incident INCIDENT = new Incident("inc-1", "s1", IncidentOrigin.USER, "/api/demo/tt",
-            IncidentStatus.INVESTIGATING, IncidentSeverity.UNKNOWN, ResourceTarget.route("/api/demo/tt"),
+            IncidentStatus.INVESTIGATING, ResourceTarget.route("/api/demo/tt"),
             TimeRange.unspecified(), "", 1, 2, List.of());
 
     private static final AgentMessage REPLY =
@@ -128,27 +127,6 @@ class AgentControllerWebTest {
         mockMvc.perform(get("/api/agent/sessions").with(user("alice")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].sessionId").value("s1"));
-    }
-
-    @Test
-    void sessionDetailCarriesMessagesAndActiveIncident() throws Exception {
-        when(agent.session("s1", "alice")).thenReturn(Optional.of(SESSION));
-        when(agent.conversation("s1", "alice")).thenReturn(List.of(REPLY));
-        when(agent.incident("inc-1", "alice")).thenReturn(Optional.of(INCIDENT));
-
-        mockMvc.perform(get("/api/agent/sessions/s1").with(user("alice")))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.session.sessionId").value("s1"))
-                .andExpect(jsonPath("$.messages[0].content").value("已开始调查"))
-                .andExpect(jsonPath("$.activeIncident.incidentId").value("inc-1"));
-    }
-
-    @Test
-    void unknownSessionIsNotFound() throws Exception {
-        when(agent.session("missing", "alice")).thenReturn(Optional.empty());
-
-        mockMvc.perform(get("/api/agent/sessions/missing").with(user("alice")))
-                .andExpect(status().isNotFound());
     }
 
     /** 提问只登记任务：202 返回任务句柄，进度靠任务快照与事件流观察。 */
@@ -241,17 +219,14 @@ class AgentControllerWebTest {
     }
 
     @Test
-    void taskAndIncidentAreScopedToOwner() throws Exception {
+    void taskIsScopedToOwner() throws Exception {
         when(agent.task("t1", "alice")).thenReturn(Optional.of(TASK));
-        when(agent.incident("inc-1", "alice")).thenReturn(Optional.empty());
 
         mockMvc.perform(get("/api/agent/tasks/t1").with(user("alice")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.taskId").value("t1"));
-        mockMvc.perform(get("/api/agent/tasks/t2").with(user("alice")))
-                .andExpect(status().isNotFound());
         // 别人的事件与不存在一样：只回 404，不透露它是否存在。
-        mockMvc.perform(get("/api/agent/incidents/inc-1").with(user("alice")))
+        mockMvc.perform(get("/api/agent/tasks/t2").with(user("alice")))
                 .andExpect(status().isNotFound());
     }
 

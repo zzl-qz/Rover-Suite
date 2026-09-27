@@ -14,7 +14,6 @@ import java.util.List;
  * @param origin           调查来源
  * @param title            展示名；默认取目标取值
  * @param status           事件状态
- * @param severity         严重度；本轮一律 {@link IncidentSeverity#UNKNOWN}
  * @param target           被调查的资源对象
  * @param timeRange        调查时间范围；用户未指定时为 {@link TimeRange#unspecified()}
  * @param summary          当前结论摘要；尚无结论时为空串
@@ -23,6 +22,6 @@ import java.util.List;
  * @param taskIds          该事件下的调查任务
  */
 public record Incident(String incidentId, String sessionId, IncidentOrigin origin, String title,
-                       IncidentStatus status, IncidentSeverity severity, ResourceTarget target,
+                       IncidentStatus status, ResourceTarget target,
                        TimeRange timeRange, String summary, long createdAtMillis, long updatedAtMillis,
                        List<String> taskIds) { }

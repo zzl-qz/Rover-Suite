@@ -17,11 +17,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   <li>{@code task.submitted} / {@code task.completed} / {@code task.failed} / {@code task.rejected}：计数；</li>
  *   <li>{@code task.active} / {@code task.queue.size}：当前值（等待输入与终态都不算执行中）；</li>
  *   <li>{@code task.duration}：登记到结束的耗时，标签 status；</li>
- *   <li>{@code model.duration} / {@code model.error}：模型解读耗时与失败次数，标签 model（已规范化）；</li>
+ *   <li>{@code model.duration}：模型调用耗时，标签 model（已规范化）；</li>
+ *   <li>{@code model.calls}：模型调用次数，标签 model + scene + outcome，失败原因因此可直接读出分布
+ *       （{@code outcome=rejected} 即「有内容但不合契约」）；</li>
+ *   <li>{@code model.tokens}：输入 / 输出 token 累计，标签 model + scene + kind（拿不到用量时不报）；</li>
  *   <li>{@code sse.connections}：当前打开的事件流连接数。</li>
  * </ul>
  *
- * 标签只允许 {@code status}、{@code reason}、{@code model} 三种，取值都来自有限枚举或规范化后的模型名。
+ * 标签只允许 {@code status}、{@code reason}、{@code model}、{@code scene}、{@code outcome}、{@code kind} 六种，
+ * 取值都来自有限枚举或规范化后的模型名：{@code outcome} 与 {@code kind} 是代码里的枚举，{@code scene} 来自
+ * 运行层写死的场景名，三者都不会随用户输入变化。
  * 等待输入（WAITING_INPUT）既不算完成也不算失败：它只出现在 task.duration 的 status 标签里，
  * 这样"完成数 + 失败数 + 等待输入数 + 仍在执行数 = 登记数"始终成立。
  */
@@ -35,12 +40,20 @@ public final class MicrometerAgentMetrics implements AgentMetrics {
     static final String TASK_QUEUE_SIZE = "rover.agent.task.queue.size";
     static final String TASK_DURATION = "rover.agent.task.duration";
     static final String MODEL_DURATION = "rover.agent.model.duration";
-    static final String MODEL_ERROR = "rover.agent.model.error";
+    static final String MODEL_CALLS = "rover.agent.model.calls";
+    static final String MODEL_TOKENS = "rover.agent.model.tokens";
     static final String SSE_CONNECTIONS = "rover.agent.sse.connections";
 
     private static final String TAG_STATUS = "status";
     private static final String TAG_REASON = "reason";
     private static final String TAG_MODEL = "model";
+    private static final String TAG_SCENE = "scene";
+    private static final String TAG_OUTCOME = "outcome";
+    private static final String TAG_KIND = "kind";
+
+    /** token 分输入与输出两条线：只看合计分不清「提示词变长了」还是「模型话多了」。 */
+    private static final String KIND_PROMPT = "prompt";
+    private static final String KIND_COMPLETION = "completion";
 
     /** 模型标签的兜底取值：描述不可用时用它，避免出现空标签值。 */
     static final String UNKNOWN_MODEL = "unknown";
@@ -101,13 +114,38 @@ public final class MicrometerAgentMetrics implements AgentMetrics {
     }
 
     @Override
-    public void modelCall(String model, long durationMillis, boolean failed) {
-        String tag = normalizeModel(model);
-        Timer.builder(MODEL_DURATION).tag(TAG_MODEL, tag).register(registry)
+    public void modelCall(String model, String scene, long durationMillis, ModelCallOutcome outcome) {
+        String modelTag = normalizeModel(model);
+        String sceneTag = normalizeScene(scene);
+        ModelCallOutcome actual = outcome == null ? ModelCallOutcome.ERROR : outcome;
+        Timer.builder(MODEL_DURATION).tag(TAG_MODEL, modelTag).tag(TAG_SCENE, sceneTag).register(registry)
                 .record(Duration.ofMillis(Math.max(0, durationMillis)));
-        if (failed) {
-            registry.counter(MODEL_ERROR, TAG_MODEL, tag).increment();
+        registry.counter(MODEL_CALLS, TAG_MODEL, modelTag, TAG_SCENE, sceneTag, TAG_OUTCOME, actual.tag())
+                .increment();
+    }
+
+    @Override
+    public void modelTokens(String model, String scene, long promptTokens, long completionTokens) {
+        // 负数只可能来自异常实现：夹到 0，避免把注册表里的累计值做小。
+        String modelTag = normalizeModel(model);
+        String sceneTag = normalizeScene(scene);
+        if (promptTokens > 0) {
+            registry.counter(MODEL_TOKENS, TAG_MODEL, modelTag, TAG_SCENE, sceneTag, TAG_KIND, KIND_PROMPT)
+                    .increment(promptTokens);
         }
+        if (completionTokens > 0) {
+            registry.counter(MODEL_TOKENS, TAG_MODEL, modelTag, TAG_SCENE, sceneTag, TAG_KIND, KIND_COMPLETION)
+                    .increment(completionTokens);
+        }
+    }
+
+    /** 场景名也是标签：只允许运行层写死的短名，超长或空白时统一兜底，避免出现空标签值。 */
+    static String normalizeScene(String scene) {
+        if (scene == null || scene.isBlank()) {
+            return "unknown";
+        }
+        String value = scene.trim();
+        return value.length() > 24 ? value.substring(0, 24) : value;
     }
 
     @Override
