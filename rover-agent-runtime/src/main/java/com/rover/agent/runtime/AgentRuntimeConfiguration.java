@@ -32,9 +32,7 @@ import com.rover.agent.runtime.llm.SpringAiJsonCompletion;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import com.rover.agent.runtime.planning.LlmInvestigationPlanner;
-import com.rover.agent.runtime.repository.ChatLog;
-import com.rover.agent.runtime.repository.InvestigationBundle;
-import com.rover.agent.runtime.repository.InMemoryIncidentRepository;
+import com.rover.agent.runtime.repository.AgentStore;
 import com.rover.agent.runtime.task.AgentExecutionSettings;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
@@ -52,60 +50,50 @@ import org.springframework.context.annotation.Configuration;
  * 端口实现（如 Admin 管理口适配器、Admin 模型适配器）由宿主进程提供，
  * 因此运行层可以在同一个 JVM 内复用，也可以整体搬到独立进程。
  *
- * 会话、消息和调查快照在配置了记录库路径时写入同一份 H2。
- * 资源笔记只保存被证据确认的根因。事件仍是内存。
+ * 会话、消息、事件、任务、步骤与证据在配置了记录库路径时写进同一份库，重启后整条链可恢复；
+ * 没配路径（单测、无状态运行）时全部走内存。资源笔记只保存被证据确认的根因。
  */
 @Configuration(proxyBeanMethods = false)
 public class AgentRuntimeConfiguration {
 
-    /** 内存记录容量上限；接入持久化后由具体实现决定，业务代码不受影响。 */
+    /** 内存实现的容量上限：落库实现不受它约束，业务代码也不感知区别。 */
     private static final int SESSION_CAPACITY = 200;
     private static final int INCIDENT_CAPACITY = 500;
     private static final int MESSAGE_CAPACITY = 2000;
     private static final int TASK_CAPACITY = 200;
 
-    /** 原始聊天记录。没配记录库路径时用内存，单测不用落盘。 */
+    /** Agent 存储：没配记录库路径时用内存，单测不用落盘。 */
     @Bean(destroyMethod = "close")
-    public ChatLog chatLog(@Value("${rover.admin.log-store-path:}") String logStorePath) {
+    public AgentStore agentStore(@Value("${rover.admin.log-store-path:}") String logStorePath) {
         if (logStorePath == null || logStorePath.isBlank()) {
-            return ChatLog.memory(SESSION_CAPACITY, MESSAGE_CAPACITY);
+            return AgentStore.memory(SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY, TASK_CAPACITY);
         }
-        return ChatLog.file(logStorePath);
+        return AgentStore.file(logStorePath);
     }
 
     @Bean
-    public AgentSessionRepository agentSessionRepository(ChatLog chatLog) {
-        return chatLog.sessions();
+    public AgentSessionRepository agentSessionRepository(AgentStore agentStore) {
+        return agentStore.sessions();
     }
 
     @Bean
-    public AgentMessageRepository agentMessageRepository(ChatLog chatLog) {
-        return chatLog.messages();
+    public AgentMessageRepository agentMessageRepository(AgentStore agentStore) {
+        return agentStore.messages();
     }
 
     @Bean
-    public IncidentRepository agentIncidentRepository() {
-        return new InMemoryIncidentRepository(INCIDENT_CAPACITY);
-    }
-
-    /** 调查快照和资源笔记。没配记录库路径时任务只在内存，笔记不写。 */
-    @Bean(destroyMethod = "close")
-    public InvestigationBundle investigationBundle(
-            @Value("${rover.admin.log-store-path:}") String logStorePath) {
-        if (logStorePath == null || logStorePath.isBlank()) {
-            return InvestigationBundle.memory(TASK_CAPACITY);
-        }
-        return InvestigationBundle.file(logStorePath);
+    public IncidentRepository agentIncidentRepository(AgentStore agentStore) {
+        return agentStore.incidents();
     }
 
     @Bean
-    public AgentTaskRepository agentTaskRepository(InvestigationBundle investigationBundle) {
-        return investigationBundle.tasks();
+    public AgentTaskRepository agentTaskRepository(AgentStore agentStore) {
+        return agentStore.tasks();
     }
 
     @Bean
-    public OpsJournal opsJournal(InvestigationBundle investigationBundle) {
-        return investigationBundle.journal();
+    public OpsJournal opsJournal(AgentStore agentStore) {
+        return agentStore.journal();
     }
 
     /**

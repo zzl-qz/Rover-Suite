@@ -201,13 +201,13 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator (application entry: human message → context → best-effort target → conversation path; machine event → investigation service); InvestigationService (lifecycle of alert-triggered investigations); ToolLoopService (model-driven conversation path) |
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph: plan / execute / evaluate / clarify / synthesise nodes, looping conditional edges, conclusion synthesis |
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner: rule-based baseline plus model candidates, out-of-scope steps dropped by PlanValidator |
-| | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces; in-memory and bounded today) |
-| | `com.rover.agent.runtime.repository` | Four thread-safe in-memory implementations (lost on restart), replaced when persistence lands |
+| | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces only; capacity limits mean something for the in-memory implementations) |
+| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`: the relational implementation of session / message / incident / task / step / evidence (six `agent_*` tables, versioned migrations, one transaction per snapshot, foreign keys so no orphans), assembled by `AgentStore`; plus four thread-safe in-memory implementations used when no record store path is configured |
 | | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 9 read-only tools (data entry point of the conversation path) |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`: the built-in operations knowledge base, default `KnowledgeReadPort` implementation |
 | | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / ModelTargetInterpreter / SpringAiJsonCompletion / QuickModelCall, plus the conversation-side ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway (model adapter and honest degradation when no model exists) |
 | `rover-admin` | `com.rover.admin.agent.adapter` | Six read-only adapters: Route / Instance / Metric / Trace / Config / Event → ports, never triggering a write |
-| | `com.rover.admin.log` | `H2LogQueryAdapter` (the `LogQueryPort` implementation, mapping string types back to `RecordType`) and TelemetryCollector (periodic sampling of Gateway / Nameserver into the record store, see 6.2) |
+| | `com.rover.admin.log` | `RecordStoreLogQueryAdapter` (the `LogQueryPort` implementation, mapping string types back to `RecordType`) and TelemetryCollector (periodic sampling of Gateway / Nameserver into the record store, see 6.2) |
 | | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + composition root |
 
 **Boundary rules:**
@@ -236,7 +236,8 @@ points at an object it can resolve (same target reuses the incident, a different
 opens none — the TaskView then carries `sessionId` with an empty `incidentId`). Nothing is blocked on that binding:
 an unresolved target still reaches the model, it just has no incident to hang off. **Follow-up questions work now**:
 later messages in a session carry the N most recent messages, the active incident, the current structured target, and
-that incident's key evidence. Session and Incident live in memory only, so **everything is lost on restart**.
+that incident's key evidence. Session, Incident, and the tasks, steps, and evidence hanging off them are persisted, so
+**the whole chain survives a restart**.
 
 Approval policy and event ingestion for Level C will be split into further sub-packages as
 they are built, rather than scaffolding empty modules now.
@@ -358,7 +359,7 @@ Telemetry collector (polls manage APIs)───┘              └→ (retenti
 Built-in FAQ (InMemoryKnowledgeStore)─────────────────────── KnowledgeReadPort ──→ tool searchKnowledge
 ```
 
-**Write path (`RecordStore` / `H2RecordStore` in `rover-common`):**
+**Write path (`RecordStore` / `JdbcRecordStore` in `rover-common`):**
 
 - Dual-queue async write: diagnostic evidence (critical) is kept as much as possible and waits briefly when the queue is
   full; high-volume telemetry is best-effort and dropped when full, so no business request ever waits on storage.
@@ -439,8 +440,10 @@ catalogue described in §7.
   （而非只有人工提问）也能驱动一次根因排查，闭合「监控发现问题 → Agent 调查原因」的回路。
 - 指标对外出口：默认进程内 `SimpleMeterRegistry`；开启 `management.metrics.export.prometheus.enabled=true` 后
   注册表切换为 `PrometheusMeterRegistry`，由 `/actuator/prometheus` 供抓取，指标名与标签口径不变（`rover.agent.*`）。
-- Storage is abstracted behind four repository interfaces with thread-safe in-memory implementations only, so
-  **everything is lost on restart**; business code does not depend on maps directly.
+- Storage is abstracted behind four repository interfaces and business code never touches maps directly: with a record
+  store path configured it uses `JdbcAgentStore` (relational tables, the whole chain recoverable after a restart);
+  with none it falls back to the thread-safe in-memory implementations (lost on restart — the path taken by unit tests
+  and stateless runs).
 - User identity always comes from the backend authentication context (`Authentication.getName()`) and a `userId` in the
   request body is never accepted; sessions, tasks, and incidents are filtered by that identity.
 - Read-only collection of routes, instances, metrics, traces, configuration, registry events, historical logs, and
@@ -492,8 +495,17 @@ catalogue described in §7.
   as failed. On the conversation path the conclusion *is* the model's full answer, and its confidence is recorded as
   `MEDIUM` — the facts are checkable, but the reasoning still comes from the model.
 - Every question lands under a Session and its task is best-effort attached to an Incident (same target reuses the
-  incident, a clearly different target opens a new one, chit-chat creates none). Task state lives in Admin memory and is
-  gone after restart; the record store (§6.3) is independent of it and survives a restart.
+  incident, a clearly different target opens a new one, chit-chat creates none). Sessions, messages, incidents, tasks,
+  steps, and evidence all go to the record store and **remain queryable after a restart**, so a historical session can
+  be reopened as-is. Tasks still PENDING / RUNNING at startup are marked FAILED by the store with "Admin restarted,
+  investigation interrupted" instead of pretending to still be running; tasks waiting for input are left untouched.
+- **Schema v1 and its migration rule**: the six agent tables (`agent_session` / `agent_message` / `agent_incident` /
+  `agent_task` / `agent_step` / `agent_evidence`) are the project's database schema baseline, managed through
+  `agent_schema_migrations`. This is the only release allowed to rebuild the schema (migration v2 drops the legacy JSON
+  snapshot tables so there is never a second source of truth); from here on, migrations are only ever added, never
+  edited, and nobody is asked to wipe the database again. One task snapshot is written in a single transaction (task +
+  steps + evidence all or nothing), and the references are foreign keys rather than conventions: session → incident →
+  task → steps / evidence, so deleting a session removes the whole chain and orphans cannot exist.
 - Strict structured output plus failure classification: `JsonCompletion`'s parsing contract is now supplied by the
   caller (`Function<String, Optional<T>> parser`), and `LlmInvestigationPlanner` / `ModelTargetInterpreter` follow a
   strict contract — invalid JSON, or a value out of range, discards the whole result and falls back to the rule layer,
@@ -520,8 +532,8 @@ catalogue described in §7.
 
 **Planned (not implemented):**
 
-- Persistence for sessions / incidents / tasks (Lite ↔ Standard storage modes): Redis for caching and short-term
-  context, MySQL for tasks and audit; only in-memory implementations exist today.
+- The next storage step: today it is a single local H2 file (Lite); the same SQL with a different connection source is
+  what a MySQL Standard profile needs. Redis caching and cross-host audit are not implemented.
 - Proactive inspection: periodic self-inspection that raises its own `INSPECTION` incidents. `POST
   /api/agent/events/ingest` already lets an external alert drive an automatic investigation; what is missing is the
   agent going out to look on a schedule.

@@ -46,7 +46,7 @@ Agent 任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED` 或 
 带来源和采集时间的 `evidence`、`limitations`，以及假设验证 `hypotheses`：每条含 `id`、`statement`、
 `status`、`detail`、`sources`，其中 `status` 为 `CONFIRMED`、`REJECTED` 或 `UNKNOWN`，分别表示该假设
 被确认、排除或证据不足无法验证。配置模型后还会包含可选的 `aiAnalysis`。诊断全程只读，不会修改路由或配置；
-任务存于 Admin 内存，重启后不可查询。
+会话、消息、事件、任务、步骤与证据都写在记录库里，重启后仍可查询（未配 `rover.admin.log-store-path` 时退回内存，重启即清空）。
 
 每条证据除 `source`、`observedAtMillis`、`rawReference` 外，`metadata` 里带统计口径：`windowSeconds`（窗口秒数，`0` 表示时点快照）、
 `sampleSize`（样本量），以及该证据的资源维度（`routeId` / `hostPort` / `component`）。样本不足时如实写「无法判断」，
@@ -153,7 +153,7 @@ Admin 为它独立开会话、记一笔 `ALERT` 来源的事件，并复用与�
 - 响应 `202` + 任务视图（`sessionId`、`taskId`、`status`），接入方凭 `taskId` 轮询详情或订阅 SSE，
   与人工提问的用法完全一致。
 - 需要登录（建议专用的服务账号）；产生的会话**不归属任何人工用户**，因此不与人工会话争「单活跃任务」锁，
-  也便于在事件视图里单独聚合。会话原文写在记录库里，重启后还能查；任务和事件仍在内存里，重启后不可查询，接入方应自行保存 `taskId` 与结论。
+  也便于在事件视图里单独聚合。会话原文、事件与调查过程都写在记录库里，重启后还能查。
 - Agent 不会主动去监控源头拉取：主动巡检（定时自巡检、自建 `INSPECTION` 事件）尚未实现，这一步仍由监控系统推送。
 
 ```bash

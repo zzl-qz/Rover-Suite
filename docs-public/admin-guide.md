@@ -22,8 +22,9 @@ investigation progress in the middle, and the active incident context on the rig
 language box (e.g. "why does /api/demo/tt fail?"); the collapsible "advanced context" lets you pin route / service /
 instance and a time range, all optional. Later questions in the same session are treated as follow-ups on the active
 incident ("why are there no instances?", "what about yesterday?"), and a new incident opens only when the target
-changes. Sessions, incidents, tasks, and messages currently live in Admin memory only — **everything is lost on
-restart**, which the left column states explicitly.
+changes. Sessions, messages, incidents, tasks, steps, and evidence are written to the record store and **survive a
+restart**: a historical session can be reopened as-is and a follow-up continues on its incident. Only with no record
+store path configured (`rover.admin.log-store-path` blank) does the agent fall back to in-memory storage.
 
 The workbench works with route and instance snapshots even when no model is configured. To enable AI explanations,
 set these environment variables:
@@ -42,9 +43,9 @@ not overwrite it. The existing startup method still works and is not deprecated,
 but the Model configuration page (below) is the recommended long-term path.
 
 Keep the key outside the repository. Investigations and workbench sessions are
-held in Admin memory and disappear after restart. The Agent only reads management
-snapshots; it does not send requests to business paths or change routes and
-configuration.
+stored in the local record store and survive a restart. The Agent only reads
+management snapshots; it does not send requests to business paths or change routes
+and configuration.
 
 Once a model is configured, the answer is written into the reply bubble as it is
 generated (the console subscribes to deltas over SSE; a dropped connection does

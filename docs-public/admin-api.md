@@ -52,8 +52,9 @@ count as running and does not hold the session's concurrency slot; the question 
 `confidence`, `evidence` with source and collection time, `limitations`, and hypothesis checks
 `hypotheses` (each with `id`, `statement`, `status`, `detail`, `sources`, where `status` is
 `CONFIRMED`, `REJECTED`, or `UNKNOWN`), plus an optional `aiAnalysis` once a model is configured.
-Diagnosis is read-only: it never changes routes or configuration. Tasks live in Admin memory and
-cannot be queried after a restart.
+Diagnosis is read-only: it never changes routes or configuration. Sessions, messages, incidents, tasks,
+steps, and evidence are written to the record store and remain queryable after a restart (with
+`rover.admin.log-store-path` blank, storage falls back to memory and is lost on restart).
 
 Besides `source`, `observedAtMillis`, and `rawReference`, every piece of evidence carries its statistics in
 `metadata`: `windowSeconds` (`0` means a point-in-time snapshot), `sampleSize`, and the resource dimension
@@ -185,8 +186,8 @@ incident, and runs the investigation over exactly the same read path a human que
   SSE with that `taskId`, exactly as for a human question.
 - Sign-in is required (a dedicated service account is recommended) and the session it creates is **owned by no human
   user**, so it never competes with human sessions for the "one active task" lock and can be aggregated separately in
-  the incident view. Sessions and tasks still live in Admin memory and disappear on restart, so callers should keep
-  their own copy of the `taskId` and the conclusion.
+  the incident view. Session transcripts, incidents, and the investigation record live in the record store, so they
+  stay queryable after a restart.
 - The agent never pulls from the monitoring source on its own: proactive inspection (periodic self-inspection raising
   `INSPECTION` incidents) is not implemented, so pushing remains the monitoring system's job.
 

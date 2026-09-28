@@ -5,6 +5,10 @@
 > 均已删除；`AgentController` 另删除了 `GET /api/agent/sessions/{sessionId}`（由 `GET /api/agent/sessions/{sessionId}/workspace`
 > 取代）与 `GET /api/agent/incidents/{incidentId}`（零引用）两个冗余端点。项目处于开发阶段、不保留向后兼容。
 > 本文以下内容为当时状态，保留作演进记录，读到 `DiagnosisController` / `TaskEventSink` 请以本提示为准。
+>
+> **再往后（P3.1 落库）：** 第 15 节「无持久化」一条已解决——会话、消息、事件、任务、步骤与证据现在写进记录库的
+> 关系表（`agent_*` 六张表 + 版本化迁移），Admin 重启后整条链仍可查询；旧的整颗 TaskView JSON CLOB 已退役。
+> 当前实现以 `ops-agent` §7 与 `admin-api` 为准。
 
 本报告对应改造任务书第 37 节的十六项要求，记录本阶段（Message 提交进异步任务生命周期 → Workbench 事件化 →
 仓储/安全/指标治理）的真实落地情况。所有结论以当前工作区代码与 `mvn test` 实测为准；本文只描述已发生的事。

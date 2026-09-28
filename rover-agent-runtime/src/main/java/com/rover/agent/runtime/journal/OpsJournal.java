@@ -3,6 +3,7 @@ package com.rover.agent.runtime.journal;
 import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.journal.ResourceNotes;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.runtime.repository.JdbcAgentStore;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -18,9 +19,9 @@ public final class OpsJournal {
     private static final Logger log = LoggerFactory.getLogger(OpsJournal.class);
     private static final Pattern PATH = Pattern.compile("/[A-Za-z0-9._~/-]+");
 
-    private final H2InvestigationLog logStore;
+    private final JdbcAgentStore logStore;
 
-    private OpsJournal(H2InvestigationLog logStore) {
+    private OpsJournal(JdbcAgentStore logStore) {
         this.logStore = logStore;
     }
 
@@ -28,7 +29,7 @@ public final class OpsJournal {
         return new OpsJournal(null);
     }
 
-    public static OpsJournal of(H2InvestigationLog logStore) {
+    public static OpsJournal of(JdbcAgentStore logStore) {
         return new OpsJournal(logStore);
     }
 
