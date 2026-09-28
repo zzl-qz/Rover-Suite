@@ -26,12 +26,7 @@ Health probe: `GET /_manage/health` → `{"status":"UP","component":"..."}`
 | `rover.admin.gateway-url` | `http://127.0.0.1:80` | Gateway management base URL | Restart |
 | `rover.admin.nameserver-manage-url` | `http://127.0.0.1:8889` | Nameserver management base URL | Restart |
 | `rover.admin.admin-token` | empty | `X-Rover-Admin-Token` sent to downstream components; unrelated to console sign-in | Restart |
-| `rover.admin.auth.username` | `admin` | Console sign-in username; env `ROVER_ADMIN_USERNAME` | Restart |
-| `rover.admin.auth.password-hash` | empty | BCrypt hash of the password; **takes precedence over the plaintext**; env `ROVER_ADMIN_PASSWORD_HASH` | Restart |
-| `rover.admin.auth.password` | empty | Plaintext password, hashed into memory at startup (startup WARN recommends `password-hash`); env `ROVER_ADMIN_PASSWORD` | Restart |
-| `rover.admin.auth.max-login-failures` | `5` | Failed sign-ins allowed per source within the window; env `ROVER_ADMIN_MAX_LOGIN_FAILURES` | Restart |
-| `rover.admin.auth.failure-window-seconds` | `600` | Failure-counting window in seconds; env `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | Restart |
-| `rover.admin.auth.trust-forwarded-headers` | `false` | Source used for sign-in rate limiting: by default only the TCP peer `remoteAddr`; the first `X-Forwarded-For` segment is used only when this is explicitly enabled. Enable it only when Admin really runs behind a trusted reverse proxy — otherwise forged headers bypass the failure limit | Restart |
+| Console account | `admin` / `admin` | One shared account in the record store table `admin_user`. Seeded only when that table is empty | First startup |
 | `rover.admin.log-store-path` | `./rover-logs/rover` | Location of the local H2 record store (real file `<path>.mv.db`); missing directories are created. It holds the operational evidence the Agent reads back through the `queryLogs` tool | Restart |
 | `rover.admin.log-retention-days` | `30` | Retention for diagnostic evidence (config change / rollback / error / instance health flip); purged when older | Restart |
 | `rover.admin.log-telemetry-retention-days` | `3` | Retention for high-volume telemetry (metric samples / slow and 5xx traces). Shorter on purpose so the store does not bloat | Restart |
@@ -49,14 +44,11 @@ Health probe: `GET /_manage/health` → `{"status":"UP","component":"..."}`
 `rover.admin.admin-token` is only sent as `X-Rover-Admin-Token` when Admin calls
 Gateway/Nameserver; it is unrelated to console sign-in.
 
-Console pages and all of `/api/*` are protected by Spring Security: when not
-signed in, pages redirect to `/login.html` and `/api/*` returns `401`. With both
-`password-hash` and `password` empty, **sign-in is disabled** and this is for
-loopback debugging only: startup logs a WARN, the console shows a hint banner,
-and `GET /api/auth/status` returns `authEnabled:false`. Configure one of the two
-on real hosts (prefer `password-hash`) and still protect `server.port` with
-network ACLs, a reverse proxy or a VPN. The session cookie is `ROVERADMIN_SESSION`
-(HttpOnly, SameSite=Strict) with a timeout taken from `server.servlet.session.timeout`.
+Console pages and all of `/api/*` require sign-in: pages redirect to `/login.html`
+and `/api/*` returns `401`. The account lives in the record store's `admin_user`
+table. The default username and password are both `admin`, and everyone shares that
+one account. The session cookie is `ROVERADMIN_SESSION` (HttpOnly, SameSite=Strict)
+with a timeout taken from `server.servlet.session.timeout`.
 
 ### Master key isolation and the startup warning
 

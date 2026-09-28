@@ -3,10 +3,18 @@ package com.rover.agent.runtime.tool;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.capability.CapabilityExecutor;
 import com.rover.agent.core.capability.CapabilityResult;
+import com.rover.agent.core.investigation.Findings;
+import com.rover.agent.core.investigation.FindingsInput;
+import com.rover.agent.core.investigation.InvestigationRules;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.StepStatus;
+import com.rover.agent.core.snapshot.DiscoveryMode;
+import com.rover.agent.core.snapshot.InstanceSnapshot;
+import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
+import com.rover.agent.core.snapshot.TraceSnapshot;
 import com.rover.agent.runtime.task.InvestigationTask;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -34,6 +42,15 @@ public final class OpsTools {
     private final AtomicInteger calls = new AtomicInteger();
     private final List<Evidence> evidence = new CopyOnWriteArrayList<>();
     private final List<String> limitations = new CopyOnWriteArrayList<>();
+    /** 与证据同源的结构化快照，供调查结束后用规则判定假设。只认「按路径查过路由」的那一次。 */
+    private boolean routeQueried;
+    private String investigatedPath = "";
+    private boolean routeRead;
+    private RouteSnapshot route;
+    private DiscoveryMode discovery = DiscoveryMode.UNKNOWN;
+    private List<InstanceSnapshot> instances;
+    private TraceSnapshot traces;
+    private List<RouteUpstreamSnapshot> routeUpstreams;
 
     public OpsTools(CapabilityExecutor executor, InvestigationTask task) {
         this.executor = executor;
@@ -187,6 +204,25 @@ public final class OpsTools {
     }
 
     /**
+     * 用本次已经取回的快照做假设判定。
+     *
+     * 没按路径查过路由时返回空，避免把「只列了路由清单」误判成路径未命中。
+     */
+    public Findings judge() {
+        if (!routeQueried) {
+            return null;
+        }
+        String path = task.path() == null || task.path().isBlank() ? investigatedPath : task.path();
+        return InvestigationRules.evaluate(new FindingsInput(path, route, routeRead, discovery,
+                instances, traces, routeUpstreams));
+    }
+
+    /** 模型按路径查过的那条路径。目标解析没认出来时，用它作为资源笔记的键。 */
+    public String investigatedPath() {
+        return investigatedPath == null ? "" : investigatedPath;
+    }
+
+    /**
      * 所有工具共用的执行路径：计数、上报步骤、真实取数、累积证据。
      *
      * 额度用尽后不再取数，返回一段说明让模型收尾——静默丢弃会让模型以为查过了。
@@ -202,9 +238,33 @@ public final class OpsTools {
         task.reportCapabilityExecuted(capability);
         evidence.addAll(result.evidence());
         limitations.addAll(result.limitations());
+        remember(result, path);
         String text = render(result);
         task.step(stepType, stepName, StepStatus.COMPLETED, result.evidence().isEmpty() ? text : brief(result));
         return text;
+    }
+
+    /** 只保留规则判定要用的快照，和调查图里的取舍一致。 */
+    private void remember(CapabilityResult result, String path) {
+        if (result.capability() == AgentCapability.ROUTE_QUERY) {
+            boolean lookedUp = result.evidence().stream().anyMatch(item -> "路由匹配".equals(item.title()));
+            if (!lookedUp) {
+                return;
+            }
+            routeQueried = true;
+            if (path != null && !path.isBlank()) {
+                investigatedPath = path;
+            }
+            routeRead = result.routeRead();
+            route = result.route();
+            discovery = result.discoveryMode();
+        } else if (result.capability() == AgentCapability.INSTANCE_QUERY && result.executed()) {
+            instances = result.instances();
+        } else if (result.capability() == AgentCapability.GATEWAY_METRICS_QUERY && result.executed()) {
+            routeUpstreams = result.routeUpstreams();
+        } else if (result.capability() == AgentCapability.TRACE_QUERY && result.executed()) {
+            traces = result.traces();
+        }
     }
 
     /** 预留一次调用额度。 */

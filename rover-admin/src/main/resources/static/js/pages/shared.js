@@ -39,7 +39,7 @@ window.RoverAdminPages.shared = {
         pageSubtitle() {
             return {
                 dashboard: '数字看不懂就悬停；顶栏 1m/5m 决定「近窗」多长',
-                workbench: '多轮追问的调查工作台；会话与任务存在内存，重启即清空',
+                workbench: '多轮追问的调查工作台。会话、原话和调查过程会保留',
                 traces: '点一行在表内展开阶段耗时',
                 routes: '路由规则热更新与落盘',
                 instances: 'Nameserver 注册实例',
@@ -99,10 +99,7 @@ window.RoverAdminPages.shared = {
         },
         healthyCount() { return this.instances.filter(i => i.healthy).length; },
         unhealthyCount() { return this.instances.filter(i => !i.healthy).length; },
-        authEnabled() { return Boolean(this.auth && this.auth.authEnabled); },
         authUser() { return (this.auth && this.auth.username) ? this.auth.username : ''; },
-        /** 未配口令时控制台全开放：这是不安全状态，必须在页面上看得见。 */
-        authOpenWarning() { return Boolean(this.auth && !this.auth.authEnabled); },
     },
 
     methods: {

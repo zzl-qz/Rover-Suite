@@ -2,9 +2,8 @@
 
 Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有接口前缀为 `/api`。Admin 本身是静态控制台加聚合层，默认不保存业务数据；它会调用 Gateway 和 Nameserver 的管理接口。
 
-控制台页面与 `/api/*` 由 Spring Security 保护：未登录时页面跳 `/login.html`，接口回 `401`。只有配置了
-`rover.admin.auth.password-hash`（BCrypt，推荐）或 `rover.admin.auth.password`（明文，启动期哈希进内存）才启用登录；
-两者都留空时不鉴权（仅限本机调试，启动打 WARN 且页面顶栏显示提示条）。
+控制台页面与 `/api/*` 必须先登录：未登录时页面跳 `/login.html`，接口回 `401`。账号在记录库的
+`admin_user` 表，默认用户名和口令都是 `admin`，多人共用这一个账号。
 
 `rover.admin.admin-token` 与登录鉴权是两回事：它只用于 Admin 调用下游组件时发送 `X-Rover-Admin-Token`。
 生产环境建议同时启用登录，并用绑定地址、防火墙、反向代理或 VPN 限制 9090 的访问来源。
@@ -138,7 +137,7 @@ P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/t
 
 ### 用户身份
 
-`userId` 一律取自后端认证上下文（`Authentication.getName()`），未启用登录或匿名访问时为空；请求体里没有也不接受
+`userId` 一律取自后端认证上下文（`Authentication.getName()`），也就是登录账号；请求体里没有也不接受
 `userId` 字段，前端提交同名 JSON 字段会被忽略。会话、任务与事件的查询都按该身份过滤，默认用户只能看到自己的记录。
 
 ### 事件接入（告警 → 自动调查）
@@ -155,7 +154,7 @@ Admin 为它独立开会话、记一笔 `ALERT` 来源的事件，并复用与�
 - 响应 `202` + 任务视图（`sessionId`、`taskId`、`status`），接入方凭 `taskId` 轮询详情或订阅 SSE，
   与人工提问的用法完全一致。
 - 需要登录（建议专用的服务账号）；产生的会话**不归属任何人工用户**，因此不与人工会话争「单活跃任务」锁，
-  也便于在事件视图里单独聚合。会话与任务仍留在 Admin 内存里，重启后不可查询，接入方应自行保存 `taskId` 与结论。
+  也便于在事件视图里单独聚合。会话原文写在记录库里，重启后还能查；任务和事件仍在内存里，重启后不可查询，接入方应自行保存 `taskId` 与结论。
 - Agent 不会主动去监控源头拉取：主动巡检（定时自巡检、自建 `INSPECTION` 事件）尚未实现，这一步仍由监控系统推送。
 
 ```bash
@@ -219,7 +218,7 @@ curl -X POST "http://127.0.0.1:9090/api/configs" \
 - 未登录时的差别：`/api/*` 回 `401` 与 `{"code":401,"message":"请先登录控制台"}`；页面请求 302 到 `/login.html`。
 - 写请求（POST/PUT/DELETE）必须带 CSRF 头 `X-XSRF-TOKEN`，令牌取自 `XSRF-TOKEN` cookie（`GET /api/auth/status` 会顺手把 cookie 铺上，也可直接读该接口的 `csrfToken` 字段）；缺失或不匹配回 `403`。
 - 登录成功后 Spring Security 会**轮换** CSRF 令牌，因此调用方每次写请求都应从 cookie 现读令牌，不要缓存。
-- 同一来源在 `rover.admin.auth.failure-window-seconds` 窗口内连续失败达到 `rover.admin.auth.max-login-failures` 次后，`POST /login` 直接回 `429`；登录成功会清空该来源的计数。失败与成功都不区分"用户不存在/口令错"，失败统一 302 到 `/login.html?error=1`。
+- 登录失败统一 302 到 `/login.html?error=1`，不区分用户不存在还是口令错误。默认账号口令都是 `admin`。
 - 会话 cookie 名为 `ROVERADMIN_SESSION`（HttpOnly、SameSite=Strict），超时取 `server.servlet.session.timeout`（默认 30 分钟，以 `GET /api/auth/status` 的 `sessionTimeoutSeconds` 为准）；登录成功会更换 session id。
 - 登出只认 `POST /api/logout`：GET 登出无法被 CSRF 保护，恶意页面可以借浏览器把操作者踢下线。
 - SSE 接口 `GET /api/agent/tasks/{taskId}/events` 未登录同样回 `401`。浏览器 `EventSource` 无法附加自定义请求头，

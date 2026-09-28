@@ -59,34 +59,10 @@ answer's place.
 
 ## First login
 
-Once a credential is configured, both the console pages and all `/api/*`
-endpoints require login. Enable login in this priority order:
-
-- Set `password-hash` (`ROVER_ADMIN_PASSWORD_HASH`) to a BCrypt hash. This has
-  the highest priority.
-- Set the plaintext `password` (`ROVER_ADMIN_PASSWORD`) only for local use;
-  startup logs a WARN recommending `password-hash`.
-- If both are empty, the console does **not** require authentication, which is
-  only acceptable on loopback: startup logs a WARN and the page header shows a
-  banner.
-
-Generate a BCrypt hash (both `$2y$` and `$2b$` output verify):
-
-```bash
-htpasswd -bnBC 10 "" 'your-password' | tr -d ':\n'
-python -c "import bcrypt;print(bcrypt.hashpw(b'your-password',bcrypt.gensalt(10)).decode())"
-```
-
-The first command works on Linux/macOS/Git Bash/WSL; the second needs
-`pip install bcrypt`.
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `ROVER_ADMIN_USERNAME` | `admin` | Console login user name |
-| `ROVER_ADMIN_PASSWORD_HASH` | empty | BCrypt hash of the password, takes priority over plaintext |
-| `ROVER_ADMIN_PASSWORD` | empty | Plaintext password, hashed into memory at startup; startup logs a WARN |
-| `ROVER_ADMIN_MAX_LOGIN_FAILURES` | `5` | Failed logins allowed per source within the window |
-| `ROVER_ADMIN_FAILURE_WINDOW_SECONDS` | `600` | Failure-counting window, in seconds |
+The console stops on the login page. The default username and password are both
+`admin`, and everyone shares that one account. It is stored in the `admin_user`
+table of the same H2 file as the record store, and the default row is written
+only when the table is empty.
 
 Other behavior:
 

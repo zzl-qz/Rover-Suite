@@ -326,10 +326,10 @@ public class AgentController {
      * 对象三类互斥，路径优先于服务、服务优先于实例；时间范围要么都不填，要么填成合法闭区间。
      */
     public record MessageRequest(String message, String path, String service, String instance,
-                                 Long fromMillis, Long toMillis) {
+                                 Long fromMillis, Long toMillis, String recallSessionId) {
 
         AgentRequestOptions toOptions() {
-            return new AgentRequestOptions(target(), timeRange());
+            return new AgentRequestOptions(target(), timeRange(), recallSessionId);
         }
 
         private ResourceTarget target() {

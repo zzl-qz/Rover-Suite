@@ -281,7 +281,8 @@ class ConversationFlowTest {
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instances, TargetInterpreter.none()), investigations, retention,
                 new IntentService(), new QueryStateService(executor),
-                new ExplainService(capabilities, registry, records), new ActionPlanService(executor), toolLoop);
+                new ExplainService(capabilities, registry, records), new ActionPlanService(executor), toolLoop,
+                com.rover.agent.runtime.journal.OpsJournal.none());
     }
 
     /** 只读端口桩：两个实例，一台健康一台不健康，够验证「取到的事实长什么样」。 */

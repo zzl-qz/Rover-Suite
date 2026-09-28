@@ -53,6 +53,9 @@ public enum AgentStepType {
     /** 合成假设验证结论 */
     DIAGNOSIS,
 
+    /** 读取或写入长期记忆 */
+    MEMORY,
+
     /** 模型解读结论 */
     AI_EXPLANATION
 }
