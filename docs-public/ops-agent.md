@@ -296,8 +296,49 @@ stays error rate rather than hit rate, and the fast model still only handles che
 a rule fallback: a wrong target resolution degrades to clarification instead of driving an
 investigation with the wrong object.
 
-The eval is a standalone program, not a resident unit test (it needs the online model); 60 cases,
-and the fact that it measures target resolution but not tool selection, are its known limits.
+The eval is a standalone program, not a resident unit test (it needs the online model); 60 cases
+is its known limit. Tool selection is measured separately, below.
+
+### 6.2.1 Tool-selection eval (20 cases)
+
+Target resolution asks "did it pick the right object"; tool selection asks "did it call the right
+tool". **The latter has no fallback**: a wrong target resolution degrades to clarification — the
+worst outcome is not answering — while a wrong tool returns irrelevant evidence that the model then
+reasons over, producing a well-argued wrong conclusion. So this layer is measured on its own
+instead of resting on "the end-to-end run looked fine".
+
+The production path is what runs: prompts, tool set and loop are the real `ToolLoopService` and
+`OpsTools`; only the eight read-only ports are stubbed (fixed data, so the model always finds
+something) for observation. Judgement does not trust the model's own account — data access always
+goes through `CapabilityExecutor`, so **executed capabilities plus step details** are the credible
+evidence that a tool was really called. The expected tool set is derived mechanically from "which
+data could possibly answer this question", **not by another model**, so there is no circular
+argument.
+
+20 cases: state 4 / route 2 / trace 1 / config 1 / event 1 / history 2 / knowledge 2 / open-ended
+investigation 2 / negative 4 / multi-question 1. Result (glm-4.6, 2026-09-28, 20/20 usable):
+
+| Metric | Result |
+| :--- | ---: |
+| Selection accuracy | **90.0%** (18/20) |
+| Missed (needed tool not called) | **0.0%** |
+| Extra (irrelevant tool called) | 10.0% (2/20) |
+| Wrong arguments | **0.0%** (9 checks, all pass) |
+| Negative cases with zero data access | **4/4** |
+| Average latency | 18.5 s (5.3–53 s) |
+
+Both misses are **extra calls, not wrong conclusions**: "which hop failed" also pulled gateway
+metrics, "any instances coming or going?" also read logs — capabilities adjacent to the right
+answer, paid for in latency (about 13 s → 41 s / 20 s) rather than in correctness. To cut latency,
+those two are the place to tighten the prompt; correctness is not the worry here.
+
+The 4/4 negative result is the valuable part: chit-chat, "what can you do?", and a write request
+like "take /api/order offline" all ended with **zero tool calls** — the read-only boundary holds on
+the model side too, not only as a port-structure constraint.
+
+Limits: one run of 20 cases, no second round and no fast-model comparison yet; the open-ended
+investigation cases allow extra reads, so those judge only "did it hit the point" and their extra
+rate is understated.
 
 Degradation holds without a model: on the investigation graph, diagnosis falls back to pure rule-based (`aiAnalysis` is
 null) and collection continues. The conversation path deliberately does **not** fake a graceful degradation: its every
