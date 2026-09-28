@@ -4,11 +4,9 @@ Admin API is same-origin with the console at `http://127.0.0.1:9090` and all pat
 prefix. Admin is a static console plus an aggregation layer; it stores no business data of its own and
 calls the Gateway and Nameserver manage APIs.
 
-Console pages and `/api/*` are protected by Spring Security: when not signed in, pages redirect to
-`/login.html` and API calls return `401`. Sign-in is enabled only when
-`rover.admin.auth.password-hash` (BCrypt, recommended) or `rover.admin.auth.password` (plain text,
-hashed into memory at startup) is set. When both are empty there is no authentication at all — that is
-acceptable for loopback debugging only: startup logs a WARN and the console shows a hint banner.
+Console pages and `/api/*` require sign-in: pages redirect to `/login.html` and API calls return
+`401`. The account is the `admin_user` row in the record store. The default username and password are
+both `admin`, and everyone shares that one account.
 
 `rover.admin.admin-token` is unrelated to console sign-in: it is only sent as `X-Rover-Admin-Token`
 when Admin calls Gateway and Nameserver. In production, enable sign-in as well and keep port 9090
@@ -262,10 +260,8 @@ Route bodies must match the Gateway route model. For configuration updates `comp
   A missing or mismatched token returns `403`.
 - Spring Security **rotates** the CSRF token after a successful sign-in, so callers should read the token
   from the cookie for every write request instead of caching it.
-- After `rover.admin.auth.max-login-failures` consecutive failures from the same source within
-  `rover.admin.auth.failure-window-seconds`, `POST /login` returns `429` directly; a successful sign-in
-  clears that source's counter. Neither success nor failure distinguishes "unknown user" from "wrong
-  password"; failures always redirect to `/login.html?error=1`.
+- A failed sign-in always redirects to `/login.html?error=1`. The default username and password are
+  both `admin`.
 - The session cookie is `ROVERADMIN_SESSION` (HttpOnly, SameSite=Strict) and its timeout comes from
   `server.servlet.session.timeout` (30 minutes by default; use `sessionTimeoutSeconds` from
   `GET /api/auth/status` as the authoritative value). A successful sign-in changes the session id.

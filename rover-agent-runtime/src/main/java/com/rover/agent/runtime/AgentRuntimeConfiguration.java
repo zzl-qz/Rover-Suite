@@ -24,6 +24,7 @@ import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
+import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.knowledge.InMemoryKnowledgeStore;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ConversationModel;
@@ -35,9 +36,8 @@ import com.rover.agent.runtime.llm.SpringAiJsonCompletion;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import com.rover.agent.runtime.planning.LlmInvestigationPlanner;
-import com.rover.agent.runtime.repository.InMemoryAgentMessageRepository;
-import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
-import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
+import com.rover.agent.runtime.repository.ChatLog;
+import com.rover.agent.runtime.repository.InvestigationBundle;
 import com.rover.agent.runtime.repository.InMemoryIncidentRepository;
 import com.rover.agent.runtime.task.AgentExecutionSettings;
 import com.rover.agent.runtime.task.IncidentRegistry;
@@ -56,8 +56,8 @@ import org.springframework.context.annotation.Configuration;
  * 端口实现（如 Admin 管理口适配器、Admin 模型适配器）由宿主进程提供，
  * 因此运行层可以在同一个 JVM 内复用，也可以整体搬到独立进程。
  *
- * 存储当前一律是内存实现（重启即失），但仓储在这里统一注册成 Bean：
- * 会话、事件、消息、任务必须共用同一份存储，否则任务快照与上下文会读到互不相干的两份数据。
+ * 会话、消息和调查快照在配置了记录库路径时写入同一份 H2。
+ * 资源笔记只保存被证据确认的根因。事件仍是内存。
  */
 @Configuration(proxyBeanMethods = false)
 public class AgentRuntimeConfiguration {
@@ -68,14 +68,23 @@ public class AgentRuntimeConfiguration {
     private static final int MESSAGE_CAPACITY = 2000;
     private static final int TASK_CAPACITY = 200;
 
-    @Bean
-    public AgentSessionRepository agentSessionRepository() {
-        return new InMemoryAgentSessionRepository(SESSION_CAPACITY);
+    /** 原始聊天记录。没配记录库路径时用内存，单测不用落盘。 */
+    @Bean(destroyMethod = "close")
+    public ChatLog chatLog(@Value("${rover.admin.log-store-path:}") String logStorePath) {
+        if (logStorePath == null || logStorePath.isBlank()) {
+            return ChatLog.memory(SESSION_CAPACITY, MESSAGE_CAPACITY);
+        }
+        return ChatLog.file(logStorePath);
     }
 
     @Bean
-    public AgentMessageRepository agentMessageRepository() {
-        return new InMemoryAgentMessageRepository(MESSAGE_CAPACITY);
+    public AgentSessionRepository agentSessionRepository(ChatLog chatLog) {
+        return chatLog.sessions();
+    }
+
+    @Bean
+    public AgentMessageRepository agentMessageRepository(ChatLog chatLog) {
+        return chatLog.messages();
     }
 
     @Bean
@@ -83,9 +92,24 @@ public class AgentRuntimeConfiguration {
         return new InMemoryIncidentRepository(INCIDENT_CAPACITY);
     }
 
+    /** 调查快照和资源笔记。没配记录库路径时任务只在内存，笔记不写。 */
+    @Bean(destroyMethod = "close")
+    public InvestigationBundle investigationBundle(
+            @Value("${rover.admin.log-store-path:}") String logStorePath) {
+        if (logStorePath == null || logStorePath.isBlank()) {
+            return InvestigationBundle.memory(TASK_CAPACITY);
+        }
+        return InvestigationBundle.file(logStorePath);
+    }
+
     @Bean
-    public AgentTaskRepository agentTaskRepository() {
-        return new InMemoryAgentTaskRepository(TASK_CAPACITY);
+    public AgentTaskRepository agentTaskRepository(InvestigationBundle investigationBundle) {
+        return investigationBundle.tasks();
+    }
+
+    @Bean
+    public OpsJournal opsJournal(InvestigationBundle investigationBundle) {
+        return investigationBundle.journal();
     }
 
     /**
@@ -259,9 +283,11 @@ public class AgentRuntimeConfiguration {
                                                           InvestigationPlanner agentInvestigationPlanner,
                                                           PlanValidator agentPlanValidator,
                                                           CapabilityExecutor agentCapabilityExecutor,
-                                                          PlanningLimits agentPlanningLimits) {
+                                                          PlanningLimits agentPlanningLimits,
+                                                          OpsJournal opsJournal) {
         return new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
-                agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits);
+                agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits,
+                opsJournal);
     }
 
     /** 状态查询：单一只读能力直接回答，不规划、不跑调查。 */
@@ -317,10 +343,11 @@ public class AgentRuntimeConfiguration {
                                                QueryStateService agentQueryStateService,
                                                ExplainService agentExplainService,
                                                ActionPlanService agentActionPlanService,
-                                               ToolLoopService agentToolLoopService) {
+                                               ToolLoopService agentToolLoopService,
+                                               OpsJournal opsJournal) {
         return new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
                 agentTaskRepository, agentIncidentRegistry, agentContextManager, agentTargetResolver,
                 agentInvestigationService, agentWorkspaceRetention, agentIntentService, agentQueryStateService,
-                agentExplainService, agentActionPlanService, agentToolLoopService);
+                agentExplainService, agentActionPlanService, agentToolLoopService, opsJournal);
     }
 }

@@ -860,6 +860,22 @@ code {
     padding: 0;
 }
 /* 过程条：默认只有这一行——和主流 Agent 一样，过程收起来，答案只留气泡那一条 */
+.wb-recall { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin-top: 8px; }
+.wb-recall-card {
+    max-width: 100%;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+    cursor: pointer;
+}
+.wb-recall-card:hover { border-color: var(--accent); background: var(--wash); }
+.wb-recall-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wb-recall-card:disabled { cursor: default; opacity: 0.6; }
+
 .wb-task-toggle {
     display: flex;
     align-items: baseline;

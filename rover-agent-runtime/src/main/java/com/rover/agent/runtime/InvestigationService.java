@@ -26,6 +26,7 @@ import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.runtime.graph.DynamicInvestigationGraph;
+import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.graph.InvestigationOutcome;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.task.IncidentRegistry;
@@ -72,6 +73,7 @@ public final class InvestigationService {
     private final PlanValidator validator;
     private final CapabilityExecutor executor;
     private final PlanningLimits limits;
+    private final OpsJournal journal;
 
     /**
      * 默认装配：确定性规划器 + 标准能力注册表 + 默认规划上限。
@@ -89,7 +91,7 @@ public final class InvestigationService {
                 new PlanValidator(STANDARD_CAPABILITIES, PlanningLimits.defaults()),
                 new CapabilityExecutor(routes, instances, metrics, traces, configs, events, logs, knowledge,
                         STANDARD_CAPABILITIES),
-                PlanningLimits.defaults());
+                PlanningLimits.defaults(), OpsJournal.none());
     }
 
     /**
@@ -101,6 +103,13 @@ public final class InvestigationService {
     public InvestigationService(IncidentRegistry incidents, InvestigationTaskRegistry tasks,
                                 ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
                                 CapabilityExecutor executor, PlanningLimits limits) {
+        this(incidents, tasks, explainer, planner, validator, executor, limits, OpsJournal.none());
+    }
+
+    /** 完整装配。调查结束后，有已确认根因才写入资源笔记。 */
+    public InvestigationService(IncidentRegistry incidents, InvestigationTaskRegistry tasks,
+                                ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
+                                CapabilityExecutor executor, PlanningLimits limits, OpsJournal journal) {
         this.incidents = incidents;
         this.tasks = tasks;
         this.explainer = explainer;
@@ -108,6 +117,7 @@ public final class InvestigationService {
         this.validator = validator;
         this.executor = executor;
         this.limits = limits == null ? PlanningLimits.defaults() : limits;
+        this.journal = journal == null ? OpsJournal.none() : journal;
     }
 
     /** 一次性调查入口：新建会话与事件后提交一次「目标已确定」的调查，不需要连续追问时用它最省事。 */
@@ -212,6 +222,7 @@ public final class InvestigationService {
             task.complete(report);
             // 结论回写到事件：事件因此成为「一个问题的多次调查」的聚合点，追问时能继承最新结论。
             incidents.summarise(task.incidentId(), report.summary());
+            journal.record(task.view());
         } catch (Exception ex) {
             if (task.cancelled()) {
                 // 取消过程中断：结论已被标记 CANCELLED，不要覆盖成失败。

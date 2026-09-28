@@ -74,15 +74,6 @@ rover:
       # 主密钥：base64 的 32 字节直接使用，否则按口令 PBKDF2 派生；留空则用主密钥文件
       master-key: ${ROVER_ADMIN_MASTER_KEY:}
       master-key-file: ${ROVER_ADMIN_MASTER_KEY_FILE:}
-    auth:
-      # 控制台登录口令：留空 = 不启用登录（仅本机调试），启动会打 WARN 且页面显示提示条。
-      # 生产环境请设置 password-hash（BCrypt），或用 password 传明文由启动期哈希，二者取 hash。
-      username: ${ROVER_ADMIN_USERNAME:}
-      password-hash: ${ROVER_ADMIN_PASSWORD_HASH:}
-      password: ${ROVER_ADMIN_PASSWORD:}
-      # 同一来源在窗口内的连续登录失败上限，超出后该来源短时间不再受理登录
-      max-login-failures: ${ROVER_ADMIN_MAX_LOGIN_FAILURES:5}
-      failure-window-seconds: ${ROVER_ADMIN_FAILURE_WINDOW_SECONDS:600}
 
 # 指标对外出口（可选，默认进程内 SimpleMeterRegistry，只供诊断）：
 #   - 开启 export.prometheus.enabled=true 后，注册表切换为 PrometheusMeterRegistry，

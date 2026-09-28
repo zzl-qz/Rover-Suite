@@ -28,10 +28,13 @@ import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
+import com.rover.agent.core.recall.OpeningFilter;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
+import com.rover.agent.runtime.journal.DialogueCards;
+import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTask;
 import com.rover.agent.runtime.task.WorkspaceRetention;
@@ -100,13 +103,15 @@ public final class AgentOrchestrator {
     private final ExplainService explanations;
     private final ActionPlanService actionPlans;
     private final ToolLoopService toolLoop;
+    private final OpsJournal journal;
+    private final DialogueCards dialogue;
 
     public AgentOrchestrator(AgentSessionRepository sessions, IncidentRepository incidents,
                              AgentMessageRepository messages, AgentTaskRepository tasks, IncidentRegistry registry,
                              AgentContextManager contexts, TargetResolver targets,
                              InvestigationService investigations, WorkspaceRetention retention,
                              IntentService intents, QueryStateService queries, ExplainService explanations,
-                             ActionPlanService actionPlans, ToolLoopService toolLoop) {
+                             ActionPlanService actionPlans, ToolLoopService toolLoop, OpsJournal journal) {
         this.sessions = sessions;
         this.incidents = incidents;
         this.messages = messages;
@@ -121,6 +126,8 @@ public final class AgentOrchestrator {
         this.explanations = explanations;
         this.actionPlans = actionPlans;
         this.toolLoop = toolLoop;
+        this.journal = journal == null ? OpsJournal.none() : journal;
+        this.dialogue = new DialogueCards(sessions, messages, tasks);
     }
 
     /** 新建会话；会话归属由后端认证上下文决定。 */
@@ -238,13 +245,40 @@ public final class AgentOrchestrator {
                 task.fail("会话不存在");
                 return;
             }
+            String forcedSession = options == null ? null : options.recallSessionId();
+            DialogueCards.Outcome earlier = dialogue.recall(session, task.question(), task.taskId(),
+                    forcedSession, System.currentTimeMillis());
+            if (earlier.kind() != DialogueCards.Kind.NONE) {
+                task.classify(TaskType.CONVERSATION, CONVERSATION_DECISION);
+                task.step(AgentStepType.MEMORY, "对话回顾", StepStatus.COMPLETED,
+                        earlier.choices().isEmpty() ? "带上点名的那场结论，没有加载原文" : "昨天有多场，只列出标题");
+                task.answerRecall(earlier.text(), earlier.choices());
+                appendReply(task);
+                return;
+            }
             AgentContext context = contexts.build(task.sessionId()).orElse(null);
             bindTargetBestEffort(task, session, context, options);
             if (task.cancelled()) {
                 return;
             }
             task.classify(TaskType.CONVERSATION, CONVERSATION_DECISION);
-            toolLoop.run(task, contextSummary(context));
+            String recalled = journal.recall(subjectKey(task), task.question());
+            if (!recalled.isBlank()) {
+                task.step(AgentStepType.MEMORY, "资源笔记", StepStatus.COMPLETED, "带上该资源上次已确认的结论");
+            }
+            String background = contextSummary(context);
+            String opening = dialogue.opening(task.sessionId(),
+                    context == null ? List.of() : context.recentMessages());
+            if (!opening.isBlank()) {
+                background = background.isBlank() ? opening : opening + "\n" + background;
+            }
+            if (!recalled.isBlank()) {
+                background = background.isBlank() ? recalled : background + "\n" + recalled;
+            }
+            toolLoop.run(task, background);
+            if (!task.cancelled()) {
+                journal.record(task.view());
+            }
             appendReply(task);
             appendConclusion(task);
         } catch (Exception ex) {
@@ -660,6 +694,15 @@ public final class AgentOrchestrator {
         return prefix + describe(target) + "：按问题规划只读调查步骤。";
     }
 
+    /** 记忆按路由或服务归集。实例只挂在事件上，不单独做服务结论的键。 */
+    private static String subjectKey(InvestigationTask task) {
+        ResourceTarget target = task.target();
+        if (target == null || target.type() == TargetType.UNKNOWN || target.value().isBlank()) {
+            return null;
+        }
+        return target.type() == TargetType.INSTANCE ? null : target.value();
+    }
+
     private static String describe(ResourceTarget target) {
         return switch (target.type()) {
             case ROUTE -> "路由 " + target.value();
@@ -677,9 +720,18 @@ public final class AgentOrchestrator {
         return message;
     }
 
-    /** 首次提问时用问题原文生成会话标题（供会话列表展示），已有标题则不覆盖。 */
+    /**
+     * 会话标题取第一句具体问题。
+     *
+     * 开头若只是寒暄，先用那句占位；等真正的问题出现再换成它。已经是具体问题的标题不再改。
+     */
     private Session withTitle(Session session, String asked) {
-        if (session.title() != null && !session.title().isBlank()) {
+        String current = session.title();
+        boolean missing = current == null || current.isBlank();
+        if (!missing && !OpeningFilter.aside(current)) {
+            return session;
+        }
+        if (!missing && OpeningFilter.aside(asked)) {
             return session;
         }
         String title = asked.length() > MAX_TITLE_LENGTH ? asked.substring(0, MAX_TITLE_LENGTH) : asked;

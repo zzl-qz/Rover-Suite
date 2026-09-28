@@ -1,7 +1,7 @@
 /**
  * Agent 工作台：把「一次路径诊断」升级成带会话上下文的连续调查。
  *
- * 三栏：左栏会话列表（内存存储，重启即清空），中栏对话与调查进度，右栏当前事件上下文。
+ * 三栏：左栏会话列表（原话与调查过程落在记录库），中栏对话与调查进度，右栏当前事件上下文。
  * 数据来源分两条：会话的展示数据一次取自聚合接口 workspace（会话 + 对话 + 事件 + 最近任务），
  * 任务卡上的步骤、状态与解读由「任务事件流」实时推送——轮询只做断线、刷新与后台恢复时的兜底。
  *
@@ -53,6 +53,8 @@ window.RoverAdminPages.workbench = {
             wbContext: { path: '', service: '', instance: '', from: '', to: '' },
             wbContextOpen: false,
             wbSending: false,
+            /** 点旧对话卡片时带上的会话 ID，只对这一次发送有效。 */
+            wbRecallSessionId: '',
             /** 本地回显的用户消息：服务端受理前先显示出来，IM 的手感是「发出去就立刻看到」。 */
             wbPending: [],
             wbDetailOpen: {},
@@ -411,6 +413,8 @@ window.RoverAdminPages.workbench = {
             if (!message || this.wbSending) return;
             const extra = this.wbRequestContext();
             if (extra === null) return;
+            if (this.wbRecallSessionId) extra.recallSessionId = this.wbRecallSessionId;
+            this.wbRecallSessionId = '';
             this.wbSending = true;
             this.wbError = null;
             this.wbInput = '';
@@ -1028,6 +1032,7 @@ window.RoverAdminPages.workbench = {
                 CONFIG_INVESTIGATION: '读取配置',
                 EVENT_INVESTIGATION: '读取事件',
                 DIAGNOSIS: '生成结论',
+                MEMORY: '记忆',
                 AI_EXPLANATION: 'AI 解读',
             }[type] || type || '步骤';
         },
@@ -1109,16 +1114,22 @@ window.RoverAdminPages.workbench = {
         },
 
         /**
-         * 任务卡是否展开：默认只留一行「过程条」，点开才看真实调查过程。
-         *
-         * 调查中的任务例外——步骤正在往上滚，铺开才有意义；定型后自动折回一行。
-         * 用户手动开合过就以用户的为准（{@link #wbDetailOpen} 里存着手动状态）。
+         * 任务卡是否展开。默认收起，只留一行进度；用户点开才看步骤和证据。
          */
         wbTaskOpen(task) {
             if (!task) return false;
-            const manual = this.wbDetailOpen[task.taskId];
-            if (manual !== undefined) return manual;
-            return !this.wbTaskSettled(task.status);
+            return this.wbDetailOpen[task.taskId] === true;
+        },
+
+        wbRecallCards(task) {
+            return (task && task.recalls) || [];
+        },
+
+        wbPickRecall(card) {
+            if (!card || !card.value || this.wbSending) return;
+            this.wbRecallSessionId = card.value;
+            this.wbInput = card.label;
+            this.wbSend();
         },
 
         wbToggleTask(taskId) {

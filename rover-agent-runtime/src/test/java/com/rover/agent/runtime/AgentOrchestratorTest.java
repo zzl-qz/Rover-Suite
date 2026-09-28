@@ -38,6 +38,7 @@ import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.runtime.llm.ModelExplainer;
+import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.llm.NoopChatModelGateway;
 import com.rover.agent.runtime.repository.InMemoryAgentMessageRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
@@ -337,7 +338,7 @@ class AgentOrchestratorTest {
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
                 new IntentService(), new QueryStateService(executor),
                 new ExplainService(capabilities, registry, records), new ActionPlanService(executor),
-                ScriptedConversationModel.service(executor, tools -> "已按问题作答。"));
+                ScriptedConversationModel.service(executor, tools -> "已按问题作答。"), OpsJournal.none());
     }
 
     private TaskView submit(Session session, String userId, String message) {

@@ -108,16 +108,14 @@ class AgentControllerWebTest {
         verify(agent, never()).startSession("admin", null);
     }
 
-    /** 测试配置下未启用登录：没有对应用户，会话也不带归属。 */
+    /** 没登录不能建会话。 */
     @Test
-    void anonymousRequestHasNoUser() throws Exception {
-        when(agent.startSession(null, null)).thenReturn(SESSION);
-
+    void anonymousRequestIsRejected() throws Exception {
         mockMvc.perform(post("/api/agent/sessions").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
-                .andExpect(status().isOk());
+                .andExpect(status().isUnauthorized());
 
-        verify(agent).startSession(null, null);
+        verify(agent, never()).startSession(any(), any());
     }
 
     @Test

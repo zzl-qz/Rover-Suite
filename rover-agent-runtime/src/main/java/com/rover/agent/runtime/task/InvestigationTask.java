@@ -9,7 +9,9 @@ import com.rover.agent.core.event.TaskSnapshot;
 import com.rover.agent.core.model.ActionPlan;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.IntentDecision;
+import com.rover.agent.core.model.Confidence;
 import com.rover.agent.core.model.InvestigationReport;
+import com.rover.agent.core.model.RecallChoice;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Step;
 import com.rover.agent.core.model.StepStatus;
@@ -64,6 +66,7 @@ public final class InvestigationTask implements InvestigationReporter {
     private InvestigationReport report;
     private String error;
     private String clarification;
+    private List<RecallChoice> recalls = List.of();
     private long eventSeq;
     private boolean settled;
     /** 协作式取消标志：执行线程在每个检查点轮询它，置位后不再产出结论。volatile 保证跨线程可见。 */
@@ -305,6 +308,13 @@ public final class InvestigationTask implements InvestigationReporter {
         };
     }
 
+    /** 指认一场旧对话：结论是那张卡片，候选卡片一并落在快照里给前端点。 */
+    public synchronized void answerRecall(String summary, List<RecallChoice> choices) {
+        this.recalls = choices == null ? List.of() : List.copyOf(choices);
+        complete(new InvestigationReport(summary == null ? "" : summary, Confidence.MEDIUM,
+                List.of(), List.of(), List.of(), null));
+    }
+
     public synchronized void complete(InvestigationReport report) {
         this.report = report;
         this.completedAtMillis = System.currentTimeMillis();
@@ -381,7 +391,7 @@ public final class InvestigationTask implements InvestigationReporter {
     public synchronized TaskView view() {
         return new TaskView(taskId, sessionId, incidentId, status, currentStage, path, target, question,
                 createdAtMillis, completedAtMillis, List.copyOf(steps), report, error, clarification,
-                taskType, intent, plan, List.copyOf(executedCapabilities), actionPlan);
+                taskType, intent, plan, List.copyOf(executedCapabilities), actionPlan, recalls);
     }
 
     /** 任务快照：视图 + 已产生的解读与思考全文 + 已发布的最新事件序号（订阅者的对齐依据）。 */

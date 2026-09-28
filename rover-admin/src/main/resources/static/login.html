@@ -20,16 +20,10 @@
 
     <section class="login-panel">
         <h1 class="login-title">登录控制台</h1>
-        <p class="login-hint">这里可以改动网关路由与配置，请确认操作者身份。</p>
+        <p class="login-hint">多人共用一个账号。默认用户名和口令都是 admin。</p>
 
         <div class="banner danger" id="errorBanner" hidden>
             <strong>用户名或口令不正确</strong>
-            <span id="errorDetail"></span>
-        </div>
-        <div class="banner warn" id="openBanner" hidden>
-            <strong>未启用登录鉴权</strong>
-            <span>当前控制台对所有来源开放，仅限本机调试。</span>
-            <a class="btn ghost" href="/">进入控制台</a>
         </div>
 
         <form class="login-form" id="loginForm" method="post" action="/login" hidden>
@@ -45,9 +39,7 @@
             <button class="btn primary login-submit" id="submitBtn" type="submit">登录</button>
         </form>
 
-        <p class="login-foot">
-            忘记口令时，请运维在服务端设置 <code>ROVER_ADMIN_PASSWORD_HASH</code> 后重启 Admin。
-        </p>
+        <p class="login-foot">账号保存在本机记录库的 admin_user 表里，首次启动会写入默认账号。</p>
     </section>
 </main>
 <script src="/js/login.js"></script>

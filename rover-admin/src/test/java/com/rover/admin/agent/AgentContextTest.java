@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -112,14 +113,14 @@ class AgentContextTest {
                 JsonNodeFactory.instance.objectNode().put("sampleRate", 1.0)
                         .set("traces", JsonNodeFactory.instance.arrayNode()));
 
-        // 走真实过滤器链：安全链在测试配置下不启用登录，但 CSRF 依然生效，写请求必须带令牌。
-        String sessionId = mapper.readTree(mockMvc.perform(post("/api/agent/sessions").with(csrf())
+        // 走真实过滤器链：必须已登录，写请求还要带 CSRF。
+        String sessionId = mapper.readTree(mockMvc.perform(post("/api/agent/sessions").with(user("admin")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString())
                 .path("sessionId").asText();
 
         String created = mockMvc.perform(post("/api/agent/sessions/" + sessionId + "/messages")
-                        .with(csrf())
+                        .with(user("admin")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"message\":\"为什么 /api/demo/tt 调用失败？\"}"))
                 .andExpect(status().isAccepted()).andReturn().getResponse().getContentAsString();
@@ -128,7 +129,7 @@ class AgentContextTest {
         JsonNode task;
         long deadline = System.currentTimeMillis() + 5000;
         do {
-            String response = mockMvc.perform(get("/api/agent/tasks/" + taskId))
+            String response = mockMvc.perform(get("/api/agent/tasks/" + taskId).with(user("admin")))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
             task = mapper.readTree(response);
             if ("COMPLETED".equals(task.path("status").asText())) break;

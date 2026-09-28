@@ -2,7 +2,6 @@ package com.rover.admin;
 
 import com.rover.admin.agent.model.AdminModelProperties;
 import com.rover.admin.config.AdminProperties;
-import com.rover.admin.security.AdminSecurityProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -13,7 +12,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
  * Description: Rover 管理端启动入口
  */
 @SpringBootApplication
-@EnableConfigurationProperties({AdminProperties.class, AdminModelProperties.class, AdminSecurityProperties.class})
+@EnableConfigurationProperties({AdminProperties.class, AdminModelProperties.class})
 public class AdminApplication {
 
     public static void main(String[] args) {

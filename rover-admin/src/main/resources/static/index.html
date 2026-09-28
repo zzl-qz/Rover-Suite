@@ -56,10 +56,10 @@
                 <span class="discovery-pill" v-if="discoveryType && discoveryType !== 'UNKNOWN'">
                     <span class="dot ok"></span>{{ discoveryType }}
                 </span>
-                <span class="user-chip" v-if="authEnabled" :title="'已登录：' + (authUser || 'admin')">
+                <span class="user-chip" :title="'已登录：' + (authUser || 'admin')">
                     <span class="dot ok"></span>{{ authUser || '已登录' }}
                 </span>
-                <button class="btn ghost" v-if="authEnabled" @click="logout">登出</button>
+                <button class="btn ghost" @click="logout">登出</button>
                 <button class="btn ghost" @click="refreshAll" :disabled="loading">
                     {{ loading ? '刷新中...' : '刷新' }}
                 </button>
@@ -67,11 +67,6 @@
         </header>
 
         <main class="content">
-            <div v-if="authOpenWarning" class="banner warn">
-                <strong>未启用登录鉴权</strong>
-                <span>控制台当前对所有来源开放，仅限本机调试。</span>
-                <span class="banner-hint">在服务端设置 <code>ROVER_ADMIN_PASSWORD_HASH</code> 后重启 Admin 即可启用登录。</span>
-            </div>
             <!-- ================= 仪表盘 ================= -->
             <section v-if="page === 'dashboard'" class="page">
                 <div v-if="metricsError" class="banner warn">
@@ -418,7 +413,7 @@
                                 <button class="btn mini ml-auto" @click="wbNewSession" :disabled="wbSending">新建会话</button>
                             </div>
                             <div class="banner tip slim">
-                                <span>会话与调查任务都存在内存里，Admin 重启后清空。</span>
+                                <span>会话、原话和调查过程写在本机记录库里，重启后还在。当前事件要重新提问才会再出现。</span>
                             </div>
                             <div v-if="!wbSessions.length" class="empty slim">
                                 还没有会话。
@@ -459,13 +454,12 @@
                                 <div v-if="!wbActiveSessionId || !wbTurns.length" class="wb-welcome">
                                     <span class="wb-avatar agent big">R</span>
                                     <h3>Rover Ops Agent</h3>
-                                    <p>只读运维诊断：基于 Gateway 路由、服务实例、实时指标与抽样追踪回答状态问题、调查调用失败；
-                                        日志、变更记录与知识检索尚未接入，当前版本不执行任何写操作。</p>
+                                    <p>只读运维诊断：查路由、实例、指标、追踪、配置和注册事件，也能查历史变更和内置运维说明。不修改路由和配置。</p>
                                     <div class="wb-examples">
                                         <button v-for="example in wbExamples" :key="example" type="button"
                                                 class="wb-example" @click="wbUseExample(example)">{{ example }}</button>
                                     </div>
-                                    <p class="wb-welcome-note">同一个会话里的目标与结论会跨多轮保留，可以直接追问「为什么没有实例？」「那昨天呢？」。</p>
+                                    <p class="wb-welcome-note">同一个会话里可以直接追问。重启后原话还在；正在查的事件要重新问一句才会再挂上。</p>
                                 </div>
                                 <template v-else>
                                 <template v-for="turn in wbTurns" :key="turn.key">
@@ -658,6 +652,11 @@
                                              正文按 Markdown 渲染（列表/标题/代码块），流式光标由渲染器贴在末字之后 -->
                                         <div v-if="turn.message" class="wb-bubble agent">
                                             <div class="wb-md" v-html="mdHtml(wbAnswerText(turn), wbIsStreaming(turn.task))"></div>
+                                        </div>
+                                        <div v-if="wbRecallCards(turn.task).length" class="wb-recall">
+                                            <button v-for="card in wbRecallCards(turn.task)" :key="card.value" type="button"
+                                                    class="wb-recall-card" :disabled="wbSending"
+                                                    @click="wbPickRecall(card)">{{ card.label }}</button>
                                         </div>
                                         <div v-if="turn.message" class="wb-meta">
                                             Rover Ops Agent · {{ fmtTime(turn.message.createdAtMillis) }}
