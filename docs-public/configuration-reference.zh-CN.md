@@ -70,12 +70,12 @@
 | `rover.agent.planning.max-rounds` | `3` | 单次动态调查最多规划轮数（>0）；触顶后停止采集并如实记录判断边界 | 重启 |
 | `rover.agent.planning.max-tool-calls` | `10` | 单次调查最多只读能力调用次数（>0）；触顶后不再发起任何调用，未执行的步骤如实上报 | 重启 |
 | `rover.agent.planning.max-plan-steps` | `6` | 单轮计划最多步骤数（>0）；超出部分由计划校验截断，未登记的写能力一律被丢弃 | 重启 |
-| `rover.agent.llm.quick-timeout-seconds` | `10` | 意图识别 / 目标解析 / 调查规划这类"失败也能兜底"的小调用等待上限（秒，`0`=用模型配置里的超时）；只在超时后重试一次，「AI 解读」不受影响 | 重启 |
+| `rover.agent.llm.quick-timeout-seconds` | `10` | 目标解析 / 调查规划这类"失败也能兜底"的小调用等待上限（秒，`0`=用模型配置里的超时）；只在超时后重试一次，「AI 解读」与对话主路径不受影响 | 重启 |
 | `rover.agent.metrics.enabled` | `true` | Agent 运行指标总开关；`false` 为应急降级，不注册任何 Meter，业务逻辑不变 | 重启 |
 | `management.metrics.export.prometheus.enabled` | `false` | 指标对外出口开关：置 `true` 后注册表切换为 `PrometheusMeterRegistry`，由 `/actuator/prometheus` 供抓取；指标名与标签口径不变（`rover.agent.*`）。需同步在 `management.endpoints.web.exposure.include` 中加入 `prometheus` | 重启 |
 | `spring.ai.tools.limits.max-total-tool-calls` | `30` | 对话主路径单次任务的工具调用总预算，需与 `OpsTools.MAX_CALLS` 对齐；给小了会让「一句话问三件事」在取数途中被掐断 | 重启 |
 | `spring.ai.tools.limits.max-calls-per-tool-default` | `10` | 该预算内单个工具的调用上限 | 重启 |
-| `spring.ai.openai.fast-base-url` / `fast-model` / `fast-api-key` | 空 | 可选的小模型，承接意图识别 / 目标解析 / 调查规划这类廉价结构化调用；未配置时回落主模型并关闭 thinking | 重启 |
+| `spring.ai.openai.fast-base-url` / `fast-model` / `fast-api-key` | 空 | 可选的小模型，承接目标解析 / 调查规划这类廉价结构化调用；未配置时回落主模型并关闭 thinking | 重启 |
 
 三个执行参数与三个规划限制越界时启动直接失败，让配置错误在启动期暴露，而不是运行期表现为「任务莫名被拒」或「调查提前收尾」。
 
@@ -85,7 +85,7 @@
 与 `model.tokens`（标签 `model`、`scene`、`kind`，取值 `prompt` / `completion`；拿不到用量就不上报、不记 0）分别记录耗时、
 调用次数与 token 用量。原 `model.error` 已移除：单一 failed 布尔只能回答「失败几次」，回答不了「失败在哪一环」，
 现由 `model.calls` 的 `outcome` 标签（`ok` / `not_configured` / `unavailable` / `timeout` / `error` / `empty` / `rejected`）区分失败原因，
-其中 `rejected` 表示「模型返回了文本但不符合输出契约」。`scene` 取有限中文取值（`意图识别`、`目标解析`、`调查规划`、`解读`），
+其中 `rejected` 表示「模型返回了文本但不符合输出契约」。`scene` 取有限中文取值（`目标解析`、`调查规划`、`解读`、`对话`），
 空白归一为 `unknown`，超 24 字符截断。
 标签只允许 `status`、`reason`、`model`、`scene`、`outcome`、`kind` 六种有限取值，模型名会规范化并截断，不引入标签基数风险。
 

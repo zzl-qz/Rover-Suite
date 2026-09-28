@@ -497,7 +497,6 @@
 
                                         <div v-if="wbTaskOpen(turn.task)" class="wb-task-body">
                                         <div class="wb-task-head">
-                                            <span v-if="turn.task.intent" class="badge comp">{{ wbIntentLabel(turn.task.intent.intent) }}</span>
                                             <span v-if="wbCurrentStage(turn.task)" class="card-hint">当前阶段：{{ wbCurrentStage(turn.task) }}</span>
                                             <span class="card-hint">{{ fmtTime(turn.task.createdAtMillis) }}</span>
                                             <button v-if="wbCanCancel(turn.task)" type="button"
@@ -510,9 +509,6 @@
                                         <div class="diagnosis-target">
                                             <code v-if="wbTargetText(turn.task)">{{ wbTargetText(turn.task) }}</code>
                                             <span class="muted">{{ wbTargetText(turn.task) ? '调查对象' : '这次提问没有指定具体对象，按全局取值' }}</span>
-                                        </div>
-                                        <div v-if="turn.task.intent && turn.task.intent.reason" class="card-hint wb-intent-reason">
-                                            意图判断依据：{{ turn.task.intent.reason }}
                                         </div>
                                         <div v-if="turn.task.clarification" class="banner tip diagnosis-task-error">
                                             <strong>需要补充调查对象</strong>
@@ -547,23 +543,6 @@
                                             <div v-if="wbUncertainties(turn.task).length" class="wb-uncertain">
                                                 <span class="badge warn">{{ wbUncertainties(turn.task).length }} 处没能确认</span>
                                                 <span class="muted">{{ wbUncertaintyText(turn.task) }}</span>
-                                            </div>
-                                        </div>
-                                        <div v-if="turn.task.actionPlan" class="wb-action-plan">
-                                            <div class="banner tip">
-                                                <strong>[当前版本仅生成计划，不执行]</strong>
-                                                <span>{{ turn.task.actionPlan.blockedReason }}</span>
-                                            </div>
-                                            <div class="wb-kv">
-                                                <div><span>动作</span><b>{{ wbActionTypeLabel(turn.task.actionPlan.actionType) }}</b></div>
-                                                <div><span>风险</span><b><span class="badge" :class="wbRiskBadge(turn.task.actionPlan.riskLevel)">{{ wbRiskLabel(turn.task.actionPlan.riskLevel) }}</span></b></div>
-                                                <div class="wide"><span>目标</span><b><code>{{ wbActionTargetText(turn.task.actionPlan) }}</code></b></div>
-                                                <div class="wide"><span>建议依据</span><b>{{ turn.task.actionPlan.reason || '-' }}</b></div>
-                                                <div class="wide"><span>当前状态</span><b>{{ turn.task.actionPlan.currentState || '-' }}</b></div>
-                                                <div class="wide"><span>目标状态</span><b>{{ turn.task.actionPlan.desiredState || '-' }}</b></div>
-                                                <div class="wide"><span>预期影响</span><b>{{ turn.task.actionPlan.expectedImpact || '-' }}</b></div>
-                                                <div class="wide"><span>验证方式</span><b>{{ turn.task.actionPlan.verificationPlan || '-' }}</b></div>
-                                                <div class="wide"><span>回滚方式</span><b>{{ turn.task.actionPlan.rollbackPlan || '-' }}</b></div>
                                             </div>
                                         </div>
                                         <div class="wb-detail">
@@ -1018,7 +997,7 @@
                             </div>
                             <div class="field wide" v-if="currentVendorMap.fastModel">
                                 <label>快速模型（后台指定）</label>
-                                <div class="muted"><code>{{ currentVendorMap.fastModel }}</code> <span class="card-hint">承接意图/目标/规划等廉价调用</span></div>
+                                <div class="muted"><code>{{ currentVendorMap.fastModel }}</code> <span class="card-hint">承接目标解析/调查规划等廉价调用</span></div>
                             </div>
                         </template>
 

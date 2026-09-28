@@ -45,7 +45,7 @@ public interface AgentMetrics {
      *
      * {@code outcome} 是有限枚举，因此失败可以按原因分开数（未配置 / 超时 / 报错 / 返回空 / 输出越界），
      * 而不是只有一个「失败了」——这是判断「模型辅助到底贡献了多少、又在哪一环丢的」的唯一依据。
-     * 场景取有限取值（意图识别 / 目标解析 / 调查规划 / 解读），模型来源与用途分开看才不至于互相掩盖。
+     * 场景取有限取值（目标解析 / 调查规划 / 解读 / 对话），模型来源与用途分开看才不至于互相掩盖。
      */
     default void modelCall(String model, String scene, long durationMillis, ModelCallOutcome outcome) {
     }

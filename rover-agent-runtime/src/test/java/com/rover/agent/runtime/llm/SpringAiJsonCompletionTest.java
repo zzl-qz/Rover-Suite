@@ -27,7 +27,7 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 /**
  * 廉价调用加固：按场景超时收紧等待上限，且只为超时重试一次。
  *
- * 意图识别、调查规划这类"失败也能兜底"的小调用不该让用户等满配置里的 30 秒；
+ * 目标解析、调查规划这类"失败也能兜底"的小调用不该让用户等满配置里的 30 秒；
  * 但重试只对超时成立——鉴权、模型不存在这类失败重试一次结果也一样，白等。
  * 另一半是失败分类：每次调用都要能把结局记成可数的原因，否则「模型到底帮上忙没有」无从判断。
  */
@@ -47,7 +47,7 @@ class SpringAiJsonCompletionTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
         Optional<String> answer = new SpringAiJsonCompletion(gateway, new MicrometerAgentMetrics(registry),
-                "意图识别", 10).complete("系统提示", "用户消息", ACCEPT_ANY);
+                "目标解析", 10).complete("系统提示", "用户消息", ACCEPT_ANY);
 
         assertTrue(answer.isPresent());
         assertEquals("{\"intent\":\"QUERY_STATE\"}", answer.get());
@@ -56,7 +56,7 @@ class SpringAiJsonCompletionTest {
         // 指标口径不变：重试算同一次调用，延迟是含重试的总耗时，最终成功只记一条 ok
         assertEquals(1L, registry.get("rover.agent.model.duration").timer().count());
         assertEquals(1.0, registry.get("rover.agent.model.calls")
-                .tag("outcome", "ok").tag("scene", "意图识别").counter().count());
+                .tag("outcome", "ok").tag("scene", "目标解析").counter().count());
     }
 
     @Test
@@ -68,7 +68,7 @@ class SpringAiJsonCompletionTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
         Optional<String> answer = new SpringAiJsonCompletion(gateway, new MicrometerAgentMetrics(registry),
-                "意图识别", 10).complete("系统提示", "用户消息", ACCEPT_ANY);
+                "目标解析", 10).complete("系统提示", "用户消息", ACCEPT_ANY);
 
         assertTrue(answer.isEmpty());
         assertEquals(1, gateway.requestedTimeouts.size());
@@ -84,7 +84,7 @@ class SpringAiJsonCompletionTest {
         when(model.call(any(Prompt.class))).thenThrow(new RuntimeException(new InterruptedIOException("timeout")));
         RecordingGateway gateway = new RecordingGateway(model);
 
-        Optional<String> answer = new SpringAiJsonCompletion(gateway, AgentMetrics.NOOP, "意图识别", 0)
+        Optional<String> answer = new SpringAiJsonCompletion(gateway, AgentMetrics.NOOP, "目标解析", 0)
                 .complete("系统提示", "用户消息", ACCEPT_ANY);
 
         assertTrue(answer.isEmpty());
@@ -102,7 +102,7 @@ class SpringAiJsonCompletionTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
         Optional<String> answer = new SpringAiJsonCompletion(gateway, new MicrometerAgentMetrics(registry),
-                "意图识别", 10).complete("系统提示", "用户消息", raw -> Optional.empty());
+                "目标解析", 10).complete("系统提示", "用户消息", raw -> Optional.empty());
 
         assertTrue(answer.isEmpty());
         assertEquals(1.0, registry.get("rover.agent.model.calls")
@@ -124,7 +124,7 @@ class SpringAiJsonCompletionTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
 
         Optional<String> answer = new SpringAiJsonCompletion(gateway, new MicrometerAgentMetrics(registry),
-                "意图识别", 10).complete("系统提示", "用户消息", ACCEPT_ANY);
+                "目标解析", 10).complete("系统提示", "用户消息", ACCEPT_ANY);
 
         assertTrue(answer.isEmpty());
         assertTrue(gateway.requestedTimeouts.isEmpty());

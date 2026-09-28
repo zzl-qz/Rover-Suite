@@ -72,16 +72,16 @@ class MicrometerAgentMetricsTest {
     /** 失败必须按原因分开数：只记「失败了几次」判断不出是部署、链路还是提示词的问题。 */
     @Test
     void modelOutcomesAreCountedSeparatelyPerScene() {
-        metrics.modelCall("DeepSeek-Chat @ api.deepseek.com", "意图识别", 800L, ModelCallOutcome.OK);
-        metrics.modelCall("DeepSeek-Chat @ api.deepseek.com", "意图识别", 30L, ModelCallOutcome.TIMEOUT);
+        metrics.modelCall("DeepSeek-Chat @ api.deepseek.com", "目标解析", 800L, ModelCallOutcome.OK);
+        metrics.modelCall("DeepSeek-Chat @ api.deepseek.com", "目标解析", 30L, ModelCallOutcome.TIMEOUT);
         metrics.modelCall("未配置模型", "调查规划", 5L, ModelCallOutcome.NOT_CONFIGURED);
 
         assertEquals(2, registry.get(MicrometerAgentMetrics.MODEL_DURATION)
-                .tag("model", "deepseek-chat").tag("scene", "意图识别").timer().count());
+                .tag("model", "deepseek-chat").tag("scene", "目标解析").timer().count());
         assertEquals(1.0, registry.get(MicrometerAgentMetrics.MODEL_CALLS)
-                .tag("outcome", "ok").tag("scene", "意图识别").counter().count());
+                .tag("outcome", "ok").tag("scene", "目标解析").counter().count());
         assertEquals(1.0, registry.get(MicrometerAgentMetrics.MODEL_CALLS)
-                .tag("outcome", "timeout").tag("scene", "意图识别").counter().count());
+                .tag("outcome", "timeout").tag("scene", "目标解析").counter().count());
         // 描述不可用时用 unknown 兜底，场景照旧分开：两个维度都不允许出现空标签值。
         assertEquals(1.0, registry.get(MicrometerAgentMetrics.MODEL_CALLS)
                 .tag("model", MicrometerAgentMetrics.UNKNOWN_MODEL)
@@ -109,7 +109,7 @@ class MicrometerAgentMetricsTest {
     void sceneTagIsBounded() {
         assertEquals("unknown", MicrometerAgentMetrics.normalizeScene(null));
         assertEquals("unknown", MicrometerAgentMetrics.normalizeScene("   "));
-        assertEquals("意图识别", MicrometerAgentMetrics.normalizeScene(" 意图识别 "));
+        assertEquals("目标解析", MicrometerAgentMetrics.normalizeScene(" 目标解析 "));
         assertTrue(MicrometerAgentMetrics.normalizeScene("场".repeat(50)).length() <= 24);
     }
 

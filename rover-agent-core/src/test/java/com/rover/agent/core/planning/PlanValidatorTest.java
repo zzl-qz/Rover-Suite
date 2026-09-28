@@ -20,7 +20,7 @@ class PlanValidatorTest {
     private final PlanValidator validator = new PlanValidator(REGISTRY, PlanningLimits.defaults());
 
     private static PlanningRequest request(String path, ResourceTarget target) {
-        return new PlanningRequest("为什么失败？", null, target, path, List.of(), List.of());
+        return new PlanningRequest("为什么失败？", target, path, List.of(), List.of());
     }
 
     private static InvestigationPlan planOf(AgentCapability... capabilities) {

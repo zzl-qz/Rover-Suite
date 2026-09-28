@@ -22,7 +22,7 @@ public interface ChatModelGateway {
     ChatClient chatClient();
 
     /**
-     * 取一个"等待上限不超过 {@code timeoutSeconds} 秒"的客户端，供意图识别这类廉价调用收紧超时。
+     * 取一个"等待上限不超过 {@code timeoutSeconds} 秒"的客户端，供目标解析这类廉价调用收紧超时。
      *
      * {@code timeoutSeconds <= 0} 表示不限制，等价于 {@link #chatClient()}；只收紧不放宽：
      * 请求值不小于配置超时时直接返回当前客户端。未配置或构建失败时抛 IllegalStateException。

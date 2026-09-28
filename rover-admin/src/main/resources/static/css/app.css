@@ -923,7 +923,6 @@ code {
 .wb-result { border-top: 1px solid var(--line-soft); padding-top: 8px; }
 /* 不确定判断要在默认视图看得见，不能只藏在折叠的「调查详情」里 */
 .wb-uncertain { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
-.wb-intent-reason { overflow-wrap: anywhere; }
 
 /* 调查计划：每一步都写清「为什么查这个」，执行过的能力就地打勾 */
 .wb-plan { display: flex; flex-direction: column; gap: 4px; border-top: 1px dashed var(--line-soft); padding-top: 8px; }
@@ -931,11 +930,6 @@ code {
 .wb-plan-step .muted { overflow-wrap: anywhere; }
 .wb-plan-mark { font-family: var(--mono); color: var(--muted); }
 .wb-plan-mark.done { color: var(--ok); }
-
-/* 处置计划：默认就标明「仅生成计划、不执行」，字段与后端 ActionPlan 一一对应 */
-.wb-action-plan { display: flex; flex-direction: column; gap: 8px; border-top: 1px dashed var(--line-soft); padding-top: 8px; }
-.wb-action-plan .banner { margin: 0; }
-.wb-action-plan .wb-kv b { white-space: pre-wrap; }
 
 .wb-detail { display: flex; flex-direction: column; border-top: 1px dashed var(--line-soft); padding-top: 2px; }
 .wb-detail h4 { margin: 12px 0 4px; font-size: 12.5px; letter-spacing: 0.03em; color: var(--muted); }

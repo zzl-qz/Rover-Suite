@@ -49,7 +49,7 @@ public record ModelSettings(boolean enabled, String baseUrl, String apiKey, Stri
     /**
      * 是否「配置了快速模型」：与主模型同启用态，且快速模型地址与模型名齐全。
      *
-     * 配置后，意图识别 / 目标解析 / 规划这类廉价调用由网关路由到快速模型；
+     * 配置后，目标解析 / 调查规划这类廉价调用由网关路由到快速模型；
      * 未配置则回退主模型 + 显式禁用思考（{@code fast} 永不为 null，缺失用 {@link FastModel#none()}）。
      */
     public boolean fastConfigured() {

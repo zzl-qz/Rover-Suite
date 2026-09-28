@@ -10,24 +10,13 @@ import java.util.Set;
 /**
  * 能力注册表：Agent 能做什么的唯一声明处。
  *
- * 两件事都由这里保证：
- * <ol>
- *   <li>Planner 只能选择注册表里 <b>已接入且只读</b> 的能力，凭空生成的能力名会被校验丢弃；</li>
- *   <li>「你能做什么」这类问题的回答来自同一份注册表，模型不会声称系统具备未实现的能力。</li>
- * </ol>
+ * 它只保证一件事：Planner 只能选择注册表里 <b>已接入且只读</b> 的能力，凭空生成的能力名会被校验丢弃。
+ * 「你能做什么」这类问题的答案是对话主路径的模型按其工具集给出的，注册表不产出任何面向用户的文案——
+ * 需要结构化能力清单时从这里的描述元数据动态生成，不在这里放一份会过期的硬编码话术。
  *
  * 注册表是纯数据，不含执行逻辑：执行映射在 {@link CapabilityExecutor}。
  */
 public final class CapabilityRegistry {
-
-    private static final String SOURCE_ROUTES = "Gateway 路由表";
-    private static final String SOURCE_INSTANCES = "Nameserver 实例注册表";
-    private static final String SOURCE_METRICS = "Gateway 实时指标";
-    private static final String SOURCE_TRACES = "Gateway 抽样追踪";
-    private static final String SOURCE_CONFIGS = "Gateway / Nameserver 生效配置";
-    private static final String SOURCE_EVENTS = "Nameserver 事件流";
-    private static final String SOURCE_LOGS = "落盘历史日志";
-    private static final String SOURCE_KNOWLEDGE = "运维知识库";
 
     private final List<CapabilityDescriptor> descriptors;
 
@@ -38,9 +27,9 @@ public final class CapabilityRegistry {
     /**
      * 本阶段的标准注册表：八个已接入的只读能力。
      *
-     * 未接入数据适配器的能力照样登记（用户问「有哪些能力」时看得到边界），但不可被 Planner 选择。
-     * 目前八个能力全部接入，因此没有「已登记但未开放」项——一旦某个适配器被移除，把对应能力改为
-     * {@code available=false} 即可，Planner 与能力清单会自动跟着收口。
+     * 未接入数据适配器的能力照样登记（{@code available=false}），但不可被 Planner 选择，
+     * 也不会出现在执行映射里。目前八个能力全部接入，因此没有「已登记但未开放」项——一旦某个适配器被移除，
+     * 把对应能力改为 {@code available=false} 即可，规划与执行都会自动跟着收口。
      */
     public static CapabilityRegistry standard() {
         return new CapabilityRegistry(List.of(
@@ -109,75 +98,5 @@ public final class CapabilityRegistry {
         Set<AgentCapability> selectable = new LinkedHashSet<>();
         selectable().forEach(item -> selectable.add(item.id()));
         return selectable;
-    }
-
-    /**
-     * 能力清单文本：由注册表生成，而不是由模型自由发挥。
-     *
-     * 已开放的按能力逐条给出说明与风险级别；未开放的单独列出并说明原因，
-     * 末尾补一句边界声明——处置类请求只出计划，不执行。
-     */
-    public String describe() {
-        StringBuilder text = new StringBuilder("Rover 当前可用的只读能力（Agent 只能选择这些能力）：");
-        for (CapabilityDescriptor item : descriptors) {
-            if (!item.available()) {
-                continue;
-            }
-            text.append("\n- ").append(item.id()).append("（").append(item.name()).append("）：")
-                    .append(item.description()).append("；风险级别 ").append(item.risk()).append("。");
-        }
-        List<CapabilityDescriptor> pending = descriptors.stream().filter(item -> !item.available()).toList();
-        if (!pending.isEmpty()) {
-            text.append("\n尚未开放的能力（未接入数据适配器，Agent 不会调用）：");
-            for (CapabilityDescriptor item : pending) {
-                text.append("\n- ").append(item.id()).append("（").append(item.name()).append("）");
-            }
-        }
-        text.append("\n处置类请求只生成不可执行的处置计划；当前版本不执行任何写操作。");
-        return text.toString();
-    }
-
-    /**
-     * 自我介绍 + 能力清单：识别不出意图、或用户直接问「你是谁」时的统一回答。
-     *
-     * 与 {@link #describe()} 同源——先讲清身份与可以直接问什么，再附上完整能力清单，
-     * 不存在第二处「对外话术」，也就不会出现「介绍里说能做、注册表里其实没有」的分叉。
-     */
-    public String introduce() {
-        return "我是 Rover Ops Agent：一个只读的运维诊断 Agent，基于 Gateway 路由、服务实例、实时指标、抽样追踪、"
-                + "生效配置、注册事件、历史日志与运维知识回答状态问题、调查调用失败与使用方式；网关写操作尚未接入。\n"
-                + "可以直接这样问我：\n"
-                + "- 「网关 QPS 多少」「order-service 有几个健康实例」——状态查询；\n"
-                + "- 「为什么 /api/demo/tt 调用失败」——只读故障调查；\n"
-                + "- 「限流阈值是多少」「最近有哪些实例上下线」——配置与事件查询；\n"
-                + "- 「你能做什么」——完整能力清单。\n"
-                + describe();
-    }
-
-    /**
-     * 未能识别意图时的简短回应：一句「没听懂」+ 现在能做什么 + 两三条示例提问。
-     *
-     * 与 {@link #introduce()} 的差别只在详略。这条路走的是「你好」「谢谢」这类没有对象的输入，
-     * 铺开完整的枚举清单与风险级别只会让人看不完；能力名仍从同一份注册表取，
-     * 因此不会出现「简短版说能做、注册表里其实没有」的分叉。
-     */
-    public String introduceBriefly() {
-        StringBuilder names = new StringBuilder();
-        for (CapabilityDescriptor item : selectable()) {
-            names.append(names.length() == 0 ? "" : "、").append(item.name());
-        }
-        return "这句话我还没能对上具体的查询或排查目标——问题里带上「哪条路径、哪个服务、哪台实例」，我就能直接查。\n"
-                + "我是 Rover Ops Agent，一个只读的运维诊断助手，不执行任何写操作。\n"
-                + "我可以帮您查这些：" + names + "；也能排查一次调用失败的原因。\n"
-                + "您可以这样问我：\n"
-                + "- 「网关现在 QPS 多少？」\n"
-                + "- 「order-service 有几个健康实例？」\n"
-                + "- 「为什么 /api/demo/tt 调用失败？」";
-    }
-
-    /** 供证据来源说明使用（与既有数据源命名保持一致）。 */
-    public String describeSources() {
-        return String.join("、", SOURCE_ROUTES, SOURCE_INSTANCES, SOURCE_METRICS, SOURCE_TRACES,
-                SOURCE_CONFIGS, SOURCE_EVENTS, SOURCE_LOGS, SOURCE_KNOWLEDGE);
     }
 }

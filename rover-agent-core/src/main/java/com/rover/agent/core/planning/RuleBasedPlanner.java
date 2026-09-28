@@ -2,8 +2,6 @@ package com.rover.agent.core.planning;
 
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.capability.CapabilityRegistry;
-import com.rover.agent.core.intent.IntentClassifier;
-import com.rover.agent.core.intent.QuerySubject;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TargetType;
 import java.util.ArrayList;
@@ -39,7 +37,7 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
     @Override
     public InvestigationPlan plan(PlanningRequest request) {
         PlanningRequest context = request == null
-                ? new PlanningRequest("", null, ResourceTarget.unknown(), "", List.of(), List.of()) : request;
+                ? new PlanningRequest("", ResourceTarget.unknown(), "", List.of(), List.of()) : request;
         ResourceTarget target = PlanValidator.requestTarget(context);
         boolean hasPath = !context.path().isBlank();
         if (!hasPath && target.type() == TargetType.UNKNOWN) {
@@ -60,16 +58,21 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
     }
 
     /**
-     * 问题本身指向配置或事件时，才追加对应的可选步骤。
+     * 问题本身点到配置或事件时，才追加对应的可选步骤。
      *
      * 这两类事实对常见故障调查没有普遍判定价值，因此不做成必查项：每次都读会凭空增加两跳只读调用，
-     * 也会让证据里塞进与问题无关的内容。词汇判定复用意图层的同一套口径，不在这里维护第二份关键词。
+     * 也会让证据里塞进与问题无关的内容。是否点到由 {@link InvestigationCueDetector} 判断，
+     * 这里是唯一的调用方，不维护第二份关键词。
+     *
+     * 两个方向各自成立、互不排斥：一句话同时提到配置与变更（「限流阈值是不是改了」）时两条都追加。
+     * 提示只说明「这个方向值得看一眼」，不构成「该查哪一类」的裁决——真的根因不该由先命中的关键词决定。
      */
     private void addQuestionDrivenSteps(List<PlannedStep> steps, PlanningRequest request, ResourceTarget target) {
-        QuerySubject subject = IntentClassifier.stateSubject(request.question());
-        if (subject == QuerySubject.CONFIG) {
+        String question = request.question();
+        if (InvestigationCueDetector.mentionsConfig(question)) {
             add(steps, AgentCapability.CONFIG_READ, REASON_CONFIG, target, false);
-        } else if (subject == QuerySubject.EVENT) {
+        }
+        if (InvestigationCueDetector.mentionsEvent(question)) {
             add(steps, AgentCapability.EVENT_QUERY, REASON_EVENT, target, false);
         }
     }
@@ -77,7 +80,7 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
     @Override
     public PlanningDecision evaluate(PlanningRequest request, PlanProgress progress) {
         PlanningRequest context = request == null
-                ? new PlanningRequest("", null, ResourceTarget.unknown(), "", List.of(), List.of()) : request;
+                ? new PlanningRequest("", ResourceTarget.unknown(), "", List.of(), List.of()) : request;
         PlanProgress state = progress == null ? PlanProgress.empty() : progress;
         Set<AgentCapability> missing = new LinkedHashSet<>(requiredCapabilities(context));
         missing.removeAll(state.settled());
@@ -93,7 +96,7 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
     /** 本目标下必查的能力：缺任何一项都会影响结论的完整性。 */
     public Set<AgentCapability> requiredCapabilities(PlanningRequest request) {
         PlanningRequest context = request == null
-                ? new PlanningRequest("", null, ResourceTarget.unknown(), "", List.of(), List.of()) : request;
+                ? new PlanningRequest("", ResourceTarget.unknown(), "", List.of(), List.of()) : request;
         Set<AgentCapability> required = new LinkedHashSet<>();
         if (!context.path().isBlank()) {
             required.add(AgentCapability.ROUTE_QUERY);

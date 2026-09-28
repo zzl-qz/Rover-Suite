@@ -49,7 +49,7 @@ public final class PlanValidator {
                                       Set<AgentCapability> settled) {
         InvestigationPlan source = plan == null ? InvestigationPlan.empty() : plan;
         PlanningRequest context = request == null
-                ? new PlanningRequest("", null, ResourceTarget.unknown(), "", List.of(), List.of()) : request;
+                ? new PlanningRequest("", ResourceTarget.unknown(), "", List.of(), List.of()) : request;
         Set<AgentCapability> handled = settled == null ? Set.of() : settled;
         List<PlannedStep> steps = new ArrayList<>();
         Set<AgentCapability> seen = new LinkedHashSet<>();

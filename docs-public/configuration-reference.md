@@ -80,10 +80,10 @@ their own history — it is not a cross-host audit source. What gets written and
 | `rover.agent.planning.max-rounds` | `3` | Maximum planning rounds per dynamic investigation (>0); once reached, collection stops and the limit is recorded as a limitation | Restart |
 | `rover.agent.planning.max-tool-calls` | `10` | Maximum read-only capability calls per investigation (>0); after the limit no further call is made and skipped steps are reported honestly | Restart |
 | `rover.agent.planning.max-plan-steps` | `6` | Maximum steps in a single round's plan (>0); extra steps are truncated by plan validation, and any unregistered write capability is dropped | Restart |
-| `rover.agent.llm.quick-timeout-seconds` | `10` | Wait cap for cheap calls that can always fall back — intent recognition, target resolution, investigation planning (seconds; `0` = use the model config timeout); retried once on timeout only, and the AI interpretation is unaffected | Restart |
+| `rover.agent.llm.quick-timeout-seconds` | `10` | Wait cap for cheap calls that can always fall back — target resolution, investigation planning (seconds; `0` = use the model config timeout); retried once on timeout only, and the AI interpretation and the conversation path are unaffected | Restart |
 | `spring.ai.tools.limits.max-total-tool-calls` | `30` | Total tool-call budget for one task on the conversation path; keep it in sync with `OpsTools.MAX_CALLS`. Too small and a sentence asking three things gets cut off mid-collection | Restart |
 | `spring.ai.tools.limits.max-calls-per-tool-default` | `10` | Per-tool call limit within that budget | Restart |
-| `spring.ai.openai.fast-base-url` / `fast-model` / `fast-api-key` | empty | Optional small model for cheap structured calls (intent / target / planning); falls back to the main model with thinking off when unset | Restart |
+| `spring.ai.openai.fast-base-url` / `fast-model` / `fast-api-key` | empty | Optional small model for cheap structured calls (target resolution / investigation planning); falls back to the main model with thinking off when unset | Restart |
 | `rover.agent.metrics.enabled` | `true` | Master switch for Agent runtime metrics; `false` (emergency degradation) registers no meters and changes no business logic | Restart |
 | `management.metrics.export.prometheus.enabled` | `false` | 指标对外出口开关：置 `true` 后注册表切换为 `PrometheusMeterRegistry`，由 `/actuator/prometheus` 供抓取；指标名与标签口径不变（`rover.agent.*`）。需同步在 `management.endpoints.web.exposure.include` 中加入 `prometheus` | Restart |
 | `management.endpoints.web.exposure.include` | `health,info` | Actuator 暴露的端点；加入 `prometheus` 即可抓取指标 | Restart |
@@ -100,7 +100,7 @@ and token usage. The old `model.error` was removed: a single failed boolean can 
 not "which stage failed", and is now replaced by the `outcome` tag on `model.calls`
 (`ok` / `not_configured` / `unavailable` / `timeout` / `error` / `empty` / `rejected`, where `rejected` means "the
 model returned text that violates the output contract"). `scene` uses a finite set of Chinese values
-(`意图识别`, `目标解析`, `调查规划`, `解读`), blank input normalizes to `unknown`, and values longer than 24
+(`目标解析`, `调查规划`, `解读`, `对话`), blank input normalizes to `unknown`, and values longer than 24
 characters are truncated.
 Tags are limited to the finite `status`, `reason`, `model`, `scene`, `outcome`, and `kind` values;
 model names are normalized and truncated, so tag cardinality stays bounded.
