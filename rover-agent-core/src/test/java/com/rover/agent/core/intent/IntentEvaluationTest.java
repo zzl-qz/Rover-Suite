@@ -1,5 +1,6 @@
 package com.rover.agent.core.intent;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.AgentIntent;
@@ -112,6 +113,9 @@ class IntentEvaluationTest {
 
     @Test
     void ruleLayerMatchesTheLabeledCorpus() {
+        // 语料规模就是命中率的分母：删一条或悄悄加一条，"100% 命中"就不再是同一个意思。
+        assertEquals(38, RULE_CORPUS.size(),
+                "规则层语料条数变了：同步更新文档里的评测基线，并确认增删是有意为之");
         List<String> mismatches = new ArrayList<>();
         for (Sample sample : RULE_CORPUS) {
             IntentDecision decision = new IntentClassifier().classify(sample.question());
@@ -129,6 +133,8 @@ class IntentEvaluationTest {
 
     @Test
     void ambiguousPhrasingsAreLeftToTheModel() {
+        assertEquals(6, AMBIGUOUS_PHRASINGS.size(),
+                "模糊说法语料条数变了：同步更新文档里的评测基线");
         List<String> hijacked = new ArrayList<>();
         for (String question : AMBIGUOUS_PHRASINGS) {
             IntentDecision decision = new IntentClassifier().classify(question);
