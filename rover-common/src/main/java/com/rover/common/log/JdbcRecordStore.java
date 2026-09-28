@@ -17,7 +17,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 基于 H2 嵌入式文件的追加式记录库：异步写入 + 时间区间查询 + 超期清理。
+ * 基于 JDBC 的追加式记录库：异步写入 + 时间区间查询 + 超期清理。
+ *
+ * <p>SQL 与方言无关（建表、索引、查询都只用 H2 与 MySQL 都认的写法），
+ * 连接来源当前是 H2 嵌入式文件；换成连接池或 MySQL 时只换连接来源，本类逻辑不变。
  *
  * <p>写入路径：{@link #log(Record)} 按类型分级入队，单写线程后台批量落盘，绝不阻塞主链路。
  * <ul>
@@ -26,13 +29,13 @@ import lombok.extern.slf4j.Slf4j;
  *   <li>遥测（心跳/请求 trace）：进普通队列，满则 best-effort 丢弃并计数，绝不拖慢业务。</li>
  * </ul>
  *
- * <p>读取/清理：每次新建短连接查询（不与写线程共享连接，规避 H2 单连接并发问题）。
+ * <p>读取/清理：每次新建短连接查询（不与写线程共享连接，规避单连接并发问题）。
  * 表上有 (ts) 与 (target, ts) 两个 B-tree 索引，百万级数据下的区间查询仍为索引扫描、毫秒级。
  *
- * <p>数据膨胀由应用层 retention（{@link #purgeOlderThan}）控制，与是否用 H2 无关。
+ * <p>数据膨胀由应用层 retention（{@link #purgeOlderThan}）控制，与底层是哪一种库无关。
  */
 @Slf4j
-public class H2RecordStore implements RecordStore {
+public class JdbcRecordStore implements RecordStore {
 
     private static final int BATCH = 200;
     /** 高优证据入队阻塞等待上限：正常情况下高优队列几乎为空，立即成功；仅在极端积压时短暂等待，不无限阻塞业务 */
@@ -49,15 +52,15 @@ public class H2RecordStore implements RecordStore {
     private volatile boolean running = true;
     private final Connection writeConn;
 
-    public H2RecordStore(String dbPath) {
+    public JdbcRecordStore(String dbPath) {
         this(dbPath, 8192);
     }
 
-    public H2RecordStore(String dbPath, int normalCapacity) {
+    public JdbcRecordStore(String dbPath, int normalCapacity) {
         this(dbPath, normalCapacity, Math.max(normalCapacity * 2, 16384));
     }
 
-    public H2RecordStore(String dbPath, int normalCapacity, int criticalCapacity) {
+    public JdbcRecordStore(String dbPath, int normalCapacity, int criticalCapacity) {
         if (dbPath == null || dbPath.isBlank()) {
             throw new IllegalArgumentException("dbPath 不能为空");
         }
@@ -67,7 +70,7 @@ public class H2RecordStore implements RecordStore {
         }
         // AUTO_SERVER=TRUE：允许 IDEA 等外部进程在应用运行期间以同一 URL 并发连接查看数据
         this.jdbcUrl = "jdbc:h2:file:" + dbPath + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE";
-        log.info("H2 落盘记录库已就绪: 库文件={}.mv.db (相对 JVM 工作目录解析)", file.getAbsolutePath());
+        log.info("落盘记录库已就绪: 库文件={}.mv.db (相对 JVM 工作目录解析)", file.getAbsolutePath());
         this.normalQueue = new ArrayBlockingQueue<>(Math.max(1, normalCapacity));
         this.criticalQueue = new ArrayBlockingQueue<>(Math.max(1, criticalCapacity));
         this.writeConn = openConnection();

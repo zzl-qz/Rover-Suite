@@ -6,12 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-class H2RecordStoreTest {
+class JdbcRecordStoreTest {
 
     @Test
     void logAndQueryAndPurge() throws Exception {
         String dbPath = "./target/test-logs/rover-" + System.nanoTime();
-        RecordStore store = new H2RecordStore(dbPath);
+        RecordStore store = new JdbcRecordStore(dbPath);
         long now = System.currentTimeMillis();
 
         store.log(Record.of(RecordType.CONFIG_CHANGE, "/api/order", "{\"action\":\"saveRoute\"}"));
@@ -44,7 +44,7 @@ class H2RecordStoreTest {
 
     @Test
     void purgeByTypeRemovesOnlyMatchingTypes() throws Exception {
-        RecordStore store = new H2RecordStore("./target/test-logs/purge-type-" + System.nanoTime());
+        RecordStore store = new JdbcRecordStore("./target/test-logs/purge-type-" + System.nanoTime());
         long old = System.currentTimeMillis() - 100_000;
 
         store.log(new Record(old, RecordType.CONFIG_CHANGE, "r", "audit"));
@@ -66,7 +66,7 @@ class H2RecordStoreTest {
     @Test
     void queueFullDropsBestEffortWithoutBlocking() {
         // 极小队列，验证 offer 失败不抛异常（best-effort）
-        RecordStore store = new H2RecordStore("./target/test-logs/drop-" + System.nanoTime(), 1);
+        RecordStore store = new JdbcRecordStore("./target/test-logs/drop-" + System.nanoTime(), 1);
         for (int i = 0; i < 5000; i++) {
             store.log(Record.of(RecordType.HEARTBEAT, "svc", "hb" + i));
         }
