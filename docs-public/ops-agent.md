@@ -264,30 +264,40 @@ key**; `baseUrl`, the main model, and the fast model are resolved by a backend `
 (Ollama / vLLM) unblocked. One key covers a vendor's whole model family, so the abstraction holds.
 
 Measured trade-off (real Zhipu API, 30-case labelled target-resolution eval,
-`TargetInterpreterEval.java`; latest re-run 2026-09-28):
+`TargetInterpreterEval.java`; the same set was run twice on 2026-09-28, and
+**the published figures are the two runs pooled, n=60**):
 
 | | glm-4.6 thinking | glm-4-flash (current fast model) |
 | :--- | :--- | :--- |
-| Average latency per case | 12.0 s | 1.1 s |
+| Average latency per case | 12.2 s (12.0 / 12.5) | 1.2 s (1.1 / 1.2) |
 | Single cheap-call cost | estimated from the vendor price list (tokens not measured this run) | ~0 (vendor-free tier) |
-| Resolution accuracy | 93.3% | 63.3% |
-| **Error rate** (wrong object, not abstain) | 6.7% | 26.7% |
+| Resolution accuracy (pooled n=60) | **91.7%** (90.0 / 93.3) | **65.0%** (63.3 / 66.7) |
+| **Error rate** (wrong object, not abstain) | **8.3%** | **25.0%** |
 | Conservative abstain rate | 0.0% | 10.0% |
 
-Method: on trap and ambiguous cases the expected answer *is* "no object", so an abstention counts
-as a hit — the accuracy figure therefore includes "correctly refused to guess". Two of glm-4.6's
-30 cases were scored correct only because they hit the 10-second timeout and degraded to
-clarification; that is not the model judging well.
+Method: pooled rather than single-run because one pass over 30 cases moved by ±3.3pp between the
+two runs, while both pointed the same way. On trap and ambiguous cases the expected answer *is*
+"no object", so an abstention counts as a hit — the accuracy figure therefore includes "correctly
+refused to guess". In each run, 2 of glm-4.6's cases (C6, D5) scored correct only because they hit
+the 30-second timeout and degraded to clarification — 4/60 overall; excluding them leaves
+**85.0% decided-by-the-model accuracy** (51/60).
 
-The re-run differs from the first eval (86.7% / 76.7%): with 30 cases, single-run variance is
-large, and neither run claims statistical significance. One conclusion from the first run did not
-hold: back then glm-4-flash's misses were mostly conservative clarifications, while this run
-produced an outright mis-attribution (read "trade-service instance down" as the instance
-`172.16.0.9:7001`) — the same failure class that ruled out `glm-4-air`. So **"the fast model's
-error nature is controlled" currently lacks stable evidence**. The selection criterion stays
-error rate rather than hit rate, and the fast model still only handles cheap calls that have a
-rule fallback: a wrong target resolution degrades to clarification instead of driving an
+**Errors that repeated in both runs** (systematic, not variance): B5 and B6 — a trap case that
+should abstain but answers `/api/order`, and an ambiguous case that answers `order-service`; the
+fast model additionally repeats A6 / B5 / C6 / D5 / E2 / E4 — abstain cases answered anyway, a
+service name read as an instance address, a path read longer than given.
+
+The gap to the first eval (86.7% / 76.7%) sits inside the same variance band. One conclusion from
+that run did not hold: back then glm-4-flash's misses were mostly conservative clarifications,
+while these runs produced an outright mis-attribution (read "trade-service instance down" as the
+instance `172.16.0.9:7001`) — the same failure class that ruled out `glm-4-air`. So **"the fast
+model's error nature is controlled" currently lacks stable evidence**. The selection criterion
+stays error rate rather than hit rate, and the fast model still only handles cheap calls that have
+a rule fallback: a wrong target resolution degrades to clarification instead of driving an
 investigation with the wrong object.
+
+The eval is a standalone program, not a resident unit test (it needs the online model); 60 cases,
+and the fact that it measures target resolution but not tool selection, are its known limits.
 
 Degradation holds without a model: on the investigation graph, diagnosis falls back to pure rule-based (`aiAnalysis` is
 null) and collection continues. The conversation path deliberately does **not** fake a graceful degradation: its every
