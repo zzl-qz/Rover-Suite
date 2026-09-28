@@ -9,7 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.admin.config.AdminProperties;
 import com.rover.admin.service.AdminConfigService;
 import com.rover.common.constants.RoverComponent;
-import com.rover.common.log.H2RecordStore;
+import com.rover.common.log.JdbcRecordStore;
 import com.rover.common.log.LogQuery;
 import com.rover.common.log.Record;
 import com.rover.common.log.RecordStore;
@@ -43,7 +43,7 @@ class TelemetryCollectorTest {
                 "{\"traces\":[{\"traceId\":\"t1\",\"path\":\"/api/x\",\"routeId\":\"r1\","
                         + "\"statusCode\":500,\"startMillis\":1000,\"slow\":true}]}"));
 
-        try (RecordStore store = new H2RecordStore("./target/test-logs/collector-" + System.nanoTime())) {
+        try (RecordStore store = new JdbcRecordStore("./target/test-logs/collector-" + System.nanoTime())) {
             try (TelemetryCollector collector = new TelemetryCollector(service, store, props)) {
                 collector.collect(); // 第一轮：基线（组件 up、实例 healthy），记指标 + 链路
                 collector.collect(); // 第二轮：组件 down、实例 down；链路被去重
@@ -79,7 +79,7 @@ class TelemetryCollectorTest {
                 .thenReturn(instances(Map.of("i1", true, "i2", true))) // i2 注册
                 .thenReturn(instances(Map.of("i1", true)));            // i2 移除
 
-        try (RecordStore store = new H2RecordStore("./target/test-logs/collector-reg-" + System.nanoTime())) {
+        try (RecordStore store = new JdbcRecordStore("./target/test-logs/collector-reg-" + System.nanoTime())) {
             try (TelemetryCollector collector = new TelemetryCollector(service, store, props)) {
                 collector.collect();
                 collector.collect();

@@ -3,7 +3,7 @@ package com.rover.admin.config;
 import com.rover.admin.log.TelemetryCollector;
 import com.rover.admin.service.AdminConfigService;
 import com.rover.common.concurrent.PeriodicTask;
-import com.rover.common.log.H2RecordStore;
+import com.rover.common.log.JdbcRecordStore;
 import com.rover.common.log.RecordStore;
 import com.rover.common.log.RecordType;
 import java.util.Arrays;
@@ -15,7 +15,7 @@ import org.springframework.context.annotation.Configuration;
 
 /**
  * 落盘记录库（H2）装配根：{@link RecordStore} 异步写入/查询、遥测采集、retention 定时清理。
- * 只读查询端口的适配由 {@code H2LogQueryAdapter}（@Component）提供，不在此重复装配。
+ * 只读查询端口的适配由 {@code RecordStoreLogQueryAdapter}（@Component）提供，不在此重复装配。
  * 放 config 包（非 web 包），不影响 {@code @WebMvcTest} 切片。
  */
 @Configuration(proxyBeanMethods = false)
@@ -31,7 +31,7 @@ public class LogStoreConfiguration {
 
     @Bean
     public RecordStore recordStore(AdminProperties props) {
-        return new H2RecordStore(props.getLogStorePath(), props.getLogQueueCapacity(), props.getLogCriticalCapacity());
+        return new JdbcRecordStore(props.getLogStorePath(), props.getLogQueueCapacity(), props.getLogCriticalCapacity());
     }
 
     /**

@@ -18,11 +18,11 @@ import org.springframework.stereotype.Component;
  * 类型字符串在此映射回存储层枚举（未知类型忽略，不抛错）。
  */
 @Component
-public class H2LogQueryAdapter implements LogQueryPort {
+public class RecordStoreLogQueryAdapter implements LogQueryPort {
 
     private final RecordStore store;
 
-    public H2LogQueryAdapter(RecordStore store) {
+    public RecordStoreLogQueryAdapter(RecordStore store) {
         this.store = store;
     }
 
