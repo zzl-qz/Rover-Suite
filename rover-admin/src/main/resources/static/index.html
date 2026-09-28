@@ -413,7 +413,7 @@
                                 <button class="btn mini ml-auto" @click="wbNewSession" :disabled="wbSending">新建会话</button>
                             </div>
                             <div class="banner tip slim">
-                                <span>会话、原话和调查过程写在本机记录库里，重启后还在。当前事件要重新提问才会再出现。</span>
+                                <span>会话、原话、事件与调查过程都写在本机记录库里，重启后还在：历史会话可以直接打开回看，追问会接着它的事件走。</span>
                             </div>
                             <div v-if="!wbSessions.length" class="empty slim">
                                 还没有会话。
@@ -459,7 +459,7 @@
                                         <button v-for="example in wbExamples" :key="example" type="button"
                                                 class="wb-example" @click="wbUseExample(example)">{{ example }}</button>
                                     </div>
-                                    <p class="wb-welcome-note">同一个会话里可以直接追问。重启后原话还在；正在查的事件要重新问一句才会再挂上。</p>
+                                    <p class="wb-welcome-note">同一个会话里可以直接追问。重启后原话、事件与调查过程都还在，接着上次的事件继续问即可。</p>
                                 </div>
                                 <template v-else>
                                 <template v-for="turn in wbTurns" :key="turn.key">

@@ -51,7 +51,8 @@ import org.slf4j.LoggerFactory;
  * {@link #run} 在 Agent Worker 线程里执行调查；编排层需要自己登记任务时也走这两个入口。
  *
  * 调查事实全部来自 {@code com.rover.agent.core.port} 的只读端口；模型只做解读，
- * 不可用时降级为规则诊断。任务状态只保留在当前进程，重启后不可查询。
+ * 不可用时降级为规则诊断。任务状态写入任务仓储：配了记录库路径时重启后仍可查询，
+ * 仍在执行的任务由存储层统一标注为「重启中断」。
  */
 public final class InvestigationService {
 
