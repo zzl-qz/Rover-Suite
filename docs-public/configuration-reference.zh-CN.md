@@ -24,7 +24,7 @@
 | `rover.admin.nameserver-manage-url` | `http://127.0.0.1:8889` | Nameserver 管理口基地址 | 重启 |
 | `rover.admin.admin-token` | 空 | Admin 调用下游时发送的 `X-Rover-Admin-Token`；与登录鉴权无关 | 重启 |
 | 控制台账号 | `admin` / `admin` | 存在记录库同一份 H2 的 `admin_user` 表。表为空时写入这一对默认账号；已有记录不覆盖。多人共用这一个账号 | 首次启动写入 |
-| `rover.admin.log-store-path` | `./rover-logs/rover` | 本地 H2 记录库位置（实际文件 `<路径>.mv.db`），目录缺失自动创建。同一份库承载三块内容：落盘运行证据（`records`，供 `queryLogs` 回读）、Agent 会话与调查聚合（`agent_session` / `agent_message` / `agent_incident` / `agent_task` / `agent_step` / `agent_evidence`，Schema v1 版本化迁移）、资源笔记（`resource_note`）。留空则 Agent 状态退回内存实现，重启即清空 | 重启 |
+| `rover.admin.log-store-path` | `./rover-logs/rover` | 本地 H2 记录库位置（实际文件 `<路径>.mv.db`），目录缺失自动创建。同一份库承载四块内容：落盘运行证据（`records`，供 `queryLogs` 回读）、Agent 会话与调查聚合（`agent_session` / `agent_message` / `agent_incident` / `agent_task` / `agent_step` / `agent_evidence`）、安全恢复点（`agent_checkpoint`，每次工具完成与阶段边界各推进一条）、资源笔记（`resource_note`）；Agent 那三组表走 `agent_schema_migrations` 版本化迁移。留空则 Agent 状态退回内存实现，重启即清空 | 重启 |
 | `rover.admin.log-retention-days` | `30` | 诊断证据类保留天数（配置变更 / 回滚 / 错误 / 实例健康翻转），超期清理 | 重启 |
 | `rover.admin.log-telemetry-retention-days` | `3` | 遥测类保留天数（指标采样 / 慢与 5xx 链路）：量大，短保留防膨胀 | 重启 |
 | `rover.admin.log-collect-interval-seconds` | `30` | 遥测采集间隔（秒）：多久拉一轮 Gateway / Nameserver 的状态、指标、实例与链路写进记录库（下限 5，首轮延迟一个周期） | 重启 |

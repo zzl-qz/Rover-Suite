@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNote;
+import com.rover.agent.core.model.AgentCheckpoint;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.CheckpointStage;
 import com.rover.agent.core.model.Confidence;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.EvidenceType;
@@ -28,6 +30,7 @@ import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
+import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
@@ -92,6 +95,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final Messages messages = new Messages();
     private final Incidents incidents = new Incidents();
     private final Tasks tasks = new Tasks();
+    private final Checkpoints checkpoints = new Checkpoints();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -105,7 +109,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         try {
             connection = DriverManager.getConnection(jdbcUrl, "sa", "");
             migrate();
-            interruptLeftovers();
+            recoverInterrupted();
         } catch (SQLException ex) {
             throw new IllegalStateException("打开 Agent 库失败: " + jdbcUrl, ex);
         }
@@ -126,6 +130,10 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     public AgentTaskRepository tasks() {
         return tasks;
+    }
+
+    public AgentCheckpointRepository checkpoints() {
+        return checkpoints;
     }
 
     /** 资源笔记：有已确认根因的调查才会写，按资源键读一条。 */
@@ -391,7 +399,7 @@ public final class JdbcAgentStore implements AutoCloseable {
                 inTransaction(() -> {
                     writeTask(task);
                     writeSteps(task);
-                    writeEvidence(task);
+                    writeEvidence(task.taskId(), task.evidence());
                     return null;
                 });
             }
@@ -477,6 +485,71 @@ public final class JdbcAgentStore implements AutoCloseable {
         }
     }
 
+    // ---------------------------------------------------------------- 安全恢复点
+
+    /**
+     * 安全恢复点的落库实现。
+     *
+     * <p>写入与任务快照共用同一个事务：任务、步骤、证据与恢复点一起落下，因此不会出现
+     * 「恢复点说证据 3 条、库里只有 2 条」这种恢复时才暴露的坏状态。
+     */
+    private final class Checkpoints implements AgentCheckpointRepository {
+
+        @Override
+        public void save(TaskView task, AgentCheckpoint checkpoint) {
+            synchronized (JdbcAgentStore.this) {
+                inTransaction(() -> {
+                    writeTask(task);
+                    writeSteps(task);
+                    writeEvidence(task.taskId(), task.evidence());
+                    writeCheckpoint(checkpoint);
+                    return null;
+                });
+            }
+        }
+
+        @Override
+        public Optional<AgentCheckpoint> latest(String taskId) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT * FROM agent_checkpoint WHERE task_id = ? ORDER BY sequence_no DESC LIMIT 1",
+                        JdbcAgentStore::readCheckpointRow, taskId);
+            }
+        }
+
+        @Override
+        public List<AgentCheckpoint> byTask(String taskId) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT * FROM agent_checkpoint WHERE task_id = ? ORDER BY sequence_no",
+                        JdbcAgentStore::readCheckpointRow, taskId);
+            }
+        }
+
+        @Override
+        public int removeByTask(String taskId) {
+            synchronized (JdbcAgentStore.this) {
+                return run("DELETE FROM agent_checkpoint WHERE task_id = ?", taskId);
+            }
+        }
+    }
+
+    private void writeCheckpoint(AgentCheckpoint checkpoint) {
+        run("INSERT INTO agent_checkpoint (checkpoint_id, task_id, sequence_no, stage, round_no, tool_call_count, "
+                + "last_step_sequence, last_evidence_sequence, resume_state_json, runtime_node, created_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                checkpoint.checkpointId(), checkpoint.taskId(), checkpoint.sequenceNo(), checkpoint.stage().name(),
+                checkpoint.roundNo(), checkpoint.toolCallCount(), checkpoint.lastStepSequence(),
+                checkpoint.lastEvidenceSequence(), blankToNull(checkpoint.resumeStateJson()),
+                blankToNull(checkpoint.runtimeNode()), checkpoint.createdAtMillis());
+    }
+
+    private static AgentCheckpoint readCheckpointRow(ResultSet rows) throws SQLException {
+        return new AgentCheckpoint(rows.getString("checkpoint_id"), rows.getString("task_id"),
+                rows.getInt("sequence_no"), CheckpointStage.valueOf(rows.getString("stage")), rows.getInt("round_no"),
+                rows.getInt("tool_call_count"), rows.getInt("last_step_sequence"),
+                rows.getInt("last_evidence_sequence"), nullToEmpty(rows.getString("resume_state_json")),
+                nullToEmpty(rows.getString("runtime_node")), rows.getLong("created_at"));
+    }
+
     private List<TaskView> assembleAll(List<TaskRow> rows) {
         return rows.stream().map(this::assembleTask).toList();
     }
@@ -484,25 +557,25 @@ public final class JdbcAgentStore implements AutoCloseable {
     private TaskView assembleTask(TaskRow row) {
         List<Step> steps = query("SELECT * FROM agent_step WHERE task_id = ? ORDER BY sequence_no, step_id",
                 JdbcAgentStore::readStep, row.taskId());
+        // 证据只读一次：视图与结论用的是同一批，任务跑到一半（结论还没合成）时也一样能读回来。
+        List<Evidence> evidence = query("SELECT * FROM agent_evidence WHERE task_id = ? "
+                + "ORDER BY sequence_no, evidence_id", JdbcAgentStore::readEvidence, row.taskId());
         return new TaskView(row.taskId(), row.sessionId(), row.incidentId(), row.status(), row.currentStage(),
                 nullToEmpty(row.path()), row.target(), row.question(), row.createdAtMillis(), row.completedAtMillis(),
-                steps, assembleReport(row), row.error(), row.clarification(), row.taskType(),
+                steps, assembleReport(row, evidence), row.error(), row.clarification(), row.taskType(),
                 fromJson(row.planJson(), InvestigationPlan.class), orEmpty(fromJson(row.executedJson(),
-                        CAPABILITIES)), orEmpty(fromJson(row.recallsJson(), RECALLS)));
+                        CAPABILITIES)), orEmpty(fromJson(row.recallsJson(), RECALLS)), evidence);
     }
 
     /**
-     * 报告只要有一项内容就还原；结论、置信度、解读与报告的局部结构全空时为 {@code null}，与运行时一致。
-     *
-     * 证据只在报告存在时读取：它本来就只随结论一起产出，任务跑到一半没有报告时也没有证据可还原。
+     * 报告只要有一项内容就还原；结论、置信度、解读与报告的局部结构全空时为 {@code null}，与运行时一致
+     * （任务跑到一半就是这种形态：步骤与证据都在，只是还没有结论）。
      */
-    private InvestigationReport assembleReport(TaskRow row) {
+    private InvestigationReport assembleReport(TaskRow row, List<Evidence> evidence) {
         if (row.resultSummary() == null && row.resultConfidence() == null && row.resultAiAnalysis() == null
                 && row.resultLimitationsJson() == null && row.resultHypothesesJson() == null) {
             return null;
         }
-        List<Evidence> evidence = query("SELECT * FROM agent_evidence WHERE task_id = ? "
-                + "ORDER BY sequence_no, evidence_id", JdbcAgentStore::readEvidence, row.taskId());
         Confidence confidence = row.resultConfidence() == null ? null
                 : Confidence.valueOf(row.resultConfidence());
         return new InvestigationReport(row.resultSummary(), confidence, evidence,
@@ -560,15 +633,14 @@ public final class JdbcAgentStore implements AutoCloseable {
         prune("agent_step", "step_id", task.taskId(), kept);
     }
 
-    private void writeEvidence(TaskView task) {
-        InvestigationReport report = task.result();
-        List<Evidence> evidence = report == null || report.evidence() == null ? List.of() : report.evidence();
+    private void writeEvidence(String taskId, List<Evidence> reported) {
+        List<Evidence> evidence = reported == null ? List.of() : reported;
         List<String> kept = new ArrayList<>();
         int sequence = 0;
         for (Evidence item : evidence) {
             int order = sequence++;
             kept.add(item.evidenceId());
-            Object[] values = {task.taskId(), item.type().name(), order, item.source(), item.title(), item.summary(),
+            Object[] values = {taskId, item.type().name(), order, item.source(), item.title(), item.summary(),
                     item.rawReference(), toJson(item.metadata()), item.observedAtMillis()};
             upsert("UPDATE agent_evidence SET task_id = ?, evidence_type = ?, sequence_no = ?, source = ?, title = ?, "
                             + "summary = ?, raw_reference = ?, payload_json = ?, observed_at = ? WHERE evidence_id = ?",
@@ -578,7 +650,7 @@ public final class JdbcAgentStore implements AutoCloseable {
                     append(values, item.evidenceId()),
                     withCreatedAt(values, item.evidenceId()));
         }
-        prune("agent_evidence", "evidence_id", task.taskId(), kept);
+        prune("agent_evidence", "evidence_id", taskId, kept);
     }
 
     /** 删掉本次快照里已经不在任务上的子记录；空快照直接清空该任务的子表。 */
@@ -642,8 +714,11 @@ public final class JdbcAgentStore implements AutoCloseable {
     /** 一条外键：约束名 + 所属表 + 建约束语句（表要先建好，因此不能写在 CREATE TABLE 里）。 */
     private record ForeignKey(String name, String table, String sql) { }
 
+    /** 一条索引：只需名字与建索引语句——判存在性时按名字扫全部 agent 表。 */
+    private record Index(String name, String sql) { }
+
     private record Migration(int version, String description, List<String> statements,
-                             List<ForeignKey> foreignKeys) { }
+                             List<ForeignKey> foreignKeys, List<Index> indexes) { }
 
     /**
      * 版本化迁移：只前进、只新增，已发布过的版本不再改动。
@@ -775,29 +850,45 @@ public final class JdbcAgentStore implements AutoCloseable {
                             new ForeignKey("fk_agent_evidence_task", "agent_evidence",
                                     "ALTER TABLE agent_evidence ADD CONSTRAINT fk_agent_evidence_task "
                                             + "FOREIGN KEY (task_id) REFERENCES agent_task(task_id) "
-                                            + "ON DELETE CASCADE"))),
+                                            + "ON DELETE CASCADE")),
+                    List.of(
+                            new Index("idx_agent_message_session",
+                                    "CREATE INDEX idx_agent_message_session ON agent_message(session_id, seq)"),
+                            new Index("idx_agent_incident_session",
+                                    "CREATE INDEX idx_agent_incident_session ON agent_incident(session_id, created_at)"),
+                            new Index("idx_agent_task_session",
+                                    "CREATE INDEX idx_agent_task_session ON agent_task(session_id, created_at)"),
+                            new Index("idx_agent_task_incident",
+                                    "CREATE INDEX idx_agent_task_incident ON agent_task(incident_id)"),
+                            new Index("idx_agent_task_status",
+                                    "CREATE INDEX idx_agent_task_status ON agent_task(status)"),
+                            new Index("idx_agent_step_task",
+                                    "CREATE INDEX idx_agent_step_task ON agent_step(task_id, sequence_no)"),
+                            new Index("idx_agent_evidence_task",
+                                    "CREATE INDEX idx_agent_evidence_task ON agent_evidence(task_id, sequence_no)"))),
             new Migration(2, "retire legacy json stores: investigation / chat_session / chat_message",
                     List.of("DROP TABLE IF EXISTS investigation",
                             "DROP TABLE IF EXISTS chat_session",
                             "DROP TABLE IF EXISTS chat_message"),
-                    List.of()));
-
-    /** v1 要建的索引：同样按元数据判断是否已存在。 */
-    private static final List<ForeignKey> INDEXES = List.of(
-            new ForeignKey("idx_agent_message_session", "agent_message",
-                    "CREATE INDEX idx_agent_message_session ON agent_message(session_id, seq)"),
-            new ForeignKey("idx_agent_incident_session", "agent_incident",
-                    "CREATE INDEX idx_agent_incident_session ON agent_incident(session_id, created_at)"),
-            new ForeignKey("idx_agent_task_session", "agent_task",
-                    "CREATE INDEX idx_agent_task_session ON agent_task(session_id, created_at)"),
-            new ForeignKey("idx_agent_task_incident", "agent_task",
-                    "CREATE INDEX idx_agent_task_incident ON agent_task(incident_id)"),
-            new ForeignKey("idx_agent_task_status", "agent_task",
-                    "CREATE INDEX idx_agent_task_status ON agent_task(status)"),
-            new ForeignKey("idx_agent_step_task", "agent_step",
-                    "CREATE INDEX idx_agent_step_task ON agent_step(task_id, sequence_no)"),
-            new ForeignKey("idx_agent_evidence_task", "agent_evidence",
-                    "CREATE INDEX idx_agent_evidence_task ON agent_evidence(task_id, sequence_no)"));
+                    List.of(), List.of()),
+            new Migration(3, "agent checkpoint: safe resume points per task",
+                    List.of("CREATE TABLE IF NOT EXISTS agent_checkpoint ("
+                                    + "checkpoint_id VARCHAR(64) PRIMARY KEY, "
+                                    + "task_id VARCHAR(64) NOT NULL, "
+                                    + "sequence_no INT NOT NULL, "
+                                    + "stage VARCHAR(32) NOT NULL, "
+                                    + "round_no INT NOT NULL, "
+                                    + "tool_call_count INT NOT NULL, "
+                                    + "last_step_sequence INT NOT NULL, "
+                                    + "last_evidence_sequence INT NOT NULL, "
+                                    + "resume_state_json TEXT, "
+                                    + "runtime_node VARCHAR(64), "
+                                    + "created_at BIGINT NOT NULL)"),
+                    List.of(new ForeignKey("fk_agent_checkpoint_task", "agent_checkpoint",
+                            "ALTER TABLE agent_checkpoint ADD CONSTRAINT fk_agent_checkpoint_task "
+                                    + "FOREIGN KEY (task_id) REFERENCES agent_task(task_id) ON DELETE CASCADE")),
+                    List.of(new Index("idx_agent_checkpoint_task",
+                            "CREATE INDEX idx_agent_checkpoint_task ON agent_checkpoint(task_id, sequence_no)"))));
 
     private void migrate() throws SQLException {
         // applied_at 用毫秒时间戳：与业务表同一口径，也不依赖各驱动对 TIMESTAMP 的绑定细节。
@@ -830,11 +921,9 @@ public final class JdbcAgentStore implements AutoCloseable {
                     execute(key.sql());
                 }
             }
-            if (migration.version() == 1) {
-                for (ForeignKey index : INDEXES) {
-                    if (!hasIndex(index.name())) {
-                        execute(index.sql());
-                    }
+            for (Index index : migration.indexes()) {
+                if (!hasIndex(index.name())) {
+                    execute(index.sql());
                 }
             }
             try (PreparedStatement record = connection.prepareStatement(
@@ -881,7 +970,8 @@ public final class JdbcAgentStore implements AutoCloseable {
         DatabaseMetaData metadata = connection.getMetaData();
         String expected = name.toLowerCase(Locale.ROOT);
         Set<String> found = new HashSet<>();
-        for (String table : List.of("agent_message", "agent_incident", "agent_task", "agent_step", "agent_evidence")) {
+        for (String table : List.of("agent_message", "agent_incident", "agent_task", "agent_step", "agent_evidence",
+                "agent_checkpoint")) {
             for (String candidate : List.of(table, table.toUpperCase(Locale.ROOT))) {
                 try (ResultSet indexes = metadata.getIndexInfo(null, null, candidate, false, false)) {
                     while (indexes.next()) {
@@ -897,18 +987,27 @@ public final class JdbcAgentStore implements AutoCloseable {
     }
 
     /**
-     * 重启后仍在执行的任务不能假装还在跑：它们没有线程了。
+     * 重启恢复：重启后仍在执行（PENDING / RUNNING）的任务没有线程了，不能假装还在跑。
      *
-     * 只动状态、错误与完成时间三列，结论与证据保持原样；停在澄清点的任务不受影响。
+     * <p>把它们标成 {@link TaskStatus#INTERRUPTED}，并把「最近一个安全恢复点跑到哪」写进错误说明——
+     * 这一步只动状态、错误与完成时间三列，步骤、证据与恢复点都原样保留，所以已采集的事实不丢：
+     * 调查路径可以就着这些事实续跑，人工会话可以就着它们重问一次。
+     *
+     * <p>停在澄清点的任务没有线程在跑，不受影响。
      */
-    private void interruptLeftovers() {
+    private void recoverInterrupted() {
         synchronized (this) {
-            int interrupted = run("UPDATE agent_task SET status = ?, error_message = ?, completed_at = ?, "
-                            + "updated_at = ?, version = version + 1 WHERE status IN (?, ?)",
-                    TaskStatus.FAILED.name(), INTERRUPTED, System.currentTimeMillis(), System.currentTimeMillis(),
-                    TaskStatus.PENDING.name(), TaskStatus.RUNNING.name());
-            if (interrupted > 0) {
-                log.warn("重启后中断 {} 个仍在执行的任务（PENDING / RUNNING → FAILED）", interrupted);
+            List<TaskRow> leftovers = query("SELECT * FROM agent_task WHERE status IN (?, ?) ORDER BY created_at",
+                    JdbcAgentStore::readTaskRow, TaskStatus.PENDING.name(), TaskStatus.RUNNING.name());
+            for (TaskRow row : leftovers) {
+                String reason = checkpoints.latest(row.taskId())
+                        .map(mark -> INTERRUPTED + "；最近的安全恢复点：" + mark.describe())
+                        .orElse(INTERRUPTED + "；没有留下安全恢复点，已采集的步骤仍可查看");
+                long now = System.currentTimeMillis();
+                run("UPDATE agent_task SET status = ?, error_message = ?, completed_at = ?, updated_at = ?, "
+                                + "version = version + 1 WHERE task_id = ?",
+                        TaskStatus.INTERRUPTED.name(), reason, now, now, row.taskId());
+                log.warn("任务 {} 在重启前仍在执行，已标记为中断（{}）", row.taskId(), reason);
             }
         }
     }

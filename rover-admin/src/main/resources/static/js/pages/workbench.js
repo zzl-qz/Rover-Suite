@@ -865,7 +865,7 @@ window.RoverAdminPages.workbench = {
         },
 
         wbTaskTerminal(status) {
-            return ['COMPLETED', 'FAILED', 'CANCELLED'].includes(status);
+            return ['COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED'].includes(status);
         },
 
         /** 已定型、不会再自己变化的任务：终态之外，等你补充信息的澄清点也算。 */
@@ -1129,13 +1129,14 @@ window.RoverAdminPages.workbench = {
         wbStatusLabel(status) {
             return {
                 PENDING: '排队中', RUNNING: '调查中', WAITING_INPUT: '待补充', COMPLETED: '已完成',
-                FAILED: '失败', CANCELLED: '已取消',
+                FAILED: '失败', CANCELLED: '已取消', INTERRUPTED: '已中断',
             }[status] || status || '等待中';
         },
 
         wbStatusBadge(status) {
             return {
                 COMPLETED: 'ok', FAILED: 'bad', CANCELLED: 'warn', RUNNING: 'warn', WAITING_INPUT: 'warn',
+                INTERRUPTED: 'warn',
             }[status] || 'comp';
         },
 

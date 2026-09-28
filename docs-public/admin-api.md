@@ -44,17 +44,22 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | POST | `/api/model/test` | Connectivity test with the submitted candidate values; nothing is persisted |
 | POST | `/api/model/verify` | Effect verification against the currently applied configuration |
 
-Agent tasks are `PENDING`, `RUNNING`, `WAITING_INPUT`, `COMPLETED`, or `FAILED` (`CANCELLED` is
-reserved by the protocol but has no entry point yet). `WAITING_INPUT` means the target could not be
+Agent tasks are `PENDING`, `RUNNING`, `WAITING_INPUT`, `COMPLETED`, `FAILED`, or `INTERRUPTED`
+(`CANCELLED` is reserved by the protocol but has no entry point yet). `WAITING_INPUT` means the target could not be
 determined from the question and session context: the task stops at the clarification point, which does not
 count as running and does not hold the session's concurrency slot; the question to answer is in the task's
-`clarification` field, and the session's next task continues once the user replies. Results contain `summary`,
+`clarification` field, and the session's next task continues once the user replies. `INTERRUPTED` means Admin
+restarted while the task was executing: no thread is running it, but the collected `steps` and `evidence` are kept
+and `error` names the latest safe resume point (which stage, round, call count, and step/evidence high-water).
+Results contain `summary`,
 `confidence`, `evidence` with source and collection time, `limitations`, and hypothesis checks
 `hypotheses` (each with `id`, `statement`, `status`, `detail`, `sources`, where `status` is
 `CONFIRMED`, `REJECTED`, or `UNKNOWN`), plus an optional `aiAnalysis` once a model is configured.
 Diagnosis is read-only: it never changes routes or configuration. Sessions, messages, incidents, tasks,
 steps, and evidence are written to the record store and remain queryable after a restart (with
 `rover.admin.log-store-path` blank, storage falls back to memory and is lost on restart).
+A task's `evidence` is everything this run has collected, whether or not a conclusion exists yet; the tool
+returning it is what makes it a fact, and `result.evidence` is the same batch once a conclusion lands.
 
 Besides `source`, `observedAtMillis`, and `rawReference`, every piece of evidence carries its statistics in
 `metadata`: `windowSeconds` (`0` means a point-in-time snapshot), `sampleSize`, and the resource dimension

@@ -7,6 +7,7 @@ import com.rover.agent.core.investigation.Findings;
 import com.rover.agent.core.investigation.FindingsInput;
 import com.rover.agent.core.investigation.InvestigationRules;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.CheckpointStage;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.StepStatus;
@@ -173,6 +174,7 @@ public final class OpsTools {
         String rendered = render(result);
         task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.COMPLETED,
                 result.evidence().isEmpty() ? rendered : brief(result));
+        markSafePoint(result);
         return rendered;
     }
 
@@ -241,7 +243,19 @@ public final class OpsTools {
         remember(result, path);
         String text = render(result);
         task.step(stepType, stepName, StepStatus.COMPLETED, result.evidence().isEmpty() ? text : brief(result));
+        markSafePoint(result);
         return text;
+    }
+
+    /**
+     * 工具已返回、步骤已终态：把证据交给任务，并推进一个安全恢复点。
+     *
+     * 这两步连在一起，含义是「这一次取到的事实已经确定」。崩在调用途中的话这里不会执行，
+     * 恢复时重做这一次只读调用即可——只读工具重做不产生副作用，也没有需要补偿的外部状态。
+     */
+    private void markSafePoint(CapabilityResult result) {
+        task.recordEvidence(result.evidence());
+        task.checkpoint(CheckpointStage.TOOL_COMPLETED, 0, calls.get(), null);
     }
 
     /** 只保留规则判定要用的快照，和调查图里的取舍一致。 */

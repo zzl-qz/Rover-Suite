@@ -6,8 +6,11 @@ import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.event.TaskSnapshot;
+import com.rover.agent.core.model.AgentCheckpoint;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.CheckpointStage;
 import com.rover.agent.core.model.Confidence;
+import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.RecallChoice;
 import com.rover.agent.core.model.ResourceTarget;
@@ -17,6 +20,7 @@ import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.planning.InvestigationPlan;
+import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.runtime.graph.InvestigationReporter;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import java.util.ArrayList;
@@ -45,8 +49,11 @@ public final class InvestigationTask implements InvestigationReporter {
     private final Consumer<TaskView> snapshotSink;
     private final TaskEventBus events;
     private final AgentMetrics metrics;
+    private final AgentCheckpointRepository checkpoints;
     private final long createdAtMillis = System.currentTimeMillis();
     private final List<Step> steps = new ArrayList<>();
+    /** 本次执行已取到的证据：逐次交付、随恢复点落库，不等结论合成。 */
+    private final List<Evidence> evidence = new ArrayList<>();
     private final StringBuilder analysis = new StringBuilder();
     /** 模型思考增量缓冲：与解读分开存放，前端要把两者放在不同位置。 */
     private final StringBuilder thinking = new StringBuilder();
@@ -63,6 +70,11 @@ public final class InvestigationTask implements InvestigationReporter {
     private String error;
     private String clarification;
     private List<RecallChoice> recalls = List.of();
+    /** 恢复点序号：每个任务内从 1 递增，用于回溯"这次调查经历过哪些安全点"。 */
+    private int checkpointSeq;
+    /** 最近一次恢复点上报的轮数与调用次数：STARTED / COMPLETED 这类生命周期恢复点沿用它们，不把计数清零。 */
+    private int lastRoundNo;
+    private int lastToolCallCount;
     private long eventSeq;
     private boolean settled;
     /** 协作式取消标志：执行线程在每个检查点轮询它，置位后不再产出结论。volatile 保证跨线程可见。 */
@@ -71,13 +83,14 @@ public final class InvestigationTask implements InvestigationReporter {
     private transient Thread runner;
 
     InvestigationTask(String taskId, String sessionId, String question, Consumer<TaskView> snapshotSink,
-                      TaskEventBus events, AgentMetrics metrics) {
+                      TaskEventBus events, AgentMetrics metrics, AgentCheckpointRepository checkpoints) {
         this.taskId = taskId;
         this.sessionId = sessionId;
         this.question = question;
         this.snapshotSink = snapshotSink;
         this.events = events;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
+        this.checkpoints = checkpoints;
     }
 
     public String taskId() {
@@ -169,6 +182,53 @@ public final class InvestigationTask implements InvestigationReporter {
         publishSnapshot();
     }
 
+    /**
+     * 交付本次执行新取到的证据：只追加，不覆盖。
+     *
+     * 证据随下一个安全恢复点落库，因此工具一返回、恢复点一推进，事实就已经在库里了；
+     * 结论合成阶段不再"补写历史"。
+     */
+    @Override
+    public synchronized void recordEvidence(List<Evidence> collected) {
+        if (collected == null || collected.isEmpty()) {
+            return;
+        }
+        evidence.addAll(collected);
+    }
+
+    /**
+     * 推进一个安全恢复点。
+     *
+     * <p>调用方必须先完成状态变更（步骤已终态、证据已交付）：一次恢复点写入会把当前任务快照、
+     * 证据与恢复点一起落库，恢复点表达的是「截至这里，一切已确定」，而不是「准备干到这里」。
+     */
+    @Override
+    public synchronized void checkpoint(CheckpointStage stage, int roundNo, int toolCallCount, String runtimeNode) {
+        if (stage == null) {
+            return;
+        }
+        this.lastRoundNo = roundNo;
+        this.lastToolCallCount = toolCallCount;
+        AgentCheckpoint mark = new AgentCheckpoint(UUID.randomUUID().toString(), taskId, ++checkpointSeq, stage,
+                roundNo, toolCallCount, steps.size(), evidence.size(), "", runtimeNode,
+                System.currentTimeMillis());
+        // 这里写的是当前快照本身：状态、步骤、证据与恢复点在同一次写入里落下，恢复点不会领先于事实。
+        checkpoints.save(view(), mark);
+    }
+
+    /** 补齐结论里带来、但没经 {@link #recordEvidence} 交付过的证据：按 ID 去重，保证不丢也不重复。 */
+    private void mergeEvidence(List<Evidence> reported) {
+        if (reported == null || reported.isEmpty()) {
+            return;
+        }
+        for (Evidence item : reported) {
+            boolean known = evidence.stream().anyMatch(kept -> kept.evidenceId().equals(item.evidenceId()));
+            if (!known) {
+                evidence.add(item);
+            }
+        }
+    }
+
     /** 计划与能力进展的全量快照通知：payload 与订阅时补发的快照同型，订阅者按覆盖语义处理。 */
     private void publishSnapshot() {
         publish(TaskEventType.SNAPSHOT, snapshot());
@@ -202,6 +262,8 @@ public final class InvestigationTask implements InvestigationReporter {
         persist();
         publish(TaskEventType.TASK_STARTED, Map.of("status", status));
         metrics.taskStarted();
+        // 安全恢复点：此刻起「任务在跑」这件事已经落库，重启后据此知道它跑到过哪一步。
+        checkpoint(CheckpointStage.STARTED, lastRoundNo, lastToolCallCount, null);
     }
 
     /** 协作式取消的判据：执行线程据此在检查点停下。volatile 读，允许非同步快速轮询。 */
@@ -304,12 +366,14 @@ public final class InvestigationTask implements InvestigationReporter {
         this.report = report;
         this.completedAtMillis = System.currentTimeMillis();
         this.status = TaskStatus.COMPLETED;
+        mergeEvidence(report.evidence());
         persist();
         // 证据与结论同时落定：事件给观察者一个明确的「证据已产出」通知，内容与快照完全一致。
         publish(TaskEventType.EVIDENCE_ADDED, Map.of("evidence", report.evidence(),
                 "count", report.evidence().size()));
         publish(TaskEventType.TASK_COMPLETED, Map.of("status", status, "summary", report.summary(),
                 "confidence", report.confidence()));
+        checkpoint(CheckpointStage.COMPLETED, lastRoundNo, lastToolCallCount, null);
         settle();
     }
 
@@ -376,7 +440,7 @@ public final class InvestigationTask implements InvestigationReporter {
     public synchronized TaskView view() {
         return new TaskView(taskId, sessionId, incidentId, status, currentStage, path, target, question,
                 createdAtMillis, completedAtMillis, List.copyOf(steps), report, error, clarification,
-                taskType, plan, List.copyOf(executedCapabilities), recalls);
+                taskType, plan, List.copyOf(executedCapabilities), recalls, List.copyOf(evidence));
     }
 
     /** 任务快照：视图 + 已产生的解读与思考全文 + 已发布的最新事件序号（订阅者的对齐依据）。 */

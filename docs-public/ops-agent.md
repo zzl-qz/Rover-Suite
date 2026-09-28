@@ -202,7 +202,7 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph: plan / execute / evaluate / clarify / synthesise nodes, looping conditional edges, conclusion synthesis |
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner: rule-based baseline plus model candidates, out-of-scope steps dropped by PlanValidator |
 | | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces only; capacity limits mean something for the in-memory implementations) |
-| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`: the relational implementation of session / message / incident / task / step / evidence (six `agent_*` tables, versioned migrations, one transaction per snapshot, foreign keys so no orphans), assembled by `AgentStore`; plus four thread-safe in-memory implementations used when no record store path is configured |
+| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`: the relational implementation of session / message / incident / task / step / evidence / safe resume points (seven `agent_*` tables, versioned migrations, one transaction per snapshot, foreign keys so no orphans), assembled by `AgentStore`; plus thread-safe in-memory implementations used when no record store path is configured |
 | | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 9 read-only tools (data entry point of the conversation path) |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`: the built-in operations knowledge base, default `KnowledgeReadPort` implementation |
 | | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / ModelTargetInterpreter / SpringAiJsonCompletion / QuickModelCall, plus the conversation-side ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway (model adapter and honest degradation when no model exists) |
@@ -497,15 +497,34 @@ catalogue described in §7.
 - Every question lands under a Session and its task is best-effort attached to an Incident (same target reuses the
   incident, a clearly different target opens a new one, chit-chat creates none). Sessions, messages, incidents, tasks,
   steps, and evidence all go to the record store and **remain queryable after a restart**, so a historical session can
-  be reopened as-is. Tasks still PENDING / RUNNING at startup are marked FAILED by the store with "Admin restarted,
-  investigation interrupted" instead of pretending to still be running; tasks waiting for input are left untouched.
-- **Schema v1 and its migration rule**: the six agent tables (`agent_session` / `agent_message` / `agent_incident` /
-  `agent_task` / `agent_step` / `agent_evidence`) are the project's database schema baseline, managed through
-  `agent_schema_migrations`. This is the only release allowed to rebuild the schema (migration v2 drops the legacy JSON
-  snapshot tables so there is never a second source of truth); from here on, migrations are only ever added, never
-  edited, and nobody is asked to wipe the database again. One task snapshot is written in a single transaction (task +
-  steps + evidence all or nothing), and the references are foreign keys rather than conventions: session → incident →
-  task → steps / evidence, so deleting a session removes the whole chain and orphans cannot exist.
+  be reopened as-is. Tasks still PENDING / RUNNING at startup are marked `INTERRUPTED` by the store — not failed: the
+  collected steps and evidence are kept and `error` names the latest safe resume point. That difference is the whole
+  point: interrupted means it can be picked up again, failed does not.
+- **A safe resume point (`agent_checkpoint`) is a business-level contract, not a framework state snapshot**: it means
+  "up to here everything is settled and it is safe to continue from this point", and there are exactly six of them —
+  task started, plan settled, every tool returned, round evaluated, synthesis done, task completed. The per-tool point
+  is the important one: **tool calls are where the agent actually produces new facts**, so checkpointing only per
+  planning round would re-run facts a crashed round had already collected. A crash in the middle of a tool call does
+  not advance the point; recovery repeats that one read-only call (harmless while everything is read-only — write
+  actions will have to go through operationId/idempotency confirmation instead).
+- **A resume point stores the high-water mark, not a list**: `stage` names the business stage (`STARTED` / `PLANNED` /
+  `TOOL_COMPLETED` / `ROUND_EVALUATED` / `SYNTHESIS_COMPLETED` / `COMPLETED`) plus round number, completed call count,
+  and step/evidence counts. Which steps and evidence those are is read back from the relational tables by sequence —
+  no ID lists are copied here. The graph node name is a diagnostic field only (`runtime_node`); recovery never depends
+  on it, so swapping the agent framework or renaming nodes cannot change recovery semantics. `resume_state_json` is
+  reserved for runtime state that cannot be rebuilt from the tables; both current paths can be rebuilt, so it stays
+  empty rather than holding invented content.
+- **Facts and the resume point are written together**: task state, steps, evidence, and the checkpoint land in one
+  transaction, so "the resume point claims 3 evidence rows while the database holds 2" cannot happen. That is also why
+  evidence became **incremental**: it is persisted as soon as a tool returns, instead of being written in one batch
+  when the conclusion is composed. The task view's `evidence` is everything this run has collected; `result.evidence`
+  is the same batch once a conclusion exists.
+- **Schema and its migration rule**: the agent tables (session / message / incident / task / step / evidence + safe
+  resume points) are the project's database schema baseline, managed through `agent_schema_migrations` (v1 creates the
+  aggregate, v2 drops the legacy JSON snapshot tables, v3 adds resume points). This is the only release allowed to
+  rebuild the schema; from here on, migrations are only ever added, never edited, and nobody is asked to wipe the
+  database again. The references are foreign keys rather than conventions: session → incident → task → steps /
+  evidence / checkpoints, so deleting a session removes the whole chain and orphans cannot exist.
 - Strict structured output plus failure classification: `JsonCompletion`'s parsing contract is now supplied by the
   caller (`Function<String, Optional<T>> parser`), and `LlmInvestigationPlanner` / `ModelTargetInterpreter` follow a
   strict contract — invalid JSON, or a value out of range, discards the whole result and falls back to the rule layer,
@@ -534,6 +553,12 @@ catalogue described in §7.
 
 - The next storage step: today it is a single local H2 file (Lite); the same SQL with a different connection source is
   what a MySQL Standard profile needs. Redis caching and cross-host audit are not implemented.
+- Resuming from a resume point: alert investigations (`INVESTIGATION`) have well-defined stage state and a settled
+  capability set, so they can genuinely resume — read the latest checkpoint, rebuild the task from the persisted
+  steps / evidence / executed capabilities, and continue from the next safe stage without repeating finished tool
+  calls. Human conversations (`CONVERSATION`) still only go as far as "mark interrupted, keep the facts, allow a
+  retry" — this version does not reach into Spring AI's conversation loop looking for a recovery cursor; a retry hands
+  the facts already collected back to the model.
 - Proactive inspection: periodic self-inspection that raises its own `INSPECTION` incidents. `POST
   /api/agent/events/ingest` already lets an external alert drive an automatic investigation; what is missing is the
   agent going out to look on a schedule.

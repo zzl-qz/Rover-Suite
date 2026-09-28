@@ -1,8 +1,10 @@
 package com.rover.agent.runtime.task;
 
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.runtime.metrics.AgentMetrics;
+import com.rover.agent.runtime.repository.InMemoryAgentCheckpointRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
 import jakarta.annotation.PreDestroy;
 import java.util.Comparator;
@@ -44,6 +46,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     private static final String REJECT_QUEUE = "QUEUE";
 
     private final AgentTaskRepository records;
+    private final AgentCheckpointRepository checkpoints;
     private final AgentExecutionSettings settings;
     private final TaskEventBus events;
     private final AgentMetrics metrics;
@@ -74,10 +77,17 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
 
     public InvestigationTaskRegistry(AgentTaskRepository records, AgentExecutionSettings settings,
                                      TaskEventBus events, AgentMetrics metrics) {
+        this(records, settings, events, metrics, new InMemoryAgentCheckpointRepository());
+    }
+
+    public InvestigationTaskRegistry(AgentTaskRepository records, AgentExecutionSettings settings,
+                                     TaskEventBus events, AgentMetrics metrics,
+                                     AgentCheckpointRepository checkpoints) {
         this.records = records;
         this.settings = settings;
         this.events = events;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
+        this.checkpoints = checkpoints == null ? new InMemoryAgentCheckpointRepository() : checkpoints;
         this.workers = new ThreadPoolExecutor(settings.workerThreads(), settings.workerThreads(), 0,
                 TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(settings.queueCapacity()), runnable -> {
                     Thread thread = new Thread(runnable, "rover-agent-worker");
@@ -104,7 +114,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
                 throw new RejectedExecutionException("调查任务已满");
             }
             InvestigationTask task = new InvestigationTask(UUID.randomUUID().toString(), sessionId, question,
-                    records::save, events, metrics);
+                    records::save, events, metrics, checkpoints);
             executing.put(task.taskId(), task);
             records.save(task.view());
             // 通道随登记一起开：全程无人订阅时，终态事件也不会丢，晚连上的订阅者仍能读到并收尾。
@@ -130,6 +140,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     public void discard(String taskId) {
         executing.remove(taskId);
         records.remove(taskId);
+        checkpoints.removeByTask(taskId);
         events.close(taskId);
     }
 
@@ -201,6 +212,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
             }
             executing.remove(view.taskId());
             records.remove(view.taskId());
+            checkpoints.removeByTask(view.taskId());
             events.close(view.taskId());
             retired++;
         }
@@ -216,6 +228,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
                 .min(Comparator.comparingLong(TaskView::createdAtMillis))
                 .ifPresent(oldest -> {
                     records.remove(oldest.taskId());
+                    checkpoints.removeByTask(oldest.taskId());
                     executing.remove(oldest.taskId());
                     events.close(oldest.taskId());
                 });

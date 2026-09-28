@@ -18,6 +18,7 @@ import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.core.repository.AgentMessageRepository;
+import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
@@ -92,6 +93,11 @@ public class AgentRuntimeConfiguration {
     }
 
     @Bean
+    public AgentCheckpointRepository agentCheckpointRepository(AgentStore agentStore) {
+        return agentStore.checkpoints();
+    }
+
+    @Bean
     public OpsJournal opsJournal(AgentStore agentStore) {
         return agentStore.journal();
     }
@@ -135,6 +141,7 @@ public class AgentRuntimeConfiguration {
 
     @Bean
     public InvestigationTaskRegistry agentTaskRegistry(AgentTaskRepository agentTaskRepository,
+                                                       AgentCheckpointRepository agentCheckpointRepository,
                                                        @Value("${rover.agent.execution.worker-threads:2}")
                                                        int workerThreads,
                                                        @Value("${rover.agent.execution.queue-capacity:16}")
@@ -144,7 +151,8 @@ public class AgentRuntimeConfiguration {
                                                        AgentMetrics agentMetrics) {
         // 参数越界时在装配阶段直接失败：配置错误必须早暴露，而不是运行期以「任务莫名被拒」出现。
         AgentExecutionSettings settings = new AgentExecutionSettings(workerThreads, queueCapacity, taskCapacity);
-        return new InvestigationTaskRegistry(agentTaskRepository, settings, new TaskEventBus(), agentMetrics);
+        return new InvestigationTaskRegistry(agentTaskRepository, settings, new TaskEventBus(), agentMetrics,
+                agentCheckpointRepository);
     }
 
     @Bean
