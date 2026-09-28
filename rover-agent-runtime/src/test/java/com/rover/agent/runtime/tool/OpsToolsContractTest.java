@@ -1,5 +1,6 @@
 package com.rover.agent.runtime.tool;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -44,6 +45,12 @@ class OpsToolsContractTest {
         return Arrays.stream(OpsTools.class.getDeclaredMethods())
                 .filter(method -> method.isAnnotationPresent(Tool.class))
                 .toList();
+    }
+
+    @Test
+    void toolCountMatchesTheDocumentedSet() {
+        assertEquals(9, toolMethods().size(),
+                "对外宣称的工具数量与实际不符：模型看到的工具集变了，文档与能力清单应同步");
     }
 
     @Test

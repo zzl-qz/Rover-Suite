@@ -264,22 +264,30 @@ key**; `baseUrl`, the main model, and the fast model are resolved by a backend `
 (Ollama / vLLM) unblocked. One key covers a vendor's whole model family, so the abstraction holds.
 
 Measured trade-off (real Zhipu API, 30-case labelled target-resolution eval,
-`TargetInterpreterEval.java`):
+`TargetInterpreterEval.java`; latest re-run 2026-09-28):
 
-| | glm-4.6 thinking (before) | glm-4-flash (chosen) |
+| | glm-4.6 thinking | glm-4-flash (current fast model) |
 | :--- | :--- | :--- |
-| Target-resolution latency | 11.3 s | 1.9 s |
-| Single cheap-call cost | ~0.033 分 | ~0 (vendor-free tier) |
-| Resolution accuracy | 86.7% | 76.7% |
-| **Error rate** (wrong object, not abstain) | 10.0% | 13.3% |
+| Average latency per case | 12.0 s | 1.1 s |
+| Single cheap-call cost | estimated from the vendor price list (tokens not measured this run) | ~0 (vendor-free tier) |
+| Resolution accuracy | 93.3% | 63.3% |
+| **Error rate** (wrong object, not abstain) | 6.7% | 26.7% |
+| Conservative abstain rate | 0.0% | 10.0% |
 
-Accuracy does drop, but the *nature* of the error is controlled: glm-4-flash's misses fall on
-ambiguous/trap cases and degrade to clarification, whereas the faster candidate `glm-4-air`
-mis-attributed on explicit cases (e.g. read "trade-service instance down" as the instance
-`172.16.0.9:7001`). We therefore chose by **error rate, not hit rate** — aligning with the
-project's "clarify rather than guess" stance. The eval is a standalone program (not a unit test)
-because it depends on a live model; the 30-case size is a stated limit, not a claim of
-statistical significance.
+Method: on trap and ambiguous cases the expected answer *is* "no object", so an abstention counts
+as a hit — the accuracy figure therefore includes "correctly refused to guess". Two of glm-4.6's
+30 cases were scored correct only because they hit the 10-second timeout and degraded to
+clarification; that is not the model judging well.
+
+The re-run differs from the first eval (86.7% / 76.7%): with 30 cases, single-run variance is
+large, and neither run claims statistical significance. One conclusion from the first run did not
+hold: back then glm-4-flash's misses were mostly conservative clarifications, while this run
+produced an outright mis-attribution (read "trade-service instance down" as the instance
+`172.16.0.9:7001`) — the same failure class that ruled out `glm-4-air`. So **"the fast model's
+error nature is controlled" currently lacks stable evidence**. The selection criterion stays
+error rate rather than hit rate, and the fast model still only handles cheap calls that have a
+rule fallback: a wrong target resolution degrades to clarification instead of driving an
+investigation with the wrong object.
 
 Degradation holds without a model: on the investigation graph, diagnosis falls back to pure rule-based (`aiAnalysis` is
 null) and collection continues. The conversation path deliberately does **not** fake a graceful degradation: its every
@@ -457,7 +465,7 @@ catalogue described in §7.
 - Every question lands under a Session and its task is best-effort attached to an Incident (same target reuses the
   incident, a clearly different target opens a new one, chit-chat creates none). Task state lives in Admin memory and is
   gone after restart; the record store (§6.3) is independent of it and survives a restart.
-- Intent recognition evaluation loop (`IntentEvaluationTest`): 32 labelled utterances must be matched exactly,
+- Intent recognition evaluation loop (`IntentEvaluationTest`): 38 labelled utterances must be matched exactly,
   one by one, by the rule layer; another 6 fuzzy phrasings of the same intents must **not** be settled by the rule
   layer with `HIGH` confidence — the model has to step in. This solves "the intent hit rate is only a verbal claim
   and prompt edits are pure guesswork": the hit rate becomes a regression baseline that can be compared before and
