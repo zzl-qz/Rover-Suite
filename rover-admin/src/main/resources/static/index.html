@@ -586,9 +586,9 @@
                                             <div v-else class="empty slim">暂无假设验证明细</div>
 
                                             <h4>证据</h4>
-                                            <div v-if="!turn.task.result || !turn.task.result.evidence || !turn.task.result.evidence.length" class="empty slim">暂无可用证据</div>
+                                            <div v-if="!turn.task.evidence || !turn.task.evidence.length" class="empty slim">暂无可用证据</div>
                                             <div v-else class="wb-evidence">
-                                                <div v-for="(item, index) in turn.task.result.evidence" :key="item.evidenceId || index" class="wb-evidence-row">
+                                                <div v-for="(item, index) in turn.task.evidence" :key="item.evidenceId || index" class="wb-evidence-row">
                                                     <span class="badge comp">{{ wbEvidenceTypeLabel(item.type) }}</span>
                                                     <div class="wb-evidence-body">
                                                         <strong>{{ item.title }}</strong>
@@ -759,14 +759,14 @@
                             <div class="card-head">
                                 <h2>证据</h2>
                                 <span v-if="wbLatestResultTask" class="card-hint ml-auto">
-                                    最近一次调查，{{ (wbLatestResultTask.result.evidence || []).length }} 条
+                                    最近一次调查，{{ (wbLatestResultTask.evidence || []).length }} 条
                                 </span>
                             </div>
-                            <div v-if="!wbLatestResultTask || !(wbLatestResultTask.result.evidence || []).length" class="empty slim">
+                            <div v-if="!wbLatestResultTask || !(wbLatestResultTask.evidence || []).length" class="empty slim">
                                 还没有可用证据。
                             </div>
                             <div v-else class="wb-evidence">
-                                <div v-for="(item, index) in wbLatestResultTask.result.evidence" :key="item.evidenceId || index" class="wb-evidence-row">
+                                <div v-for="(item, index) in wbLatestResultTask.evidence" :key="item.evidenceId || index" class="wb-evidence-row">
                                     <span class="badge comp">{{ wbEvidenceTypeLabel(item.type) }}</span>
                                     <div class="wb-evidence-body">
                                         <strong>{{ item.title }}</strong>

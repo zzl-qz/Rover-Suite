@@ -16,6 +16,7 @@ import com.rover.agent.core.investigation.Findings;
 import com.rover.agent.core.investigation.FindingsInput;
 import com.rover.agent.core.investigation.InvestigationRules;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.CheckpointStage;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.StepStatus;
@@ -233,6 +234,8 @@ public final class DynamicInvestigationGraph {
             reporter.reportPlan(validated);
             reporter.step(AgentStepType.PLANNING, STEP_PLANNING, StepStatus.COMPLETED,
                     validated.isEmpty() ? "第 " + round + " 轮没有可执行的只读步骤" : describePlan(round, validated));
+            // 计划已定稿：空计划也算一个安全点，恢复时不必重新问一遍模型「该查什么」。
+            reporter.checkpoint(CheckpointStage.PLANNED, round, toolCalls, NODE_PLAN);
         }
         return Map.of(STATE_ROUNDS, round, STATE_HAS_PLAN, !validated.isEmpty());
     }
@@ -290,6 +293,10 @@ public final class DynamicInvestigationGraph {
                 reporter.step(result.stepType(), result.stepName(),
                         result.executed() ? StepStatus.COMPLETED : StepStatus.FAILED,
                         result.executed() ? detailOf(result) : limitationOf(result));
+                // 安全恢复点：这次取到的事实（含失败时如实记下的边界）已经确定并落库。
+                // 崩在调用途中的话这里不会执行，恢复时重做这一次只读调用即可。
+                reporter.recordEvidence(result.evidence());
+                reporter.checkpoint(CheckpointStage.TOOL_COMPLETED, rounds, toolCalls, NODE_EXECUTE);
             }
         }
         return Map.of(STATE_TOOL_CALLS, toolCalls);
@@ -325,6 +332,10 @@ public final class DynamicInvestigationGraph {
             }
             verdict = VERDICT_FINISH;
         }
+        if (reporter != null) {
+            // 走向已定：恢复时不必重跑评估，直接按这里的轮数与调用次数接着算预算。
+            reporter.checkpoint(CheckpointStage.ROUND_EVALUATED, rounds, toolCalls, NODE_EVALUATE);
+        }
         return Map.of(STATE_VERDICT, verdict, STATE_TOOL_CALLS, toolCalls);
     }
 
@@ -345,6 +356,8 @@ public final class DynamicInvestigationGraph {
         if (reporter != null) {
             reporter.step(AgentStepType.DIAGNOSIS, STEP_SYNTHESIS, StepStatus.COMPLETED,
                     InvestigationRules.describeVerdicts(result.hypotheses()));
+            // 结论已成型：这是「证据足够、可以出结果」的安全点，恢复时不会再折回去重查一遍。
+            reporter.checkpoint(CheckpointStage.SYNTHESIS_COMPLETED, rounds, toolCalls, NODE_SYNTHESIS);
         }
         this.findings = result;
         return Map.of();

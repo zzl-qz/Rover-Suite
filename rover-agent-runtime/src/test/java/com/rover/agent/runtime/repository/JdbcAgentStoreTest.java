@@ -109,7 +109,8 @@ class JdbcAgentStoreTest {
 
         try (JdbcAgentStore second = new JdbcAgentStore(path)) {
             TaskView interrupted = second.tasks().find("t1").orElseThrow();
-            assertEquals(TaskStatus.FAILED, interrupted.status());
+            assertEquals(TaskStatus.INTERRUPTED, interrupted.status(),
+                    "重启中断不是失败：已有事实还在，可以按恢复点接着跑");
             assertTrue(interrupted.error().contains("重启"), "中断原因要说清是重启，而不是含糊的失败");
             assertTrue(interrupted.completedAtMillis() > 0, "中断也是一次终态，完成时间要落下");
             assertEquals(List.of(running), interrupted.steps(), "中断只改状态，过程记录保持原样");
@@ -226,7 +227,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(2, store.schemaVersion(), "v1 建聚合表，v2 清理旧 JSON 快照表");
+            assertEquals(3, store.schemaVersion(), "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点");
         }
 
         // 模拟"迁移记录丢了但表还在"：MySQL 的 DDL 不能回滚，重跑必须照样通过。
@@ -237,7 +238,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-            assertEquals(2, store.schemaVersion());
+            assertEquals(3, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -296,7 +297,7 @@ class JdbcAgentStoreTest {
                         StepStatus.COMPLETED, null, "5xx=12", 61L, 70L, null)),
                 report, null, null, TaskType.INVESTIGATION, plan,
                 List.of(AgentCapability.ROUTE_QUERY, AgentCapability.GATEWAY_METRICS_QUERY),
-                List.of(new RecallChoice("昨天那场", "s0")));
+                List.of(new RecallChoice("昨天那场", "s0")), List.of(evidence));
     }
 
     @Test

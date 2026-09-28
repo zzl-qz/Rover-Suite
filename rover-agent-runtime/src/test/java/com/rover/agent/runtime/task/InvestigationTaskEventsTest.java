@@ -16,6 +16,7 @@ import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.runtime.metrics.AgentMetrics;
+import com.rover.agent.runtime.repository.InMemoryAgentCheckpointRepository;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -33,7 +34,7 @@ class InvestigationTaskEventsTest {
 
     private final TaskEventBus bus = new TaskEventBus(64);
     private final InvestigationTask task = new InvestigationTask("task-1", "session-1", "为什么失败？",
-            view -> { }, bus, AgentMetrics.NOOP);
+            view -> { }, bus, AgentMetrics.NOOP, new InMemoryAgentCheckpointRepository());
 
     @Test
     void publishesLifecycleStepsAndAnalysisInOrder() {
@@ -139,7 +140,7 @@ class InvestigationTaskEventsTest {
             }
         };
         InvestigationTask measured = new InvestigationTask("task-metrics", "session-1", "为什么失败？",
-                view -> { }, bus, recording);
+                view -> { }, bus, recording, new InMemoryAgentCheckpointRepository());
 
         measured.start();
         measured.complete(report());

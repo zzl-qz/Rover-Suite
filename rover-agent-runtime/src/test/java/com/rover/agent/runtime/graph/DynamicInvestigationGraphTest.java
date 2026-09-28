@@ -9,6 +9,8 @@ import com.rover.agent.core.capability.CapabilityDescriptor;
 import com.rover.agent.core.capability.CapabilityExecutor;
 import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.CheckpointStage;
+import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.planning.InvestigationPlan;
@@ -239,12 +241,14 @@ class DynamicInvestigationGraphTest {
         }
     }
 
-    /** 上报口的内存记录：计划、已执行能力与步骤说明都要能被断言。 */
+    /** 上报口的内存记录：计划、已执行能力、证据与安全恢复点都要能被断言。 */
     private static final class RecordingReporter implements InvestigationReporter {
 
         private final List<InvestigationPlan> plans = new CopyOnWriteArrayList<>();
         private final List<AgentCapability> capabilities = new CopyOnWriteArrayList<>();
         private final List<String> details = new CopyOnWriteArrayList<>();
+        private final List<Evidence> evidence = new CopyOnWriteArrayList<>();
+        private final List<CheckpointStage> stages = new CopyOnWriteArrayList<>();
 
         @Override
         public void reportPlan(InvestigationPlan plan) {
@@ -254,6 +258,16 @@ class DynamicInvestigationGraphTest {
         @Override
         public void reportCapabilityExecuted(AgentCapability capability) {
             capabilities.add(capability);
+        }
+
+        @Override
+        public void recordEvidence(List<Evidence> collected) {
+            evidence.addAll(collected);
+        }
+
+        @Override
+        public void checkpoint(CheckpointStage stage, int roundNo, int toolCallCount, String runtimeNode) {
+            stages.add(stage);
         }
 
         @Override

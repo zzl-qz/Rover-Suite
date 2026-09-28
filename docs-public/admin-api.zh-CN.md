@@ -40,13 +40,17 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | POST | `/api/model/test` | 用请求体里的候选值做连接测试，不落盘 |
 | POST | `/api/model/verify` | 对当前已生效的配置做效果验证 |
 
-Agent 任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED` 或 `FAILED`（另有协议预留的 `CANCELLED`）。
+Agent 任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED`、`FAILED` 或 `INTERRUPTED`（另有 `CANCELLED`）。
 `WAITING_INPUT` 表示目标无法从问题与会话上下文确定，任务停在澄清点等待用户补充，不算执行中，也不占用会话的并发位；
-澄清提问在任务的 `clarification` 字段里，用户补充信息后由会话的下一次任务继续。结果包含 `summary`、`confidence`、
-带来源和采集时间的 `evidence`、`limitations`，以及假设验证 `hypotheses`：每条含 `id`、`statement`、
+澄清提问在任务的 `clarification` 字段里，用户补充信息后由会话的下一次任务继续。
+`INTERRUPTED` 表示 Admin 在任务执行途中重启：任务没有线程在跑，但已采集的 `steps` 与 `evidence` 都还在，
+`error` 里写明最近的安全恢复点（跑到哪个阶段、第几轮、调用了几次、步骤与证据各几条）。
+结果包含 `summary`、`confidence`、带来源和采集时间的 `evidence`、`limitations`，以及假设验证 `hypotheses`：每条含 `id`、`statement`、
 `status`、`detail`、`sources`，其中 `status` 为 `CONFIRMED`、`REJECTED` 或 `UNKNOWN`，分别表示该假设
 被确认、排除或证据不足无法验证。配置模型后还会包含可选的 `aiAnalysis`。诊断全程只读，不会修改路由或配置；
 会话、消息、事件、任务、步骤与证据都写在记录库里，重启后仍可查询（未配 `rover.admin.log-store-path` 时退回内存，重启即清空）。
+任务视图上的 `evidence` 是「本次执行已取到的全部证据」，与结论是否已产出无关：工具一返回它就在，
+结论里的 `result.evidence` 是同一批（结论说明自己建立在哪些事实上）。
 
 每条证据除 `source`、`observedAtMillis`、`rawReference` 外，`metadata` 里带统计口径：`windowSeconds`（窗口秒数，`0` 表示时点快照）、
 `sampleSize`（样本量），以及该证据的资源维度（`routeId` / `hostPort` / `component`）。样本不足时如实写「无法判断」，

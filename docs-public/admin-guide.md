@@ -23,8 +23,10 @@ language box (e.g. "why does /api/demo/tt fail?"); the collapsible "advanced con
 instance and a time range, all optional. Later questions in the same session are treated as follow-ups on the active
 incident ("why are there no instances?", "what about yesterday?"), and a new incident opens only when the target
 changes. Sessions, messages, incidents, tasks, steps, and evidence are written to the record store and **survive a
-restart**: a historical session can be reopened as-is and a follow-up continues on its incident. Only with no record
-store path configured (`rover.admin.log-store-path` blank) does the agent fall back to in-memory storage.
+restart**: a historical session can be reopened as-is and a follow-up continues on its incident. A task that was still
+running is marked "interrupted" with its latest safe resume point, and the steps and evidence it had already collected
+stay readable. Only with no record store path configured (`rover.admin.log-store-path` blank) does the agent fall back
+to in-memory storage.
 
 The workbench works with route and instance snapshots even when no model is configured. To enable AI explanations,
 set these environment variables:

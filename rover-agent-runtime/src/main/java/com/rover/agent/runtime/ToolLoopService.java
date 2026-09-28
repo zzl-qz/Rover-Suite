@@ -6,6 +6,7 @@ import com.rover.agent.core.capability.UntrustedText;
 import com.rover.agent.core.investigation.Findings;
 import com.rover.agent.core.investigation.InvestigationRules;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.CheckpointStage;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.model.Confidence;
@@ -152,6 +153,9 @@ public final class ToolLoopService {
                 task.step(AgentStepType.DIAGNOSIS, "假设判定", StepStatus.COMPLETED,
                         InvestigationRules.describeVerdicts(judged.hypotheses()));
             }
+            // 结论已成型：这条路径没有规划轮数，取数次数就是它的进度；恢复点记下来，
+            // 「已经答到哪一步」在库里是确定的，而不是重启后只剩一句失败。
+            task.checkpoint(CheckpointStage.SYNTHESIS_COMPLETED, 0, tools.callCount(), null);
             // 回答正文仍是模型的话。假设由同一批工具快照按规则判定，只有「确认」才会写成资源笔记。
             task.complete(new InvestigationReport(answer, Confidence.MEDIUM, tools.evidence(),
                     tools.limitations(), judged == null ? List.of() : judged.hypotheses(), null));
