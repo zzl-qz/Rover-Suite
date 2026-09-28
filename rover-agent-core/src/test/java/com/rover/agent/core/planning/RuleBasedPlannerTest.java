@@ -60,6 +60,45 @@ class RuleBasedPlannerTest {
                 "不问配置就不读：每次多两跳只读调用，证据里也会混进与问题无关的内容");
     }
 
+    /**
+     * 线索是提示而不是裁决：它只决定「要不要多看一个方向」，既不替问题定性，也不屏蔽另一条路。
+     *
+     * 这四条是给 {@code InvestigationCueDetector} 的回归基线。词表可以扩，但这几条语义不能被改坏——
+     * 一旦有人把「先命中的方向说了算」写回来（旧 Intent 词表就是这么做的），下面第三条会立刻变红：
+     *
+     * <pre>
+     * 「最近延迟为什么升高？」        → 不该仅因为「延迟」就去读配置（延迟由指标与追踪回答）
+     * 「最近是不是有人改了超时配置？」  → 应该把 CONFIG_READ 纳入考虑
+     * 「5xx 突然升高，限流阈值是不是改了？」→ METRICS 与 CONFIG 两个方向都合理
+     * 「最近发生过什么配置变更？」     → 配置与变更经过都该看
+     * </pre>
+     */
+    @Test
+    void questionCuesHintDirectionsWithoutDecidingThem() {
+        Set<AgentCapability> latency = planner
+                .plan(request("最近延迟为什么升高？", ResourceTarget.route("/api/order"), "/api/order"))
+                .capabilities();
+        assertFalse(latency.contains(AgentCapability.CONFIG_READ), "「延迟」不是配置线索：指标与追踪才回答这个问题");
+        assertFalse(latency.contains(AgentCapability.EVENT_QUERY), "「延迟」也不是变更经过线索");
+
+        Set<AgentCapability> timeout = planner
+                .plan(request("最近是不是有人改了超时配置？", ResourceTarget.route("/api/order"), "/api/order"))
+                .capabilities();
+        assertTrue(timeout.contains(AgentCapability.CONFIG_READ), "问到超时/配置本身，配置读取必须被考虑");
+
+        Set<AgentCapability> threshold = planner
+                .plan(request("5xx 突然升高，限流阈值是不是改了？", ResourceTarget.route("/api/order"), "/api/order"))
+                .capabilities();
+        assertTrue(threshold.contains(AgentCapability.GATEWAY_METRICS_QUERY), "流量事实与配置事实同时在问题里");
+        assertTrue(threshold.contains(AgentCapability.CONFIG_READ), "命中配置线索不得屏蔽指标方向，反之亦然");
+
+        Set<AgentCapability> changed = planner
+                .plan(request("最近发生过什么配置变更？", ResourceTarget.service("demo-service"), ""))
+                .capabilities();
+        assertTrue(changed.contains(AgentCapability.CONFIG_READ), "「配置」指向当前生效配置");
+        assertTrue(changed.contains(AgentCapability.EVENT_QUERY), "「变更」指向变更经过，两个方向都该被听见");
+    }
+
     @Test
     void plannedCapabilitiesStayInsideTheReadOnlyRegistry() {
         CapabilityRegistry registry = CapabilityRegistry.standard();
@@ -83,6 +122,6 @@ class RuleBasedPlannerTest {
     }
 
     private PlanningRequest request(String question, ResourceTarget target, String path) {
-        return new PlanningRequest(question, null, target, path, List.of(), List.of());
+        return new PlanningRequest(question, target, path, List.of(), List.of());
     }
 }

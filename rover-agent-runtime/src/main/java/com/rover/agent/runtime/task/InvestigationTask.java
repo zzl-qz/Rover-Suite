@@ -6,9 +6,7 @@ import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.event.TaskSnapshot;
-import com.rover.agent.core.model.ActionPlan;
 import com.rover.agent.core.model.AgentStepType;
-import com.rover.agent.core.model.IntentDecision;
 import com.rover.agent.core.model.Confidence;
 import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.RecallChoice;
@@ -59,9 +57,7 @@ public final class InvestigationTask implements InvestigationReporter {
     private String path = "";
     private ResourceTarget target = ResourceTarget.unknown();
     private TaskType taskType = TaskType.INVESTIGATION;
-    private IntentDecision intent;
     private InvestigationPlan plan = InvestigationPlan.empty();
-    private ActionPlan actionPlan;
     private long completedAtMillis;
     private InvestigationReport report;
     private String error;
@@ -111,12 +107,7 @@ public final class InvestigationTask implements InvestigationReporter {
         return target;
     }
 
-    /** 本次任务识别出的意图；尚未识别时为 {@code null}。 */
-    public synchronized IntentDecision intent() {
-        return intent;
-    }
-
-    /** 本次任务类型；未识别意图前默认为故障调查。 */
+    /** 本次任务类型：人工会话为智能问答，机器事件触发的调查为自动调查。 */
     public synchronized TaskType taskType() {
         return taskType;
     }
@@ -143,14 +134,15 @@ public final class InvestigationTask implements InvestigationReporter {
     }
 
     /**
-     * 意图识别完成：把任务类型与意图判断写进快照。
+     * 标明本次任务走的是人工对话主路径（{@link TaskType#CONVERSATION}）。
      *
-     * 意图不是一次状态迁移，而是结构化进展；用一次全量快照事件通知订阅者，
-     * 前端按「快照覆盖」语义合并，既能看到意图判定，也不会打乱步骤与解读的增量流。
+     * 任务形态不是一次状态迁移，而是结构化事实；用一次全量快照事件通知订阅者，
+     * 前端按「快照覆盖」语义合并，既能看到形态，也不会打乱步骤与解读的增量流。
+     *
+     * 这里刻意不再写任何「意图判断」：对话主路径上不存在预分类——查什么、怎么答由模型在对话中决定。
      */
-    public synchronized void classify(TaskType type, IntentDecision decision) {
-        this.taskType = type == null ? TaskType.INVESTIGATION : type;
-        this.intent = decision;
+    public synchronized void markConversation() {
+        this.taskType = TaskType.CONVERSATION;
         persist();
         publishSnapshot();
     }
@@ -173,13 +165,6 @@ public final class InvestigationTask implements InvestigationReporter {
         if (capability != null && !executedCapabilities.contains(capability)) {
             executedCapabilities.add(capability);
         }
-        persist();
-        publishSnapshot();
-    }
-
-    /** 处置请求的产出：只生成计划、不执行任何写操作，说明书随快照一起展示。 */
-    public synchronized void attachActionPlan(ActionPlan plan) {
-        this.actionPlan = plan;
         persist();
         publishSnapshot();
     }
@@ -391,7 +376,7 @@ public final class InvestigationTask implements InvestigationReporter {
     public synchronized TaskView view() {
         return new TaskView(taskId, sessionId, incidentId, status, currentStage, path, target, question,
                 createdAtMillis, completedAtMillis, List.copyOf(steps), report, error, clarification,
-                taskType, intent, plan, List.copyOf(executedCapabilities), actionPlan, recalls);
+                taskType, plan, List.copyOf(executedCapabilities), recalls);
     }
 
     /** 任务快照：视图 + 已产生的解读与思考全文 + 已发布的最新事件序号（订阅者的对齐依据）。 */

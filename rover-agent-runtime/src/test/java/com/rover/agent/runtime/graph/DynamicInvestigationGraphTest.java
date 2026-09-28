@@ -178,7 +178,7 @@ class DynamicInvestigationGraphTest {
                 () -> List.of(), () -> List.of(), r -> List.of(), (q, limit) -> List.of(), registry);
         DynamicInvestigationGraph graph = new DynamicInvestigationGraph(planner,
                 new PlanValidator(registry, limits), executor, limits, reporter);
-        return graph.investigate("task-1", PATH, "为什么 " + PATH + " 调用失败？", TARGET, null);
+        return graph.investigate("task-1", PATH, "为什么 " + PATH + " 调用失败？", TARGET);
     }
 
     private static RouteReadPort routes() {

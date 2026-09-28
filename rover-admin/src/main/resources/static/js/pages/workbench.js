@@ -1020,9 +1020,7 @@ window.RoverAdminPages.workbench = {
         /** 步骤类型的中文名：只在后端没给 step.name 时兜底，不参与任何流程判断。 */
         wbStepTypeLabel(type) {
             return {
-                INTENT_RESOLUTION: '意图识别',
                 PLANNING: '调查规划',
-                ACTION_PLANNING: '生成处置计划',
                 ANSWER: '回答',
                 TARGET_RESOLUTION: '目标解析',
                 ROUTE_INVESTIGATION: '读取路由',
@@ -1037,28 +1035,18 @@ window.RoverAdminPages.workbench = {
             }[type] || type || '步骤';
         },
 
-        /** 任务类型：一次提问最终以什么形态执行，后端 taskType 直接给出，不靠文本猜。 */
+        /** 任务类型：一次执行以什么形态进行，后端 taskType 直接给出，不靠文本猜。 */
         wbTaskTypeLabel(type) {
             return {
                 CONVERSATION: '智能问答',
-                QUERY: '状态查询', INVESTIGATION: '故障调查', ACTION_PLAN: '处置计划',
-                EXPLAIN: '解释说明', UNSUPPORTED: '暂未开放',
+                INVESTIGATION: '故障调查',
             }[type] || '智能问答';
         },
 
         wbTaskTypeBadge(type) {
             return {
-                CONVERSATION: 'ok', INVESTIGATION: 'comp', QUERY: 'ok', EXPLAIN: 'ok',
-                ACTION_PLAN: 'warn', UNSUPPORTED: 'warn',
+                CONVERSATION: 'ok', INVESTIGATION: 'comp',
             }[type] || 'ok';
-        },
-
-        wbIntentLabel(intent) {
-            return {
-                QUERY_STATE: '查询状态', INVESTIGATE: '故障调查', EXPLAIN: '解释说明',
-                ACTION_REQUEST: '处置请求', CREATE_INSPECTION: '定时巡检', KNOWLEDGE_QUERY: '知识检索',
-                UNKNOWN: '未识别',
-            }[intent] || intent || '未识别';
         },
 
         /** 只读能力的中文名：与后端 AgentCapability 一一对应，用于计划与已执行能力展示。 */
@@ -1077,28 +1065,6 @@ window.RoverAdminPages.workbench = {
 
         wbPlanMark(task, capability) {
             return this.wbPlanState(task, capability) === 'done' ? '✓' : '○';
-        },
-
-        wbActionTypeLabel(type) {
-            return {
-                DRAIN_INSTANCE: '摘除实例', RESTORE_INSTANCE: '恢复实例', UPDATE_ROUTE_TIMEOUT: '调整路由超时',
-                UPDATE_RATE_LIMIT: '调整限流', UNKNOWN: '未识别的动作',
-            }[type] || type || '未识别的动作';
-        },
-
-        wbRiskLabel(level) {
-            return { LOW: '低', MEDIUM: '中', HIGH: '高' }[level] || level || '未评估';
-        },
-
-        wbRiskBadge(level) {
-            return { LOW: 'ok', MEDIUM: 'warn', HIGH: 'bad' }[level] || 'comp';
-        },
-
-        /** 处置计划的目标展示：优先用预检解析出的对象，解析不出时如实退回用户原文。 */
-        wbActionTargetText(plan) {
-            if (!plan) return '-';
-            const value = plan.target && plan.target.value;
-            return value || plan.targetDescription || '未指定';
         },
 
         /** 已执行能力的中文清单；没有时返回空串，由模板决定是否展示这一行。 */

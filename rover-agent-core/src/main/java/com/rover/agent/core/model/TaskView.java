@@ -9,8 +9,8 @@ public record TaskView(String taskId, String sessionId, String incidentId, TaskS
                        AgentStepType currentStage, String path, ResourceTarget target, String question,
                        long createdAtMillis, long completedAtMillis, List<Step> steps,
                        InvestigationReport result, String error, String clarification,
-                       TaskType taskType, IntentDecision intent, InvestigationPlan plan,
-                       List<AgentCapability> executedCapabilities, ActionPlan actionPlan,
+                       TaskType taskType, InvestigationPlan plan,
+                       List<AgentCapability> executedCapabilities,
                        List<RecallChoice> recalls) {
 
     public TaskView {
@@ -21,14 +21,14 @@ public record TaskView(String taskId, String sessionId, String incidentId, TaskS
         recalls = recalls == null ? List.of() : List.copyOf(recalls);
     }
 
-    /** 兼容构造器：P2 之前的调用方只关心调查链，任务类型固定为故障调查。 */
+    /** 兼容构造器：只关心调查链的调用方不必显式给出任务类型，默认按自动调查形态展示。 */
     public TaskView(String taskId, String sessionId, String incidentId, TaskStatus status,
                     AgentStepType currentStage, String path, ResourceTarget target, String question,
                     long createdAtMillis, long completedAtMillis, List<Step> steps,
                     InvestigationReport result, String error, String clarification) {
         this(taskId, sessionId, incidentId, status, currentStage, path, target, question, createdAtMillis,
                 completedAtMillis, steps, result, error, clarification, TaskType.INVESTIGATION, null,
-                InvestigationPlan.empty(), List.of(), null, null);
+                List.of(), null);
     }
 
     /** 是否给出了调查计划：前端据此决定是否展示计划区。 */
@@ -39,7 +39,7 @@ public record TaskView(String taskId, String sessionId, String incidentId, TaskS
     /** 进程重启时，还在执行的任务不能假装还在跑。 */
     public TaskView interrupted(String reason) {
         return new TaskView(taskId, sessionId, incidentId, TaskStatus.FAILED, currentStage, path, target, question,
-                createdAtMillis, System.currentTimeMillis(), steps, result, reason, clarification, taskType, intent,
-                plan, executedCapabilities, actionPlan, recalls);
+                createdAtMillis, System.currentTimeMillis(), steps, result, reason, clarification, taskType,
+                plan, executedCapabilities, recalls);
     }
 }

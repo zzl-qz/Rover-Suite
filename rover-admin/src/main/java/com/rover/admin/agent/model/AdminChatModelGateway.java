@@ -162,7 +162,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
     @Override
     public ChatClient chatClient(int timeoutSeconds) {
         ModelSettings settings = applied;
-        // 配置了快速模型：廉价调用（意图/目标/规划）一律路由到快速模型，不再用思考模型硬扛。
+        // 配置了快速模型：廉价调用（目标/规划）一律路由到快速模型，不再用思考模型硬扛。
         if (settings.fastConfigured()) {
             return fastScene(timeoutSeconds);
         }
@@ -265,7 +265,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
      * 构建客户端。
      *
      * @param thinking 是否允许深度思考。只有主客户端开——它服务的是「AI 解读」这类需要推理质量的长调用；
-     *                 场景客户端走 {@code false}：意图识别、目标解析、规划都是 10 秒上限的廉价调用，
+     *                 场景客户端走 {@code false}：目标解析、调查规划都是 10 秒上限的廉价调用，
      *                 让它们先想一遍既拖慢用户等待，也更容易撞上超时后回退规则，
      *                 反而丢掉了模型本该贡献的那点判断
      */
@@ -321,7 +321,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
             if (thinking) {
                 options.enableThinking();
             } else {
-                // 关键：glm 系列不传 thinking 参数时是「默认开启思考」的。意图识别、目标解析、规划
+                // 关键：glm 系列不传 thinking 参数时是「默认开启思考」的。目标解析、调查规划
                 // 这些廉价调用都走 thinking=false，若不显式禁用，会背上 11 秒以上的思考时间，
                 // 撞上 10 秒的场景超时，表现就是「每次都超时、重试后转澄清」。显式禁用后降到约 3 秒。
                 options.disableThinking();
@@ -380,9 +380,9 @@ public class AdminChatModelGateway implements ChatModelGateway {
     /**
      * 带超时的 HTTP 客户端：原生协议的选项里没有超时字段，等待上限只能落在 HTTP 层。
      *
-     * 这层超时是必要的——意图识别这类场景靠 {@code chatClient(timeoutSeconds)} 收紧等待，
-     * 底层不设超时那层收紧就形同虚设。这条 RestClient 只服务非流式调用（意图识别、目标解析、
-     * 规划、连接测试），流式对话走另一条 WebClient 路径，不经过这里。
+     * 这层超时是必要的——目标解析这类场景靠 {@code chatClient(timeoutSeconds)} 收紧等待，
+     * 底层不设超时那层收紧就形同虚设。这条 RestClient 只服务非流式调用（目标解析、
+     * 调查规划、连接测试），流式对话走另一条 WebClient 路径，不经过这里。
      *
      * 用 {@link JdkClientHttpRequestFactory}（JDK 的 {@link HttpClient}）而不是
      * {@code SimpleClientHttpRequestFactory}：后者基于 {@code HttpURLConnection}，读超时后

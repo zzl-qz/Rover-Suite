@@ -1,7 +1,6 @@
 package com.rover.agent.core.planning;
 
 import com.rover.agent.core.model.Evidence;
-import com.rover.agent.core.model.IntentDecision;
 import com.rover.agent.core.model.ResourceTarget;
 import java.util.List;
 
@@ -11,14 +10,15 @@ import java.util.List;
  * {@code evidence} 是已经采到的证据——第二轮起模型据此判断「还差什么」，
  * 这也是动态调查与固定链路的分水岭：下一步由当前事实决定，而不是由写死的边决定。
  *
+ * 这里没有「意图」这一层：规划读的是问题原文与已知事实，不需要调用方先把问题归成一类。
+ *
  * @param question    用户问题原文
- * @param intent      意图判断
  * @param target      本次请求的目标对象
  * @param path        取数用的请求路径（路由口径）；为空串表示没有可调查路径
  * @param evidence    已采集的证据
  * @param limitations 已产生的判断边界
  */
-public record PlanningRequest(String question, IntentDecision intent, ResourceTarget target, String path,
+public record PlanningRequest(String question, ResourceTarget target, String path,
                               List<Evidence> evidence, List<String> limitations) {
 
     public PlanningRequest {

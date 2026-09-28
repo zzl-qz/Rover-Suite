@@ -54,25 +54,24 @@ Agent 任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED` 或 
 且确有 5xx 才判 `CONFIRMED` 并点名实例；样本达标且全部非 5xx 判 `REJECTED`；窗口内没有任何转发记录时判 `UNKNOWN`，
 并明确说明「不能据此认定异常已恢复」。
 
-P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/tasks/{taskId}` 与 SSE 快照都带以下字段：
-`taskType`（`CONVERSATION` / `QUERY` / `INVESTIGATION` / `EXPLAIN` / `ACTION_PLAN` / `UNSUPPORTED`）。
-其中 `CONVERSATION` 是工作台对话主路径的默认形态：由模型自己决定查哪些只读工具、查几次，因此不预分类意图、
-也不预先产出计划（`plan` 为空，`executedCapabilities` 仍如实列出实际跑过的能力）；`taskType` 是给用户看的执行形态，
-必须与实际发生的动作一致。事件接入产生的调查仍是 `INVESTIGATION`，下面这些字段也主要出现在它身上：
-`intent`（`intent`、`confidence`、`reason`、`targetHint`、`requestedAction`）、`plan`（`goal`、`hypotheses`、`steps`；每步含 `capability`、`reason`、
-`target`、`required`）、`executedCapabilities`（实际调用或按事实跳过的只读能力）与 `actionPlan`（处置计划）。
-同一句话按意图走不同形态：状态查询只调用一个只读能力、不建事件；能力咨询由能力注册表回答、不进入目标解析；
-处置请求只产出可人工审核的计划、不执行写操作；定时巡检等未开放请求如实说明边界、不跑空调查。
-处置计划含 `actionType`、`riskLevel`、`currentState`、`desiredState`、`expectedImpact`、`verificationPlan`、
-`rollbackPlan`、`blockedReason`；`executable` 恒为 `false`，`blockedReason` 固定说明「当前版本仅生成计划，不执行」。
+`GET /api/agent/tasks/{taskId}` 与 SSE 快照里的 `taskType` 只有两个取值，对应两条真实存在的执行路径：
+
+- `CONVERSATION`：人工会话。由模型自己决定查哪些只读工具、查几次，因此不预先产出计划（`plan` 为空，
+  `executedCapabilities` 仍如实列出实际跑过的能力）。
+- `INVESTIGATION`：告警等机器事件触发的自动调查，带 `plan`（`goal`、`hypotheses`、`steps`；每步含 `capability`、`reason`、
+  `target`、`required`）与 `executedCapabilities`（实际调用或按事实跳过的只读能力）。
+
+`taskType` 是给用户看的执行形态，必须与实际发生的动作一致。快照里没有 `intent` 这类字段：主路径不做意图预分类，
+「这句话是想查询、解释还是调查」由模型在对话中自行决定，不存在一份需要展示的判定结果，也没有处置计划——
+能力清单里没有任何写能力，`ACTION_PLAN` 这种形态从不存在。
 
 任务事件流 `GET /api/agent/tasks/{taskId}/events` 用 `text/event-stream` 推送该任务的全部结构化事件：SSE 事件名即事件类型，
 数据是完整的事件信封（`eventId`、`taskId`、`type`、`timestampMillis`、`payload`）。建连时先补发一份 `SNAPSHOT`
 （任务视图 + 已产生的解读文本 + 已覆盖的事件序号 `coveredEventId`），随后按增量推送 `TASK_STARTED`、`STEP_STARTED`、
 `STEP_COMPLETED`、`STEP_FAILED`、`EVIDENCE_ADDED`、`ANALYSIS_DELTA`、`CLARIFICATION_REQUIRED` 等；
 任务进入终态（`TASK_COMPLETED`/`TASK_FAILED`/`TASK_CANCELLED`）或停在澄清点时收尾并关闭连接。
-意图判定、调查计划、能力执行进展与处置计划不是过程日志，而是结果的一部分：它们随 `SNAPSHOT` 全量快照推送（覆盖语义），
-中途接入或断线重连的客户端都能还原「识别成什么意图、计划查什么、实际查了什么、处置计划是什么」。
+调查计划与能力执行进展不是过程日志，而是结果的一部分：它们随 `SNAPSHOT` 全量快照推送（覆盖语义），
+中途接入或断线重连的客户端都能还原「计划查什么、实际查了什么」。
 事实来源始终是 `GET /api/agent/tasks/{taskId}`：任何事件表达的信息都必须能查到，丢事件、断连接都不影响任务继续执行。
 连接空闲超时 180 秒，超时或断线后前端重连并靠补发快照对齐，不会丢内容。任务不存在、已不可观察或不属于当前用户时回 `404`。
 
@@ -96,22 +95,22 @@ P2 起任务快照不再只有「故障调查」一种形态，`GET /api/agent/t
 - 同一会话已有执行中的任务时回 `409` + `{"code":"SESSION_TASK_RUNNING","message":...,"taskId":"<在跑的任务>"}`：
   一个会话同时只允许一个主动调查任务在跑。
 - 任务容量或执行队列已满时回 `429` + `{"code":"TASK_BUSY","message":"调查任务繁忙，请稍后再试"}`。
-- 目标无法确定时不猜、也不另开事件：任务停在 `WAITING_INPUT`，`clarification` 是要补充的问题，
-  同时该提问作为一条 Agent 消息写入会话；用户回复后由会话的下一次任务继续（本阶段不做同一任务的原地恢复）。
-  **只有故障调查才会因目标不明而澄清**：能力咨询与全局指标查询不要求资源目标。
+- 对象识别不出来时不猜、也不拦下对话：这次任务不挂事件（`incidentId` 为空），模型照常按全局口径作答。
+  只有**告警调查**会在缺少必要信息时停在 `WAITING_INPUT`，`clarification` 是要补充的问题；用户回复后由会话的下一次任务继续
+  （本阶段不做同一任务的原地恢复）。
 
-支持的问法与落点（都可直接用一句自然语言触发）：
+支持的问法与落点（人工提问都走同一条路径：模型自己决定查什么、怎么答；下表列的是实际发生的动作）：
 
 | 问法示例 | 落点 |
 | --- | --- |
-| `网关 QPS 多少？` | 状态查询：只调 `GATEWAY_METRICS_QUERY`，回答窗口请求数与 5xx 计数，不建事件、不跑调查 |
-| `order-service 几个健康实例？` | 状态查询：只调 `INSTANCE_QUERY`，按解析出的服务统计健康实例数 |
-| `/api/demo/tt 命中了哪条路由？` | 状态查询：只调 `ROUTE_QUERY`，回答命中的路由事实 |
-| `为什么 /api/demo/tt 调用失败？` | 故障调查：按动态计划（路由 → 实例 → 指标 → 追踪）执行只读调查，产出假设验证结论 |
-| `你能做什么？` | 解释：由 `CapabilityRegistry` 列出真实能力清单（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件 / 历史日志 / 运维知识），不解析资源；`你是谁` / `介绍一下你自己` 同义 |
-| `你好` / 看不出意图的闲聊 | 兜底：不追问资源路径，回一段自我介绍 + 能力清单（同一份注册表），告诉用户可以怎么问 |
-| `把 order-03 摘掉` | 处置计划：只读预检 + 不可执行的 `ActionPlan`，`executable=false` |
-| `每天 9 点自动巡检并发邮件` | 未开放：如实说明「定时巡检尚未开放」，不进入调查 |
+| `网关 QPS 多少？` | 智能问答：模型调 `GATEWAY_METRICS_QUERY` 取窗口事实后作答；一句话问几件事就查几次 |
+| `order-service 几个健康实例？` | 智能问答：模型调 `INSTANCE_QUERY`，按解析出的服务统计健康实例数 |
+| `/api/demo/tt 命中了哪条路由？` | 智能问答：模型调 `ROUTE_QUERY`，回答命中的路由事实 |
+| `为什么 /api/demo/tt 调用失败？` | 智能问答：模型自行决定查哪几项（例如路由 → 实例 → 指标 → 追踪）并组织回答；识别出对象时按对象聚合成事件 |
+| `你能做什么？` | 智能问答：模型回答当前真实能力清单（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件 / 历史日志 / 运维知识） |
+| `你好` / 闲聊 | 智能问答：不查任何数据，直接回答；不会反问「请给出请求路径」 |
+| `把 order-03 摘掉` | 只读边界：能力清单里没有任何写能力，模型只能给出只读事实与依据，不会假装有一份可执行的处置计划 |
+| `每天 9 点自动巡检并发邮件` | 能力边界：不接入调度与通知，如实说明未开放 |
 
 `planning`（轮数 / 能力调用次数 / 单轮步数）上限见 `configuration-reference`；触顶时任务会把限制写进
 `limitations` 并如实上报未执行的步骤，不会假装查完。

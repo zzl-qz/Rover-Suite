@@ -17,7 +17,6 @@ import com.rover.agent.core.investigation.FindingsInput;
 import com.rover.agent.core.investigation.InvestigationRules;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Evidence;
-import com.rover.agent.core.model.IntentDecision;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.planning.InvestigationPlan;
@@ -99,7 +98,6 @@ public final class DynamicInvestigationGraph {
     private String taskId = "";
     private String path = "";
     private String question = "";
-    private IntentDecision intent;
     private ResourceTarget target = ResourceTarget.unknown();
     private InvestigationPlan plan = InvestigationPlan.empty();
     private int rounds;
@@ -132,15 +130,12 @@ public final class DynamicInvestigationGraph {
      * @param path     取数用的请求路径；为空表示没有可调查路径
      * @param question 用户问题（供规划提示词与计划目标使用）
      * @param target   本次请求的目标对象
-     * @param intent   意图判断（供规划参考，不改变能力边界）
      */
-    public InvestigationOutcome investigate(String taskId, String path, String question, ResourceTarget target,
-                                            IntentDecision intent) {
+    public InvestigationOutcome investigate(String taskId, String path, String question, ResourceTarget target) {
         this.taskId = taskId == null ? "" : taskId;
         this.path = path == null ? "" : path.trim();
         this.question = question == null ? "" : question.trim();
         this.target = target == null ? ResourceTarget.unknown() : target;
-        this.intent = intent;
         OverAllState state;
         try {
             Map<String, Object> input = new HashMap<>();
@@ -399,7 +394,7 @@ public final class DynamicInvestigationGraph {
     }
 
     private PlanningRequest planningRequest() {
-        return new PlanningRequest(question, intent, target, path, List.copyOf(evidence), List.copyOf(limitations));
+        return new PlanningRequest(question, target, path, List.copyOf(evidence), List.copyOf(limitations));
     }
 
     private static String describePlan(int round, InvestigationPlan plan) {

@@ -52,7 +52,7 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 | :--- | :--- | :--- |
 | Detect | Monitoring / alerting sends through `POST /api/agent/events/ingest` | Implemented (passive ingestion); proactive periodic inspection is not implemented |
 | Investigate → Diagnose | **Core value of the agent** | In progress (model-driven conversation path plus a read-only graph chain with hypothesis verification) |
-| Recommend | Agent | In progress (produces non-executable action plans) |
+| Recommend | Agent | Planned (read-only facts and rationale only; no action plan is produced) |
 | Approve / Execute / Verify | Agent, with a governance layer | Planned |
 
 ## 4. Capability levels
@@ -85,8 +85,10 @@ The two paths differ in *who chooses*, and agree on the boundary: on the investi
 the executor runs it, and an evaluate node decides whether to keep planning, ask for clarification, or conclude; on the
 conversation path that choice belongs to the model. What does not change is that both may pick only READ_ONLY capabilities
 that are actually wired up in the registry, and the three hard limits — planning rounds, capability calls, and plan steps —
-are enforced by code rather than the prompt; hitting them stops collection and is stated plainly in the conclusion. Action requests only produce a non-executable action plan (`executable` is always
-`false`); execution is deferred to Level C.
+are enforced by code rather than the prompt; hitting them stops collection and is stated plainly in the conclusion.
+Writes do not exist yet: there is neither an executable action nor a "planned but not executed" remediation plan —
+shipping a plan for capabilities that are not implemented only blurs whether the project supports them or merely
+planned them once. Execution is deferred to Level C, and its design will follow the write APIs that actually exist.
 
 ### Level C: Act
 
@@ -113,8 +115,8 @@ Engineer-initiated (implemented)                     Event / alert triggered (im
         │                                                unverifiable → conclusion)
         ↓                                                        ↓
   9 read-only tools (see §7) → facts + evidence +          Hypothesis-driven root cause
-        │                     limitations                        ↓
-        ↓                                                 Action Plan (produced, not executed)
+        │                     limitations
+        ↓
   answered while querying; the answer is written back
   to the session as one Agent reply
 ```
@@ -124,9 +126,9 @@ directly. The difference is *who decides what to query* — the model on the con
 budget), the planner on the investigation path (picks available capabilities from the registry, with hypothesis
 verification).
 
-The conversation path no longer pre-classifies the question into "state query / investigation / capability summary"
-and then runs a different pipeline per shape: a sentence asking three things triggers three lines of querying, and a
-part it cannot answer is reported as "this part was not found" rather than abandoning the whole reply.
+The conversation path has no "classify the question first, then dispatch" layer at all: a sentence asking three things
+triggers three lines of querying, and a part it cannot answer is reported as "this part was not found" rather than
+abandoning the whole reply.
 
 - **Engineer-initiated:** ask in one sentence on the Admin Agent Workbench (e.g. "why does /api/demo/tt fail?"), with an
   optional collapsible "advanced context" for route / service / instance and a time range; follow-ups reuse the active
@@ -188,23 +190,22 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 
 | Module | Package | Responsibility |
 | :--- | :--- | :--- |
-| `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget / AgentIntent / IntentDecision / TaskType / ActionPlan |
+| `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget / TaskType / AgentStepType |
 | | `com.rover.agent.core.snapshot` | Neutral read-only snapshots: RouteSnapshot / RouteUpstreamSnapshot / InstanceSnapshot / GatewayMetricSnapshot / TraceSnapshot / TraceRow / ConfigEntrySnapshot / RegistryEventSnapshot / DiscoveryMode |
 | | `com.rover.agent.core.port` | Read-only ports: RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort / ConfigReadPort / EventReadPort / LogQueryPort / KnowledgeReadPort (the latter two with LogRequest / LogEntry / KnowledgeEntry); unavailable data raises SnapshotUnavailableException |
 | | `com.rover.agent.core.repository` | Storage interfaces: AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository (in-memory or persistent implementations are swappable) |
 | | `com.rover.agent.core.context` | AgentContextManager (N most recent messages + active incident + structured target + key evidence); TargetResolver / ResourceTarget (explicit input → existing routes and instances → model assistance → clarification) |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules (pure functions, unit-testable without the framework) |
-| | `com.rover.agent.core.intent` | IntentClassifier / IntentDecision / IntentService: intent recognition with constrained values (out-of-range values are dropped) |
 | | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult / AgentGrounding (environment profile and glossary) / UntrustedText (sentinel fencing for untrusted content): capability catalogue and the single read-only execution point |
-| | `com.rover.agent.core.planning` | InvestigationPlanner / InvestigationPlan / PlannedStep / PlanValidator / PlanningLimits / RuleBasedPlanner: plan production, out-of-scope dropping, hard limits |
-| `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator (application entry: context → target → task → conversation path); InvestigationService (investigation task lifecycle, still used by alert ingestion); QueryStateService / ExplainService / ActionPlanService (state queries, capability summary, action plans); ToolLoopService (model-driven conversation path) |
+| | `com.rover.agent.core.planning` | InvestigationPlanner / InvestigationPlan / PlannedStep / PlanValidator / PlanningLimits / RuleBasedPlanner / InvestigationCueDetector (only decides whether the question mentions configuration or events, so the rule-based planner knows whether to append those optional steps): plan production, out-of-scope dropping, hard limits |
+| `rover-agent-runtime` | `com.rover.agent.runtime` | AgentOrchestrator (application entry: human message → context → best-effort target → conversation path; machine event → investigation service); InvestigationService (lifecycle of alert-triggered investigations); ToolLoopService (model-driven conversation path) |
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph: plan / execute / evaluate / clarify / synthesise nodes, looping conditional edges, conclusion synthesis |
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner: rule-based baseline plus model candidates, out-of-scope steps dropped by PlanValidator |
 | | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces; in-memory and bounded today) |
 | | `com.rover.agent.runtime.repository` | Four thread-safe in-memory implementations (lost on restart), replaced when persistence lands |
 | | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 9 read-only tools (data entry point of the conversation path) |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`: the built-in operations knowledge base, default `KnowledgeReadPort` implementation |
-| | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / LlmIntentInterpreter / ModelTargetInterpreter / SpringAiJsonCompletion, plus the conversation-side ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway (model adapter and honest degradation when no model exists) |
+| | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / ModelTargetInterpreter / SpringAiJsonCompletion / QuickModelCall, plus the conversation-side ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway (model adapter and honest degradation when no model exists) |
 | `rover-admin` | `com.rover.admin.agent.adapter` | Six read-only adapters: Route / Instance / Metric / Trace / Config / Event → ports, never triggering a write |
 | | `com.rover.admin.log` | `H2LogQueryAdapter` (the `LogQueryPort` implementation, mapping string types back to `RecordType`) and TelemetryCollector (periodic sampling of Gateway / Nameserver into the record store, see 6.2) |
 | | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + composition root |
@@ -230,14 +231,12 @@ Session (one continuous conversation) ─┬─ Incident (one problem under inve
                                                                       └── Hypothesis (confirmed / eliminated / unverifiable)
 ```
 
-Every question lands under a Session; only a fault investigation (INVESTIGATION) creates a `USER`-origin Incident and
-hangs the Task off it — state queries, capability questions, and action plans create no incident (the TaskView carries
-`sessionId` with an empty `incidentId`). **Follow-up questions work now**: later messages in a
-session carry the N most recent messages, the active incident, the current structured target, and that incident's key
-evidence; the active incident is reused when the target matches, a new incident opens only when a clearly different
-target is resolved, and a clarification is returned rather than a guess when nothing can be resolved (only fault
-investigations clarify on an unclear target; capability questions never enter target resolution). Session and
-Incident live in memory only, so **everything is lost on restart**.
+Every message lands under a Session, and the conversation path binds its Task to an Incident only when the question
+points at an object it can resolve (same target reuses the incident, a different one opens a new incident, chit-chat
+opens none — the TaskView then carries `sessionId` with an empty `incidentId`). Nothing is blocked on that binding:
+an unresolved target still reaches the model, it just has no incident to hang off. **Follow-up questions work now**:
+later messages in a session carry the N most recent messages, the active incident, the current structured target, and
+that incident's key evidence. Session and Incident live in memory only, so **everything is lost on restart**.
 
 Approval policy and event ingestion for Level C will be split into further sub-packages as
 they are built, rather than scaffolding empty modules now.
@@ -250,7 +249,7 @@ than by call site:
 | Call class | Examples | Model | Why |
 | :--- | :--- | :--- | :--- |
 | Reasoning (long, generative) | AI interpretation of an incident | Main model, thinking on | Needs deep reasoning; latency is acceptable as it is the final synthesis step |
-| Cheap (structured, candidate-selection) | Intent recognition, target resolution, investigation planning | Fast model (vendor default), thinking off | Output is constrained to a candidate list and rule-fallbackable; speed and cost dominate |
+| Cheap (structured, candidate-selection) | Target resolution, investigation planning | Fast model (vendor default), thinking off | Output is constrained to a candidate list and rule-fallbackable; speed and cost dominate |
 
 The split lands on the `ChatModelGateway` port: `chatClient()` serves the main model (thinking on)
 for reasoning, while `chatClient(int timeoutSeconds)` is the dedicated cheap-call entry that routes
@@ -452,33 +451,12 @@ catalogue described in §7.
   through `queryLogs`.
 - Split into `rover-agent-core` / `rover-agent-runtime` / `rover-admin` with one-way dependencies; read-only access is
   guaranteed structurally by the ports.
-- Intent recognition and dispatch (**side branch; the conversation path no longer goes through here**): a message is first classified (`QUERY_STATE` / `INVESTIGATE` / `EXPLAIN` /
-  `ACTION_REQUEST` / `KNOWLEDGE_QUERY` / the not-yet-open `CREATE_INSPECTION`), and a resource target is resolved only
-  when needed; state queries run a couple of read-only capabilities, capability questions answer from the registry's
-  real list, and unsupported requests are answered honestly instead of forced into an investigation. Unrecognised
-  messages with no resolvable target get a self-introduction plus the capability list instead of a path clarification.
-- Evidence-driven path correction (**side branch; the conversation path no longer goes through here**; without changing
-  the "a query stays a query" semantics): when a lightweight path
-  genuinely has nothing useful to produce, the fallback wording is not handed straight to the user — another path is
-  tried instead. A state query that cannot tell which kind of fact is being asked for ("what is the state of
-  order-service right now") or an explanation question with no conclusion in the session yet is escalated to a
-  read-only investigation, provided the object named in the question resolves. A dedicated "路径纠正" step records why
-  the shape changed. Correction only happens when the question itself names an object: a question missing its object
-  ("what is the state right now") still reports the missing subject honestly instead of restarting an investigation on
-  last turn's object.
-- The intent prompt has three parts: the environment profile and glossary from `AgentGrounding` (the system is a Gateway
-  plus a Nameserver, which hops a call passes through, and what users mean by each colloquialism), the read-only
-  capability boundary rendered from the same capability registry, and the allowed intents with their decision order
-  plus a few examples. The AI interpretation prompt reuses the same profile, so the two never describe the system
-  separately. The model-side policy is "if it is about this system at all, pick the closest intent and honestly report
-  MEDIUM or LOW"; `UNKNOWN` is reserved for input unrelated to operations, so an in-domain-but-uncertain message is no
-  longer thrown away. The rule layer gained colloquial failure vocabulary (扛不住 / 时好时坏 / 无响应 / 502 …) at the
-  same time: the deterministic layer stops missing, and the model fills gaps instead of covering for it.
 - Capability registry and read-only executor: available capabilities (route / instance / gateway metrics / trace /
   configuration / registry-event queries) are registered as READ_ONLY, planning may only choose among them, and the
   executor is the single data-access point
-  between the model and production data; capabilities without a data adapter are marked unselectable, and action requests
-  only produce a non-executable action plan (`executable` is always `false`).
+  between the model and production data; capabilities without a data adapter are marked unselectable. No write capability
+  exists anywhere in the catalogue, so a remediation request can only be answered with read-only facts and rationale
+  instead of a plan that pretends to be executable.
 - The investigation chain is orchestrated by a Spring AI Alibaba StateGraph: a planner produces the plan (rule-based
   baseline, model candidates only, out-of-scope steps dropped) and the run advances through a
   PLAN → EXECUTE → EVALUATE loop, where the evaluate node decides whether to keep planning, clarify, or conclude; hitting
@@ -493,7 +471,7 @@ catalogue described in §7.
   returns the active `buildId` and applied-at time, proving the active config is the one just saved).
 - When no model is configured or the model is unavailable, diagnosis automatically degrades to pure rule-based
   diagnosis (`aiAnalysis` is null); collection and orchestration are unaffected, and the missing evidence is stated.
-- Cheap calls that can always fall back — intent recognition, target resolution, investigation planning — are capped by
+- Cheap calls that can always fall back — target resolution, investigation planning — are capped by
   `rover.agent.llm.quick-timeout-seconds` (default 10) and retried once on timeout only: a transient network stall
   either heals itself or falls back to the deterministic path quickly. The AI interpretation is a streaming long call
   and is unaffected, keeping the timeout from the model config.
@@ -516,15 +494,10 @@ catalogue described in §7.
 - Every question lands under a Session and its task is best-effort attached to an Incident (same target reuses the
   incident, a clearly different target opens a new one, chit-chat creates none). Task state lives in Admin memory and is
   gone after restart; the record store (§6.3) is independent of it and survives a restart.
-- Intent recognition evaluation loop (`IntentEvaluationTest`): 38 labelled utterances must be matched exactly,
-  one by one, by the rule layer; another 6 fuzzy phrasings of the same intents must **not** be settled by the rule
-  layer with `HIGH` confidence — the model has to step in. This solves "the intent hit rate is only a verbal claim
-  and prompt edits are pure guesswork": the hit rate becomes a regression baseline that can be compared before and
-  after a change.
 - Strict structured output plus failure classification: `JsonCompletion`'s parsing contract is now supplied by the
-  caller (`Function<String, Optional<T>> parser`), and `LlmIntentInterpreter` moved from "lenient default filling"
-  to a strict contract — invalid JSON, or any of intent / confidence / topic / action missing or out of range,
-  discards the whole result and falls back to the rule layer, with no default value filled in. `ModelCallOutcome`
+  caller (`Function<String, Optional<T>> parser`), and `LlmInvestigationPlanner` / `ModelTargetInterpreter` follow a
+  strict contract — invalid JSON, or a value out of range, discards the whole result and falls back to the rule layer,
+  with no default value filled in. `ModelCallOutcome`
   splits the outcome into `OK` / `NOT_CONFIGURED` / `UNAVAILABLE` / `TIMEOUT` / `ERROR` / `EMPTY` / `REJECTED`,
   where `rejected` means "the model returned text that violates the contract". This solves "an out-of-range output
   gets patched with a default and the resulting hit-rate loss cannot be located": falling back to the rule layer is

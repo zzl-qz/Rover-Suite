@@ -18,11 +18,11 @@ import org.springframework.ai.tool.annotation.ToolParam;
  * 工具契约测试：把「模型能不能选对工具」这件事里<b>确定性、可回归</b>的部分固化成断言。
  *
  * <p>工具选择由模型根据 {@link Tool#description()} 完成，模型层的命中率不可在单测复现（见
- * {@code ScriptedConversationModel} 与 {@code IntentEvaluationTest} 的说明）。但「描述写得够不够、
- * 参数有没有说明、每个能力是否都有暴露」是模型命中率的静态前提——这些是确定性事实，可以也必须测。
+ * {@code ScriptedConversationModel} 的说明）。但「描述写得够不够、参数有没有说明、每个能力是否都有暴露」
+ * 是模型命中率的静态前提——这些是确定性事实，可以也必须测。
  *
- * <p>它补上 {@code IntentEvaluationTest} 只测「意图」、不测「工具」的空档：
- * 意图判对之后，模型还要在 9 个工具里选对那一个，这一步同样有改坏的空间。
+ * <p>它守住的是「模型在 9 个工具里选对那一个」这一步的前提：选错的空间始终存在，而工具本身
+ * 必须先是可选、可描述、可执行的。
  */
 class OpsToolsContractTest {
 

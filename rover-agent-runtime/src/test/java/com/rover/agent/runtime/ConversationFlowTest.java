@@ -13,7 +13,6 @@ import com.rover.agent.core.context.AgentContextManager;
 import com.rover.agent.core.context.AgentRequestOptions;
 import com.rover.agent.core.context.TargetInterpreter;
 import com.rover.agent.core.context.TargetResolver;
-import com.rover.agent.core.intent.IntentService;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskType;
@@ -274,15 +273,12 @@ class ConversationFlowTest {
         IncidentRegistry registry = new IncidentRegistry(sessions, incidents, retention);
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instances, 8);
-        CapabilityRegistry capabilities = CapabilityRegistry.standard();
         InvestigationService investigations = new InvestigationService(routes, instances, metrics, traces, configs,
                 events, r -> List.of(), (q, limit) -> List.of(), registry, tasks,
                 new ModelExplainer(new NoopChatModelGateway()));
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instances, TargetInterpreter.none()), investigations, retention,
-                new IntentService(), new QueryStateService(executor),
-                new ExplainService(capabilities, registry, records), new ActionPlanService(executor), toolLoop,
-                com.rover.agent.runtime.journal.OpsJournal.none());
+                toolLoop, com.rover.agent.runtime.journal.OpsJournal.none());
     }
 
     /** 只读端口桩：两个实例，一台健康一台不健康，够验证「取到的事实长什么样」。 */

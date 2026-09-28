@@ -17,7 +17,6 @@ import com.rover.agent.core.event.TaskEvent;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.event.TaskSnapshot;
-import com.rover.agent.core.intent.IntentService;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
@@ -331,13 +330,10 @@ class AgentOrchestratorTest {
                 new ModelExplainer(new NoopChatModelGateway()));
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instancePort, 8);
-        CapabilityRegistry capabilities = CapabilityRegistry.standard();
         CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort,
-                configPort, eventPort, logPort, knowledgePort, capabilities);
+                configPort, eventPort, logPort, knowledgePort, CapabilityRegistry.standard());
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
-                new IntentService(), new QueryStateService(executor),
-                new ExplainService(capabilities, registry, records), new ActionPlanService(executor),
                 ScriptedConversationModel.service(executor, tools -> "已按问题作答。"), OpsJournal.none());
     }
 

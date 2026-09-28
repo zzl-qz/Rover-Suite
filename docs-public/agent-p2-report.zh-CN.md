@@ -1,8 +1,13 @@
 # Rover Ops Agent P2 改造报告：Intent / Capability / Dynamic Investigation
 
+> **历史文档，已不代表当前架构。** 本报告记录的 Intent 分流（`com.rover.agent.core.intent`、`IntentDecision`、
+> `QueryStateService` / `ExplainService` / `ActionPlanService` 与 `ActionPlan`）后来被整体移除：人工会话主路径
+> 改为模型自主 Tool Calling，不再做任何预意图分类；告警调查仍走 `DynamicInvestigationGraph`。
+> 阅读本报告时请把它当作当轮决策的存档，不要据此理解现在的代码——当前实现以 `ops-agent` 与 `admin-api` 为准。
+>
 > 本报告只描述本轮改造实际落地的内容，与代码一致；测试结果取自 `rover-agent-runtime/target/p2-full-test.log`。
 > 架构原则沿用任务书 §16：LLM 负责理解、计划与解释，Java 负责权限、执行、限制与确定性事实判断；
-> Agent 只能调用已注册的只读能力；Dynamic Planning 不等于无限 ReAct；ActionPlan 不等于执行。
+> Agent 只能调用已注册的只读能力；Dynamic Planning 不等于无限 ReAct。
 
 ## 1. 新增 Intent
 

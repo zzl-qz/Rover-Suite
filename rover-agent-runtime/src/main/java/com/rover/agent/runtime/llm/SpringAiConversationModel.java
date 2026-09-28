@@ -29,7 +29,7 @@ public final class SpringAiConversationModel implements ConversationModel {
     /** 思考文本的长度上限：比回答略宽——推理过程本来就比结论长。 */
     private static final int MAX_THINKING_LENGTH = 4000;
 
-    /** 指标里的场景名：与「意图识别 / 目标解析 / 解读」并列，便于按用途分开看模型表现。 */
+    /** 指标里的场景名：与「目标解析 / 调查规划 / 解读」并列，便于按用途分开看模型表现。 */
     private static final String SCENE = "对话";
 
     private final ChatModelGateway gateway;

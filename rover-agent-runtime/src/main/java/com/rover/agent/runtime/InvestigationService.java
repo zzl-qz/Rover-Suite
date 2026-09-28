@@ -41,11 +41,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 只读故障调查用例入口：登记调查任务并执行「调查图 + 模型解读」的完整闭环。
+ * 机器事件触发的只读调查用例入口：登记调查任务并执行「调查图 + 模型解读」的完整闭环。
+ *
+ * 这是告警侧的执行形态：目标由事件自带（路径来自告警），不经过自然语言解析，也没有模型自主选工具这一步——
+ * 规划器产出只读步骤、评估节点按证据决定继续或收尾。人工会话不走这里（那条路径由
+ * {@code AgentOrchestrator} 交给对话主路径）。
  *
  * 提交与执行是分开的：{@link #register} 只登记 PENDING 任务（不阻塞调用线程），
- * {@link #run} 在 Agent Worker 线程里执行调查。目标解析（把自然语言问题落到调查对象）属于编排层，
- * 由编排层解析完成后调用 {@link #run}。
+ * {@link #run} 在 Agent Worker 线程里执行调查；编排层需要自己登记任务时也走这两个入口。
  *
  * 调查事实全部来自 {@code com.rover.agent.core.port} 的只读端口；模型只做解读，
  * 不可用时降级为规则诊断。任务状态只保留在当前进程，重启后不可查询。
@@ -120,17 +123,14 @@ public final class InvestigationService {
         this.journal = journal == null ? OpsJournal.none() : journal;
     }
 
-    /** 一次性调查入口：新建会话与事件后提交一次「目标已确定」的调查，不需要连续追问时用它最省事。 */
-    public TaskView submit(String path, String question) {
-        return submit(path, question, IncidentOrigin.USER, null);
-    }
-
     /**
-     * 事件接入入口：告警 / 网关切面异常等事件触发一次自动调查。
+     * 事件接入入口：告警 / 网关切面异常等事件触发一次自动调查——这是本服务唯一的提交入口。
      *
-     * 与人工 {@link #submit(String, String)} 的差别只有两点：事件来源记为 {@link IncidentOrigin#ALERT}，
-     * 且事件自带一个观测窗口（不传则按默认窗口）。会话按事件独立开（userId 为 null），
-     * 因此不会与某个人工会话的「单活跃任务」锁冲突（不会 409）。
+     * 人工提问不走这里（人工会话由 {@code AgentOrchestrator} 交给对话主路径），因此不保留
+     * 「一次性诊断」那种产品里并不存在的调用方式：多一个入口，就多一套与真实链路不同的行为要被维护。
+     *
+     * 事件来源记为 {@link IncidentOrigin#ALERT}，且事件自带一个观测窗口（不传则按默认窗口）。
+     * 会话按事件独立开（userId 为 null），因此不会与某个人工会话的「单活跃任务」锁冲突（不会 409）。
      */
     public TaskView submitAlert(String path, String alertMessage, TimeRange timeRange) {
         String question = "告警自动调查："
@@ -202,7 +202,7 @@ public final class InvestigationService {
             DynamicInvestigationGraph graph =
                     new DynamicInvestigationGraph(planner, validator, executor, limits, task);
             InvestigationOutcome outcome = graph.investigate(task.taskId(), task.path(), task.question(),
-                    task.target(), task.intent());
+                    task.target());
             if (task.cancelled()) {
                 return;
             }

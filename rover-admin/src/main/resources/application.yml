@@ -27,7 +27,7 @@ spring:
       chat:
         model: ${ROVER_AGENT_MODEL:deepseek-chat}
         parallel-tool-calls: false
-      # 快速模型（可选）：承接意图识别/目标解析/规划这类廉价调用，未配置则回退主模型
+      # 快速模型（可选）：承接目标解析/调查规划这类廉价调用，未配置则回退主模型
       fast-base-url: ${ROVER_AGENT_FAST_BASE_URL:}
       fast-model: ${ROVER_AGENT_FAST_MODEL:}
       fast-api-key: ${ROVER_AGENT_FAST_API_KEY:}

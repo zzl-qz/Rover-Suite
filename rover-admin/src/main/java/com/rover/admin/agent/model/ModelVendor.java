@@ -20,7 +20,7 @@ public enum ModelVendor {
     DEEPSEEK("deepseek", "DeepSeek", "https://api.deepseek.com", "deepseek-chat", ""),
 
     /**
-     * 智谱：主模型用思考模型（解读/对话），快速模型用轻量模型（意图/目标/规划）。
+     * 智谱：主模型用思考模型（解读/对话），快速模型用轻量模型（目标/规划）。
      *
      * 快速模型在 glm-4-air 与 glm-4-flash 之间选了 flash：30 条评测集上 air 命中率略高
      * （80% vs 76.7%），但**错误率高得多**（20% vs 13.3%），且是唯一在「简单/干扰」这类

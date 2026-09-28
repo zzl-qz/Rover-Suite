@@ -103,7 +103,7 @@ class InvestigationServiceTest {
                 route("/api", "demo-service", ""), route("/api/demo/tt", "demo", "11")));
         when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
-        TaskView task = await(investigations.submit("/api/demo/tt", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/demo/tt", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
         assertEquals("MEDIUM", task.result().confidence().name());
@@ -126,7 +126,7 @@ class InvestigationServiceTest {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo-service", "")));
         when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
-        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
         assertTrue(task.result().summary().contains("1 个匹配的健康实例"));
@@ -135,10 +135,10 @@ class InvestigationServiceTest {
 
     @Test
     void marksMissingRouteDataAndRejectsExternalUrls() throws Exception {
-        assertThrows(IllegalArgumentException.class, () -> investigations.submit("http://example.com/api", "诊断"));
+        assertThrows(IllegalArgumentException.class, () -> diagnose("http://example.com/api", "诊断"));
         when(routes.routes()).thenThrow(new IllegalStateException("unreachable"));
 
-        TaskView task = await(investigations.submit("/api/demo/tt", "诊断").taskId());
+        TaskView task = await(diagnose("/api/demo/tt", "诊断").taskId());
 
         assertEquals("COMPLETED", task.status().name());
         assertEquals("LOW", task.result().confidence().name());
@@ -152,7 +152,7 @@ class InvestigationServiceTest {
         when(routes.routes()).thenReturn(List.of(new RouteSnapshot("legacy", "/static", "", "",
                 "http://legacy.internal:8080", "", 1L)));
 
-        TaskView task = await(investigations.submit("/static/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/static/hello", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
         assertEquals("LOW", task.result().confidence().name());
@@ -167,7 +167,7 @@ class InvestigationServiceTest {
         when(routes.discoveryMode()).thenReturn(DiscoveryMode.NACOS);
         when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
 
-        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         assertEquals("LOW", task.result().confidence().name());
         assertTrue(task.result().summary().contains("NACOS"));
@@ -180,11 +180,11 @@ class InvestigationServiceTest {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
         when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo", "blue", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
-        TaskView healthy = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView healthy = await(diagnose("/api/hello", "为什么失败？").taskId());
         assertTrue(healthy.result().summary().contains("1 个匹配的健康实例"));
 
         when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo", "blue", "", "127.0.0.1", 8081, false, 100, true, 0L)));
-        TaskView unhealthy = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView unhealthy = await(diagnose("/api/hello", "为什么失败？").taskId());
         assertEquals("LOW", unhealthy.result().confidence().name());
         assertTrue(unhealthy.result().summary().contains("可能回退"));
     }
@@ -196,14 +196,14 @@ class InvestigationServiceTest {
         when(traces.byPath(anyString())).thenReturn(new TraceSnapshot(true, 1.0, List.of(
                 new TraceRow("t1", "/api/hello-other", 503, System.currentTimeMillis())), 1L));
 
-        TaskView similar = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView similar = await(diagnose("/api/hello", "为什么失败？").taskId());
         assertEquals("MEDIUM", similar.result().confidence().name());
         assertTrue(similar.result().evidence().stream()
                 .anyMatch(item -> item.summary().contains("精确路径匹配追踪 0 条")));
 
         when(traces.byPath(anyString())).thenReturn(new TraceSnapshot(true, 1.0, List.of(
                 new TraceRow("t2", "/api/hello", 503, System.currentTimeMillis())), 1L));
-        TaskView exact = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView exact = await(diagnose("/api/hello", "为什么失败？").taskId());
         assertEquals("MEDIUM", exact.result().confidence().name());
         assertTrue(exact.result().summary().contains("无法仅凭状态码确定其原因"));
     }
@@ -213,7 +213,7 @@ class InvestigationServiceTest {
         when(routes.routes()).thenReturn(List.of(route("/api/demo/tt", "demo", "11")));
         when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
-        TaskView task = await(investigations.submit("/api/demo/tt", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/demo/tt", "为什么失败？").taskId());
 
         // 路由已命中 → H1 排除；目标无匹配实例 → H3 确认；结论仍为 MEDIUM。
         assertEquals("REJECTED", hypothesis(task, "H1").status().name());
@@ -228,7 +228,7 @@ class InvestigationServiceTest {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo-service", "")));
         when(instances.instances()).thenReturn(List.of(new InstanceSnapshot("demo-service", "", "", "127.0.0.1", 8081, true, 100, true, 0L)));
 
-        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         // 有健康实例 → 既非「无匹配实例」也非「实例不健康」，两条假设均被排除。
         assertEquals("REJECTED", hypothesis(task, "H3").status().name());
@@ -240,7 +240,7 @@ class InvestigationServiceTest {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
         when(instances.instances()).thenReturn(List.of());
 
-        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
         assertNull(task.result().aiAnalysis());
@@ -255,7 +255,7 @@ class InvestigationServiceTest {
         when(instances.instances()).thenReturn(List.of());
         useModel(new ModelExplainer(TestGateway.configuredButUnavailable()));
 
-        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
         assertNull(task.result().aiAnalysis());
@@ -276,7 +276,7 @@ class InvestigationServiceTest {
         when(model.stream(any(Prompt.class))).thenReturn(Flux.just(
                 response("AI 解释（依据运行时预读快照）")));
 
-        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
         assertEquals("AI 解释（依据运行时预读快照）", task.result().aiAnalysis());
@@ -310,7 +310,7 @@ class InvestigationServiceTest {
                 response("先看路由"),
                 responseWithUsage("，再看实例", 1200, 64)));
 
-        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         assertEquals("先看路由，再看实例", task.result().aiAnalysis());
         assertEquals(1.0, registry.get("rover.agent.model.calls")
@@ -336,7 +336,7 @@ class InvestigationServiceTest {
             return Flux.just(response("先看路由"), response("，再看实例"));
         });
 
-        TaskView submitted = investigations.submit("/api/hello", "为什么失败？");
+        TaskView submitted = diagnose("/api/hello", "为什么失败？");
         RecordingSubscriber subscriber = new RecordingSubscriber();
         assertTrue(investigations.subscribeEvents(submitted.taskId(), subscriber).isPresent());
         subscribed.countDown();
@@ -357,7 +357,7 @@ class InvestigationServiceTest {
     void lateSubscriberOfFinishedTaskGetsSnapshotAndImmediateTerminal() throws Exception {
         when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
         when(instances.instances()).thenReturn(List.of());
-        TaskView task = await(investigations.submit("/api/hello", "为什么失败？").taskId());
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         RecordingSubscriber subscriber = new RecordingSubscriber();
         assertTrue(investigations.subscribeEvents("missing-task", subscriber).isEmpty());
@@ -365,6 +365,21 @@ class InvestigationServiceTest {
         assertTrue(investigations.subscribeEvents(task.taskId(), subscriber).isPresent());
         subscriber.awaitTerminal();
         assertEquals(List.of("snapshot:", "end:COMPLETED"), subscriber.notes());
+    }
+
+    /**
+     * 触发一次调查。
+     *
+     * 生产入口只有 {@link InvestigationService#submitAlert}（人工提问不走这里），测试也围绕它：
+     * 不为了让用例好写，就在生产类上留一个产品里并不存在的调用方式。
+     */
+    private TaskView diagnose(String path, String question) {
+        return investigations.submitAlert(path, question, null);
+    }
+
+    /** 同一个入口，但作用在用例自建的实例上（容量与回滚用例各建一份）。 */
+    private static TaskView diagnose(InvestigationService service, String path, String question) {
+        return service.submitAlert(path, question, null);
     }
 
     /** 换入不同的模型端口，复用同一组只读端口桩。 */
@@ -387,9 +402,9 @@ class InvestigationServiceTest {
         try {
             // 2 个工作线程 + 16 个排队位被阻塞的调查占满，继续提交必然被拒绝。
             for (int i = 0; i < 18; i++) {
-                service.submit("/api/hello", "诊断");
+                diagnose(service, "/api/hello", "诊断");
             }
-            assertThrows(RejectedExecutionException.class, () -> service.submit("/api/hello", "诊断"));
+            assertThrows(RejectedExecutionException.class, () -> diagnose(service, "/api/hello", "诊断"));
 
             ArgumentCaptor<String> incidentIds = ArgumentCaptor.forClass(String.class);
             verify(registry).removeIncident(incidentIds.capture());
@@ -421,7 +436,7 @@ class InvestigationServiceTest {
                     break;
                 }
             }
-            assertThrows(RejectedExecutionException.class, () -> service.submit("/api/hello", "诊断"));
+            assertThrows(RejectedExecutionException.class, () -> diagnose(service, "/api/hello", "诊断"));
 
             ArgumentCaptor<String> incidentIds = ArgumentCaptor.forClass(String.class);
             verify(registry).removeIncident(incidentIds.capture());
@@ -486,7 +501,7 @@ class InvestigationServiceTest {
             for (TaskEvent event : events) {
                 switch (event.type()) {
                     case SNAPSHOT -> {
-                        // 意图 / 计划 / 能力进展也会发全量快照（覆盖语义）：这里只记订阅后的第一条，
+                        // 计划 / 能力进展也会发全量快照（覆盖语义）：这里只记订阅后的第一条，
                         // 后续快照不产生新文本，与前端「快照覆盖、增量追加」的消费方式一致。
                         if (!snapshotRecorded) {
                             notes.add("snapshot:" + ((TaskSnapshot) event.payload()).analysis());

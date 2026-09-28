@@ -5,9 +5,6 @@ import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.context.AgentContextManager;
 import com.rover.agent.core.context.TargetInterpreter;
 import com.rover.agent.core.context.TargetResolver;
-import com.rover.agent.core.intent.IntentClassifier;
-import com.rover.agent.core.intent.IntentInterpreter;
-import com.rover.agent.core.intent.IntentService;
 import com.rover.agent.core.planning.InvestigationPlanner;
 import com.rover.agent.core.planning.PlanValidator;
 import com.rover.agent.core.planning.PlanningLimits;
@@ -28,7 +25,6 @@ import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.knowledge.InMemoryKnowledgeStore;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ConversationModel;
-import com.rover.agent.runtime.llm.LlmIntentInterpreter;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.llm.ModelTargetInterpreter;
 import com.rover.agent.runtime.llm.NoopChatModelGateway;
@@ -172,7 +168,7 @@ public class AgentRuntimeConfiguration {
     /**
      * 规则解析不出对象时的模型辅助；模型未配置时退化为不推断。
      *
-     * 目标解析与意图识别一样是"失败就兜底"的廉价调用，用 {@code rover.agent.llm.quick-timeout-seconds}
+     * 目标解析是"失败就兜底"的廉价调用，用 {@code rover.agent.llm.quick-timeout-seconds}
      * 收紧等待上限，避免一次网络卡顿让用户等满模型配置里的超时。
      */
     @Bean
@@ -224,28 +220,6 @@ public class AgentRuntimeConfiguration {
         return new PlanningLimits(maxRounds, maxToolCalls, maxPlanSteps);
     }
 
-    /**
-     * 意图解释器：模型只补「规则说不清」的场合，输出取值受限，越界一律丢弃。
-     *
-     * 提示词里的能力清单取自同一份注册表：模型判断「这条消息想问什么」时看到的能力边界，
-     * 与用户问「你能做什么」时看到的完全一致，不会出现两套说法。
-     */
-    @Bean
-    public IntentInterpreter agentIntentInterpreter(CapabilityRegistry agentCapabilityRegistry,
-                                                    ObjectProvider<ChatModelGateway> chatModelGateways,
-                                                    AgentMetrics agentMetrics,
-                                                    @Value("${rover.agent.llm.quick-timeout-seconds:10}")
-                                                    int quickTimeoutSeconds) {
-        return new LlmIntentInterpreter(new SpringAiJsonCompletion(
-                chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics, "意图识别",
-                quickTimeoutSeconds), agentCapabilityRegistry);
-    }
-
-    @Bean
-    public IntentService agentIntentService(IntentInterpreter agentIntentInterpreter) {
-        return new IntentService(agentIntentInterpreter, new IntentClassifier());
-    }
-
     /** 调查规划器：确定性规则打底，模型只提出候选，越界步骤由 {@link PlanValidator} 丢弃。 */
     @Bean
     public InvestigationPlanner agentInvestigationPlanner(CapabilityRegistry agentCapabilityRegistry,
@@ -290,32 +264,11 @@ public class AgentRuntimeConfiguration {
                 opsJournal);
     }
 
-    /** 状态查询：单一只读能力直接回答，不规划、不跑调查。 */
-    @Bean
-    public QueryStateService agentQueryStateService(CapabilityExecutor agentCapabilityExecutor) {
-        return new QueryStateService(agentCapabilityExecutor);
-    }
-
-    /** 解释用例：能力清单来自注册表，结论解释复用会话里已有的调查结论。 */
-    @Bean
-    public ExplainService agentExplainService(CapabilityRegistry agentCapabilityRegistry,
-                                              IncidentRegistry agentIncidentRegistry,
-                                              AgentTaskRepository agentTaskRepository) {
-        return new ExplainService(agentCapabilityRegistry, agentIncidentRegistry, agentTaskRepository);
-    }
-
-    /** 处置计划：只读预检后产出不可执行的计划，本阶段不执行任何写操作。 */
-    @Bean
-    public ActionPlanService agentActionPlanService(CapabilityExecutor agentCapabilityExecutor) {
-        return new ActionPlanService(agentCapabilityExecutor);
-    }
-
     /**
      * 对话主路径：模型自主决定查什么、查几次、怎么答；工具来自只读能力执行器。
      *
      * 刻意不收紧超时：一次对话可能包含多轮工具调用（先看实例、再查它的指标），
-     * 用「意图识别」那种十秒上限会把它掐断在取数途中。等得久一些但答得完整，
-     * 比快而残缺更符合这个入口的用途。
+     * 用十秒级的快速上限会把它掐断在取数途中。等得久一些但答得完整，比快而残缺更符合这个入口的用途。
      */
     @Bean
     public ToolLoopService agentToolLoopService(CapabilityExecutor agentCapabilityExecutor,
@@ -328,7 +281,7 @@ public class AgentRuntimeConfiguration {
                 conversationModels.getIfAvailable());
     }
 
-    /** Agent 应用入口：意图/目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */
+    /** Agent 应用入口：目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */
     @Bean
     public AgentOrchestrator agentOrchestrator(AgentSessionRepository agentSessionRepository,
                                                IncidentRepository agentIncidentRepository,
@@ -339,15 +292,10 @@ public class AgentRuntimeConfiguration {
                                                TargetResolver agentTargetResolver,
                                                InvestigationService agentInvestigationService,
                                                WorkspaceRetention agentWorkspaceRetention,
-                                               IntentService agentIntentService,
-                                               QueryStateService agentQueryStateService,
-                                               ExplainService agentExplainService,
-                                               ActionPlanService agentActionPlanService,
                                                ToolLoopService agentToolLoopService,
                                                OpsJournal opsJournal) {
         return new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
                 agentTaskRepository, agentIncidentRegistry, agentContextManager, agentTargetResolver,
-                agentInvestigationService, agentWorkspaceRetention, agentIntentService, agentQueryStateService,
-                agentExplainService, agentActionPlanService, agentToolLoopService, opsJournal);
+                agentInvestigationService, agentWorkspaceRetention, agentToolLoopService, opsJournal);
     }
 }
