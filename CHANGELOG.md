@@ -25,6 +25,15 @@ All notable changes to Rover-Suite are documented here. Releases follow
   read-only tools), the record store and telemetry collector, the task-cancel
   API, and the alert-ingestion API across the bilingual Ops Agent guide,
   configuration reference, Admin API reference, and user guide.
+- Added the first controlled operational action, `ADJUST_ROUTE_TARGET_WEIGHT`:
+  the agent can only file a pending change (a tenth, proposal-only tool), and a
+  human approval in the Workbench triggers a deterministic executor that
+  re-checks the revision and target weight, commits under the gateway's
+  optimistic lock with a pre-persisted `operationId`, reads the route back to
+  verify, and compensates a failed change through the same narrow primitive.
+  Unknown outcomes stay `UNCERTAIN` and are resolved by re-querying that same
+  `operationId`, never by resubmitting. Persisted in a new `agent_action` table
+  (schema v4).
 - Fixed Admin configuration type detection for `gateway.loadbalance.strategy`.
 
 ## Release process

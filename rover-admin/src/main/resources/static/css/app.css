@@ -978,6 +978,26 @@ code {
 .wb-kv > div.wide { grid-column: 1 / -1; }
 .wb-note { margin-top: 10px; font-size: 12px; }
 
+/*
+ * 变更与处置：Agent 提议、人批准、程序执行、结果可回读、可补偿。
+ * 视觉上刻意与「证据」「诊断」区分开——这是一条会改变生产状态的卡，需要被一眼认出来。
+ */
+.wb-actions { display: flex; flex-direction: column; gap: 10px; }
+.wb-action { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--card); }
+.wb-action-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.wb-action-impact { font-size: 12px; }
+/* 预览是网关给的原始差异行，用等宽字：与服务端日志、路由页看到的同一份文本 */
+.wb-action-preview { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; }
+.wb-action-progress { font-size: 12px; font-weight: 700; }
+.wb-action-progress.idle { color: var(--muted); }
+.wb-action-progress.run { color: var(--accent); }
+.wb-action-progress.ok { color: var(--ok); }
+.wb-action-progress.bad { color: var(--danger); }
+.wb-action-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.wb-action-meta { font-size: 11.5px; }
+.wb-action-foot .btn { margin-left: auto; }
+.wb-action-foot .btn + .btn { margin-left: 0; }
+
 .wb-evidence { display: flex; flex-direction: column; gap: 8px; }
 .wb-evidence-row { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; }
 .wb-evidence-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

@@ -6,16 +6,21 @@ import com.rover.agent.core.capability.CapabilityResult;
 import com.rover.agent.core.investigation.Findings;
 import com.rover.agent.core.investigation.FindingsInput;
 import com.rover.agent.core.investigation.InvestigationRules;
+import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.CheckpointStage;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.StepStatus;
+import com.rover.agent.core.model.WeightRequestUnit;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
+import com.rover.agent.core.util.Texts;
+import com.rover.agent.runtime.action.ActionProposal;
+import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.task.InvestigationTask;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -23,11 +28,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
-/** Agent 的只读查询工具集：模型自己决定查什么，每次调用都是一次真实取数。 */
+/**
+ * Agent 的工具集：只读查询 + 唯一的提案工具。
+ *
+ * <p>边界很硬：查询工具每次调用都真实取数；提案工具只登记一条「待人工审批」的变更，
+ * 一个字节都不会写给 Gateway。真正改生产状态的代码在 {@code RouteWeightActionExecutor}，
+ * 只有人点击批准之后才会被调用，模型既碰不到它，也没有任何工具能绕过审批。
+ */
 public final class OpsTools {
 
     /** 单次任务的工具调用上限，防止模型反复查询停不下来。 */
     private static final int MAX_CALLS = 30;
+
+    /** 预算耗尽后统一的收尾说明：静默丢弃会让模型以为查过了。 */
+    private static final String BUDGET_EXHAUSTED =
+            "本次对话的查询次数已达上限（" + MAX_CALLS + " 次）。请立刻基于已经取回的事实作答，"
+                    + "仍不确定的部分如实说明无法确认，不要再请求新的查询。";
 
     private static final String STEP_ROUTE = "读取路由";
     private static final String STEP_INSTANCE = "读取实例";
@@ -37,9 +53,12 @@ public final class OpsTools {
     private static final String STEP_EVENT = "读取事件";
     private static final String STEP_LOG = "读取历史日志";
     private static final String STEP_KNOWLEDGE = "检索知识";
+    private static final String STEP_ACTION = "生成变更计划";
 
     private final CapabilityExecutor executor;
     private final InvestigationTask task;
+    /** 变更提议入口；未装配（单测、只读运行）时提案工具如实说明「没有这项能力」。 */
+    private final AgentActionService actions;
     private final AtomicInteger calls = new AtomicInteger();
     private final List<Evidence> evidence = new CopyOnWriteArrayList<>();
     private final List<String> limitations = new CopyOnWriteArrayList<>();
@@ -54,8 +73,13 @@ public final class OpsTools {
     private List<RouteUpstreamSnapshot> routeUpstreams;
 
     public OpsTools(CapabilityExecutor executor, InvestigationTask task) {
+        this(executor, task, null);
+    }
+
+    public OpsTools(CapabilityExecutor executor, InvestigationTask task, AgentActionService actions) {
         this.executor = executor;
         this.task = task;
+        this.actions = actions;
     }
 
     /** 列出 Gateway 上配置的全部路由。 */
@@ -73,7 +97,7 @@ public final class OpsTools {
             + "不传路径时列出全部路由。它只说明转发规则本身，不含任何流量与错误数据；"
             + "要判断请求成功与否，请配合实例清单、网关指标或追踪。")
     public String getRoute(@ToolParam(description = "请求路径，例如 /api/demo/tt；留空表示列出全部路由") String path) {
-        String target = text(path);
+        String target = Texts.orEmpty(path);
         if (target.isBlank()) {
             return listRoutes();
         }
@@ -88,7 +112,7 @@ public final class OpsTools {
             + "它只说明注册与健康事实，不说明实例响应快慢或返回码；后者要用网关指标或追踪。")
     public String listInstances(@ToolParam(description = "服务名，例如 order-service；留空表示查询全部注册实例")
                                 String serviceName) {
-        String service = text(serviceName);
+        String service = Texts.orEmpty(serviceName);
         String running = service.isBlank()
                 ? "正在读取注册中心全部实例与健康状态"
                 : "正在读取服务 " + service + " 的实例与健康状态";
@@ -105,7 +129,7 @@ public final class OpsTools {
             + "不要据此判定某一台实例异常。")
     public String getGatewayMetrics(@ToolParam(description = "请求路径，例如 /api/demo/tt；留空则只查全局计数")
                                     String path) {
-        String target = text(path);
+        String target = Texts.orEmpty(path);
         String running = target.isBlank()
                 ? "正在读取 Gateway 全局流量与拒绝计数"
                 : "正在读取网关指标与 " + target + " 各上游实例的窗口观测";
@@ -120,7 +144,7 @@ public final class OpsTools {
             + "追踪是抽样的，采样率可能很低、也可能一条都没有；没有记录不等于没有发生故障，"
             + "此时应改用实例清单或网关指标判断。")
     public String getTraces(@ToolParam(description = "请求路径，例如 /api/demo/tt") String path) {
-        String target = text(path);
+        String target = Texts.orEmpty(path);
         if (target.isBlank()) {
             return "需要给出请求路径才能查询追踪，例如 /api/demo/tt。";
         }
@@ -159,12 +183,11 @@ public final class OpsTools {
             @ToolParam(description = "目标实体：服务名、路由路径或 ip:port；留空表示查全部实体") String target,
             @ToolParam(description = "查最近几小时，默认 24") Integer hours) {
         if (!withinBudget()) {
-            return "本次对话的查询次数已达上限（" + MAX_CALLS + " 次）。请立刻基于已经取回的事实作答，"
-                    + "仍不确定的部分如实说明无法确认，不要再请求新的查询。";
+            return BUDGET_EXHAUSTED;
         }
-        List<String> types = text(type).isBlank() ? null : List.of(text(type));
+        List<String> types = Texts.orEmpty(type).isBlank() ? null : List.of(Texts.orEmpty(type));
         Long from = hours == null || hours <= 0 ? null : System.currentTimeMillis() - hours * 3_600_000L;
-        String entity = text(target);
+        String entity = Texts.orEmpty(target);
         task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.RUNNING,
                 entity.isBlank() ? "正在查询历史日志" : "正在查询 " + entity + " 的历史日志");
         CapabilityResult result = executor.queryLogs(entity, types, from, null, task.taskId());
@@ -183,11 +206,100 @@ public final class OpsTools {
             + "问「限流怎么配置」「怎么接入一个服务」「怎么做灰度发布」「怎么摘除异常实例」时用它。"
             + "它返回文档/经验，不是当前实时状态；要查当前生效值请用配置或指标工具。")
     public String searchKnowledge(@ToolParam(description = "要检索的问题，例如「怎么配置限流阈值」") String query) {
-        if (text(query).isBlank()) {
+        if (Texts.orEmpty(query).isBlank()) {
             return "需要给出要检索的问题，例如「怎么配置限流阈值」。";
         }
         return query(AgentCapability.KNOWLEDGE_RETRIEVAL, AgentStepType.KNOWLEDGE_INVESTIGATION, STEP_KNOWLEDGE,
-                "正在检索运维知识库", ResourceTarget.unknown(), text(query));
+                "正在检索运维知识库", ResourceTarget.unknown(), Texts.orEmpty(query));
+    }
+
+    /**
+     * 创建一条待人工审批的灰度权重变更计划。
+     *
+     * <p>这是整套工具里唯一一个「会留下痕迹」的方法，而它留下的只是一条待审批记录：
+     * Gateway 的路由表不会因为这个调用改变。方法名刻意叫 propose 而不是 execute——
+     * 名字里的动词就是边界，模型与读代码的人都不该误解它。
+     *
+     * <p><b>单位必须显式声明。</b>「权重值」与「流量占比」是两种量纲：在一条 95/5 的路由上，
+     * 「20」既可能是权重值 20，也可能是 20% 流量（换算后约 2000），差两个数量级。
+     * 用户说「权重调到 20」才传 RAW_WEIGHT，说「流量调到 20%」才传 TRAFFIC_PERCENT；
+     * 只说「放量到 20」「调到 20」这种没有单位的表达，必须传 UNSURE——
+     * 这时不会生成任何变更计划，而是把问题交回给用户澄清。**绝不要替用户挑一个单位。**
+     *
+     * <p>这里刻意不调用 {@code task.checkpoint(...)}：恢复点的前提是「重做不产生副作用」，
+     * 而这条调用会写库，重做会多出一张待审批卡，因此它不配当安全恢复点。
+     */
+    @Tool(description = "创建一个「待人工审批」的灰度版本权重变更计划（不会修改 Gateway，必须由人在控制台点击批准才会执行）。"
+            + "仅当用户明确要求调整某个版本的流量权重时调用。"
+            + "route 传请求路径或路由前缀（例如 /api/order），group 传版本分组（例如 v2），"
+            + "requestedValue 传目标数值，requestedUnit 传它的单位："
+            + "RAW_WEIGHT=用户说的是「权重（值）」，取值 0~10000；"
+            + "TRAFFIC_PERCENT=用户说的是「流量/占比/百分比」，取值 0~100，由系统换算成权重。"
+            + "【重要】用户只说「放量到 20」「调到 20」这类没有单位的表达时，必须传 UNSURE："
+            + "这时不会创建任何计划，你会拿到一句澄清要求，请原样转述给用户并等他确认单位是权重还是百分比。"
+            + "不要在两个单位之间替用户猜一个——猜错会让真实流量偏差一个数量级。"
+            + "用户只是问「现在权重多少」「能不能放量」时不要调用它，先如实回答并给出建议。")
+    public String proposeTargetWeightChange(
+            @ToolParam(description = "请求路径或路由前缀，例如 /api/order") String route,
+            @ToolParam(description = "版本分组，例如 v2") String group,
+            @ToolParam(description = "目标数值：RAW_WEIGHT 时为权重值 0~10000；TRAFFIC_PERCENT 时为流量占比 0~100")
+            Integer requestedValue,
+            @ToolParam(description = "requestedValue 的单位：RAW_WEIGHT / TRAFFIC_PERCENT / UNSURE（用户没说明单位时必须传 UNSURE）")
+            String requestedUnit) {
+        if (!withinBudget()) {
+            return BUDGET_EXHAUSTED;
+        }
+        if (actions == null) {
+            return "当前运行方式没有接入变更提议能力，只能提供只读诊断。";
+        }
+        WeightRequestUnit unit = WeightRequestUnit.parse(requestedUnit);
+        task.step(AgentStepType.ACTION_PROPOSAL, STEP_ACTION, StepStatus.RUNNING,
+                "正在核对路由与当前权重，生成待审批变更计划");
+        ActionProposal proposal = actions.propose(task.sessionId(), task.taskId(), task.incidentId(), route, group,
+                requestedValue, unit);
+        if (proposal.clarificationRequired()) {
+            task.step(AgentStepType.ACTION_PROPOSAL, STEP_ACTION, StepStatus.FAILED,
+                    "语义不明确，需要向用户澄清：" + proposal.reason());
+            return renderClarification(proposal.reason());
+        }
+        if (!proposal.created()) {
+            task.step(AgentStepType.ACTION_PROPOSAL, STEP_ACTION, StepStatus.FAILED,
+                    "没有生成变更计划：" + proposal.reason());
+            return "没有生成变更计划：" + proposal.reason();
+        }
+        AgentAction action = proposal.action();
+        task.step(AgentStepType.ACTION_PROPOSAL, STEP_ACTION, StepStatus.COMPLETED,
+                "已生成待审批变更：" + action.describe() + "（预计流量占比 " + action.trafficPercentText()
+                        + "，基于 revision " + action.expectedRevision() + "）");
+        return render(action);
+    }
+
+    /** 语义不明确时的返回：不生成计划，把「该问什么」原样交给模型转述给用户。 */
+    private static String renderClarification(String reason) {
+        return "没有创建变更计划：这次请求的数值语义不明确，必须先向用户澄清。\n"
+                + reason
+                + "\n请你用一句话问用户：是要把【权重值】调到这个数，还是把【流量占比】调到这个百分比？"
+                + "在用户明确回答之前，不要再次调用本工具，也不要自行假定单位。";
+    }
+
+    /** 交给模型的提案结果：把「改完之后世界会变成什么样」摊开，外加一句「不要把它说成已经改好了」。 */
+    private static String render(AgentAction action) {
+        StringBuilder text = new StringBuilder("已创建待人工审批的变更计划（尚未执行）：\n");
+        text.append("- 变更 ID：").append(action.actionId()).append("\n");
+        text.append("- 路由：").append(action.businessPrefix().isBlank() ? action.routeId() : action.businessPrefix())
+                .append("（routeId=").append(action.routeId()).append("）\n");
+        text.append("- 目标版本：").append(action.targetLabel()).append("\n");
+        text.append("- Raw Weight：").append(action.beforeWeight()).append(" → ").append(action.desiredWeight()).append("\n");
+        text.append("- 预计流量占比：").append(action.trafficPercentText()).append("\n");
+        text.append("- 请求口径：").append(action.requestText()).append("\n");
+        text.append("- 变更前 revision：").append(action.expectedRevision()).append("（执行前会重新校验，不一致会拒绝执行）\n");
+        text.append("- 影响：").append(action.impact()).append("\n");
+        if (!action.preview().isEmpty()) {
+            text.append("- 预览：").append(String.join("；", action.preview())).append("\n");
+        }
+        text.append("这张计划不会自己执行：需要人在 Workbench 的「待审批变更」里点击「批准并执行」。")
+                .append("请如实告诉用户「计划已创建，等待人工批准」，不要说成「已经调整好了」。");
+        return text.toString();
     }
 
     /** 本次对话取回的全部证据。 */
@@ -232,8 +344,7 @@ public final class OpsTools {
     private String query(AgentCapability capability, AgentStepType stepType, String stepName, String runningText,
                          ResourceTarget target, String path) {
         if (!withinBudget()) {
-            return "本次对话的查询次数已达上限（" + MAX_CALLS + " 次）。请立刻基于已经取回的事实作答，"
-                    + "仍不确定的部分如实说明无法确认，不要再请求新的查询。";
+            return BUDGET_EXHAUSTED;
         }
         task.step(stepType, stepName, StepStatus.RUNNING, runningText);
         CapabilityResult result = executor.execute(capability, target, path == null ? "" : path, task.taskId());
@@ -312,7 +423,4 @@ public final class OpsTools {
         return extra <= 0 ? first : first + "（另有 " + extra + " 条证据）";
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 }

@@ -454,7 +454,10 @@
                                 <div v-if="!wbActiveSessionId || !wbTurns.length" class="wb-welcome">
                                     <span class="wb-avatar agent big">R</span>
                                     <h3>Rover Ops Agent</h3>
-                                    <p>只读运维诊断：查路由、实例、指标、追踪、配置和注册事件，也能查历史变更和内置运维说明。不修改路由和配置。</p>
+                                    <p>
+                                        网关运维诊断：查路由、实例、指标、追踪、配置和注册事件，也能查历史变更和内置运维说明。
+                                        它不能直接改配置；需要调灰度权重时，只会开出一张待你审批的变更单，批准后才由程序执行、并回读确认。
+                                    </p>
                                     <div class="wb-examples">
                                         <button v-for="example in wbExamples" :key="example" type="button"
                                                 class="wb-example" @click="wbUseExample(example)">{{ example }}</button>
@@ -730,6 +733,80 @@
                                     因此这里不单列 Route / Service / Instance 三个字段。
                                 </div>
                             </template>
+                        </div>
+
+                        <!-- 变更与处置：Agent 只能建议，人批准之后才由确定性执行器落地 -->
+                        <div class="card">
+                            <div class="card-head">
+                                <h2>变更与处置</h2>
+                                <span v-if="wbPendingActions" class="badge warn ml-auto">{{ wbPendingActions }} 条待处置</span>
+                            </div>
+                            <div v-if="!wbActions.length" class="empty slim">
+                                还没有变更记录。
+                                <div class="empty-hint">
+                                    Agent 可以在调查后给出「调整某个灰度版本权重」的待审批计划；
+                                    批准之后才会真正执行，执行结果会被回读确认，出问题还能补偿回滚。
+                                </div>
+                            </div>
+                            <div v-else class="wb-actions">
+                                <div v-for="action in wbActions" :key="action.actionId" class="wb-action">
+                                    <div class="wb-action-head">
+                                        <strong>{{ wbActionTypeLabel(action.type) }}</strong>
+                                        <span class="badge ml-auto" :class="wbActionBadge(action.status)">
+                                            {{ wbActionStatusLabel(action.status) }}
+                                        </span>
+                                    </div>
+                                    <div class="wb-kv">
+                                        <div><span>路由</span><b>{{ action.businessPrefix || action.routeId }}</b></div>
+                                        <div><span>目标版本</span><b>{{ wbActionTarget(action) }}</b></div>
+                                        <div><span>Raw Weight</span>
+                                            <b>{{ action.beforeWeight }} → {{ action.desiredWeight }}</b>
+                                        </div>
+                                        <div><span>预计流量占比</span><b>{{ wbActionTrafficPercent(action) }}</b></div>
+                                        <div><span>请求口径</span><b>{{ wbActionRequestText(action) }}</b></div>
+                                        <div>
+                                            <span>当前 revision</span>
+                                            <b>{{ action.expectedRevision }}<template v-if="action.appliedRevision != null"> → {{ action.appliedRevision }}</template></b>
+                                        </div>
+                                    </div>
+                                    <div v-if="action.impact" class="muted wb-action-impact">{{ action.impact }}</div>
+                                    <div v-if="action.preview && action.preview.length" class="wb-action-preview">
+                                        <div v-for="(line, index) in action.preview" :key="index" class="muted">
+                                            <code>{{ line }}</code>
+                                        </div>
+                                    </div>
+                                    <div v-if="action.errorMessage" class="banner warn slim">{{ action.errorMessage }}</div>
+                                    <div v-if="wbActionError[action.actionId]" class="banner warn slim">
+                                        {{ wbActionError[action.actionId] }}
+                                    </div>
+                                    <div class="wb-action-progress" :class="wbActionProgress(action).tone">
+                                        {{ wbActionProgress(action).mark }} {{ wbActionProgress(action).text }}
+                                    </div>
+                                    <div class="wb-action-foot">
+                                        <span class="muted wb-action-meta">{{ wbActionMeta(action) }}</span>
+                                        <template v-if="wbActionIdle(action) && action.status === 'PENDING_APPROVAL'">
+                                            <button class="btn mini" :disabled="wbActionBusy[action.actionId]"
+                                                    @click="wbActionCommand(action, 'reject')">拒绝</button>
+                                            <button class="btn mini primary" :disabled="wbActionBusy[action.actionId]"
+                                                    @click="wbActionCommand(action, 'approve')">
+                                                {{ wbActionBusy[action.actionId] === 'approve' ? '执行中…' : '批准并执行' }}
+                                            </button>
+                                        </template>
+                                        <template v-else-if="wbActionIdle(action) && action.status === 'SUCCESS'">
+                                            <button class="btn mini danger" :disabled="wbActionBusy[action.actionId]"
+                                                    @click="wbActionCommand(action, 'rollback')">
+                                                {{ wbActionBusy[action.actionId] === 'rollback' ? '回滚中…' : '回滚' }}
+                                            </button>
+                                        </template>
+                                        <template v-else-if="wbActionIdle(action) && action.status === 'UNCERTAIN'">
+                                            <button class="btn mini" :disabled="wbActionBusy[action.actionId]"
+                                                    @click="wbActionCommand(action, 'resolve')">
+                                                {{ wbActionBusy[action.actionId] === 'resolve' ? '确认中…' : '重新确认结果' }}
+                                            </button>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         <div class="card">

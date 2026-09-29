@@ -54,7 +54,7 @@ Admin 地址：<http://127.0.0.1:9090>。停止、验收脚本和生产安全提
 - **混合语言接入：** Java 服务可用 Starter，Node.js、Python、Go、PHP、C++ 可通过 HTTP+JSON API 注册。
 - **运行态可观察：** Admin 提供路由、实例、最近事件、请求追踪、指标和可热更新配置视图。
 - **轻量扩展：** Java SPI Filter / LoadBalancer 覆盖常见定制场景，不必一上来引入完整服务网格。
-- **运维 Agent（预览）：** Rover Ops Agent 基于 Gateway 与 Nameserver 的运行态数据做只读故障调查，输出结论、证据来源和采集时间；定位与边界见 [Rover Ops Agent](docs-public/ops-agent.zh-CN.md)。
+- **运维 Agent（预览）：** Rover Ops Agent 基于 Gateway 与 Nameserver 的运行态数据做只读故障调查，输出结论、证据来源和采集时间；它还能把一类运维变更——灰度版本权重调整——开成待人工审批的变更单，批准后才执行、执行后回读确认，并可补偿回滚；定位与边界见 [Rover Ops Agent](docs-public/ops-agent.zh-CN.md)。
 
 ## 解决什么问题
 

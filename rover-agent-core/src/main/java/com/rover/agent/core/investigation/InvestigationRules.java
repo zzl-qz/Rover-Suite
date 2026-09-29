@@ -9,6 +9,7 @@ import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
+import com.rover.agent.core.util.Texts;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -69,10 +70,10 @@ public final class InvestigationRules {
             confidence = input.routeRead() ? Confidence.HIGH : Confidence.LOW;
         } else {
             hypotheses.add(hypothesis("H1", "该路径未命中任何路由", Verdict.REJECTED,
-                    "已命中路由 " + text(route.businessPrefix()), List.of(SOURCE_ROUTES)));
+                    "已命中路由 " + Texts.orEmpty(route.businessPrefix()), List.of(SOURCE_ROUTES)));
             // 静态上游与非 Nameserver 服务发现都属于路由事实（判断范围），不是故障假设：
             // 它们只写进结论与证据，不能作为「已确认假设」展示。
-            String service = text(route.serviceName());
+            String service = Texts.orEmpty(route.serviceName());
             if (service.isBlank()) {
                 summary = "该路由配置为静态上游（无动态服务目标）；当前只读数据无法确认其上游状态。";
             } else if (discovery != DiscoveryMode.NAMESERVER) {
@@ -84,17 +85,17 @@ public final class InvestigationRules {
                 summary = "已找到路由，但实例数据不足，暂时无法判断上游状态。";
             } else {
                 evaluateDownstream = true;
-                String group = text(route.group());
+                String group = Texts.orEmpty(route.group());
                 List<InstanceSnapshot> matching = instances.stream()
-                        .filter(item -> service.equals(text(item.serviceName())))
-                        .filter(item -> group.isBlank() || group.equals(text(item.group())))
+                        .filter(item -> service.equals(Texts.orEmpty(item.serviceName())))
+                        .filter(item -> group.isBlank() || group.equals(Texts.orEmpty(item.group())))
                         .toList();
                 long healthy = matching.stream().filter(InstanceSnapshot::healthy).count();
                 if (matching.isEmpty()) {
                     hypotheses.add(hypothesis("H3", "目标服务当前没有匹配实例", Verdict.CONFIRMED,
                             "注册表中没有 " + service + " / " + routeGroupLabel(group) + " 的实例",
                             List.of(SOURCE_INSTANCES)));
-                    summary = "路由 " + text(route.businessPrefix()) + " 指向 " + service + " / "
+                    summary = "路由 " + Texts.orEmpty(route.businessPrefix()) + " 指向 " + service + " / "
                             + routeGroupLabel(group) + "，当前 Nameserver 注册表没有匹配实例。"
                             + missingTraceClause(traces, input.path());
                     confidence = Confidence.MEDIUM;
@@ -103,7 +104,7 @@ public final class InvestigationRules {
                             "已找到 " + matching.size() + " 个匹配实例", List.of(SOURCE_INSTANCES)));
                     hypotheses.add(hypothesis("H4", "匹配实例均不健康", Verdict.CONFIRMED,
                             matching.size() + " 个实例均标为不健康", List.of(SOURCE_INSTANCES)));
-                    summary = "路由 " + text(route.businessPrefix()) + " 的目标当前有 " + matching.size()
+                    summary = "路由 " + Texts.orEmpty(route.businessPrefix()) + " 的目标当前有 " + matching.size()
                             + " 个注册实例，但均标为不健康；Gateway 在没有健康实例时可能回退使用这些实例。";
                 } else {
                     hypotheses.add(hypothesis("H3", "目标服务当前没有匹配实例", Verdict.REJECTED,
@@ -244,7 +245,7 @@ public final class InvestigationRules {
         }
         long now = System.currentTimeMillis();
         for (TraceRow row : traces.rows()) {
-            if (isRecent(now, row) && text(path).equals(text(row.path()))) {
+            if (isRecent(now, row) && Texts.orEmpty(path).equals(Texts.orEmpty(row.path()))) {
                 return true;
             }
         }
@@ -257,7 +258,7 @@ public final class InvestigationRules {
         }
         long now = System.currentTimeMillis();
         for (TraceRow row : traces.rows()) {
-            if (isRecent(now, row) && row.statusCode() == 503 && text(path).equals(text(row.path()))) {
+            if (isRecent(now, row) && row.statusCode() == 503 && Texts.orEmpty(path).equals(Texts.orEmpty(row.path()))) {
                 return true;
             }
         }
@@ -274,7 +275,4 @@ public final class InvestigationRules {
         return group.isBlank() ? "全部分组" : group;
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 }

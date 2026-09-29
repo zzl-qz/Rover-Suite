@@ -52,8 +52,8 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 | :--- | :--- | :--- |
 | Detect | Monitoring / alerting sends through `POST /api/agent/events/ingest` | Implemented (passive ingestion); proactive periodic inspection is not implemented |
 | Investigate → Diagnose | **Core value of the agent** | In progress (model-driven conversation path plus a read-only graph chain with hypothesis verification) |
-| Recommend | Agent | Planned (read-only facts and rationale only; no action plan is produced) |
-| Approve / Execute / Verify | Agent, with a governance layer | Planned |
+| Recommend | Agent | Implemented for one action: gray-release weight adjustment. The agent can only write a suggestion as a pending change; it cannot execute it |
+| Approve / Execute / Verify | Agent, with a governance layer | In progress (approve → precondition → optimistic-lock commit → read-back verification → compensating rollback, complete for one action) |
 
 ## 4. Capability levels
 
@@ -86,17 +86,24 @@ the executor runs it, and an evaluate node decides whether to keep planning, ask
 conversation path that choice belongs to the model. What does not change is that both may pick only READ_ONLY capabilities
 that are actually wired up in the registry, and the three hard limits — planning rounds, capability calls, and plan steps —
 are enforced by code rather than the prompt; hitting them stops collection and is stated plainly in the conclusion.
-Writes do not exist yet: there is neither an executable action nor a "planned but not executed" remediation plan —
-shipping a plan for capabilities that are not implemented only blurs whether the project supports them or merely
-planned them once. Execution is deferred to Level C, and its design will follow the write APIs that actually exist.
+Remediation plans are opened on exactly one write primitive that really exists — gray-release weight adjustment (see §7) —
+and the model can only do one thing with it: register a pending change for human approval. Commit, verification, and
+compensation are done by a deterministic executor. Everything else (draining an instance, changing configuration,
+restarting, adding or deleting routes) still has no write interface, and no "planned but not executed" plan is produced:
+shipping a plan for capabilities that are not implemented only blurs whether the project supports them or merely planned
+them once.
 
 ### Level C: Act
 
 With authorization, the agent performs limited operational actions such as draining an unhealthy instance, adjusting
 routes, changing rate limits, or triggering a rollback.
 
-**Status: planned.** This level requires policy, RBAC, risk grading, human approval, idempotency, rollback, and result
-verification.
+**Status: in progress (the first action is complete end to end — see §7 "Controlled change loop").** The only executable
+action today is `ADJUST_ROUTE_TARGET_WEIGHT`: the model only files a pending change, and after human approval
+`RouteWeightActionExecutor` performs precondition check → optimistic-lock commit → read-back verification, with
+compensating rollback through the same narrow primitive. Policy, RBAC, and risk grading remain planned — this version
+lowers risk by opening one action, exposing the write path to the executor only, and requiring human approval, rather
+than pretending the governance layer is complete.
 
 ## 5. Two entry points
 
@@ -114,7 +121,7 @@ Engineer-initiated (implemented)                     Event / alert triggered (im
   and in which order                                     synthesise (confirm / eliminate /
         │                                                unverifiable → conclusion)
         ↓                                                        ↓
-  9 read-only tools (see §7) → facts + evidence +          Hypothesis-driven root cause
+  9 read-only tools + 1 proposal tool (see §7) →           Hypothesis-driven root cause
         │                     limitations
         ↓
   answered while querying; the answer is written back
@@ -122,9 +129,11 @@ Engineer-initiated (implemented)                     Event / alert triggered (im
 ```
 
 Both paths read data through the same `CapabilityExecutor`: neither the model nor an alert can reach management APIs
-directly. The difference is *who decides what to query* — the model on the conversation path (9 tools plus a call
-budget), the planner on the investigation path (picks available capabilities from the registry, with hypothesis
-verification).
+directly. The difference is *who decides what to query* — the model on the conversation path (9 read-only tools plus one
+proposal tool, sharing a call budget), the planner on the investigation path (picks available capabilities from the
+registry, with hypothesis verification). The proposal tool neither reads data through a capability nor writes to the
+gateway: it only registers a pending change for human approval, so the "reads must go through `CapabilityExecutor`"
+boundary is untouched.
 
 The conversation path has no "classify the question first, then dispatch" layer at all: a sentence asking three things
 triggers three lines of querying, and a part it cannot answer is reported as "this part was not found" rather than
@@ -192,8 +201,8 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | :--- | :--- | :--- |
 | `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget / TaskType / AgentStepType |
 | | `com.rover.agent.core.snapshot` | Neutral read-only snapshots: RouteSnapshot / RouteUpstreamSnapshot / InstanceSnapshot / GatewayMetricSnapshot / TraceSnapshot / TraceRow / ConfigEntrySnapshot / RegistryEventSnapshot / DiscoveryMode |
-| | `com.rover.agent.core.port` | Read-only ports: RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort / ConfigReadPort / EventReadPort / LogQueryPort / KnowledgeReadPort (the latter two with LogRequest / LogEntry / KnowledgeEntry); unavailable data raises SnapshotUnavailableException |
-| | `com.rover.agent.core.repository` | Storage interfaces: AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository (in-memory or persistent implementations are swappable) |
+| | `com.rover.agent.core.port` | Read-only ports: RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort / ConfigReadPort / EventReadPort / LogQueryPort / KnowledgeReadPort (the latter two with LogRequest / LogEntry / KnowledgeEntry); unavailable data raises SnapshotUnavailableException. The only write port is `RouteControlPort` (read state / preview / adjust weight / query operation), used by the deterministic executor alone |
+| | `com.rover.agent.core.repository` | Storage interfaces: AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository / AgentCheckpointRepository / AgentActionRepository (in-memory or persistent implementations are swappable) |
 | | `com.rover.agent.core.context` | AgentContextManager (N most recent messages + active incident + structured target + key evidence); TargetResolver / ResourceTarget (explicit input → existing routes and instances → model assistance → clarification) |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules (pure functions, unit-testable without the framework) |
 | | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult / AgentGrounding (environment profile and glossary) / UntrustedText (sentinel fencing for untrusted content): capability catalogue and the single read-only execution point |
@@ -202,21 +211,24 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph: plan / execute / evaluate / clarify / synthesise nodes, looping conditional edges, conclusion synthesis |
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner: rule-based baseline plus model candidates, out-of-scope steps dropped by PlanValidator |
 | | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces only; capacity limits mean something for the in-memory implementations) |
-| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`: the relational implementation of session / message / incident / task / step / evidence / safe resume points (seven `agent_*` tables, versioned migrations, one transaction per snapshot, foreign keys so no orphans), assembled by `AgentStore`; plus thread-safe in-memory implementations used when no record store path is configured |
-| | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 9 read-only tools (data entry point of the conversation path) |
+| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`: the relational implementation of session / message / incident / task / step / evidence / safe resume points / controlled change records (eight `agent_*` tables, versioned migrations, one transaction per snapshot, foreign keys so no orphans, and startup recovery that turns half-finished changes into failed or uncertain), assembled by `AgentStore`; plus thread-safe in-memory implementations used when no record store path is configured |
+| | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 9 read-only tools plus 1 proposal tool (data entry point and the single suggestion entry point of the conversation path) |
+| | `com.rover.agent.runtime.action` | `AgentActionService` (propose / approve / reject / rollback / resolve, state transitions claimed by CAS) plus `RouteWeightActionExecutor` (the only code that writes to the gateway) and `ActionDraft` / `RouteLocator` |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`: the built-in operations knowledge base, default `KnowledgeReadPort` implementation |
 | | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / ModelTargetInterpreter / SpringAiJsonCompletion / QuickModelCall, plus the conversation-side ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway (model adapter and honest degradation when no model exists) |
-| `rover-admin` | `com.rover.admin.agent.adapter` | Six read-only adapters: Route / Instance / Metric / Trace / Config / Event → ports, never triggering a write |
+| `rover-admin` | `com.rover.admin.agent.adapter` | Six read-only adapters: Route / Instance / Metric / Trace / Config / Event → ports, never triggering a write; plus `AdminRouteControlAdapter` (the management-API implementation of RouteControlPort, serving the controlled change loop only) |
 | | `com.rover.admin.log` | `RecordStoreLogQueryAdapter` (the `LogQueryPort` implementation, mapping string types back to `RecordType`) and TelemetryCollector (periodic sampling of Gateway / Nameserver into the record store, see 6.2) |
-| | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + composition root |
+| | `com.rover.admin.agent` | AgentController (session / message / task / incident contract) + AgentActionController (approve / reject / rollback / resolve a change) + composition root |
 
 **Boundary rules:**
 
 - `rover-agent-core` depends on neither Spring, Jackson, nor Spring AI: the JSON shape of the Admin management API is
   parsed only in the `rover-admin` adapters, while core rules speak neutral snapshots. That keeps core directly
   unit-testable and data-source agnostic.
-- Read-only is structural: the port interfaces only expose read methods, so the runtime cannot reach
-  `saveRoute / deleteRoute / updateConfig`.
+- Read-only is structural: the read-only ports expose read methods only, so the runtime cannot reach
+  `saveRoute / deleteRoute / updateConfig`. The single write port, `RouteControlPort`, has exactly four methods —
+  read state / preview / adjust weight / query operation — with no route creation, deletion, or config editing:
+  the capability boundary lives in the interface, not in the prompt or in code review.
 - Spring AI and Graph dependencies appear only in the `rover-agent-runtime` and `rover-admin` modules; Admin also owns
   the model-configuration wiring, so the agent can later move to its own process.
 - The parent `spring-boot.version` stays at 3.2.0: `rover-agent-runtime` and `rover-admin` each import the
@@ -409,8 +421,8 @@ catalogue described in §7.
 - Conversation path `ToolLoopService` (model-driven evidence collection): once a question arrives, **the model itself
   decides what to query, how many times, and in what order** — rather than first classifying the question into "state
   query / investigation / capability summary" and running a different pipeline per shape. Every tool call is a real read,
-  and all tools run through the same `CapabilityExecutor`: the model never sees management-API credentials and has no
-  write capability at all. There are 9 read-only tools, one per capability in the registry:
+  and all read-only tools run through the same `CapabilityExecutor`: the model never sees management-API credentials.
+  There are 9 read-only tools, one per capability in the registry:
 
   | Tool | What it reads | Capability |
   | :--- | :--- | :--- |
@@ -427,6 +439,51 @@ catalogue described in §7.
   not ask a route snapshot for traffic or read "no traces" as "no problem". The call budget is enforced on both sides:
   `OpsTools.MAX_CALLS` (30) and `spring.ai.tools.limits.max-total-tool-calls` (30) are kept in sync, with a per-tool
   default limit of 10.
+
+  The tenth tool is the only non-read-only entry point, and its name is the boundary:
+  `proposeTargetWeightChange(route, group, desiredWeight)` — *propose*, not *execute*. It reads the routes once, checks the
+  version target and its current weight, then registers a `PENDING_APPROVAL` change and answers "not executed yet";
+  **no path from it reaches a write call** (`OpsToolsProposalTest` pins this down with a fake gateway that fails on any
+  write method). It deliberately does not advance the safe resume point either: resume points assume "redoing has no side
+  effect", while this call writes a row and redoing it would leave a second pending card behind.
+- **Controlled change loop (`ADJUST_ROUTE_TARGET_WEIGHT`, the first and currently only action)**: model proposal →
+  pending approval → human approval → deterministic execution → read-back verification → compensating rollback, each step
+  with its own state and code:
+  - **Observe / Plan**: `proposeTargetWeightChange` reads the routes once (revision plus per-version weights) and registers
+    a `PENDING_APPROVAL` change. **The gateway is not touched by a single byte.** No matching route, missing version, or an
+    unchanged weight all return a reasoned "why this cannot be proposed" instead of forcing a card into existence.
+  - **Approve**: `POST /api/agent/actions/{actionId}/approve|reject|rollback|resolve`. "Pending → executing" is an atomic
+    state transition (`AgentActionRepository.transition`), so triple-clicking approves and executes exactly once; a change
+    belongs to the user of the session that created it, and somebody else's change is treated as nonexistent (404).
+  - **Precondition**: re-read the whole table and compare revision, target existence, and current weight against the
+    proposal. An approval card may have been on screen for ten minutes; routes someone else changed in that window must not
+    be overwritten by it — on mismatch the action lands in `PRECONDITION_FAILED` and **no write request is sent**.
+  - **Execute**: preview (the candidate table is validated and diffed by the gateway, without persisting or applying) →
+    **persist the `operationId` before sending the request** → commit with the revision read at proposal time.
+  - **Verify**: a 200 from the gateway only means the request was accepted; whether the goal was reached has to be read
+    back. A mismatch is `FAILED` — claiming success without reading back is lying.
+  - **Rollback**: a compensating action, not a whole-table rollback. It puts only the target this change touched back to
+    `beforeWeight`, committed with the *current* revision; reverting the whole table to an old version would wipe out
+    whatever others changed afterwards.
+- **`revision` and `operationId` solve two different problems**: the former is optimistic locking (never overwrite someone
+  else's update with stale state; a conflict returns 409 and the change lands in `PRECONDITION_FAILED`), the latter is
+  idempotency (never let one operation execute twice because of a retry). So after a timeout the only correct move is
+  **re-querying with the original operationId**: `APPLIED` means continue verifying, confirmed-not-applied means retrying
+  is safe, and an unreachable gateway means `UNCERTAIN` — never resubmit under a fresh id, which is exactly how one change
+  gets executed twice.
+- **No model inside the executor**: `RouteWeightActionExecutor` is plain deterministic code (precondition, CAS, call,
+  re-query, verify), and every state it records is backed by facts the program verified. `UNCERTAIN` therefore has to
+  exist: "the write was sent, no response arrived, and the re-query is unreachable" is neither success nor failure.
+- **Restart recovery**: a half-finished change is classified by whether its idempotency key reached the database — no key
+  means the write never left (`FAILED`), a key means it may have applied (`UNCERTAIN`, confirm with the same id); an
+  interrupted rollback returns to `SUCCESS` so the operator can click rollback again.
+- **Change record (`agent_action`)**: one row holds everything a change is based on and produced — target, both weights,
+  expected revision, both idempotency keys, applied revision, requester / approver, preview diff, failure note, and a row
+  version (schema v4). Deleting the session removes it; retiring a task only nulls the foreign key, because the audit value
+  of a change outlives the link that created it.
+- **Workbench "Changes" card**: lists changes and only offers the buttons the server-side state allows (pending →
+  approve / reject; succeeded → rollback; uncertain → re-confirm). Execution is synchronous, so the response is terminal;
+  the UI never turns a change green optimistically — only the server's read-back decides whether it took effect.
 - Multi-turn follow-ups: AgentContextManager assembles "N most recent messages
   (`rover.agent.context.recent-message-limit`, default 8) + active incident + structured target + key evidence";
   TargetResolver resolves the object as "explicit input → existing routes and instances → model assistance →
@@ -458,8 +515,10 @@ catalogue described in §7.
   configuration / registry-event queries) are registered as READ_ONLY, planning may only choose among them, and the
   executor is the single data-access point
   between the model and production data; capabilities without a data adapter are marked unselectable. No write capability
-  exists anywhere in the catalogue, so a remediation request can only be answered with read-only facts and rationale
-  instead of a plan that pretends to be executable.
+  exists anywhere in the catalogue: writes go down a separate, much narrower chain — `RouteControlPort` (read state,
+  preview, adjust weight, query operation) → `RouteWeightActionExecutor` (triggered only by human approval). A remediation
+  request therefore still gets read-only facts and rationale, at most plus one pending change awaiting human approval —
+  never a plan that pretends to be executable.
 - The investigation chain is orchestrated by a Spring AI Alibaba StateGraph: a planner produces the plan (rule-based
   baseline, model candidates only, out-of-scope steps dropped) and the run advances through a
   PLAN → EXECUTE → EVALUATE loop, where the evaluate node decides whether to keep planning, clarify, or conclude; hitting
@@ -505,8 +564,10 @@ catalogue described in §7.
   task started, plan settled, every tool returned, round evaluated, synthesis done, task completed. The per-tool point
   is the important one: **tool calls are where the agent actually produces new facts**, so checkpointing only per
   planning round would re-run facts a crashed round had already collected. A crash in the middle of a tool call does
-  not advance the point; recovery repeats that one read-only call (harmless while everything is read-only — write
-  actions will have to go through operationId/idempotency confirmation instead).
+  not advance the point; recovery repeats that one read-only call (harmless while everything is read-only).
+  Write actions therefore never rely on resume points: the proposal tool does not advance one (redoing it would leave a
+  second pending card), and both commit and compensation persist their `operationId` before sending the request, so a
+  restart can classify a half-finished change as failed or uncertain by whether the key reached the database.
 - **A resume point stores the high-water mark, not a list**: `stage` names the business stage (`STARTED` / `PLANNED` /
   `TOOL_COMPLETED` / `ROUND_EVALUATED` / `SYNTHESIS_COMPLETED` / `COMPLETED`) plus round number, completed call count,
   and step/evidence counts. Which steps and evidence those are is read back from the relational tables by sequence —
@@ -520,11 +581,13 @@ catalogue described in §7.
   when the conclusion is composed. The task view's `evidence` is everything this run has collected; `result.evidence`
   is the same batch once a conclusion exists.
 - **Schema and its migration rule**: the agent tables (session / message / incident / task / step / evidence + safe
-  resume points) are the project's database schema baseline, managed through `agent_schema_migrations` (v1 creates the
-  aggregate, v2 drops the legacy JSON snapshot tables, v3 adds resume points). This is the only release allowed to
+  resume points + controlled change records) are the project's database schema baseline, managed through
+  `agent_schema_migrations` (v1 creates the aggregate, v2 drops the legacy JSON snapshot tables, v3 adds resume points,
+  v4 adds change records). This is the only release allowed to
   rebuild the schema; from here on, migrations are only ever added, never edited, and nobody is asked to wipe the
   database again. The references are foreign keys rather than conventions: session → incident → task → steps /
-  evidence / checkpoints, so deleting a session removes the whole chain and orphans cannot exist.
+  evidence / checkpoints, with changes hanging off both session and task, so deleting a session removes the whole chain
+  and orphans cannot exist.
 - Strict structured output plus failure classification: `JsonCompletion`'s parsing contract is now supplied by the
   caller (`Function<String, Optional<T>> parser`), and `LlmInvestigationPlanner` / `ModelTargetInterpreter` follow a
   strict contract — invalid JSON, or a value out of range, discards the whole result and falls back to the rule layer,
@@ -564,10 +627,16 @@ catalogue described in §7.
   agent going out to look on a schedule.
 - Record store off-box: today it is a local H2 per Admin instance, so replicas each write their own history; a shared
   time-series / log backend is needed before it counts as cross-host audit.
-- Graph checkpoint recovery and interrupt-based human approval.
+- Graph checkpoint recovery and interrupt-based human approval: the controlled change loop already has human approval
+  (a REST endpoint plus a state CAS), but it runs "execute after approval" rather than making approval an interrupt inside
+  the graph; the graph itself is still not wired to interrupt.
 - External SOP / Runbook retrieval: historical logs (`queryLogs`) and the built-in FAQ (`searchKnowledge`) are live, but
   loading a team's own runbooks and change records in bulk — real RAG with chunking, embeddings, and citations — is not.
-- Write actions, approval flow, audit, and post-execution verification.
+- Every other write action and the full governance layer: actions beyond gray-release weight adjustment (draining
+  instances, editing configuration, deleting routes, restarting), risk grading for actions, automatic approval and
+  automatic rollback, cross-host audit. The one action that is implemented uses the most conservative combination
+  available: a single action, the write path exposed only to the executor, mandatory human approval, a read-back before
+  success, and compensation through the same narrow primitive.
 
 ## 8. Difference from data-analytics agents
 
@@ -576,9 +645,9 @@ catalogue described in §7.
 | Role | Data analyst | SRE / operations diagnostician |
 | Typical question | Why did sales drop? | Why is the service returning 5xx? |
 | Core data | Database | Gateway + Instances + Metrics + Trace + record store + operations knowledge |
-| Core tools | SQL / Python | 9 read-only tools: Route / Instance / Metrics / Trace / Config / Events / Logs / Knowledge |
-| Output | Data analysis report | Incident diagnosis |
-| Action | Data analysis | Remediation (planned) |
+| Core tools | SQL / Python | 9 read-only tools: Route / Instance / Metrics / Trace / Config / Events / Logs / Knowledge (plus 1 tool that files a change for approval) |
+| Output | Data analysis report | Incident diagnosis (plus a remediation plan awaiting human approval) |
+| Action | Data analysis | Controlled remediation: one action today — gray-release weight adjustment, executed and read back after human approval (the rest is planned) |
 | Risk surface | SQL / data | Production infrastructure |
 | Goal | Insight | Diagnose + Remediate |
 

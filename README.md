@@ -54,7 +54,7 @@ Open Admin at <http://127.0.0.1:9090>. See the [Docker Compose demo](deploy/dock
 - **Mixed-language registration:** Java services can use the Starter; Node.js, Python, Go, PHP, and C++ can register through the HTTP+JSON API.
 - **Runtime visibility:** Admin shows routes, instances, recent events, sampled request traces, metrics, and hot-reloadable settings.
 - **Extension points without a heavy platform:** Java SPI filters and load-balancers cover common customization without introducing a full service mesh.
-- **Ops agent (preview):** Rover Ops Agent runs read-only fault investigation over Gateway and Nameserver runtime data and returns a conclusion, evidence sources, and collection timestamps; see [Rover Ops Agent](docs-public/ops-agent.md) for positioning and boundaries.
+- **Ops agent (preview):** Rover Ops Agent runs read-only fault investigation over Gateway and Nameserver runtime data and returns a conclusion, evidence sources, and collection timestamps. It can also file one kind of operational change — a gray-release weight adjustment — as a pending change that only executes after human approval, then verifies the result by reading the route back and can compensate with a rollback; see [Rover Ops Agent](docs-public/ops-agent.md) for positioning and boundaries.
 
 ## What It Solves
 

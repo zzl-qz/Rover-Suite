@@ -26,7 +26,7 @@ public class ChannelInactiveListener implements EventListener<ChannelInactiveEve
 
     @Override
     public void onEvent(ChannelInactiveEvent event) {
-        // 将这个channel从订阅表中移除（如果是GateWay的话通常只命令这一个）
+        // 将这个channel从订阅表中移除（如果是GateWay的话通常只命中这一个）
         services.getSubscriptionManager().removeChannel(event.getChannel());
         Set<BoundInstance> bound = NameserverChannelSupport.takeBoundInstances(event.getChannel());
         if (bound == null || bound.isEmpty()) {

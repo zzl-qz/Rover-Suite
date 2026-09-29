@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNote;
+import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionType;
+import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.AgentCheckpoint;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.AgentStepType;
@@ -26,15 +29,18 @@ import com.rover.agent.core.model.Step;
 import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.model.TaskStatus;
+import com.rover.agent.core.model.WeightRequestUnit;
 import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
+import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
+import com.rover.agent.core.util.Texts;
 import java.io.File;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
@@ -51,6 +57,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -84,6 +91,14 @@ public final class JdbcAgentStore implements AutoCloseable {
     private static final ObjectMapper JSON = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
     private static final String INTERRUPTED = "Admin 重启，调查已中断";
+    /** 重启恢复用语：提交前就断了，网关一定没收到写请求。 */
+    private static final String RESTART_NOT_SUBMITTED = "Admin 重启，这条变更在提交前中断：Gateway 未被改动，可以重新发起";
+    /** 重启恢复用语：幂等号已落库，写请求可能已经生效，只能按「结果未知」处理。 */
+    private static final String RESTART_UNKNOWN = "Admin 重启时这条变更还在执行中：写请求可能已经生效，"
+            + "请用同一操作号确认结果，不要重新执行";
+    /** 重启恢复用语：回滚没发出去，权重还是变更后的值。 */
+    private static final String RESTART_ROLLBACK_NOT_SUBMITTED = "Admin 重启，回滚在提交前中断："
+            + "当前权重仍是变更后的值，可以重试回滚";
     private static final TypeReference<List<Hypothesis>> HYPOTHESES = new TypeReference<>() { };
     private static final TypeReference<List<String>> STRINGS = new TypeReference<>() { };
     private static final TypeReference<Map<String, String>> METADATA = new TypeReference<>() { };
@@ -96,6 +111,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final Incidents incidents = new Incidents();
     private final Tasks tasks = new Tasks();
     private final Checkpoints checkpoints = new Checkpoints();
+    private final Actions actions = new Actions();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -110,6 +126,7 @@ public final class JdbcAgentStore implements AutoCloseable {
             connection = DriverManager.getConnection(jdbcUrl, "sa", "");
             migrate();
             recoverInterrupted();
+            recoverInterruptedActions();
         } catch (SQLException ex) {
             throw new IllegalStateException("打开 Agent 库失败: " + jdbcUrl, ex);
         }
@@ -134,6 +151,11 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     public AgentCheckpointRepository checkpoints() {
         return checkpoints;
+    }
+
+    /** 变更记录：提议、批准、执行与回滚的全过程都落在 agent_action 一行里。 */
+    public AgentActionRepository actions() {
+        return actions;
     }
 
     /** 资源笔记：有已确认根因的调查才会写，按资源键读一条。 */
@@ -385,7 +407,7 @@ public final class JdbcAgentStore implements AutoCloseable {
                 : new TimeRange(rows.getLong("time_from"), rows.getLong("time_to"));
         return new IncidentRow(rows.getString("incident_id"), rows.getString("session_id"),
                 IncidentOrigin.valueOf(rows.getString("origin")), IncidentStatus.valueOf(rows.getString("status")),
-                rows.getString("title"), nullToEmpty(rows.getString("summary")), readTarget(rows), timeRange,
+                rows.getString("title"), Texts.raw(rows.getString("summary")), readTarget(rows), timeRange,
                 rows.getLong("created_at"), rows.getLong("updated_at"));
     }
 
@@ -546,8 +568,139 @@ public final class JdbcAgentStore implements AutoCloseable {
         return new AgentCheckpoint(rows.getString("checkpoint_id"), rows.getString("task_id"),
                 rows.getInt("sequence_no"), CheckpointStage.valueOf(rows.getString("stage")), rows.getInt("round_no"),
                 rows.getInt("tool_call_count"), rows.getInt("last_step_sequence"),
-                rows.getInt("last_evidence_sequence"), nullToEmpty(rows.getString("resume_state_json")),
-                nullToEmpty(rows.getString("runtime_node")), rows.getLong("created_at"));
+                rows.getInt("last_evidence_sequence"), Texts.raw(rows.getString("resume_state_json")),
+                Texts.raw(rows.getString("runtime_node")), rows.getLong("created_at"));
+    }
+
+    // ---------------------------------------------------------------- 变更记录
+
+    /**
+     * 变更记录的落库实现。
+     *
+     * <p>{@link #transition} 用「带状态条件的 UPDATE + 影响行数」做 CAS，而不是先查再改：
+     * 返回 0 行就说明状态已经被别人改过（例如另一个人抢先批准），调用方据此放弃执行。
+     * 连接被 {@link JdbcAgentStore} 的同步块串行化，因此同一进程内不会出现两个线程同时看到
+     * PENDING_APPROVAL 的情况；SQL 里的状态条件则保证即使换多进程部署，语义也不会破。
+     */
+    private final class Actions implements AgentActionRepository {
+
+        @Override
+        public void save(AgentAction action) {
+            writeAction(action, null);
+        }
+
+        @Override
+        public Optional<AgentAction> find(String actionId) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore::readActionRow,
+                        actionId);
+            }
+        }
+
+        @Override
+        public List<AgentAction> bySession(String sessionId) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT * FROM agent_action WHERE session_id = ? ORDER BY created_at DESC, action_id",
+                        JdbcAgentStore::readActionRow, sessionId);
+            }
+        }
+
+        @Override
+        public Optional<AgentAction> transition(String actionId, ActionStatus expected,
+                                                UnaryOperator<AgentAction> mutation) {
+            synchronized (JdbcAgentStore.this) {
+                AgentAction current = queryOne("SELECT * FROM agent_action WHERE action_id = ?",
+                        JdbcAgentStore::readActionRow, actionId).orElse(null);
+                if (current == null || current.status() != expected) {
+                    return Optional.empty();
+                }
+                AgentAction moved = mutation.apply(current);
+                return writeAction(moved, expected) == 0 ? Optional.empty() : Optional.of(moved);
+            }
+        }
+
+        @Override
+        public int removeBySession(String sessionId) {
+            synchronized (JdbcAgentStore.this) {
+                return run("DELETE FROM agent_action WHERE session_id = ?", sessionId);
+            }
+        }
+    }
+
+    /**
+     * 写入一行变更记录：命中则更新，未命中则插入。
+     *
+     * @param expectedStatus 非空时作为更新的状态条件（CAS）；返回受影响行数，0 表示状态已被别人改过
+     */
+    private int writeAction(AgentAction action, ActionStatus expectedStatus) {
+        synchronized (JdbcAgentStore.this) {
+            Object[] values = {action.sessionId(), action.incidentId(), action.taskId(), action.type().name(),
+                    action.status().name(), action.routeId(), blankToNull(action.businessPrefix()),
+                    blankToNull(action.serviceName()), blankToNull(action.group()), action.beforeWeight(),
+                    action.desiredWeight(), action.requestedValue(), unitName(action.requestedUnit()),
+                    action.beforeTrafficPercent(), action.desiredTrafficPercent(),
+                    action.expectedRevision(), action.applyOperationId(),
+                    action.appliedRevision(), action.rollbackOperationId(), action.requestedBy(),
+                    action.approvedBy(), action.approvedAtMillis(), toJson(action.preview()), action.impact(),
+                    action.errorMessage(), action.createdAtMillis(), action.updatedAtMillis()};
+            String update = "UPDATE agent_action SET session_id = ?, incident_id = ?, task_id = ?, action_type = ?, "
+                    + "status = ?, route_id = ?, business_prefix = ?, service_name = ?, target_group = ?, "
+                    + "before_weight = ?, desired_weight = ?, requested_value = ?, requested_unit = ?, "
+                    + "before_traffic_percent = ?, desired_traffic_percent = ?, expected_revision = ?, "
+                    + "apply_operation_id = ?, "
+                    + "applied_revision = ?, rollback_operation_id = ?, requested_by = ?, approved_by = ?, "
+                    + "approved_at = ?, preview_json = ?, impact = ?, error_message = ?, created_at = ?, "
+                    + "updated_at = ?, version = version + 1 WHERE action_id = ?";
+            if (expectedStatus != null) {
+                return run(update + " AND status = ?", append(append(values, action.actionId()),
+                        expectedStatus.name()));
+            }
+            if (run(update, append(values, action.actionId())) > 0) {
+                return 1;
+            }
+            run("INSERT INTO agent_action (session_id, incident_id, task_id, action_type, status, route_id, "
+                            + "business_prefix, service_name, target_group, before_weight, desired_weight, "
+                            + "requested_value, requested_unit, before_traffic_percent, desired_traffic_percent, "
+                            + "expected_revision, apply_operation_id, applied_revision, rollback_operation_id, "
+                            + "requested_by, approved_by, approved_at, preview_json, impact, error_message, "
+                            + "created_at, updated_at, version, action_id) "
+                            + "VALUES (" + "?, ".repeat(values.length) + "1, ?)",
+                    append(values, action.actionId()));
+            return 1;
+        }
+    }
+
+    private static AgentAction readActionRow(ResultSet rows) throws SQLException {
+        return new AgentAction(rows.getString("action_id"), rows.getString("session_id"),
+                rows.getString("incident_id"), rows.getString("task_id"),
+                ActionType.valueOf(rows.getString("action_type")), ActionStatus.valueOf(rows.getString("status")),
+                Texts.raw(rows.getString("route_id")), Texts.raw(rows.getString("business_prefix")),
+                Texts.raw(rows.getString("service_name")), Texts.raw(rows.getString("target_group")),
+                rows.getInt("before_weight"), rows.getInt("desired_weight"),
+                rows.getInt("requested_value"), unitOrNull(rows, "requested_unit"),
+                rows.getDouble("before_traffic_percent"), rows.getDouble("desired_traffic_percent"),
+                rows.getInt("expected_revision"),
+                rows.getString("apply_operation_id"), intOrNull(rows, "applied_revision"),
+                rows.getString("rollback_operation_id"), rows.getString("requested_by"),
+                rows.getString("approved_by"), rows.getLong("approved_at"),
+                orEmpty(fromJson(rows.getString("preview_json"), STRINGS)), Texts.raw(rows.getString("impact")),
+                rows.getString("error_message"), rows.getLong("created_at"), rows.getLong("updated_at"));
+    }
+
+    /** 单位列：历史数据没有单位时存 NULL，读回来也是 null，不要退化成某个默认值。 */
+    private static String unitName(WeightRequestUnit unit) {
+        return unit == null ? null : unit.name();
+    }
+
+    private static WeightRequestUnit unitOrNull(ResultSet rows, String column) throws SQLException {
+        String value = rows.getString(column);
+        return value == null || value.isBlank() ? null : WeightRequestUnit.parse(value);
+    }
+
+    /** 可空整数列：列值为 NULL 时返回 null，而不是 0（0 是合法的版本号）。 */
+    private static Integer intOrNull(ResultSet rows, String column) throws SQLException {
+        int value = rows.getInt(column);
+        return rows.wasNull() ? null : value;
     }
 
     private List<TaskView> assembleAll(List<TaskRow> rows) {
@@ -561,7 +714,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         List<Evidence> evidence = query("SELECT * FROM agent_evidence WHERE task_id = ? "
                 + "ORDER BY sequence_no, evidence_id", JdbcAgentStore::readEvidence, row.taskId());
         return new TaskView(row.taskId(), row.sessionId(), row.incidentId(), row.status(), row.currentStage(),
-                nullToEmpty(row.path()), row.target(), row.question(), row.createdAtMillis(), row.completedAtMillis(),
+                Texts.raw(row.path()), row.target(), row.question(), row.createdAtMillis(), row.completedAtMillis(),
                 steps, assembleReport(row, evidence), row.error(), row.clarification(), row.taskType(),
                 fromJson(row.planJson(), InvestigationPlan.class), orEmpty(fromJson(row.executedJson(),
                         CAPABILITIES)), orEmpty(fromJson(row.recallsJson(), RECALLS)), evidence);
@@ -888,7 +1041,59 @@ public final class JdbcAgentStore implements AutoCloseable {
                             "ALTER TABLE agent_checkpoint ADD CONSTRAINT fk_agent_checkpoint_task "
                                     + "FOREIGN KEY (task_id) REFERENCES agent_task(task_id) ON DELETE CASCADE")),
                     List.of(new Index("idx_agent_checkpoint_task",
-                            "CREATE INDEX idx_agent_checkpoint_task ON agent_checkpoint(task_id, sequence_no)"))));
+                            "CREATE INDEX idx_agent_checkpoint_task ON agent_checkpoint(task_id, sequence_no)"))),
+            new Migration(4, "agent action: proposed, approved and verified route changes",
+                    List.of("CREATE TABLE IF NOT EXISTS agent_action ("
+                                    + "action_id VARCHAR(64) PRIMARY KEY, "
+                                    + "session_id VARCHAR(64) NOT NULL, "
+                                    + "incident_id VARCHAR(64), "
+                                    + "task_id VARCHAR(64), "
+                                    + "action_type VARCHAR(48) NOT NULL, "
+                                    + "status VARCHAR(32) NOT NULL, "
+                                    + "route_id VARCHAR(255) NOT NULL, "
+                                    + "business_prefix VARCHAR(255), "
+                                    + "service_name VARCHAR(255), "
+                                    + "target_group VARCHAR(128), "
+                                    + "before_weight INT NOT NULL, "
+                                    + "desired_weight INT NOT NULL, "
+                                    + "expected_revision INT NOT NULL, "
+                                    + "apply_operation_id VARCHAR(64), "
+                                    + "applied_revision INT, "
+                                    + "rollback_operation_id VARCHAR(64), "
+                                    + "requested_by VARCHAR(128), "
+                                    + "approved_by VARCHAR(128), "
+                                    + "approved_at BIGINT NOT NULL, "
+                                    + "preview_json TEXT, "
+                                    + "impact TEXT, "
+                                    + "error_message TEXT, "
+                                    + "created_at BIGINT NOT NULL, "
+                                    + "updated_at BIGINT NOT NULL, "
+                                    + "version BIGINT NOT NULL)"),
+                    List.of(
+                            new ForeignKey("fk_agent_action_session", "agent_action",
+                                    "ALTER TABLE agent_action ADD CONSTRAINT fk_agent_action_session "
+                                            + "FOREIGN KEY (session_id) REFERENCES agent_session(session_id) "
+                                            + "ON DELETE CASCADE"),
+                            // 任务被淘汰时把外键置空而不是删掉变更：变更的审计价值高于它的来路链接。
+                            new ForeignKey("fk_agent_action_task", "agent_action",
+                                    "ALTER TABLE agent_action ADD CONSTRAINT fk_agent_action_task "
+                                            + "FOREIGN KEY (task_id) REFERENCES agent_task(task_id) "
+                                            + "ON DELETE SET NULL")),
+                    List.of(
+                            new Index("idx_agent_action_session",
+                                    "CREATE INDEX idx_agent_action_session ON agent_action(session_id, created_at)"),
+                            new Index("idx_agent_action_status",
+                                    "CREATE INDEX idx_agent_action_status ON agent_action(status)"))),
+                // 审批卡上被批准的到底是「权重 20」还是「20% 流量」，事后只能靠这几列回答：
+                // desired_weight 只是换算结果，不能反推用户意图。
+                new Migration(5, "agent action: keep requested value, its unit and traffic percent preview",
+                        List.of(
+                                "ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS requested_value INT",
+                                "ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS requested_unit VARCHAR(24)",
+                                "ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS before_traffic_percent DOUBLE",
+                                "ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS desired_traffic_percent DOUBLE"),
+                        List.of(),
+                        List.of()));
 
     private void migrate() throws SQLException {
         // applied_at 用毫秒时间戳：与业务表同一口径，也不依赖各驱动对 TIMESTAMP 的绑定细节。
@@ -971,7 +1176,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         String expected = name.toLowerCase(Locale.ROOT);
         Set<String> found = new HashSet<>();
         for (String table : List.of("agent_message", "agent_incident", "agent_task", "agent_step", "agent_evidence",
-                "agent_checkpoint")) {
+                "agent_checkpoint", "agent_action")) {
             for (String candidate : List.of(table, table.toUpperCase(Locale.ROOT))) {
                 try (ResultSet indexes = metadata.getIndexInfo(null, null, candidate, false, false)) {
                     while (indexes.next()) {
@@ -1008,6 +1213,41 @@ public final class JdbcAgentStore implements AutoCloseable {
                                 + "version = version + 1 WHERE task_id = ?",
                         TaskStatus.INTERRUPTED.name(), reason, now, now, row.taskId());
                 log.warn("任务 {} 在重启前仍在执行，已标记为中断（{}）", row.taskId(), reason);
+            }
+        }
+    }
+
+    /**
+     * 重启恢复：把「停在半路」的变更挪到一个诚实的终态。
+     *
+     * <p>判断依据只有一条——<b>幂等号有没有落库</b>。它是在发请求之前写的，因此：
+     * 没有号说明写请求根本没发出去，可以确定地判为「没生效」；有号说明请求可能已经生效，
+     * 只能判为「结果未知」，让人用同一个号去确认。
+     *
+     * <p>回滚中断是唯一需要退回 {@link ActionStatus#SUCCESS} 的情况：那条变更确实生效过，
+     * 只是补偿没发出去，人还能再点一次回滚。
+     */
+    private void recoverInterruptedActions() {
+        synchronized (this) {
+            long now = System.currentTimeMillis();
+            int unsent = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
+                            + "version = version + 1 WHERE status = ? AND apply_operation_id IS NULL",
+                    ActionStatus.FAILED.name(), RESTART_NOT_SUBMITTED, now, ActionStatus.EXECUTING.name());
+            int unknown = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
+                            + "version = version + 1 WHERE status IN (?, ?) AND apply_operation_id IS NOT NULL",
+                    ActionStatus.UNCERTAIN.name(), RESTART_UNKNOWN, now, ActionStatus.EXECUTING.name(),
+                    ActionStatus.VERIFYING.name());
+            int rollbackUnsent = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
+                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NULL",
+                    ActionStatus.SUCCESS.name(), RESTART_ROLLBACK_NOT_SUBMITTED, now,
+                    ActionStatus.ROLLING_BACK.name());
+            int rollbackUnknown = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
+                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NOT NULL",
+                    ActionStatus.UNCERTAIN.name(), RESTART_UNKNOWN, now, ActionStatus.ROLLING_BACK.name());
+            if (unsent + unknown + rollbackUnsent + rollbackUnknown > 0) {
+                log.warn("重启前有 {} 条变更停在执行中：{} 条未提交（判为失败）、{} 条结果未知（待确认）",
+                        unsent + unknown + rollbackUnsent + rollbackUnknown,
+                        unsent + rollbackUnsent, unknown + rollbackUnknown);
             }
         }
     }
@@ -1130,9 +1370,6 @@ public final class JdbcAgentStore implements AutoCloseable {
         return value == null || value.isBlank() ? null : value;
     }
 
-    private static String nullToEmpty(String value) {
-        return value == null ? "" : value;
-    }
 
     private static ResourceTarget targetOf(ResourceTarget target) {
         return target == null ? ResourceTarget.unknown() : target;
@@ -1141,7 +1378,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private static ResourceTarget readTarget(ResultSet rows) throws SQLException {
         String type = rows.getString("target_type");
         return type == null ? ResourceTarget.unknown()
-                : new ResourceTarget(TargetType.valueOf(type), nullToEmpty(rows.getString("target_key")));
+                : new ResourceTarget(TargetType.valueOf(type), Texts.raw(rows.getString("target_key")));
     }
 
     private static AgentStepType stepType(String value) {

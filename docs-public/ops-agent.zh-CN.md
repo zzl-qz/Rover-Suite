@@ -45,8 +45,8 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 | :--- | :--- | :--- |
 | Detect（发现异常） | 监控 / 告警系统通过 `POST /api/agent/events/ingest` 送进来 | 已实现（被动接入）；主动定时巡检未实现 |
 | Investigate → Diagnose（调查与诊断） | **Agent 的核心价值** | 进行中（只读调查链已用 Graph 编排，含假设验证） |
-| Recommend（处置建议） | Agent | 规划中（当前只给只读事实与判断依据，不产出处置计划） |
-| Approve / Execute / Verify（审批、受控执行、验证） | Agent，需配套治理层 | 规划中 |
+| Recommend（处置建议） | Agent | 已实现（唯一一种动作：灰度版本权重调整。Agent 只能把建议写成待审批变更，不执行） |
+| Approve / Execute / Verify（审批、受控执行、验证） | Agent，需配套治理层 | 进行中（批准 → 状态预检 → 乐观锁提交 → 回读验证 → 补偿回滚，已按一个动作打通） |
 
 ## 4. 能力分级
 
@@ -74,14 +74,18 @@ Agent 能制定调查计划、动态选择工具、关联多条证据、排除�
 两条路径的「选择权」不同，边界相同：调查路径由规划器产出计划、由执行器执行、由评估节点按证据决定
 「继续规划 / 澄清 / 出结论」；会话主路径把这一步交给模型。不变的是——两者都只能从同一份能力注册表里挑已接入的 READ_ONLY 能力，
 规划轮数、能力调用次数与计划步数三条硬边界由代码执行而不是提示词，
-触顶即停止采集并在结论中如实说明。写操作尚不存在：既没有可执行的处置动作，也没有「只生成不执行」的处置计划——
-留一份不存在的计划只会让人分不清「支持」还是「曾经规划过」，等真正做受控执行时再按实际存在的写接口设计。
+触顶即停止采集并在结论中如实说明。处置计划只在一个真实存在的写原语上开放——灰度版本权重调整（见 §7），
+且模型能做的只有「登记一张待人工审批的变更单」：提交、验证与补偿由确定性执行器完成。其余动作（摘实例、改配置、重启、增删路由）
+仍然没有写接口，也不产出「只生成不执行」的计划——留一份不存在的计划只会让人分不清「支持」还是「曾经规划过」。
 
 ### Level C：Act（执行）
 
 Agent 能在授权后执行有限的运维动作，例如摘除异常实例、调整路由、修改限流规则、触发回滚。
 
-**状态：规划中。** 该级别必须配套 Policy、RBAC、风险分级、人工审批、幂等、回滚与结果验证，缺一不可。
+**状态：进行中（第一个动作已打通，见 §7「受控变更闭环」）。** 当前唯一可执行的动作是 `ADJUST_ROUTE_TARGET_WEIGHT`
+（调整某个灰度版本的流量权重）：模型只负责开出待审批变更单，人工批准后才由 `RouteWeightActionExecutor` 做
+「状态预检 → 乐观锁提交 → 回读验证」，补偿回滚走同一个窄原语。Policy、RBAC 与风险分级仍是规划中——
+这一版靠「动作面只开一个、写权限只给执行器、变更必须人工批准」把风险压低，而不是假装治理层已经齐了。
 
 ## 5. 两个入口
 
@@ -98,14 +102,15 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
   模型自己决定查什么、查几次、按什么顺序                synthesise
         │                                    （假设：确认 / 排除 / 无法验证 → 结论）
         ↓                                              ↓
-  9 个只读工具（见 §7）→ 事实 + 依据 + 局限          假设式 Root Cause
+  9 个只读工具 + 1 个提案工具（见 §7）→ 事实 + 依据 + 局限   假设式 Root Cause
         │
         ↓
   边查边答，结论作为一条 Agent 回复写回会话
 ```
 
 两条路径的取数口是同一个 `CapabilityExecutor`：模型与告警都无法越过它直连管理接口。区别在于「谁决定查什么」——
-对话路径交给模型（9 个工具 + 调用预算），调查路径交给规划器（注册表里挑已接入能力，带假设验证）。
+对话路径交给模型（9 个只读工具 + 1 个提案工具，共用同一份调用预算），调查路径交给规划器（注册表里挑已接入能力，带假设验证）。
+提案工具不取数、也不写网关，它只登记一条待人工审批的变更，因此不改变「取数必须经 CapabilityExecutor」这条边界。
 
 会话主路径不再先判「状态查询 / 故障调查 / 能力说明」再各走一套：一句话里问了几件事就查几次，答不了的那件如实说
 「这一部分没查到」，不会因为其中一件事答不出就整句放弃。
@@ -165,8 +170,8 @@ rover-agent-core（纯 Java：领域对象、只读端口、中立快照、诊�
 | :--- | :--- | :--- |
 | `rover-agent-core` | `com.rover.agent.core.model` | Session / Incident / AgentMessage / Task / Step / Evidence / Hypothesis / InvestigationReport / TaskView / ResourceTarget / TaskType / AgentStepType |
 | | `com.rover.agent.core.snapshot` | 中立只读快照：RouteSnapshot / RouteUpstreamSnapshot / InstanceSnapshot / GatewayMetricSnapshot / TraceSnapshot / TraceRow / ConfigEntrySnapshot / RegistryEventSnapshot / DiscoveryMode |
-| | `com.rover.agent.core.port` | 只读端口：RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort / ConfigReadPort / EventReadPort / LogQueryPort / KnowledgeReadPort（后两者配套 LogRequest / LogEntry / KnowledgeEntry）；数据不可用抛 SnapshotUnavailableException |
-| | `com.rover.agent.core.repository` | 存储接口：AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository（内存 / 持久化实现可替换） |
+| | `com.rover.agent.core.port` | 只读端口：RouteReadPort / InstanceReadPort / MetricReadPort / TraceReadPort / ConfigReadPort / EventReadPort / LogQueryPort / KnowledgeReadPort（后两者配套 LogRequest / LogEntry / KnowledgeEntry）；数据不可用抛 SnapshotUnavailableException。唯一的写端口是 `RouteControlPort`（读状态 / 预览 / 调权重 / 查操作四个方法），它只被确定性执行器使用 |
+| | `com.rover.agent.core.repository` | 存储接口：AgentSessionRepository / AgentMessageRepository / IncidentRepository / AgentTaskRepository / AgentCheckpointRepository / AgentActionRepository（内存 / 持久化实现可替换） |
 | | `com.rover.agent.core.context` | AgentContextManager（最近 N 条消息 + 当前事件 + 结构化目标 + 关键证据）、TargetResolver / ResourceTarget（显式指定 → 现有路由与实例 → 模型辅助 → 澄清） |
 | | `com.rover.agent.core.investigation` | RouteMatcher / EvidenceNarrator / InvestigationRules（纯函数，可脱离框架单测） |
 | | `com.rover.agent.core.capability` | CapabilityDescriptor / CapabilityRegistry / CapabilityExecutor / CapabilityResult / AgentGrounding（环境画像与术语表）/ UntrustedText（不可信内容哨兵围栏）：能力清单与唯一的只读执行口 |
@@ -175,19 +180,21 @@ rover-agent-core（纯 Java：领域对象、只读端口、中立快照、诊�
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph：plan / execute / evaluate / clarify / synthesise 节点与循环条件边、结论合成 |
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner：规则打底 + 模型候选，越界步骤由 PlanValidator 丢弃 |
 | | `com.rover.agent.runtime.task` | 任务生命周期、Session / Incident 登记（只走存储接口；容量上限只对内存实现有意义） |
-| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`：会话 / 消息 / 事件 / 任务 / 步骤 / 证据 / 安全恢复点的关系表实现（`agent_*` 七张表，版本化迁移、一次快照一次事务、外键不留孤儿），`AgentStore` 负责装配；另有线程安全内存实现，作为未配记录库路径时的退路 |
-| | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型；OpsTools：9 个只读工具（对话主路径的数据入口） |
+| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`：会话 / 消息 / 事件 / 任务 / 步骤 / 证据 / 安全恢复点 / 受控变更记录的关系表实现（`agent_*` 八张表，版本化迁移、一次快照一次事务、外键不留孤儿、启动时把半途的变更判成失败或结果未知），`AgentStore` 负责装配；另有线程安全内存实现，作为未配记录库路径时的退路 |
+| | `com.rover.agent.runtime.action` | `AgentActionService`（提议 / 批准 / 拒绝 / 回滚 / 结果确认，状态迁移用 CAS 抢）+ `RouteWeightActionExecutor`（唯一写网关的确定性代码）+ `ActionDraft` / `RouteLocator` |
+| | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型；OpsTools：9 个只读工具 + 1 个提案工具（对话主路径的数据入口与唯一建议入口） |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`：内置运维知识库，`KnowledgeReadPort` 的默认实现 |
 | | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / ModelTargetInterpreter / SpringAiJsonCompletion / QuickModelCall，对话侧另有 ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway（模型适配与未配置时的诚实降级） |
-| `rover-admin` | `com.rover.admin.agent.adapter` | 6 个只读适配器：Route / Instance / Metric / Trace / Config / Event → 端口，不触发任何写操作 |
+| `rover-admin` | `com.rover.admin.agent.adapter` | 6 个只读适配器：Route / Instance / Metric / Trace / Config / Event → 端口，不触发任何写操作；另有 `AdminRouteControlAdapter`（RouteControlPort 的管理口实现，只服务受控变更链路） |
 | | `com.rover.admin.log` | `RecordStoreLogQueryAdapter`（`LogQueryPort` 的实现，把字符串类型映射回 `RecordType` 查落盘记录库）与 TelemetryCollector（周期拉取 Gateway / Nameserver 运行态写入记录库，详见 6.2） |
-| | `com.rover.admin.agent` | AgentController（会话 / 消息 / 任务 / 事件契约）+ 组合根 |
+| | `com.rover.admin.agent` | AgentController（会话 / 消息 / 任务 / 事件契约）+ AgentActionController（变更的审批 / 拒绝 / 回滚 / 确认）+ 组合根 |
 
 **边界规则：**
 
 - `rover-agent-core` 不依赖 Spring / Jackson / Spring AI：Admin 管理口的 JSON 形状只在 `rover-admin` 的适配器里解析，
   核心规则用中立快照表达，因此可以直接单测，将来换数据源也不必改核心。
-- 只读是结构性的：端口接口只有读方法，运行层拿不到 `saveRoute / deleteRoute / updateConfig`。
+- 只读是结构性的：只读端口只有读方法，运行层拿不到 `saveRoute / deleteRoute / updateConfig`；唯一的写端口 `RouteControlPort`
+  只有「读状态 / 预览 / 调权重 / 查操作」，没有增删路由与改配置——能力边界落在接口上，而不是落在提示词或代码评审里。
 - Spring AI 与 Graph 依赖只出现在 `rover-agent-runtime` 与 `rover-admin` 两个模块；Admin 侧负责模型配置装配，便于后续把 Agent 挪到独立进程。
 - 父工程 `spring-boot.version` 保持 3.2.0 不变：`rover-agent-runtime` 与 `rover-admin` 各自在模块内导入
   Spring Boot 4.1.1 与 Spring AI 2.0.1 BOM，互不影响。
@@ -324,7 +331,7 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 
 - 对话主路径 `ToolLoopService`（模型自主取数）：一次提问进来后，**由模型自己决定查什么、查几次、按什么顺序查**，
   不存在「先判断这句话属于查询、解释还是调查，再分流」的中间层——那正是已从主链上撤下的旧做法，现在连代码都不在了。每次工具调用都是一次真实取数，
-  工具的共同执行体仍是 `CapabilityExecutor`——模型拿不到管理接口凭证，也没有任何写权限。共 9 个只读工具，
+  工具的共同执行体仍是 `CapabilityExecutor`——模型拿不到管理接口凭证。共 9 个只读工具，
   与能力注册表一一对应：
 
   | 工具 | 读到什么 | 对应能力 |
@@ -342,6 +349,40 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
   也不会把「追踪无记录」当成「没有问题」。调用预算由两侧同时兜：`OpsTools.MAX_CALLS`（30）与
   `spring.ai.tools.limits.max-total-tool-calls`（30）保持一致，单工具默认上限 10；模型不可用时不假降级到规则流程，
   而是如实回「当前没有可用的模型，请在模型配置页填好后重试」——这条路径的每次取数与每句结论都出自模型，冒充不了。
+
+  第 10 个工具是唯一的非只读入口，名字就是边界：`proposeTargetWeightChange(route, group, desiredWeight)`
+  ——「propose」不是「execute」。它读一次路由、核对版本目标与当前权重，然后登记一条 `PENDING_APPROVAL` 变更并返回
+  「尚未执行」的说明；<b>它没有任何路径能走到写接口</b>（`OpsToolsProposalTest` 用一个「写方法一被调用就失败」的假网关把这一点固定下来）。
+  它也刻意不推进安全恢复点：恢复点的前提是「重做不产生副作用」，而这条调用会写库，重做会多出一张待审批卡。
+- **受控变更闭环（`ADJUST_ROUTE_TARGET_WEIGHT`，第一个也是当前唯一一个动作）**：模型提议 → 待审批 → 人工批准 →
+  确定性执行 → 回读验证 → 补偿回滚，每一环都有对应的状态与代码：
+  - **Observe / Plan**：`proposeTargetWeightChange` 读一次当前路由（含 revision 与各版本权重），登记一条
+    `PENDING_APPROVAL` 变更，**Gateway 一个字节都不会被改动**。路由没匹配上、版本不存在、权重已经是目标值，
+    都返回一句有依据的「为什么提不了」，不硬凑一张卡出来。
+  - **Approve**：`POST /api/agent/actions/{actionId}/approve|reject|rollback|resolve`。「待审批 → 执行中」是一次
+    原子状态迁移（`AgentActionRepository.transition` 的状态 CAS），因此连点三下只会执行一次；变更归属创建它的会话用户，
+    别人的变更对当前用户按不存在处理（404）。
+  - **Precondition**：重新读整表，核对 revision、目标是否还在、当前权重是否仍等于提议时的值。审批卡可能在人面前放了十分钟，
+    这十分钟里别人改过的路由不能被这张卡覆盖——不一致就落 `PRECONDITION_FAILED`，**不发出任何写请求**。
+  - **Execute**：预览（候选整表交网关校验并比对差异，不落盘、不生效）→ **先把 `operationId` 落库再发请求** →
+    用提议时读到的 revision 提交。
+  - **Verify**：网关返回 200 只代表请求生效，目标是否达成必须自己回读确认；回读不一致就是 `FAILED`——不回读就报成功等于谎报。
+  - **Rollback**：补偿动作，不是整表回滚。只把这一次改过的那个目标改回 `beforeWeight`，并用**当前** revision 提交；
+    整表退回旧版本会把别人在这之后的修改一起抹掉。
+- **`revision` 与 `operationId` 解决的是两个不同的问题**：前者是乐观锁（防止用旧状态覆盖别人的修改，冲突由网关返回 409，
+  变更落 `PRECONDITION_FAILED`），后者是幂等（防止同一次操作因为重试而执行两遍）。因此请求超时之后的唯一正确动作是
+  **用原 operationId 回查**：确认 `APPLIED` 就接着验证，确认没生效才谈重试，连回查都不可达则落 `UNCERTAIN`（结果未知）——
+  绝不换一个号重新提交，那正是「同一个变更被执行两次」的来源。
+- **执行器里没有模型**：`RouteWeightActionExecutor` 是纯确定性代码（预检、CAS、调用、回查、验证），
+  它写下的每个状态都由程序验证过的事实支撑。`UNCERTAIN` 因此是一个必须存在的状态：
+  「写请求已发出、但没拿到响应且回查不可达」既不是成功也不是失败，只能如实说结果未知。
+- **重启恢复**：停在半路的变更按「幂等号有没有落库」处理——没有号说明写请求根本没发出去（判 `FAILED`），
+  有号说明可能已经生效（判 `UNCERTAIN`，用同一个号确认）；回滚中断则退回 `SUCCESS`，人还能再点一次回滚。
+- **变更记录（`agent_action`）**：一行记录一次变更的全部依据与结果——对象、两端权重、期望 revision、两个幂等号、
+  生效 revision、提议人 / 批准人、预览差异、失败说明与行版本号（Schema v4）。会话被整组清理时连带删除，
+  任务被淘汰时只把外键置空：变更的审计价值高于它的来路链接。
+- **Workbench「变更与处置」卡片**：逐条展示变更，只在服务端状态允许时才给按钮（待审批 → 批准 / 拒绝；已完成 → 回滚；
+  结果未知 → 重新确认）。执行是同步的，返回即终态；前端不做「先乐观变绿」——变更有没有生效只能由服务端的回读说了算。
 - Admin「Agent 工作台」+ 会话式接口：`POST/GET /api/agent/sessions`、`POST /api/agent/sessions/{sessionId}/messages`、`GET /api/agent/sessions/{sessionId}/workspace`、`GET /api/agent/tasks/{taskId}`、`GET /api/agent/tasks/{taskId}/events`（SSE）；
   旧 `/api/agent/diagnoses*` 入口已随 `DiagnosisController` 一并移除，只保留会话式入口。
 - 多轮追问：AgentContextManager 装配「最近 N 条消息（`rover.agent.context.recent-message-limit`，默认 8）+ 当前事件 + 结构化目标 + 关键证据」；
@@ -359,11 +400,13 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 - 运行证据落库与遥测采集（详见 §6.2）：配置变更 / 回滚 / 写失败、组件与实例健康翻转、按周期聚合的指标采样、慢与 5xx 链路
   都写进本地记录库，与用户是否提问无关。实时数据仍走管理口，历史证据才走 `queryLogs`。
 - 能力注册表与只读执行器：可用能力（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件 / 历史日志 / 运维知识检索）统一登记为 READ_ONLY 能力，规划只能从中选择，
-  执行器是模型与生产数据之间唯一的取数口；未接入数据适配器的能力标记为不可选。能力清单里没有任何写能力，处置类请求因此只能得到只读事实与依据，而不是一份假装可执行的计划。
+  执行器是模型与生产数据之间唯一的取数口；未接入数据适配器的能力标记为不可选。能力清单里没有任何写能力：
+  写只走另一条、独立得多的链——`RouteControlPort`（只有读状态、预览、调权重、查操作四个方法）→ `RouteWeightActionExecutor`（只由人工批准触发）。
+  因此处置类请求拿到的仍是只读事实与依据，最多再加一张待人工批准的变更单，而不是一份假装可执行的计划。
 - 调查链由 Spring AI Alibaba StateGraph 编排：调查计划由规划器产出（规则打底、模型只提候选，越界步骤被丢弃），
   按「PLAN → EXECUTE → EVALUATE」循环推进，评估节点按证据决定继续规划、澄清还是出结论，触顶（`rover.agent.planning.*`）时停止并在结论中标注。
 - 假设驱动结论：逐条确认或排除候选故障原因，每条假设标注状态（确认 / 排除 / 无法验证）、说明与证据来源。
-- 诊断全程只读，不修改路由与配置。
+- 诊断全程只读：不修改路由与配置。唯一的写路径是人工批准后的灰度权重变更（见上），它由确定性执行器完成，模型既不能触发也不能确认。
 - 控制台「模型配置」页可填写 OpenAI 兼容服务，保存即生效、无需重启 Admin；环境变量 `ROVER_AGENT_MODEL_CHAT` / `ROVER_AGENT_API_KEY` / `ROVER_AGENT_BASE_URL` / `ROVER_AGENT_MODEL` 只在首次启动、尚无模型配置文件时用于播种，之后以页面保存的配置为准。页面另支持连接测试（不保存）与验证已生效配置（`POST /api/model/verify` 回带生效版本号 `buildId` 与生效时间，可证明生效的正是刚保存的配置）。
 - 模型未配置或不可用时的两种诚实降级：**对话主路径不做假降级**——它的每次取数与每句结论都由模型产出，因此直接回
   「当前没有配置可用的模型，请在模型配置页填好后重试」并用 `LOW` 结掉任务；调查链（Graph）仍会退化为纯规则诊断
@@ -375,10 +418,12 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 - 「AI 解读」边生成边推送：`ModelExplainer` 用流式调用把增量交给任务，Admin 通过 SSE 实时下发；最终全文仍落回任务结果，前端断线由轮询兜底。采集与规则判定是阻塞的 Graph 链路，不参与流式。
 - 结论会作为一条 Agent 回复落进会话，且在任务定型之前写入：客户端收到 `TASK_COMPLETED` 后重新拉取会话，看到的就是答案本身，而不是「已开始 / 已继续调查…」的受理播报。对话路径的结论就是模型的回答全文，置信度如实记为 `MEDIUM`（事实有据可查，推理仍出自模型）；调查路径才会优先取模型解读、没有解读时回落规则结论。结论回调失败只 WARN，不会把已经跑完的任务判成失败。
 - 每次提问都会落到 Session 之下，并尽力把这次任务挂到一个 Incident（解析出对象就按对象归集：同对象沿用、换对象另开；纯闲聊不建事件）。会话、消息、事件、任务、步骤与证据都写进记录库，**重启后仍可查询**，历史会话可以直接打开回看。重启时仍在执行（PENDING / RUNNING）的任务由存储层标成 `INTERRUPTED`（中断，不是失败）：已采集的步骤与证据原样保留，`error` 里写明最近的安全恢复点，「已中断」与「失败」的区别就是前者能接着来；停在澄清点的任务保持原样。
-- **安全恢复点（`agent_checkpoint`）是业务级契约，不是框架状态快照**：恢复点定义成「截至这里，一切已确定，可以安全从这里继续」，落点只有六个——任务开始、计划定稿、每次工具返回、每轮评估完成、结论合成、任务完成。每个工具成功返回后推进一次是核心落点：**工具调用才是 Agent 产生新事实的地方**，只按「每轮规划」记点会让一轮里已经查过的事实重跑一遍。崩在工具调用途中的话恢复点不会前进，恢复时重做这一次只读调用即可（只读工具重做不产生副作用，将来接写操作时必须改走 operationId 幂等确认）。
+- **安全恢复点（`agent_checkpoint`）是业务级契约，不是框架状态快照**：恢复点定义成「截至这里，一切已确定，可以安全从这里继续」，落点只有六个——任务开始、计划定稿、每次工具返回、每轮评估完成、结论合成、任务完成。每个工具成功返回后推进一次是核心落点：**工具调用才是 Agent 产生新事实的地方**，只按「每轮规划」记点会让一轮里已经查过的事实重跑一遍。崩在工具调用途中的话恢复点不会前进，恢复时重做这一次只读调用即可（只读工具重做不产生副作用）。
+写操作因此**不靠恢复点**，而靠自己的幂等号：提案工具不推进恢复点（重做会多出一张待审批卡），变更的提交与补偿都先把
+`operationId` 落库再发请求，重启时按「幂等号有没有落库」把半途的变更判成失败或结果未知。
 - **恢复点存高水位，不存清单**：`stage` 只描述业务阶段（`STARTED` / `PLANNED` / `TOOL_COMPLETED` / `ROUND_EVALUATED` / `SYNTHESIS_COMPLETED` / `COMPLETED`），再加轮数、已调用次数、步骤条数与证据条数；具体是哪些步骤与证据按序号从关系表读回来，不在这里复制 ID 列表。图节点名只作诊断字段（`runtime_node`），恢复流程不依赖它——换框架、改节点名都不能影响恢复语义。`resume_state_json` 留给「无法从关系表重建的运行态」，本轮两条路径的运行态都能重建，因此先留空，不写没有来源的内容。
 - **恢复点与事实同一次写入**：任务状态、步骤、证据与恢复点在一个事务里落下，所以不会出现「恢复点说证据 3 条、库里只有 2 条」这种恢复时才暴露的坏状态。证据也因此改成**增量落库**：工具一返回就随恢复点落库，不再等结论合成时一次性补写；任务视图上的 `evidence` 是「本次已取到的全部证据」，结论里的 `result.evidence` 是同一批。
-- **Schema 与迁移约定**：Agent 聚合的表（会话 / 消息 / 事件 / 任务 / 步骤 / 证据 + 安全恢复点）是本项目数据库 Schema 的起点，按 `agent_schema_migrations` 版本化迁移管理（v1 建聚合表、v2 删旧 JSON 快照表、v3 加恢复点）。这一版是唯一允许清库重建的版本；此后只新增迁移、不改已发布的迁移，也不再要求使用者清库。关系是外键而不是约定：会话指向事件、事件指向任务、任务指向步骤与证据与恢复点，删会话连带清掉整条链，因此不存在孤儿与悬空引用。
+- **Schema 与迁移约定**：Agent 聚合的表（会话 / 消息 / 事件 / 任务 / 步骤 / 证据 + 安全恢复点 + 受控变更记录）是本项目数据库 Schema 的起点，按 `agent_schema_migrations` 版本化迁移管理（v1 建聚合表、v2 删旧 JSON 快照表、v3 加恢复点、v4 加变更记录）。这一版是唯一允许清库重建的版本；此后只新增迁移、不改已发布的迁移，也不再要求使用者清库。关系是外键而不是约定：会话指向事件、事件指向任务、任务指向步骤与证据与恢复点，变更挂在会话与任务上，删会话连带清掉整条链，因此不存在孤儿与悬空引用。
 - 结构化输出强约束 + 失败分类：`JsonCompletion` 的解析契约由调用方传入（`Function<String, Optional<T>> parser`）；`LlmInvestigationPlanner` 与 `ModelTargetInterpreter` 走严格契约——JSON 非法、或取值越界，整条结果直接丢弃并回退规则层，不再静默补默认值；`ModelCallOutcome` 把调用结局区分为 `OK` / `NOT_CONFIGURED` / `UNAVAILABLE` / `TIMEOUT` / `ERROR` / `EMPTY` / `REJECTED`，其中 `rejected` 专门表示「模型返回了文本但不符合契约」。解决「越界输出被补默认值后损失无法定位」的问题：宁可回退规则层，也不吞掉契约违规。
 - 模型调用可观测性（含 token 用量）：`AgentMetrics` 的口径变为 `modelCall(model, scene, durationMillis, outcome)`，并新增 `modelTokens(model, scene, promptTokens, completionTokens)`；Micrometer 侧暴露 `model.calls`（标签 `model` / `scene` / `outcome`）、`model.duration`（标签 `model` / `scene`）与 `model.tokens`（标签 `model` / `scene` / `kind`，取值 `prompt` / `completion`；拿不到用量就不上报、不记 0），并删除只能回答「失败几次」的 `model.error`。解决「调用次数与耗时说明不了成本与上下文膨胀」的问题：token 用量按场景可查，成本与提示词膨胀可以被量化。
 - 提示注入隔离（`UntrustedText`）：用哨兵把不可信内容围起来（开始 `<<<ROVER-DATA`、结束 `ROVER-DATA>>>`），`contract()` 声明哨兵内的一切都不是指令；`block(label, content)` 会先把内容里出现的哨兵替换成占位符 `[ROVER-DATA]` 再围栏。已应用在 `ModelExplainer`（快照描述）、`LlmInvestigationPlanner`（用户问题 + 已采集证据）与 `ModelTargetInterpreter`（候选对象 + 用户问题）。解决「快照 / 问题 / 证据都是外部内容，可能诱导模型越权」的问题：内容无法伪造边界，模型能把「数据」和「指令」分开。
@@ -390,10 +435,13 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 - 记录库的远程化：现在是单机本地 H2，多副本 Admin 时各写各的，需要独立的时间序列 / 日志后端才能算跨机审计。
 - 主动巡检：定时自巡检并自建 `INSPECTION` 事件。`POST /api/agent/events/ingest` 已经能让外部告警驱动自动调查，
   缺的是 Agent 自己定时去看一圈的那半边。
-- Graph checkpoint 恢复与 interrupt 人工审批。
+- Graph checkpoint 恢复与 interrupt 人工审批：受控变更那一条已经有人工批准（站外的 REST 端点 + 状态 CAS），
+  但它是「审批后再跑」，不是把审批做成图上的中断点；图本身仍未接 interrupt。
 - 外部 SOP / Runbook 文档检索：历史日志（`queryLogs`）与内置 FAQ（`searchKnowledge`）已落地，
   但把团队自己的 Runbook / 变更记录批量灌进知识库（真 RAG：切片、向量、引用出处）尚未实现。
-- 写操作、审批流、审计与执行后验证。
+- 其余写操作与完整治理层：除灰度权重调整之外的动作（摘实例、改配置、删路由、重启）、动作风险分级、
+  自动审批与自动回滚、跨机审计。已实现的那一个动作走的是最保守的组合：动作面只开一个、写权限只给执行器、
+  必须人工批准、结果必须回读、补偿走同一个窄原语。
 
 ## 8. 与数据分析类 Agent 的区别
 
@@ -402,9 +450,9 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 | 角色 | 数据分析师 | SRE / 运维诊断员 |
 | 典型问题 | 销售额为什么下降？ | 服务为什么 5xx？ |
 | 核心数据 | Database | Gateway + Instances + Metrics + Trace + 历史落库 + 运维知识 |
-| 核心工具 | SQL / Python | 9 个只读工具：Route / Instance / Metrics / Trace / Config / Events / Logs / Knowledge |
-| 最终产物 | 数据分析报告 | Incident Diagnosis |
-| Action | 数据分析 | 运维处置（规划中） |
+| 核心工具 | SQL / Python | 9 个只读工具：Route / Instance / Metrics / Trace / Config / Events / Logs / Knowledge（+1 个待审批变更的提案工具） |
+| 最终产物 | 数据分析报告 | Incident Diagnosis（+ 待人工审批的处置计划） |
+| Action | 数据分析 | 受控运维处置：当前一个动作——灰度权重调整，人工批准后执行并回读验证（其余规划中） |
 | 风险面 | SQL / 数据 | 生产基础设施 |
 | 目标 | Insight | Diagnose + Remediate |
 
