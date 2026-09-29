@@ -33,6 +33,7 @@ import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
+import com.rover.agent.core.util.Texts;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -372,7 +373,7 @@ public final class DynamicInvestigationGraph {
             return routeRead ? "当前路由表没有匹配项，实例数据对本路径没有判定价值，跳过读取实例。"
                     : "路由数据不可用，跳过读取实例。";
         }
-        if (text(route.serviceName()).isBlank()) {
+        if (Texts.orEmpty(route.serviceName()).isBlank()) {
             return "该路由配置为静态上游（无动态服务目标），跳过读取实例。";
         }
         if (discovery != DiscoveryMode.NAMESERVER) {
@@ -503,7 +504,4 @@ public final class DynamicInvestigationGraph {
         return value.length() > MAX_DETAIL_LENGTH ? value.substring(0, MAX_DETAIL_LENGTH) + "…" : value;
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 }

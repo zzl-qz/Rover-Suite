@@ -26,6 +26,7 @@ import com.rover.agent.core.snapshot.RegistryEventSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
+import com.rover.agent.core.util.Texts;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -176,7 +177,7 @@ public final class CapabilityExecutor {
                 EvidenceNarration narration = EvidenceNarrator.route(route);
                 evidence.add(Evidence.of(taskId, EvidenceType.ROUTE, SOURCE_ROUTES, "路由匹配", narration.detail(),
                         "/api/routes", metadata(narration, observedAt,
-                                KEY_ROUTE_ID, route == null ? "" : text(route.routeId())), observedAt));
+                                KEY_ROUTE_ID, route == null ? "" : Texts.orEmpty(route.routeId())), observedAt));
                 limitations.addAll(narration.limitations());
             }
             routeRead = true;
@@ -212,7 +213,7 @@ public final class CapabilityExecutor {
                             List.of(Evidence.of(taskId, EvidenceType.INSTANCE, SOURCE_INSTANCES, "实例健康",
                                     narration.detail(), "/api/instances",
                                     metadata(narration, observedAt,
-                                            KEY_ROUTE_ID, route == null ? "" : text(route.routeId())), observedAt)),
+                                            KEY_ROUTE_ID, route == null ? "" : Texts.orEmpty(route.routeId())), observedAt)),
                             narration.limitations())
                     .withInstances(snapshot);
         } catch (Exception ex) {
@@ -258,15 +259,15 @@ public final class CapabilityExecutor {
 
     /** 本次指标证据要归因到哪条路由：优先用已读到的路由事实，其次按路径补一次匹配。 */
     private String resolveRouteId(RouteSnapshot route, String lookup, List<String> limitations) {
-        if (route != null && !text(route.routeId()).isBlank()) {
-            return text(route.routeId());
+        if (route != null && !Texts.orEmpty(route.routeId()).isBlank()) {
+            return Texts.orEmpty(route.routeId());
         }
         if (lookup == null || lookup.isBlank()) {
             return "";
         }
         try {
             RouteSnapshot matched = RouteMatcher.match(routes.routes(), lookup);
-            return matched == null ? "" : text(matched.routeId());
+            return matched == null ? "" : Texts.orEmpty(matched.routeId());
         } catch (Exception ex) {
             log.warn("Agent 按路径补匹配路由失败", ex);
             limitations.add(EvidenceNarrator.routeUnavailable());
@@ -308,7 +309,7 @@ public final class CapabilityExecutor {
             EvidenceNarration item = EvidenceNarrator.routeUpstream(row);
             evidence.add(Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "上游实例窗口观测",
                     item.detail(), "/api/metrics/routes?routeId=" + urlEncode(routeId),
-                    metadata(item, observedAt, KEY_ROUTE_ID, routeId, KEY_HOST_PORT, text(row.hostPort())),
+                    metadata(item, observedAt, KEY_ROUTE_ID, routeId, KEY_HOST_PORT, Texts.orEmpty(row.hostPort())),
                     observedAt));
             limitations.addAll(item.limitations());
         }
@@ -343,7 +344,7 @@ public final class CapabilityExecutor {
             if (entry == null) {
                 continue;
             }
-            grouped.computeIfAbsent(text(entry.component()), key -> new ArrayList<>()).add(entry);
+            grouped.computeIfAbsent(Texts.orEmpty(entry.component()), key -> new ArrayList<>()).add(entry);
         }
         if (grouped.isEmpty()) {
             limitations.add("当前没有读取到任何配置项，无法确认生效配置。");
@@ -481,7 +482,4 @@ public final class CapabilityExecutor {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 }

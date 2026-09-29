@@ -15,13 +15,18 @@ import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.KnowledgeReadPort;
 import com.rover.agent.core.port.LogQueryPort;
 import com.rover.agent.core.port.MetricReadPort;
+import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
+import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
+import com.rover.agent.runtime.action.ActionExecutor;
+import com.rover.agent.runtime.action.AgentActionService;
+import com.rover.agent.runtime.action.RouteWeightActionExecutor;
 import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.knowledge.InMemoryKnowledgeStore;
 import com.rover.agent.runtime.llm.ChatModelGateway;
@@ -62,12 +67,14 @@ public class AgentRuntimeConfiguration {
     private static final int INCIDENT_CAPACITY = 500;
     private static final int MESSAGE_CAPACITY = 2000;
     private static final int TASK_CAPACITY = 200;
+    private static final int ACTION_CAPACITY = 200;
 
     /** Agent 存储：没配记录库路径时用内存，单测不用落盘。 */
     @Bean(destroyMethod = "close")
     public AgentStore agentStore(@Value("${rover.admin.log-store-path:}") String logStorePath) {
         if (logStorePath == null || logStorePath.isBlank()) {
-            return AgentStore.memory(SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY, TASK_CAPACITY);
+            return AgentStore.memory(SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY, TASK_CAPACITY,
+                    ACTION_CAPACITY);
         }
         return AgentStore.file(logStorePath);
     }
@@ -95,6 +102,12 @@ public class AgentRuntimeConfiguration {
     @Bean
     public AgentCheckpointRepository agentCheckpointRepository(AgentStore agentStore) {
         return agentStore.checkpoints();
+    }
+
+    /** 变更记录：Agent 提议、人批准、执行器落地的全过程都存这里。 */
+    @Bean
+    public AgentActionRepository agentActionRepository(AgentStore agentStore) {
+        return agentStore.actions();
     }
 
     @Bean
@@ -127,9 +140,10 @@ public class AgentRuntimeConfiguration {
     public WorkspaceRetention agentWorkspaceRetention(AgentSessionRepository agentSessionRepository,
                                                       IncidentRepository agentIncidentRepository,
                                                       AgentMessageRepository agentMessageRepository,
+                                                      AgentActionRepository agentActionRepository,
                                                       InvestigationTaskRegistry agentTaskRegistry) {
         return new WorkspaceRetention(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
-                agentTaskRegistry, SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY);
+                agentTaskRegistry, agentActionRepository, SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY);
     }
 
     @Bean
@@ -269,12 +283,41 @@ public class AgentRuntimeConfiguration {
     @Bean
     public ToolLoopService agentToolLoopService(CapabilityExecutor agentCapabilityExecutor,
                                                ObjectProvider<ChatModelGateway> chatModelGateways,
-                                               ObjectProvider<ConversationModel> conversationModels) {
+                                               ObjectProvider<ConversationModel> conversationModels,
+                                               AgentActionService agentActionService) {
         // 模型侧留一个可替换的入口：端到端测试用它注入脚本，从而在不依赖真实模型的前提下
         // 验证「工具真的取数、证据真的落库」这条链路——这是单测替代不了的部分。
+        // 变更提议入口同样注入：模型能走到的最远处就是「登记一条待审批变更」，执行在 ActionExecutor 里。
         return new ToolLoopService(agentCapabilityExecutor,
                 chatModelGateways.getIfAvailable(NoopChatModelGateway::new),
-                conversationModels.getIfAvailable());
+                conversationModels.getIfAvailable(),
+                agentActionService);
+    }
+
+    /**
+     * 权重调整执行器：整条链路上唯一会写 Gateway 的实现。
+     *
+     * <p>它只依赖「可写路由端口 + 变更记录」，既不认识模型也不认识 HTTP 层：
+     * 想换一种变更（例如以后加配置变更）时，加一个实现即可，流程与权限层不用动。
+     */
+    @Bean
+    public ActionExecutor agentActionExecutor(RouteControlPort routeControlPort,
+                                             AgentActionRepository agentActionRepository) {
+        return new RouteWeightActionExecutor(routeControlPort, agentActionRepository);
+    }
+
+    /**
+     * 受控变更的应用入口：提议 / 批准 / 拒绝 / 回滚 / 结果确认。
+     *
+     * <p>模型只被允许调用它的 {@code propose}；批准之后的每一步都由人在控制台触发。
+     */
+    @Bean
+    public AgentActionService agentActionService(AgentActionRepository agentActionRepository,
+                                                 AgentSessionRepository agentSessionRepository,
+                                                 RouteControlPort routeControlPort,
+                                                 ActionExecutor agentActionExecutor) {
+        return new AgentActionService(agentActionRepository, agentSessionRepository, routeControlPort,
+                agentActionExecutor);
     }
 
     /** Agent 应用入口：目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */

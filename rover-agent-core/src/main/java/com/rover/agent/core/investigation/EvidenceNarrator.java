@@ -11,6 +11,7 @@ import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
+import com.rover.agent.core.util.Texts;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -52,13 +53,13 @@ public final class EvidenceNarrator {
             return new EvidenceNarration("当前路由表没有匹配项", List.of());
         }
         String targets = staticTargets(route);
-        String detail = "id=" + text(route.routeId()) + "，前缀=" + text(route.businessPrefix())
-                + "，服务=" + text(route.serviceName()) + "，分组=" + routeGroupLabel(route.group())
+        String detail = "id=" + Texts.orEmpty(route.routeId()) + "，前缀=" + Texts.orEmpty(route.businessPrefix())
+                + "，服务=" + Texts.orEmpty(route.serviceName()) + "，分组=" + routeGroupLabel(route.group())
                 + (targets.isBlank() ? "" : "，静态目标=" + targets);
         // 两种上游都没有时把「没有配」说成事实：只留空字段会让读的人以为信息缺失，
         // 进而把一条能转发的路由判成配错了。
         List<String> limitations = new ArrayList<>();
-        if (text(route.serviceName()).isBlank() && targets.isBlank()) {
+        if (Texts.orEmpty(route.serviceName()).isBlank() && targets.isBlank()) {
             limitations.add("该路由既没有目标服务也没有静态上游地址，请求匹配到它也无法转发。");
         }
         return new EvidenceNarration(detail, List.copyOf(limitations));
@@ -66,8 +67,8 @@ public final class EvidenceNarrator {
 
     /** 静态上游地址：单个 targetUrl 与多地址 targetUrls 取有值的一个。 */
     private static String staticTargets(RouteSnapshot route) {
-        String multiple = text(route.targetUrls());
-        return multiple.isBlank() ? text(route.targetUrl()) : multiple;
+        String multiple = Texts.orEmpty(route.targetUrls());
+        return multiple.isBlank() ? Texts.orEmpty(route.targetUrl()) : multiple;
     }
 
     /** 路由清单的证据表述：逐条给出前缀与上游，「一共有几条路由」这类问题靠它回答。 */
@@ -79,14 +80,14 @@ public final class EvidenceNarrator {
         for (RouteSnapshot route : all) {
             String targets = staticTargets(route);
             String upstream;
-            if (!text(route.serviceName()).isBlank()) {
-                upstream = "服务=" + text(route.serviceName()) + "，分组=" + routeGroupLabel(route.group());
+            if (!Texts.orEmpty(route.serviceName()).isBlank()) {
+                upstream = "服务=" + Texts.orEmpty(route.serviceName()) + "，分组=" + routeGroupLabel(route.group());
             } else if (!targets.isBlank()) {
                 upstream = "静态目标=" + targets;
             } else {
                 upstream = "无上游（匹配到也无法转发）";
             }
-            lines.add(text(route.businessPrefix()) + "（id=" + text(route.routeId()) + "）→ " + upstream);
+            lines.add(Texts.orEmpty(route.businessPrefix()) + "（id=" + Texts.orEmpty(route.routeId()) + "）→ " + upstream);
         }
         return new EvidenceNarration("共 " + all.size() + " 条路由：" + String.join("；", lines),
                 List.of(), all.size(), 0);
@@ -103,8 +104,8 @@ public final class EvidenceNarrator {
 
     /** 实例快照的证据表述；有目标路由时额外给出该目标的健康实例数。 */
     public static EvidenceNarration instances(List<InstanceSnapshot> instances, RouteSnapshot route) {
-        String service = route == null ? "" : text(route.serviceName());
-        String group = route == null ? "" : text(route.group());
+        String service = route == null ? "" : Texts.orEmpty(route.serviceName());
+        String group = route == null ? "" : Texts.orEmpty(route.group());
         return instances(instances, service, group);
     }
 
@@ -117,15 +118,15 @@ public final class EvidenceNarrator {
      */
     public static EvidenceNarration instances(List<InstanceSnapshot> instances, String serviceName, String group) {
         List<InstanceSnapshot> rows = instances == null ? List.of() : instances;
-        String service = text(serviceName);
-        String groupName = text(group);
+        String service = Texts.orEmpty(serviceName);
+        String groupName = Texts.orEmpty(group);
         if (service.isBlank()) {
             return new EvidenceNarration("注册实例共 " + rows.size() + " 个；样本：" + sample(rows),
                     List.of(), rows.size(), 0);
         }
         List<InstanceSnapshot> matched = rows.stream()
-                .filter(item -> service.equals(text(item.serviceName())))
-                .filter(item -> groupName.isBlank() || groupName.equals(text(item.group())))
+                .filter(item -> service.equals(Texts.orEmpty(item.serviceName())))
+                .filter(item -> groupName.isBlank() || groupName.equals(Texts.orEmpty(item.group())))
                 .toList();
         if (matched.isEmpty()) {
             return new EvidenceNarration("注册中心没有服务 " + service + " 的任何实例；当前已注册的服务："
@@ -141,14 +142,14 @@ public final class EvidenceNarrator {
     /** 实例样本行：服务/分组@地址:端口(健康状态)，最多 5 条。 */
     private static String sample(List<InstanceSnapshot> rows) {
         return rows.stream().limit(5)
-                .map(item -> text(item.serviceName()) + "/" + groupLabel(item.group()) + "@" + text(item.host())
+                .map(item -> Texts.orEmpty(item.serviceName()) + "/" + groupLabel(item.group()) + "@" + Texts.orEmpty(item.host())
                         + ":" + item.port() + "(" + (item.healthy() ? "健康" : "不健康") + ")")
                 .reduce((left, right) -> left + "、" + right).orElse("无");
     }
 
     /** 当前注册的全部服务名；用于告诉调用方「有哪些服务可查」，而不是让它对着空结果猜。 */
     private static String registeredServices(List<InstanceSnapshot> rows) {
-        return rows.stream().map(item -> text(item.serviceName())).filter(name -> !name.isBlank())
+        return rows.stream().map(item -> Texts.orEmpty(item.serviceName())).filter(name -> !name.isBlank())
                 .distinct().reduce((left, right) -> left + "、" + right).orElse("无");
     }
 
@@ -159,14 +160,14 @@ public final class EvidenceNarrator {
      */
     public static long healthyCount(List<InstanceSnapshot> instances, String serviceName, String group) {
         List<InstanceSnapshot> rows = instances == null ? List.of() : instances;
-        String service = text(serviceName);
-        String groupName = text(group);
+        String service = Texts.orEmpty(serviceName);
+        String groupName = Texts.orEmpty(group);
         if (service.isBlank()) {
             return 0;
         }
         return rows.stream()
-                .filter(item -> service.equals(text(item.serviceName())))
-                .filter(item -> groupName.isBlank() || groupName.equals(text(item.group())))
+                .filter(item -> service.equals(Texts.orEmpty(item.serviceName())))
+                .filter(item -> groupName.isBlank() || groupName.equals(Texts.orEmpty(item.group())))
                 .filter(InstanceSnapshot::healthy)
                 .count();
     }
@@ -186,12 +187,12 @@ public final class EvidenceNarrator {
      * 一两个请求里的 5xx 与几百个请求里的 5xx 不是同一件事，这里必须把差异说清楚。
      */
     public static EvidenceNarration routeUpstream(RouteUpstreamSnapshot row) {
-        String detail = "上游 " + text(row.hostPort()) + "：窗口请求数=" + row.windowRequests()
+        String detail = "上游 " + Texts.orEmpty(row.hostPort()) + "：窗口请求数=" + row.windowRequests()
                 + "，5xx=" + row.status5xx() + "，连接失败=" + row.connectFail() + "，超时=" + row.timeout()
                 + "，平均耗时=" + row.avgMillis() + "ms，P95=" + row.p95Millis() + "ms";
         List<String> limitations = new ArrayList<>();
         if (row.windowRequests() < InvestigationRules.MIN_INSTANCE_SAMPLE) {
-            limitations.add("上游 " + text(row.hostPort()) + " 窗口请求数 " + row.windowRequests()
+            limitations.add("上游 " + Texts.orEmpty(row.hostPort()) + " 窗口请求数 " + row.windowRequests()
                     + " 低于判断阈值 " + InvestigationRules.MIN_INSTANCE_SAMPLE + "，样本不足，无法判断该实例是否异常。");
         }
         limitations.add("该观测只覆盖最近 " + row.windowSeconds()
@@ -201,7 +202,7 @@ public final class EvidenceNarrator {
 
     /** 「路由 × 上游实例」窗口内没有转发记录时的证据表述：这是「没有样本」，不是「数据不可用」。 */
     public static EvidenceNarration routeUpstreamsEmpty(String routeId, int windowSeconds) {
-        return new EvidenceNarration("路由 " + text(routeId) + " 最近 " + windowSeconds
+        return new EvidenceNarration("路由 " + Texts.orEmpty(routeId) + " 最近 " + windowSeconds
                 + " 秒没有上游转发记录，无法按实例归因",
                 List.of("窗口内没有样本，无法判断该路由任何上游实例的状态；也不能据此判定异常已恢复。"),
                 0, windowSeconds);
@@ -213,7 +214,7 @@ public final class EvidenceNarrator {
      * 只报事实（请求数、5xx、错误率），是否算异常由调用方结合样本量判断。
      */
     public static String upstreamFact(RouteUpstreamSnapshot row) {
-        return "上游 " + text(row.hostPort()) + "（窗口请求 " + row.windowRequests() + " 次，5xx "
+        return "上游 " + Texts.orEmpty(row.hostPort()) + "（窗口请求 " + row.windowRequests() + " 次，5xx "
                 + row.status5xx() + " 次，错误率 " + String.format(Locale.ROOT, "%.1f", errorRate(row)) + "%）";
     }
 
@@ -231,11 +232,11 @@ public final class EvidenceNarrator {
         List<ConfigEntrySnapshot> rows = entries == null ? List.of() : entries;
         long unavailable = rows.stream().filter(ConfigEntrySnapshot::unavailable).count();
         String sample = rows.stream().limit(MAX_CONFIG_SAMPLE)
-                .map(item -> text(item.key()) + "=" + text(item.value())
-                        + "（应用方式=" + text(item.applyMode())
+                .map(item -> Texts.orEmpty(item.key()) + "=" + Texts.orEmpty(item.value())
+                        + "（应用方式=" + Texts.orEmpty(item.applyMode())
                         + (item.hotReloadable() ? "，支持热更新" : "，不支持热更新") + "）")
                 .reduce((left, right) -> left + "、" + right).orElse("无");
-        String detail = "组件 " + text(component) + " 生效配置 " + rows.size() + " 项"
+        String detail = "组件 " + Texts.orEmpty(component) + " 生效配置 " + rows.size() + " 项"
                 + (unavailable == 0 ? "" : "（其中 " + unavailable + " 项取值读取失败）") + "；样本：" + sample;
         List<String> limitations = new ArrayList<>();
         limitations.add("配置快照只反映当前生效值，不代表运行态已按该配置工作；改动是否生效要看对应流量与错误指标。");
@@ -259,8 +260,8 @@ public final class EvidenceNarrator {
             if (!isWithin(row.timestampMillis(), now, windowMillis)) {
                 continue;
             }
-            recent.add(text(row.type()) + " " + text(row.serviceName()) + "/" + text(row.instanceId())
-                    + "：" + text(row.detail()));
+            recent.add(Texts.orEmpty(row.type()) + " " + Texts.orEmpty(row.serviceName()) + "/" + Texts.orEmpty(row.instanceId())
+                    + "：" + Texts.orEmpty(row.detail()));
         }
         long outside = rows.size() - recent.size();
         String detail = "最近 " + EVENT_WINDOW_SECONDS + " 秒注册中心事件 " + recent.size() + " 条"
@@ -285,7 +286,7 @@ public final class EvidenceNarrator {
         int matched = 0;
         int earlier = 0;
         for (TraceRow row : rows) {
-            if (!text(path).equals(text(row.path()))) {
+            if (!Texts.orEmpty(path).equals(Texts.orEmpty(row.path()))) {
                 continue;
             }
             if (!InvestigationRules.isRecent(now, row)) {
@@ -294,7 +295,7 @@ public final class EvidenceNarrator {
             }
             matched++;
             if (recent.size() < 5) {
-                recent.add("HTTP " + row.statusCode() + " traceId=" + text(row.traceId()));
+                recent.add("HTTP " + row.statusCode() + " traceId=" + Texts.orEmpty(row.traceId()));
             }
         }
         String detail = (snapshot.enabled() ? "" : "追踪已关闭；") + "最近五分钟精确路径匹配追踪 " + matched
@@ -348,7 +349,7 @@ public final class EvidenceNarrator {
     public static EvidenceNarration knowledge(List<KnowledgeEntry> entries, String query) {
         List<KnowledgeEntry> rows = entries == null ? List.of() : entries;
         if (rows.isEmpty()) {
-            return new EvidenceNarration("知识库中没有与「" + text(query) + "」相关的条目",
+            return new EvidenceNarration("知识库中没有与「" + Texts.orEmpty(query) + "」相关的条目",
                     List.of("知识库未收录该问题；建议说清具体是哪一项（限流、熔断、超时、采样率等），"
                             + "或让我读当前生效配置值。"));
         }
@@ -380,7 +381,7 @@ public final class EvidenceNarrator {
         }
         List<String> lines = new ArrayList<>();
         for (LogEntry entry : rows.stream().limit(MAX_LOG_SAMPLE).toList()) {
-            lines.add(stamp(entry.ts()) + " " + entry.type() + " " + text(entry.target())
+            lines.add(stamp(entry.ts()) + " " + entry.type() + " " + Texts.orEmpty(entry.target())
                     + "：" + truncate(entry.payload(), LOG_PAYLOAD_LIMIT));
         }
         String detail = "共 " + rows.size() + " 条" + typeText + "历史日志：" + String.join("；", lines);
@@ -392,7 +393,7 @@ public final class EvidenceNarrator {
 
     /** 按上游实例的指标取数失败：与「窗口内没有样本」严格区分。 */
     public static String routeUpstreamsUnavailable(String routeId) {
-        return "路由 " + text(routeId) + " 的按上游实例指标不可用，无法确认是哪台实例异常。";
+        return "路由 " + Texts.orEmpty(routeId) + " 的按上游实例指标不可用，无法确认是哪台实例异常。";
     }
 
     /** 记录时间是否落在判定窗口内；时间戳缺失或晚于当前时刻的记录一律不计入。 */
@@ -401,16 +402,13 @@ public final class EvidenceNarrator {
     }
 
     private static String groupLabel(String group) {
-        return text(group).isBlank() ? "默认组" : text(group);
+        return Texts.orEmpty(group).isBlank() ? "默认组" : Texts.orEmpty(group);
     }
 
     private static String routeGroupLabel(String group) {
-        return text(group).isBlank() ? "全部分组" : text(group);
+        return Texts.orEmpty(group).isBlank() ? "全部分组" : Texts.orEmpty(group);
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 
     /** 时间范围换算成窗口秒数；无有效范围时为 0（非窗口口径）。 */
     private static long windowSeconds(long fromMillis, long toMillis) {

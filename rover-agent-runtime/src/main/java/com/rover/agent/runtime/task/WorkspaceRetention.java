@@ -3,6 +3,7 @@ package com.rover.agent.runtime.task;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.Session;
+import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.IncidentRepository;
@@ -24,17 +25,30 @@ public final class WorkspaceRetention {
     private final IncidentRepository incidents;
     private final AgentMessageRepository messages;
     private final TaskRetirement tasks;
+    private final AgentActionRepository actions;
     private final int sessionCapacity;
     private final int incidentCapacity;
     private final int messageCapacity;
 
+    /** 兼容构造器：不接管变更记录的清理（未装配变更存储的运行方式）。 */
     public WorkspaceRetention(AgentSessionRepository sessions, IncidentRepository incidents,
                               AgentMessageRepository messages, TaskRetirement tasks,
+                              int sessionCapacity, int incidentCapacity, int messageCapacity) {
+        this(sessions, incidents, messages, tasks, null, sessionCapacity, incidentCapacity, messageCapacity);
+    }
+
+    /**
+     * @param actions 变更记录存储；非空时随会话整组清理——变更挂在会话上，
+     *                会话没了还留着「待审批」的变更，就是一条谁也处理不了的悬空记录
+     */
+    public WorkspaceRetention(AgentSessionRepository sessions, IncidentRepository incidents,
+                              AgentMessageRepository messages, TaskRetirement tasks, AgentActionRepository actions,
                               int sessionCapacity, int incidentCapacity, int messageCapacity) {
         this.sessions = sessions;
         this.incidents = incidents;
         this.messages = messages;
         this.tasks = tasks;
+        this.actions = actions;
         this.sessionCapacity = sessionCapacity;
         this.incidentCapacity = incidentCapacity;
         this.messageCapacity = messageCapacity;
@@ -94,9 +108,10 @@ public final class WorkspaceRetention {
         int incidentCount = incidents.removeBySession(sessionId);
         int messageCount = messages.removeBySession(sessionId);
         int taskCount = tasks.retireBySession(sessionId);
+        int actionCount = actions == null ? 0 : actions.removeBySession(sessionId);
         sessions.remove(sessionId);
-        log.info("已整组清理会话 {}：事件 {} 条、消息 {} 条、任务 {} 条", sessionId, incidentCount, messageCount,
-                taskCount);
+        log.info("已整组清理会话 {}：事件 {} 条、消息 {} 条、任务 {} 条、变更 {} 条", sessionId, incidentCount,
+                messageCount, taskCount, actionCount);
         return new Cleanup(incidentCount, messageCount, taskCount);
     }
 

@@ -28,11 +28,15 @@ const WB_EVENT_TYPES = [
     'TASK_FAILED', 'TASK_CANCELLED',
 ];
 
-/** 空态里可直接点的问题示例：都落在已接入的只读能力范围内，点了就填进输入框而不是直接发送。 */
+/**
+ * 空态里可直接点的问题示例：都落在已接入的能力范围内（只读调查 + 一个待审批的权重变更），
+ * 点了只填进输入框而不是直接发送——含变更意图的例子更要留出改词的机会。
+ */
 const WB_EXAMPLES = [
     '网关现在 QPS 多少？',
     'order-service 有几个健康实例？',
     '为什么 /api/demo/tt 调用失败？',
+    '把 /api/order 的 v2 放量到 20（会生成待审批变更）',
     '你能做什么？',
 ];
 
@@ -81,6 +85,12 @@ window.RoverAdminPages.workbench = {
             wbNow: 0,
             /** 视图是否贴着对话底部：决定自动跟随，以及要不要显示「回到最新」。 */
             wbAtBottom: true,
+            /** 当前会话的变更记录（新的在前）：待审批、执行结果与回滚都从服务端读回来。 */
+            wbActions: [],
+            /** 每条变更正在进行的操作（approve / reject / rollback / resolve）：用来禁用按钮，避免连点。 */
+            wbActionBusy: {},
+            /** 每条变更最近一次操作失败的原因：服务端拒绝（409/404）时显示在卡片里，而不是整页报错。 */
+            wbActionError: {},
         };
     },
 
@@ -205,6 +215,16 @@ window.RoverAdminPages.workbench = {
         },
 
         /** 当前事件下最近一次产出结论的任务，右栏「当前诊断」与「证据」都用它。 */
+        /**
+         * 待人工处置的变更条数：批准 / 拒绝 / 回滚 / 确认结果都算「等一个决定」。
+         *
+         * 回读确认中、执行中的不算待人工处置（程序正在跑），失败与已完成也不算。
+         */
+        wbPendingActions() {
+            return this.wbActions.filter(action => ['PENDING_APPROVAL', 'UNCERTAIN', 'SUCCESS']
+                .includes(action.status)).length;
+        },
+
         wbLatestResultTask() {
             const incidentId = this.wbActiveIncident ? this.wbActiveIncident.incidentId : null;
             const tasks = Object.values(this.wbTasks)
@@ -313,6 +333,10 @@ window.RoverAdminPages.workbench = {
             this.wbThinkingEnd = {};
             this.wbThinkManual = {};
             this.wbPending = [];
+            // 变更记录属于会话：切会话先把上一场的卡片清掉，再拉新会话自己的记录
+            this.wbActions = [];
+            this.wbActionBusy = {};
+            this.wbActionError = {};
             this._wbLoadedSessionId = '';
             this.wbDetailOpen = {};
             this.wbError = null;
@@ -342,6 +366,9 @@ window.RoverAdminPages.workbench = {
                 const tasks = {};
                 (workspace.tasks || []).forEach((task) => { tasks[task.taskId] = task; });
                 this.wbTasks = tasks;
+                // 变更记录与对话一起对齐：任务刚结束的时候，正是新提议出现的时候。
+                // 不 await：它只影响右栏一张卡，不该拖慢对话与任务卡的渲染。
+                this.wbLoadActions(sessionId);
                 this.wbError = null;
                 // 切到别的会话（含首次载入）直接落到底部；同一会话的刷新则尊重用户当前的阅读位置。
                 const switched = this._wbLoadedSessionId !== sessionId;
@@ -486,6 +513,177 @@ window.RoverAdminPages.workbench = {
             } finally {
                 task._cancelling = false;
             }
+        },
+
+        // ---------------------------------------------------------------- 变更与处置
+
+        /** 读当前会话的变更记录；读不到就按「没有变更」渲染，不打扰主流程（对话与调查不受影响）。 */
+        async wbLoadActions(sessionId) {
+            if (!sessionId) {
+                this.wbActions = [];
+                return;
+            }
+            try {
+                const list = await RoverAdminApi.api('/api/agent/actions/sessions/' + encodeURIComponent(sessionId));
+                if (this.wbActiveSessionId !== sessionId) return;
+                this.wbActions = Array.isArray(list) ? list : [];
+            } catch (e) {
+                if (this.wbActiveSessionId === sessionId) this.wbActions = [];
+            }
+        },
+
+        /**
+         * 处置一条变更：批准 / 拒绝 / 回滚 / 确认结果。
+         *
+         * 服务端的执行是同步的，因此这里只需等返回值——返回的就是终态。
+         * 前端不做「先乐观改成成功」：变更有没有生效只能由服务端的回读说了算，
+         * 页面上提前变绿就是在替它撒谎。
+         */
+        async wbActionCommand(action, command) {
+            if (!action || this.wbActionBusy[action.actionId]) return;
+            this.wbActionBusy = Object.assign({}, this.wbActionBusy, { [action.actionId]: command });
+            this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: '' });
+            try {
+                const updated = await RoverAdminApi.api(
+                    '/api/agent/actions/' + encodeURIComponent(action.actionId) + '/' + command,
+                    { method: 'POST' });
+                this.wbReplaceAction(updated);
+            } catch (e) {
+                // 被拒（已被处理过、状态不允许）或执行异常：记在卡片上，并重新拉一次真实状态
+                this.wbActionError = Object.assign({}, this.wbActionError,
+                    { [action.actionId]: (e && e.message) ? e.message : '操作失败' });
+                await this.wbLoadActions(this.wbActiveSessionId);
+            } finally {
+                const busy = Object.assign({}, this.wbActionBusy);
+                delete busy[action.actionId];
+                this.wbActionBusy = busy;
+            }
+        },
+
+        /** 就地替换一条变更：不整表重取，避免列表顺序与正在看的卡片跳动。 */
+        wbReplaceAction(updated) {
+            if (!updated || !updated.actionId) return;
+            const exists = this.wbActions.some(item => item.actionId === updated.actionId);
+            this.wbActions = exists
+                ? this.wbActions.map(item => (item.actionId === updated.actionId ? updated : item))
+                : [updated].concat(this.wbActions);
+        },
+
+        /** 是否没有正在进行的操作（按钮据此禁用，避免双击发出两次请求）。 */
+        wbActionIdle(action) {
+            return action && !this.wbActionBusy[action.actionId];
+        },
+
+        wbActionTypeLabel(type) {
+            return { ADJUST_ROUTE_TARGET_WEIGHT: '灰度权重调整' }[type] || type || '变更';
+        },
+
+        wbActionStatusLabel(status) {
+            return {
+                PENDING_APPROVAL: '待审批',
+                EXECUTING: '执行中',
+                VERIFYING: '验证中',
+                SUCCESS: '已完成',
+                FAILED: '失败',
+                PRECONDITION_FAILED: '预检未通过',
+                UNCERTAIN: '结果未知',
+                REJECTED: '已拒绝',
+                ROLLING_BACK: '回滚中',
+                ROLLED_BACK: '已回滚',
+            }[status] || status || '';
+        },
+
+        /** 状态徽标色：绿=确认生效/已补偿，红=确认失败，黄=等你决定，灰=已拒绝，其余为进行中。 */
+        wbActionBadge(status) {
+            return {
+                SUCCESS: 'ok',
+                ROLLED_BACK: 'ok',
+                FAILED: 'bad',
+                PRECONDITION_FAILED: 'bad',
+                UNCERTAIN: 'warn',
+                PENDING_APPROVAL: 'warn',
+                REJECTED: 'comp',
+            }[status] || 'comp';
+        },
+
+        wbActionTarget(action) {
+            if (!action) return '';
+            return action.group ? action.serviceName + '@' + action.group : action.serviceName;
+        },
+
+        /**
+         * 预计流量占比：审批真正要看的东西。
+         *
+         * Raw Weight 是路由表里的相对值，单独看不出影响——5 → 20 到底是多少流量，
+         * 取决于同路由其他版本的权重。占比由服务端按整条路由算好带过来：
+         * 让「批准」这个动作建立在「改完之后流量会变成什么样」上，而不是一个抽象数字。
+         */
+        wbActionTrafficPercent(action) {
+            if (!action || action.beforeTrafficPercent == null || action.desiredTrafficPercent == null) {
+                return '—';
+            }
+            const one = (value) => value.toFixed(1) + '%';
+            return one(action.beforeTrafficPercent) + ' → ' + one(action.desiredTrafficPercent);
+        },
+
+        /**
+         * 请求口径：用户当初要的到底是「权重 20」还是「20% 流量」。
+         *
+         * 这两者在小数量纲的路由上能差两个数量级，卡片上必须留着原始口径，
+         * 否则事后只能看到换算结果，说不清批的究竟是什么。
+         */
+        wbActionRequestText(action) {
+            if (!action) return '';
+            if (!action.requestedUnit) return '权重 ' + action.desiredWeight + '（未声明单位）';
+            if (action.requestedUnit === 'TRAFFIC_PERCENT') return '流量占比 ' + action.requestedValue + '%';
+            return '权重值 ' + action.requestedValue;
+        },
+
+        /**
+         * 卡片底部那行进度：只由服务端状态推出，一句话说清「现在到哪一步、有没有确认过」。
+         *
+         * 刻意不给未确认的变更画绿勾：网关说成功不等于目标达成，
+         * 只有回读确认过才会显示「已确认」。
+         */
+        wbActionProgress(action) {
+            const submitted = Boolean(action.applyOperationId);
+            switch (action.status) {
+                case 'PENDING_APPROVAL':
+                    return { mark: '○', text: '尚未执行，等人工批准', tone: 'idle' };
+                case 'REJECTED':
+                    return { mark: '○', text: '已拒绝，未执行', tone: 'idle' };
+                case 'EXECUTING':
+                    return { mark: '●', text: '已批准，正在校验当前状态并提交', tone: 'run' };
+                case 'VERIFYING':
+                    return { mark: '●', text: '已提交，正在回读路由确认结果', tone: 'run' };
+                case 'ROLLING_BACK':
+                    return { mark: '●', text: '正在把权重补偿回变更前的值', tone: 'run' };
+                case 'SUCCESS':
+                    return { mark: '✓', text: '已提交并回读确认，权重已生效', tone: 'ok' };
+                case 'ROLLED_BACK':
+                    return { mark: '✓', text: '已补偿回滚并回读确认', tone: 'ok' };
+                case 'PRECONDITION_FAILED':
+                    return { mark: '!', text: '预检未通过，Gateway 未被改动', tone: 'bad' };
+                case 'FAILED':
+                    return {
+                        mark: '!',
+                        text: submitted ? '已提交但确认未达成' : '提交前失败，Gateway 未被改动',
+                        tone: 'bad',
+                    };
+                case 'UNCERTAIN':
+                    return { mark: '!', text: '已提交但结果未确认，请用原操作号核对', tone: 'bad' };
+                default:
+                    return { mark: '○', text: '', tone: 'idle' };
+            }
+        },
+
+        /** 卡片角落的署名：谁提的、谁批的、什么时候——变更必须能追到人。 */
+        wbActionMeta(action) {
+            const parts = [];
+            if (action.requestedBy) parts.push('提议 ' + action.requestedBy);
+            if (action.approvedBy) parts.push('批准 ' + action.approvedBy);
+            parts.push(this.fmtTime(action.updatedAtMillis));
+            return parts.join(' · ');
         },
 
         /** Enter 发送、Shift+Enter 换行；输入法组合中的 Enter 是在选词，不能当发送。 */
@@ -713,6 +911,11 @@ window.RoverAdminPages.workbench = {
             }
             if (type === 'STEP_STARTED' || type === 'STEP_COMPLETED' || type === 'STEP_FAILED') {
                 this.wbMergeStep(taskId, payload.step, type);
+                // 变更计划是在对话进行中产生的：它一落库就把右栏的卡片拉出来，
+                // 不让用户等到回答收尾才知道「有一张待审批的单子」。
+                if (payload.step && payload.step.type === 'ACTION_PROPOSAL' && type !== 'STEP_STARTED') {
+                    this.wbLoadActions(this.wbActiveSessionId);
+                }
                 return;
             }
             if (type === 'CLARIFICATION_REQUIRED') {
@@ -1030,6 +1233,7 @@ window.RoverAdminPages.workbench = {
                 CONFIG_INVESTIGATION: '读取配置',
                 EVENT_INVESTIGATION: '读取事件',
                 DIAGNOSIS: '生成结论',
+                ACTION_PROPOSAL: '变更计划',
                 MEMORY: '记忆',
                 AI_EXPLANATION: 'AI 解读',
             }[type] || type || '步骤';

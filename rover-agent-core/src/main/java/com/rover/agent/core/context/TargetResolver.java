@@ -8,6 +8,7 @@ import com.rover.agent.core.port.SnapshotUnavailableException;
 import com.rover.agent.core.investigation.RouteMatcher;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.util.Texts;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -113,13 +114,13 @@ public final class TargetResolver {
      */
     private static String availableHint(List<RouteSnapshot> routeList, List<InstanceSnapshot> instanceList) {
         List<String> paths = (routeList == null ? List.<RouteSnapshot>of() : routeList).stream()
-                .map(route -> text(route.businessPrefix()))
+                .map(route -> Texts.orEmpty(route.businessPrefix()))
                 .filter(prefix -> !prefix.isBlank())
                 .distinct()
                 .limit(MAX_HINT_OBJECTS)
                 .toList();
         List<String> services = (instanceList == null ? List.<InstanceSnapshot>of() : instanceList).stream()
-                .map(instance -> text(instance.serviceName()))
+                .map(instance -> Texts.orEmpty(instance.serviceName()))
                 .filter(name -> !name.isBlank())
                 .distinct()
                 .limit(MAX_HINT_OBJECTS)
@@ -161,8 +162,8 @@ public final class TargetResolver {
 
     private static String serviceOfInstance(List<InstanceSnapshot> instanceList, String address) {
         for (InstanceSnapshot instance : instanceList) {
-            if (addressIgnoreCase(instance).equalsIgnoreCase(address) && !text(instance.serviceName()).isBlank()) {
-                return text(instance.serviceName());
+            if (addressIgnoreCase(instance).equalsIgnoreCase(address) && !Texts.orEmpty(instance.serviceName()).isBlank()) {
+                return Texts.orEmpty(instance.serviceName());
             }
         }
         return null;
@@ -170,15 +171,15 @@ public final class TargetResolver {
 
     private static String routePathOf(List<RouteSnapshot> routeList, String serviceName) {
         return routeList.stream()
-                .filter(route -> text(route.serviceName()).equals(serviceName))
-                .map(route -> text(route.businessPrefix()))
+                .filter(route -> Texts.orEmpty(route.serviceName()).equals(serviceName))
+                .map(route -> Texts.orEmpty(route.businessPrefix()))
                 .filter(prefix -> !prefix.isBlank())
                 .findFirst()
                 .orElse(null);
     }
 
     private static String addressIgnoreCase(InstanceSnapshot instance) {
-        return text(instance.host()) + ":" + instance.port();
+        return Texts.orEmpty(instance.host()) + ":" + instance.port();
     }
 
     /** 显式目标必须带确定类型与取值，否则视同未指定。 */
@@ -197,11 +198,11 @@ public final class TargetResolver {
             }
             RouteSnapshot matched = RouteMatcher.match(routeList, token);
             if (matched != null && (best == null
-                    || text(matched.businessPrefix()).length() > text(best.businessPrefix()).length())) {
+                    || Texts.orEmpty(matched.businessPrefix()).length() > Texts.orEmpty(best.businessPrefix()).length())) {
                 best = matched;
             }
         }
-        return best == null ? null : ResourceTarget.route(text(best.businessPrefix()));
+        return best == null ? null : ResourceTarget.route(Texts.orEmpty(best.businessPrefix()));
     }
 
     /** 服务名：路由的目标服务名与注册实例的服务名一起作为已知集合，取最长的命中项。 */
@@ -209,13 +210,13 @@ public final class TargetResolver {
                                                String text) {
         Set<String> names = new LinkedHashSet<>();
         for (RouteSnapshot route : routeList) {
-            if (!text(route.serviceName()).isBlank()) {
-                names.add(text(route.serviceName()));
+            if (!Texts.orEmpty(route.serviceName()).isBlank()) {
+                names.add(Texts.orEmpty(route.serviceName()));
             }
         }
         for (InstanceSnapshot instance : instanceList) {
-            if (!text(instance.serviceName()).isBlank()) {
-                names.add(text(instance.serviceName()));
+            if (!Texts.orEmpty(instance.serviceName()).isBlank()) {
+                names.add(Texts.orEmpty(instance.serviceName()));
             }
         }
         return names.stream()
@@ -230,7 +231,7 @@ public final class TargetResolver {
     private static ResourceTarget matchInstance(List<InstanceSnapshot> instanceList, String text) {
         List<String> addresses = new ArrayList<>();
         for (InstanceSnapshot instance : instanceList) {
-            if (!text(instance.host()).isBlank() && instance.port() > 0) {
+            if (!Texts.orEmpty(instance.host()).isBlank() && instance.port() > 0) {
                 addresses.add(instance.host().trim() + ":" + instance.port());
             }
         }
@@ -271,7 +272,4 @@ public final class TargetResolver {
         return text.toLowerCase().contains(candidate.toLowerCase());
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 }

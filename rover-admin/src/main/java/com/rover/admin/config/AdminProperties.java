@@ -2,13 +2,19 @@ package com.rover.admin.config;
 
 import com.rover.common.constants.NameserverConstants;
 import com.rover.common.constants.GatewayConstants;
+import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Author: Daylight
  * Created: 2026-08-09 13:45:00
  * Description: Admin 连接 Gateway / Nameserver 管理口的地址配置
+ *
+ * <p>字段上的注释就是这份配置的说明书：读配置的人只看这里就该知道每个值干什么、
+ * 缺省是什么，因此注释留在字段上，存取方法交给 Lombok——把 90 行 getter/setter
+ * 换成一行注解，改一个配置项时不会再改漏一处。
  */
+@Data
 @ConfigurationProperties(prefix = AdminProperties.PREFIX)
 public class AdminProperties {
 
@@ -32,76 +38,4 @@ public class AdminProperties {
     private int logQueueCapacity = 8192;
     /** 异步写入高优(诊断证据)队列容量；满则短暂阻塞等待，尽量不丢；默认 16384 */
     private int logCriticalCapacity = 16384;
-
-    public String getGatewayUrl() {
-        return gatewayUrl;
-    }
-
-    public void setGatewayUrl(String gatewayUrl) {
-        this.gatewayUrl = gatewayUrl;
-    }
-
-    public String getNameserverManageUrl() {
-        return nameserverManageUrl;
-    }
-
-    public void setNameserverManageUrl(String nameserverManageUrl) {
-        this.nameserverManageUrl = nameserverManageUrl;
-    }
-
-    public String getAdminToken() {
-        return adminToken;
-    }
-
-    public void setAdminToken(String adminToken) {
-        this.adminToken = adminToken;
-    }
-
-    public String getLogStorePath() {
-        return logStorePath;
-    }
-
-    public void setLogStorePath(String logStorePath) {
-        this.logStorePath = logStorePath;
-    }
-
-    public int getLogRetentionDays() {
-        return logRetentionDays;
-    }
-
-    public void setLogRetentionDays(int logRetentionDays) {
-        this.logRetentionDays = logRetentionDays;
-    }
-
-    public int getLogTelemetryRetentionDays() {
-        return logTelemetryRetentionDays;
-    }
-
-    public void setLogTelemetryRetentionDays(int logTelemetryRetentionDays) {
-        this.logTelemetryRetentionDays = logTelemetryRetentionDays;
-    }
-
-    public int getLogCollectIntervalSeconds() {
-        return logCollectIntervalSeconds;
-    }
-
-    public void setLogCollectIntervalSeconds(int logCollectIntervalSeconds) {
-        this.logCollectIntervalSeconds = logCollectIntervalSeconds;
-    }
-
-    public int getLogQueueCapacity() {
-        return logQueueCapacity;
-    }
-
-    public void setLogQueueCapacity(int logQueueCapacity) {
-        this.logQueueCapacity = logQueueCapacity;
-    }
-
-    public int getLogCriticalCapacity() {
-        return logCriticalCapacity;
-    }
-
-    public void setLogCriticalCapacity(int logCriticalCapacity) {
-        this.logCriticalCapacity = logCriticalCapacity;
-    }
 }

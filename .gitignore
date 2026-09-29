@@ -110,3 +110,7 @@ replay_pid*
 plugins/*.jar
 !plugins/.gitkeep
 rover-gateway-test/plugin-demo/demo-config/plugins/*.jar
+
+# Eval / 测试产物（含 H2 库、录制日志与脱敏快照，不入库）
+artifacts/
+

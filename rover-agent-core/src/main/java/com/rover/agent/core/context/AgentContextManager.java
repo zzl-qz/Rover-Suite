@@ -17,6 +17,7 @@ import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.util.Texts;
 import java.util.List;
 import java.util.Optional;
 
@@ -94,13 +95,13 @@ public final class AgentContextManager {
         }
         if (target.type() == TargetType.ROUTE) {
             RouteSnapshot matched = RouteMatcher.match(readRoutes(), target.value());
-            String serviceName = matched == null ? "" : text(matched.serviceName());
+            String serviceName = matched == null ? "" : Texts.orEmpty(matched.serviceName());
             return serviceName.isBlank() ? null : serviceName;
         }
         if (target.type() == TargetType.INSTANCE) {
             return readInstances().stream()
                     .filter(instance -> address(instance).equalsIgnoreCase(target.value()))
-                    .map(instance -> text(instance.serviceName()))
+                    .map(instance -> Texts.orEmpty(instance.serviceName()))
                     .filter(name -> !name.isBlank())
                     .findFirst()
                     .orElse(null);
@@ -161,10 +162,7 @@ public final class AgentContextManager {
     }
 
     private static String address(InstanceSnapshot instance) {
-        return text(instance.host()) + ":" + instance.port();
+        return Texts.orEmpty(instance.host()) + ":" + instance.port();
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 }

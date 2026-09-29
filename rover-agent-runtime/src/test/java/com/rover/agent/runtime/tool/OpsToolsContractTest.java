@@ -47,9 +47,15 @@ class OpsToolsContractTest {
                 .toList();
     }
 
+    /**
+     * 工具总数：8 个只读查询 + 1 个提案工具（{@code proposeTargetWeightChange}）。
+     *
+     * <p>提案工具算进来是刻意的：它也在模型的可选集合里，因此它的描述必须和查询工具一样经得起挑选；
+     * 而它与其他 9 个的区别（只有它不读数据、只登记一条待审批变更）必须由测试固定下来。
+     */
     @Test
     void toolCountMatchesTheDocumentedSet() {
-        assertEquals(9, toolMethods().size(),
+        assertEquals(10, toolMethods().size(),
                 "对外宣称的工具数量与实际不符：模型看到的工具集变了，文档与能力清单应同步");
     }
 

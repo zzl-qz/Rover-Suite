@@ -5,8 +5,8 @@ package com.rover.agent.core.model;
  *
  * 除规格给定的数据采集与结论阶段外，本项目还有几类补充阶段：
  * {@link #PLANNING}（规划只读步骤）、{@link #TARGET_RESOLUTION}（把自然语言问题解析成调查对象）、
- * {@link #ANSWER}（直接回答状态查询）、{@link #MEMORY}（读取或写入长期记忆）与
- * {@link #AI_EXPLANATION}（模型解读）。
+ * {@link #ANSWER}（直接回答状态查询）、{@link #ACTION_PROPOSAL}（生成待审批变更计划）、
+ * {@link #MEMORY}（读取或写入长期记忆）与 {@link #AI_EXPLANATION}（模型解读）。
  */
 public enum AgentStepType {
 
@@ -45,6 +45,9 @@ public enum AgentStepType {
 
     /** 合成假设验证结论 */
     DIAGNOSIS,
+
+    /** 生成待人工审批的变更计划（只登记建议，不修改任何生产状态） */
+    ACTION_PROPOSAL,
 
     /** 读取或写入长期记忆 */
     MEMORY,

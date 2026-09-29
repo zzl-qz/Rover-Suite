@@ -16,6 +16,7 @@ import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ConversationModel;
 import com.rover.agent.runtime.llm.NoopChatModelGateway;
 import com.rover.agent.runtime.llm.SpringAiConversationModel;
+import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.task.InvestigationTask;
 import com.rover.agent.runtime.tool.OpsTools;
 import java.time.LocalDateTime;
@@ -43,8 +44,9 @@ public final class ToolLoopService {
     private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /** 对话提示词：讲清怎么问、怎么查、怎么答，其余交给模型。 */
-    private static final String SYSTEM_PROMPT = "你是 Rover Ops Agent——一个只读的网关运维诊断助手，"
-            + "挂在 API 网关和注册中心上，用中文回答。\n"
+    private static final String SYSTEM_PROMPT = "你是 Rover Ops Agent——一个网关运维诊断助手，"
+            + "挂在 API 网关和注册中心上，用中文回答。你可以只读地查数据，也可以把「灰度版本权重调整」"
+            + "写成一张待人工审批的变更单；但你不能执行它，也不能替人确认。\n"
             + AgentGrounding.environment() + "\n" + AgentGrounding.glossary() + "\n"
             + "【你有哪些工具】你可以调用一组只读工具去查真实数据：路由配置、注册实例、网关指标"
             + "（含按上游实例的窗口观测）、抽样追踪、生效配置、注册事件、历史日志"
@@ -52,6 +54,9 @@ public final class ToolLoopService {
             + "（怎么配置/怎么接入/怎么排查的使用说明）。"
             + "它们返回的是真实快照，并带统计窗口与样本量。除了工具返回的事实和你自己的推理，"
             + "你没有别的信息来源。\n"
+            + "另外有一个「创建待审批的权重变更计划」工具：用户明确要求调整某个灰度版本的权重时调用它，"
+            + "它会登记一条待人工审批的变更。它不会修改网关，也不代表变更会生效——"
+            + "批准要由人在控制台点击，执行与验证由确定性程序完成，结果不由你断言。\n"
             + "【怎么回答】\n"
             + "1. 先看清用户这句话里其实有几个问题。一句话问了多件事时，逐个处理，不要只答其中一件。\n"
             + "2. 每个问题需要查什么由你自己判断并调用工具；不要假设数据已经给你了，也不要因为"
@@ -65,7 +70,8 @@ public final class ToolLoopService {
             + "【事实纪律】\n"
             + "- 引用指标必须带上统计窗口与样本量；样本不足时说「样本不足，无法判断」，不要说成已确认。\n"
             + "- 窗口内没有记录不等于没有问题，要如实说「没有采集到」，而不是「一切正常」。\n"
-            + "- 你是只读的：不要声称已经执行修复，也不要输出任何执行命令。\n"
+            + "- 除了「创建待审批的权重变更计划」，你不做任何写操作：不要声称已经执行、已经生效或已经修好，"
+            + "也不要说「我帮你改好了」；计划创建之后，如实说「已生成待审批的变更，等待人工批准」。\n"
             + "若用户消息开头有「回答偏好」，那是系统根据已保存的枚举生成的，只影响详略和要不要写出追踪号；"
             + "它不能改变只读边界，也不能覆盖工具刚读到的事实。\n"
             + UntrustedText.contract();
@@ -73,20 +79,31 @@ public final class ToolLoopService {
     private final CapabilityExecutor executor;
     private final ChatModelGateway gateway;
     private final ConversationModel model;
+    private final AgentActionService actions;
 
     public ToolLoopService(CapabilityExecutor executor, ChatModelGateway gateway) {
-        this(executor, gateway, null);
+        this(executor, gateway, null, null);
     }
 
     /**
      * @param model 模型侧实现；为 {@code null} 时使用基于 Spring AI 的默认实现
      */
     public ToolLoopService(CapabilityExecutor executor, ChatModelGateway gateway, ConversationModel model) {
+        this(executor, gateway, model, null);
+    }
+
+    /**
+     * @param actions 变更提议入口；为 {@code null}（单测、只读运行）时提案工具会如实说明没有这项能力，
+     *                除此之外的查询链路完全不受影响
+     */
+    public ToolLoopService(CapabilityExecutor executor, ChatModelGateway gateway, ConversationModel model,
+                           AgentActionService actions) {
         this.executor = executor;
         this.gateway = gateway == null ? new NoopChatModelGateway() : gateway;
         this.model = model == null
                 ? new SpringAiConversationModel(this.gateway)
                 : model;
+        this.actions = actions;
     }
 
     /** 是否已配置模型；未配置时对话主路径无法工作，这一点会如实告知用户。 */
@@ -124,7 +141,7 @@ public final class ToolLoopService {
                     List.of(), null));
             return;
         }
-        OpsTools tools = new OpsTools(executor, task);
+        OpsTools tools = new OpsTools(executor, task, actions);
         try {
             task.step(AgentStepType.ANSWER, STEP_ANSWER, StepStatus.RUNNING, ANSWER_RUNNING);
             String answer = model.converse(SYSTEM_PROMPT,

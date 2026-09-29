@@ -5,6 +5,7 @@ import com.rover.agent.core.context.TargetInterpreter;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.util.Texts;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -69,11 +70,11 @@ public final class ModelTargetInterpreter implements TargetInterpreter {
         Map<String, ResourceTarget> unique = new LinkedHashMap<>();
         if (routes != null) {
             for (RouteSnapshot route : routes) {
-                String prefix = text(route.businessPrefix());
+                String prefix = Texts.orEmpty(route.businessPrefix());
                 if (!prefix.isBlank()) {
                     unique.putIfAbsent("ROUTE|" + prefix, ResourceTarget.route(prefix));
                 }
-                String service = text(route.serviceName());
+                String service = Texts.orEmpty(route.serviceName());
                 if (!service.isBlank()) {
                     unique.putIfAbsent("SERVICE|" + service, ResourceTarget.service(service));
                 }
@@ -81,7 +82,7 @@ public final class ModelTargetInterpreter implements TargetInterpreter {
         }
         if (instances != null) {
             for (InstanceSnapshot instance : instances) {
-                String service = text(instance.serviceName());
+                String service = Texts.orEmpty(instance.serviceName());
                 if (!service.isBlank()) {
                     unique.putIfAbsent("SERVICE|" + service, ResourceTarget.service(service));
                 }
@@ -121,7 +122,7 @@ public final class ModelTargetInterpreter implements TargetInterpreter {
     }
 
     private static String address(InstanceSnapshot instance) {
-        String host = text(instance.host());
+        String host = Texts.orEmpty(instance.host());
         return host.isBlank() || instance.port() <= 0 ? "" : host + ":" + instance.port();
     }
 
@@ -130,7 +131,4 @@ public final class ModelTargetInterpreter implements TargetInterpreter {
         return trimmed.length() <= MAX_QUERY_LENGTH ? trimmed : trimmed.substring(0, MAX_QUERY_LENGTH);
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 }

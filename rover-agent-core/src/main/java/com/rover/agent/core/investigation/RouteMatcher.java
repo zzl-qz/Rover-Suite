@@ -1,6 +1,7 @@
 package com.rover.agent.core.investigation;
 
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.util.Texts;
 import java.util.Comparator;
 import java.util.List;
 
@@ -16,16 +17,12 @@ public final class RouteMatcher {
         }
         return routes.stream()
                 .filter(route -> matches(route, path))
-                .max(Comparator.comparingInt(route -> text(route.businessPrefix()).length()))
+                .max(Comparator.comparingInt(route -> Texts.orEmpty(route.businessPrefix()).length()))
                 .orElse(null);
     }
 
     private static boolean matches(RouteSnapshot route, String path) {
-        String prefix = text(route.businessPrefix());
-        return !prefix.isBlank() && ("/".equals(prefix) || path.equals(prefix) || path.startsWith(prefix + "/"));
+        return RoutePrefix.matches(route.businessPrefix(), path);
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value.trim();
-    }
 }
