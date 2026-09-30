@@ -7,7 +7,9 @@ package com.rover.agent.core.model;
  *             ┌── 人拒绝 ────────────────► REJECTED
  * PENDING_APPROVAL
  *             └── 人批准 ──► EXECUTING ──► VERIFYING ──► SUCCESS ──► ROLLING_BACK ──► ROLLED_BACK
- *                              │            │
+ *                              │            │                         │
+ *                              │            │                         └─► ROLLBACK_PRECONDITION_FAILED
+ *                              │            │                             （目标已被别人改过，补偿未提交）
  *                              │            └─► FAILED（提交了但回读不一致）
  *                              ├─► PRECONDITION_FAILED（预检没过，Gateway 一个字节都没动）
  *                              └─► UNCERTAIN（提交了，但连回查都拿不到结果）
@@ -46,7 +48,13 @@ public enum ActionStatus {
     ROLLING_BACK("回滚中"),
 
     /** 补偿完成且回读一致。 */
-    ROLLED_BACK("已回滚");
+    ROLLED_BACK("已回滚"),
+
+    /**
+     * 回滚预检没过：当前权重已经不是这次变更写进去的值，补偿请求没有提交。
+     * 不能自动改回去，否则会盖掉别人后来的修改。
+     */
+    ROLLBACK_PRECONDITION_FAILED("回滚预检未通过");
 
     private final String label;
 
@@ -62,7 +70,7 @@ public enum ActionStatus {
     /** 是否已经落定、不会再自行变化（{@link #UNCERTAIN} 不算：它可以被回查结果改写）。 */
     public boolean settled() {
         return this == SUCCESS || this == FAILED || this == PRECONDITION_FAILED || this == REJECTED
-                || this == ROLLED_BACK;
+                || this == ROLLED_BACK || this == ROLLBACK_PRECONDITION_FAILED;
     }
 
     /** 是否允许人工批准/拒绝。 */

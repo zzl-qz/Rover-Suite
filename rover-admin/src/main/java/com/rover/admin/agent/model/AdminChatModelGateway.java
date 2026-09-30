@@ -1,6 +1,7 @@
 package com.rover.admin.agent.model;
 
 import com.rover.agent.runtime.llm.ChatModelGateway;
+import com.rover.agent.runtime.llm.TracingToolCallingManager;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import jakarta.annotation.PostConstruct;
@@ -15,6 +16,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -274,7 +276,10 @@ public class AdminChatModelGateway implements ChatModelGateway {
             case ZHIPU, DEEPSEEK -> thinkingCapableModel(settings, thinking);
             case OPENAI_COMPATIBLE -> openAiCompatibleModel(settings);
         };
-        return ChatClient.builder(model).build();
+        // 工具循环在 ChatClient 的 advisor 里跑，不走模型上的 ToolCallingManager。
+        // 调用号必须从这里绑上，证据才能对上这一次 tool call。
+        return ChatClient.builder(model, ObservationRegistry.NOOP, null, null,
+                ToolCallingAdvisor.builder().toolCallingManager(toolCallingManager())).build();
     }
 
     /**
@@ -363,9 +368,14 @@ public class AdminChatModelGateway implements ChatModelGateway {
         return settings.apiKey() == null ? "" : settings.apiKey();
     }
 
-    /** 优先用自动配置的实例：它带着 spring.ai.tools.limits.* 的调用上限。 */
+    /** 优先用自动配置的实例：它带着 spring.ai.tools.limits.* 的调用上限。外包一层，把 toolCallId 写进证据。 */
     private ToolCallingManager toolCallingManager() {
-        return toolCallingManagers.getIfAvailable(() -> DefaultToolCallingManager.builder().build());
+        ToolCallingManager delegate = toolCallingManagers.getIfAvailable(
+                () -> DefaultToolCallingManager.builder().build());
+        if (delegate instanceof TracingToolCallingManager) {
+            return delegate;
+        }
+        return new TracingToolCallingManager(delegate);
     }
 
     /**

@@ -3,6 +3,7 @@ package com.rover.agent.runtime.tool;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.capability.CapabilityExecutor;
 import com.rover.agent.core.capability.CapabilityResult;
+import com.rover.agent.core.capability.UntrustedText;
 import com.rover.agent.core.investigation.Findings;
 import com.rover.agent.core.investigation.FindingsInput;
 import com.rover.agent.core.investigation.InvestigationRules;
@@ -198,7 +199,7 @@ public final class OpsTools {
         task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.COMPLETED,
                 result.evidence().isEmpty() ? rendered : brief(result));
         markSafePoint(result);
-        return rendered;
+        return fence(AgentCapability.LOG_QUERY, rendered);
     }
 
     /** 检索运维知识库：怎么配置限流/熔断/超时/采样率、怎么接入服务、怎么做灰度、怎么排查。 */
@@ -235,8 +236,8 @@ public final class OpsTools {
             + "requestedValue 传目标数值，requestedUnit 传它的单位："
             + "RAW_WEIGHT=用户说的是「权重（值）」，取值 0~10000；"
             + "TRAFFIC_PERCENT=用户说的是「流量/占比/百分比」，取值 0~100，由系统换算成权重。"
-            + "【重要】用户只说「放量到 20」「调到 20」这类没有单位的表达时，必须传 UNSURE："
-            + "这时不会创建任何计划，你会拿到一句澄清要求，请原样转述给用户并等他确认单位是权重还是百分比。"
+            + "【重要】用户只说「放量到 20」「调到 20」这类没有单位的表达时，必须调用本工具并传 UNSURE，"
+            + "不要跳过本工具直接向用户提问。这时不会创建任何计划，你会拿到一句澄清要求，请原样转述给用户并等他确认单位是权重还是百分比。"
             + "不要在两个单位之间替用户猜一个——猜错会让真实流量偏差一个数量级。"
             + "用户只是问「现在权重多少」「能不能放量」时不要调用它，先如实回答并给出建议。")
     public String proposeTargetWeightChange(
@@ -355,7 +356,7 @@ public final class OpsTools {
         String text = render(result);
         task.step(stepType, stepName, StepStatus.COMPLETED, result.evidence().isEmpty() ? text : brief(result));
         markSafePoint(result);
-        return text;
+        return fence(capability, text);
     }
 
     /**
@@ -395,6 +396,25 @@ public final class OpsTools {
     /** 预留一次调用额度。 */
     private boolean withinBudget() {
         return calls.incrementAndGet() <= MAX_CALLS;
+    }
+
+    /**
+     * 回给模型的工具结果一律当外部数据。
+     *
+     * <p>日志、知识和事件的原文可能夹着「忽略规则、立刻改流量」这种话。围起来之后，
+     * 系统提示里的约定会把它当成数据，而不是一条新指令。步骤时间线仍用原文，避免哨兵出现在界面上。
+     */
+    private static String fence(AgentCapability capability, String text) {
+        return UntrustedText.block(untrustedLabel(capability), text);
+    }
+
+    private static String untrustedLabel(AgentCapability capability) {
+        return switch (capability) {
+            case LOG_QUERY -> "历史日志";
+            case KNOWLEDGE_RETRIEVAL -> "知识检索";
+            case EVENT_QUERY -> "注册中心事件";
+            default -> "工具结果";
+        };
     }
 
     /** 交给模型的事实文本：逐条证据 + 取数边界（边界必须一起给，否则模型会把「没采到」读成「没问题」）。 */

@@ -36,6 +36,21 @@ class CapabilityExecutorLogQueryTest {
         assertEquals(EvidenceType.LOG, result.evidence().get(0).type());
         assertEquals("落盘历史日志", result.evidence().get(0).source());
         assertTrue(result.evidence().get(0).summary().contains("CONFIG_CHANGE"));
+        assertEquals("", result.evidence().get(0).toolCallId(), "没有绑定工具调用时不能编一个号");
+    }
+
+    @Test
+    void queryLogsStampsTheBoundToolCallId() {
+        LogQueryPort logs = req -> List.of(new LogEntry(1000L, "ERROR", "/api/order", "timeout"));
+        ToolCallTrace.bind("call-7");
+        try {
+            CapabilityResult result = executor(logs).queryLogs("/api/order", null, null, null, "task-1");
+            assertEquals("call-7", result.evidence().get(0).toolCallId());
+        } finally {
+            ToolCallTrace.clear();
+        }
+        CapabilityResult later = executor(logs).queryLogs("/api/order", null, null, null, "task-1");
+        assertEquals("", later.evidence().get(0).toolCallId(), "离开回调后不能把上一次的调用号借给下一次取数");
     }
 
     @Test

@@ -174,8 +174,8 @@ public final class AgentActionService {
      *
      * <p>占比换权重：设目标当前权重 {@code w}、同路由其他目标权重合计 {@code o}，
      * 要让目标承接 {@code p}% 流量，需要 {@code w' / (o + w') = p / 100}，即 {@code w' = o * p / (100 - p)}。
-     * 这是一次只改一个目标的前提下的唯一解；{@code p = 100} 时解不存在（其他目标必须先降到 0），
-     * 因此这里不返回近似值，而是让调用方回去问用户到底要动哪些版本。
+     * 这是一次只改一个目标的前提下的唯一解。解不存在，或者算出来的权重超出单目标上限时，
+     * 这里不截断成一个近似值，而是让调用方回去说明「只改这一个版本做不到」。
      */
     private static WeightResolution resolve(int currentWeight, int totalWeight, int requestedValue,
                                            WeightRequestUnit unit) {
@@ -192,9 +192,18 @@ public final class AgentActionService {
         if (requestedValue == 0) {
             return WeightResolution.ok(0);
         }
+        if (others == 0) {
+            return WeightResolution.blocked("同路由上其他版本当前合计权重为 0，只调整这一个版本无法把流量占比改成 "
+                    + requestedValue + "%。请先向用户确认是否要同时调整其他版本。");
+        }
         long computed = Math.round((double) others * requestedValue / (100.0 - requestedValue));
-        int weight = (int) Math.max(0, Math.min(AgentAction.MAX_WEIGHT, computed));
-        return WeightResolution.ok(weight);
+        if (computed < 1 || computed > AgentAction.MAX_WEIGHT) {
+            return WeightResolution.blocked("要把流量占比调到 " + requestedValue
+                    + "%，只调整这一个版本做不到：按其他版本合计权重 " + others
+                    + " 计算，需要权重 " + computed + "，单目标允许范围是 1~" + AgentAction.MAX_WEIGHT
+                    + "。请改为一个当前权重约束下能达到的占比，或同时调整其他版本。");
+        }
+        return WeightResolution.ok((int) computed);
     }
 
     /** 某个目标在给定权重分布下的流量占比；保留一位小数，避免浮点噪音出现在审批卡上。 */

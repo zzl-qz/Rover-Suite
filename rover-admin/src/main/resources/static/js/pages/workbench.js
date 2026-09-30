@@ -590,6 +590,7 @@ window.RoverAdminPages.workbench = {
                 REJECTED: '已拒绝',
                 ROLLING_BACK: '回滚中',
                 ROLLED_BACK: '已回滚',
+                ROLLBACK_PRECONDITION_FAILED: '回滚预检未通过',
             }[status] || status || '';
         },
 
@@ -600,6 +601,7 @@ window.RoverAdminPages.workbench = {
                 ROLLED_BACK: 'ok',
                 FAILED: 'bad',
                 PRECONDITION_FAILED: 'bad',
+                ROLLBACK_PRECONDITION_FAILED: 'bad',
                 UNCERTAIN: 'warn',
                 PENDING_APPROVAL: 'warn',
                 REJECTED: 'comp',
@@ -664,6 +666,8 @@ window.RoverAdminPages.workbench = {
                     return { mark: '✓', text: '已补偿回滚并回读确认', tone: 'ok' };
                 case 'PRECONDITION_FAILED':
                     return { mark: '!', text: '预检未通过，Gateway 未被改动', tone: 'bad' };
+                case 'ROLLBACK_PRECONDITION_FAILED':
+                    return { mark: '!', text: '当前权重已不是这次写入的值，未自动补偿', tone: 'bad' };
                 case 'FAILED':
                     return {
                         mark: '!',
