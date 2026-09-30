@@ -25,7 +25,7 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
         capability = capability == null ? AgentCapability.ROUTE_QUERY : capability;
         stepType = stepType == null ? AgentStepType.ANSWER : stepType;
         stepName = stepName == null || stepName.isBlank() ? capability.name() : stepName.trim();
-        evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        evidence = List.copyOf(stamp(evidence == null ? List.of() : evidence));
         limitations = limitations == null ? List.of() : List.copyOf(limitations);
         discoveryMode = discoveryMode == null ? DiscoveryMode.UNKNOWN : discoveryMode;
     }
@@ -52,6 +52,19 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
                                          boolean executed, List<Evidence> evidence, List<String> limitations) {
         return new CapabilityResult(capability, type(descriptor), name(descriptor), executed, evidence, limitations,
                 null, false, DiscoveryMode.UNKNOWN, null, null, null, null, null, null);
+    }
+
+    /** 当前线程绑了工具调用号时，给这份结果里的每条证据记上。规划路径没有号，原样返回。 */
+    private static List<Evidence> stamp(List<Evidence> evidence) {
+        String toolCallId = ToolCallTrace.current();
+        if (toolCallId.isEmpty() || evidence.isEmpty()) {
+            return evidence;
+        }
+        List<Evidence> stamped = new ArrayList<>(evidence.size());
+        for (Evidence item : evidence) {
+            stamped.add(item.withToolCallId(toolCallId));
+        }
+        return stamped;
     }
 
     private static AgentStepType type(CapabilityDescriptor descriptor) {

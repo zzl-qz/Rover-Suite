@@ -30,8 +30,8 @@ import org.slf4j.LoggerFactory;
  *   <li><b>先落库再提交</b>：幂等号必须在发请求之前写进库，否则超时的那一刻就永远认不出「那一次」了。</li>
  *   <li><b>回读验证</b>：网关说成功只代表请求生效，目标状态是否达成要自己读回来确认；
  *       回读不一致就是失败，不回读就报成功等于谎报。</li>
- *   <li><b>补偿回滚</b>：只把这一次改过的那个目标改回去，而不是整表退回旧版本——
- *       整表回滚会把别人在这之后的修改一起抹掉。</li>
+ *   <li><b>补偿回滚</b>：只把这一次改过的那个目标改回去，而且当前权重必须仍等于这次写入的值。
+ *       已经被别人改过就停在 {@link ActionStatus#ROLLBACK_PRECONDITION_FAILED}，一个字节都不写。</li>
  * </ol>
  *
  * <p>失败处理不按「抛没抛异常」分类，而按<b>网关到底动没动</b>分类：没拿到的响应才有「可能已经生效」的问题，
@@ -104,9 +104,16 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         if (!located.passed()) {
             return backToSuccess(action, "回滚未提交：" + located.message() + "，请人工确认当前状态");
         }
-        if (located.target().weight() == action.beforeWeight()) {
+        int current = located.target().weight();
+        if (current == action.beforeWeight()) {
             // 已经是补偿目标：再写一次不会让世界更好，只会多一条操作记录。
             return settle(action, ActionStatus.ROLLED_BACK, null);
+        }
+        if (current != action.desiredWeight()) {
+            // 别人在这次变更之后改过同一个目标。写回 beforeWeight 会盖掉那次修改。
+            return settle(action, ActionStatus.ROLLBACK_PRECONDITION_FAILED,
+                    "回滚未提交：当前权重是 " + current + "，已经不是这次变更写入的 " + action.desiredWeight()
+                            + "，不能自动补偿到 " + action.beforeWeight() + "。请人工确认后再决定是否另开一条变更。");
         }
         String operationId = UUID.randomUUID().toString();
         AgentAction submitting = new ActionDraft(action).rollbackOperation(operationId)

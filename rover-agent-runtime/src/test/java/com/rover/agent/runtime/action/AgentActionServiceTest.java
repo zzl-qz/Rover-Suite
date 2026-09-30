@@ -245,6 +245,33 @@ class AgentActionServiceTest {
     }
 
     @Test
+    void rollbackRefusesWhenTargetWasChangedBySomeoneElse() {
+        AgentAction done = service.approve(propose(20).actionId(), OWNER);
+        gateway.applyWeight("v2", 30);
+
+        AgentAction refused = service.rollback(done.actionId(), OWNER);
+
+        assertEquals(ActionStatus.ROLLBACK_PRECONDITION_FAILED, refused.status());
+        assertEquals(30, gateway.weightOf("v2"), "别人后来写成的 30 不能被补偿盖掉");
+        assertTrue(refused.errorMessage().contains("30"), refused.errorMessage());
+        assertTrue(refused.errorMessage().contains("20"), refused.errorMessage());
+        assertEquals(1, gateway.writes, "预检没过时不能再写 Gateway");
+        assertNull(refused.rollbackOperationId(), "没提交的补偿不能留下操作号");
+    }
+
+    @Test
+    void rollbackTreatsWeightAlreadyRestoredAsRolledBack() {
+        AgentAction done = service.approve(propose(20).actionId(), OWNER);
+        gateway.applyWeight("v2", 5);
+
+        AgentAction rolled = service.rollback(done.actionId(), OWNER);
+
+        assertEquals(ActionStatus.ROLLED_BACK, rolled.status());
+        assertEquals(5, gateway.weightOf("v2"));
+        assertEquals(1, gateway.writes, "已经回到变更前的值时不再写一次");
+    }
+
+    @Test
     void rollbackIsRefusedBeforeSuccess() {
         AgentAction pending = propose(20);
 
@@ -344,6 +371,34 @@ class AgentActionServiceTest {
         assertFalse(proposal.created());
         assertTrue(proposal.clarificationRequired(), proposal.reason());
         assertTrue(proposal.reason().contains("其他版本"), proposal.reason());
+        assertEquals(0, gateway.writes);
+    }
+
+    /** 算出来的权重超过单目标上限时拒绝提案，不能截断成一个实际占比差很远的近似值。 */
+    @Test
+    void unreachablePercentIsClarifiedInsteadOfClamped() {
+        gateway.applyWeight("v1", AgentAction.MAX_WEIGHT);
+
+        ActionProposal proposal = service.propose(SESSION, "t1", "i1", "/api/order", "v2", 99,
+                WeightRequestUnit.TRAFFIC_PERCENT);
+
+        assertFalse(proposal.created(), proposal.reason());
+        assertTrue(proposal.clarificationRequired(), proposal.reason());
+        assertTrue(proposal.reason().contains("10000") || proposal.reason().contains(String.valueOf(AgentAction.MAX_WEIGHT)),
+                proposal.reason());
+        assertTrue(repository.bySession(SESSION).isEmpty(), "做不到的占比不能留下待审批卡");
+        assertEquals(0, gateway.writes);
+    }
+
+    /** 刚好顶到上限的占比仍然可以提案：这不是近似，是算出来的唯一解。 */
+    @Test
+    void percentThatLandsOnMaxWeightIsStillProposed() {
+        gateway.applyWeight("v1", AgentAction.MAX_WEIGHT);
+        gateway.applyWeight("v2", 1);
+
+        AgentAction action = propose(50, WeightRequestUnit.TRAFFIC_PERCENT);
+
+        assertEquals(AgentAction.MAX_WEIGHT, action.desiredWeight());
         assertEquals(0, gateway.writes);
     }
 
