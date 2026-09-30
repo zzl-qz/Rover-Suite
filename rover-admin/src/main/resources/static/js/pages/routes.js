@@ -1,7 +1,13 @@
 /** 路由管理页。 */
 window.RoverAdminPages = window.RoverAdminPages || {};
+/** 与网关 ServiceInstance.DEFAULT_WEIGHT 一致：静态地址不写 |权重 时按这个值分流。 */
+const DEFAULT_STATIC_WEIGHT = 100;
 const EMPTY_ROUTE_FORM = {
-    id: '', businessPrefix: '', targetUrl: '', targetUrls: '',
+    id: '', businessPrefix: '',
+    // 静态地址一行一台机器；weight 为空串表示不指定，网关按默认权重算
+    staticTargets: [],
+    // 原路由只写了单个 targetUrl 时，保存仍写回 targetUrl，避免预览里冒出无意义的差异
+    keepSingleTargetUrl: false,
     targets: [], stickyHeader: '', stripPrefix: '',
     upstreamKind: 'discovery',
 };
@@ -41,6 +47,11 @@ window.RoverAdminPages.routes = {
         targetWeightTotal() {
             return this.routeForm.targets.reduce((sum, t) => sum + weightOf(t), 0);
         },
+        staticWeightTotal() {
+            return this.routeForm.staticTargets
+                .filter(t => String(t.url || '').trim())
+                .reduce((sum, t) => sum + staticWeightOf(t), 0);
+        },
     },
 
     methods: {
@@ -58,6 +69,7 @@ window.RoverAdminPages.routes = {
             this.routeForm = {
                 ...EMPTY_ROUTE_FORM,
                 targets: [],
+                staticTargets: [],
                 upstreamKind: this.dynamicDiscovery ? 'discovery' : 'static',
             };
             this.editingPrefix = null;
@@ -72,11 +84,12 @@ window.RoverAdminPages.routes = {
                     group: t.group || '',
                     weight: weightOf(t),
                 }));
+                const staticTargets = parseStaticTargets(route);
                 this.routeForm = {
                     id: route.id || '',
                     businessPrefix: route.businessPrefix || '',
-                    targetUrl: route.targetUrl || '',
-                    targetUrls: route.targetUrls || '',
+                    staticTargets: staticTargets.length ? staticTargets : [{ url: '', weight: '' }],
+                    keepSingleTargetUrl: Boolean(route.targetUrl) && !route.targetUrls,
                     targets: targets.length ? targets : [{ serviceName: '', group: '', weight: 100 }],
                     stickyHeader: route.stickyHeader || '',
                     stripPrefix: route.stripPrefix || '',
@@ -85,6 +98,7 @@ window.RoverAdminPages.routes = {
             } else {
                 this.resetRouteForm();
                 this.routeForm.targets = [{ serviceName: '', group: '', weight: 100 }];
+                this.routeForm.staticTargets = [{ url: '', weight: '' }];
             }
             this.routePreview = null;
             this.rollbackRevision = '';
@@ -99,10 +113,26 @@ window.RoverAdminPages.routes = {
         },
         removeTarget(index) {
             if (this.routeForm.targets.length <= 1) {
-                this.toast('error', '至少保留一个版本目标');
+                this.toast('error', '至少保留一个分组');
                 return;
             }
             this.routeForm.targets.splice(index, 1);
+        },
+        addStaticTarget() {
+            this.routeForm.staticTargets.push({ url: '', weight: '' });
+        },
+        removeStaticTarget(index) {
+            if (this.routeForm.staticTargets.length <= 1) {
+                this.toast('error', '至少保留一个地址');
+                return;
+            }
+            this.routeForm.staticTargets.splice(index, 1);
+        },
+        /** 静态地址的实际流量占比；没填地址的空行不参与计算。 */
+        staticShare(target) {
+            const total = this.staticWeightTotal;
+            if (!total || !String(target.url || '').trim()) return '-';
+            return (staticWeightOf(target) / total * 100).toFixed(1) + '%';
         },
         /** 单个版本的实际流量占比，让「权重」看起来是可信的放量刻度。 */
         targetShare(target) {
@@ -115,13 +145,28 @@ window.RoverAdminPages.routes = {
             const first = this.routeForm.targets.find(t => t.serviceName);
             return first ? first.serviceName : 'demo-service';
         },
-        /** 列表里展示版本与权重，例如「v1 95 / v2 5」。 */
-        routeVersionLabel(route) {
-            const targets = route && route.targets;
-            if (!targets || !targets.length) {
-                return '';
-            }
-            return targets.map(t => `${t.group || '默认'} ${weightOf(t)}`).join(' / ');
+        /** 列表里每个分组一行：分组名、权重、在同一服务内的实际占比。 */
+        routeTargetRows(route) {
+            const targets = (route && route.targets) || [];
+            const total = targets.reduce((sum, t) => sum + weightOf(t), 0);
+            return targets.map(t => ({
+                group: t.group || '',
+                // 空分组在 nameserver 里是通配组：该服务所有分组的实例都算，不是「没分组的实例」
+                groupLabel: t.group ? `分组 ${t.group}` : '不限分组（全部实例）',
+                weight: weightOf(t),
+                share: total ? (weightOf(t) / total * 100).toFixed(1) + '%' : '0%',
+            }));
+        },
+        /** 列表里静态地址一台一行：地址、权重（标出是否默认）、占比。 */
+        routeStaticRows(route) {
+            const rows = parseStaticTargets(route);
+            const total = rows.reduce((sum, t) => sum + staticWeightOf(t), 0);
+            return rows.map(t => ({
+                url: t.url,
+                weight: staticWeightOf(t),
+                isDefault: t.weight === '',
+                share: total ? (staticWeightOf(t) / total * 100).toFixed(1) + '%' : '0%',
+            }));
         },
         /** 列表里的服务名：取第一个版本目标（校验保证同一条路由只有一个服务）。 */
         routeServiceName(route) {
@@ -174,12 +219,30 @@ window.RoverAdminPages.routes = {
                 payload.targets = targets;
                 payload.stickyHeader = String(form.stickyHeader || '').trim();
             } else {
-                if (!form.targetUrl && !form.targetUrls) {
-                    this.toast('error', '请填静态地址');
+                const rows = form.staticTargets
+                    .map(t => ({ url: String(t.url || '').trim(), weight: String(t.weight ?? '').trim() }))
+                    .filter(t => t.url);
+                if (!rows.length) {
+                    this.toast('error', '请至少填一个静态地址');
                     return null;
                 }
-                payload.targetUrl = form.targetUrl;
-                payload.targetUrls = form.targetUrls;
+                const badUrl = rows.find(t => !/^https?:\/\/[^\s,|]+$/i.test(t.url));
+                if (badUrl) {
+                    this.toast('error', `地址格式不对：${badUrl.url}，要写成 http://主机:端口`);
+                    return null;
+                }
+                const badWeight = rows.find(t => t.weight && !/^[1-9]\d*$/.test(t.weight));
+                if (badWeight) {
+                    this.toast('error', `${badWeight.url} 的权重要填正整数，或者留空按 ${DEFAULT_STATIC_WEIGHT} 算`);
+                    return null;
+                }
+                // 网关的 targetUrls 是逗号拼接串，单项写成 地址|权重，不写权重即默认
+                const joined = rows.map(t => (t.weight ? `${t.url}|${t.weight}` : t.url));
+                if (form.keepSingleTargetUrl && rows.length === 1 && !rows[0].weight) {
+                    payload.targetUrl = joined[0];
+                } else {
+                    payload.targetUrls = joined.join(',');
+                }
             }
             return payload;
         },
@@ -300,7 +363,7 @@ window.RoverAdminPages.routes = {
                     body: JSON.stringify(payload),
                 });
                 this.toast('success',
-                    result.message || `版本 ${payload.group || '默认'} 权重已调整为 ${weight}`);
+                    result.message || `${payload.group ? '分组 ' + payload.group : '不限分组'} 权重已调整为 ${weight}`);
                 await this.fetchRoutes();
             } catch (e) {
                 this.toast('error', e.message);
@@ -399,6 +462,33 @@ function newOperationId() {
         return window.crypto.randomUUID();
     }
     return 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+}
+
+/**
+ * 把路由上的 targetUrl + targetUrls 拆成「一台机器一行」。
+ * 与网关解析口径一致：取最后一个 | 后面的纯数字当权重，否则整段都是地址、权重留空。
+ */
+function parseStaticTargets(route) {
+    if (!route) return [];
+    const raws = [route.targetUrl || '', ...String(route.targetUrls || '').split(',')]
+        .map(s => s.trim())
+        .filter(Boolean);
+    return raws.map(raw => {
+        const bar = raw.lastIndexOf('|');
+        const tail = bar > 0 ? raw.slice(bar + 1).trim() : '';
+        if (tail && /^\d+$/.test(tail)) {
+            return { url: raw.slice(0, bar).trim(), weight: String(Math.max(1, Number(tail))) };
+        }
+        return { url: raw, weight: '' };
+    });
+}
+
+/** 静态地址的生效权重：没填按默认 100，网关会把 0 抬成 1，这里同样处理。 */
+function staticWeightOf(target) {
+    const text = String((target && target.weight) ?? '').trim();
+    if (!text) return DEFAULT_STATIC_WEIGHT;
+    const value = Math.floor(Number(text));
+    return Number.isFinite(value) ? Math.max(1, value) : DEFAULT_STATIC_WEIGHT;
 }
 
 /** 权重取整，坏值按 0 处理，避免把 NaN 提交给网关。 */

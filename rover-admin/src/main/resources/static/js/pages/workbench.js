@@ -610,22 +610,71 @@ window.RoverAdminPages.workbench = {
 
         wbActionTarget(action) {
             if (!action) return '';
-            return action.group ? action.serviceName + '@' + action.group : action.serviceName;
+            return action.serviceName + ' · ' + (action.group ? '分组 ' + action.group : '不限分组');
+        },
+
+        /** 服务端 impact 形如「缩量：…（80 → 70）」，数字卡片上已有，只取冒号前的动作名当标签。 */
+        wbActionKind(action) {
+            return action && action.impact ? action.impact.split('：')[0] : '';
         },
 
         /**
          * 预计流量占比：审批真正要看的东西。
          *
-         * Raw Weight 是路由表里的相对值，单独看不出影响——5 → 20 到底是多少流量，
+         * 权重是路由表里的相对值，单独看不出影响——5 → 20 到底是多少流量，
          * 取决于同路由其他版本的权重。占比由服务端按整条路由算好带过来：
          * 让「批准」这个动作建立在「改完之后流量会变成什么样」上，而不是一个抽象数字。
          */
-        wbActionTrafficPercent(action) {
+        wbActionShare(action) {
             if (!action || action.beforeTrafficPercent == null || action.desiredTrafficPercent == null) {
-                return '—';
+                return null;
             }
-            const one = (value) => value.toFixed(1) + '%';
-            return one(action.beforeTrafficPercent) + ' → ' + one(action.desiredTrafficPercent);
+            return {
+                from: action.beforeTrafficPercent.toFixed(1) + '%',
+                to: action.desiredTrafficPercent.toFixed(1) + '%',
+            };
+        },
+
+        /** 预览只有一行且不是差异（如「预览不可用：…」「无差异」）时直接露出，这类话审批人必须看到。 */
+        wbActionPreviewNote(action) {
+            const lines = (action && action.preview) || [];
+            return lines.length === 1 && !/^(ADDED|REMOVED|MODIFIED)\b/.test(lines[0]) ? lines[0] : '';
+        },
+
+        /**
+         * 把网关差异原文还原成「分组 / 改前 / 改后」表，让审批人看到整条路由而不止被改的那一行。
+         * 原文是 targets 列表的 toString：[{serviceName=x, group=v1, weight=100}, …] → […]；
+         * 对不上这个格式就返回 null，模板退回展示原文。
+         */
+        wbActionDiffRows(action) {
+            const lines = (action && action.preview) || [];
+            if (lines.length !== 1) return null;
+            const halves = lines[0].split(' → ');
+            if (halves.length !== 2) return null;
+            const parse = (text) => {
+                const map = new Map();
+                for (const m of text.matchAll(/\{serviceName=([^,}]*), group=([^,}]*), weight=(\d+)\}/g)) {
+                    map.set(m[2], Number(m[3]));
+                }
+                return map;
+            };
+            const before = parse(halves[0]);
+            const after = parse(halves[1]);
+            if (!before.size && !after.size) return null;
+            const share = (map, group) => {
+                const total = [...map.values()].reduce((sum, w) => sum + w, 0);
+                if (!map.has(group)) return '—';
+                const w = map.get(group);
+                return w + '（' + (total ? (w / total * 100).toFixed(1) : '0.0') + '%）';
+            };
+            const groups = [...new Set([...before.keys(), ...after.keys()])];
+            return groups.map(group => ({
+                group,
+                label: group || '不限分组',
+                before: share(before, group),
+                after: share(after, group),
+                changed: before.get(group) !== after.get(group),
+            }));
         },
 
         /**

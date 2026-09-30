@@ -347,16 +347,34 @@
                     <div v-else-if="!routes.length" class="empty">还没有路由，点右上角加一条。</div>
                     <table v-else class="table">
                         <thead><tr>
-                            <th>ID</th><th>前缀</th><th>版本（group 权重）</th><th>serviceName</th>
-                            <th>targetUrl / targetUrls</th><th>stripPrefix</th><th class="w-actions"></th>
+                            <th>ID</th><th>前缀</th><th>转发到（服务 → 分组 · 权重 · 占比）</th>
+                            <th>stripPrefix</th><th class="w-actions"></th>
                         </tr></thead>
                         <tbody>
                         <tr v-for="r in routes" :key="r.businessPrefix + r.id">
                             <td>{{ r.id || '-' }}</td>
                             <td><code>{{ r.businessPrefix }}</code></td>
-                            <td>{{ routeVersionLabel(r) || '-' }}</td>
-                            <td>{{ routeServiceName(r) || '-' }}</td>
-                            <td class="ellipsis" :title="r.targetUrl || r.targetUrls">{{ r.targetUrl || r.targetUrls || '-' }}</td>
+                            <td v-if="routeTargetRows(r).length">
+                                <div class="route-service"><span class="badge comp">注册中心</span><code>{{ routeServiceName(r) }}</code></div>
+                                <div class="route-targets">
+                                    <div class="route-target" v-for="t in routeTargetRows(r)" :key="t.group"
+                                         :class="{ stopped: !t.weight }">
+                                        <span>{{ t.groupLabel }}</span>
+                                        <span class="route-target-weight">权重 {{ t.weight }}</span>
+                                        <span class="route-target-share">{{ t.share }}</span>
+                                    </div>
+                                </div>
+                            </td>
+                            <td v-else>
+                                <div class="route-service"><span class="badge comp">静态地址</span></div>
+                                <div class="route-targets">
+                                    <div class="route-target" v-for="t in routeStaticRows(r)" :key="t.url">
+                                        <code>{{ t.url }}</code>
+                                        <span class="route-target-weight">权重 {{ t.weight }}<template v-if="t.isDefault">（默认）</template></span>
+                                        <span class="route-target-share">{{ t.share }}</span>
+                                    </div>
+                                </div>
+                            </td>
                             <td>{{ r.stripPrefix || '-' }}</td>
                             <td class="row-actions">
                                 <button class="btn mini" @click="openRouteDrawer(r)">编辑</button>
@@ -752,35 +770,47 @@
                                 <div v-for="action in wbActions" :key="action.actionId" class="wb-action">
                                     <div class="wb-action-head">
                                         <strong>{{ wbActionTypeLabel(action.type) }}</strong>
+                                        <span v-if="wbActionKind(action)" class="wb-action-kind">{{ wbActionKind(action) }}</span>
                                         <span class="badge ml-auto" :class="wbActionBadge(action.status)">
                                             {{ wbActionStatusLabel(action.status) }}
                                         </span>
                                     </div>
-                                    <div class="wb-kv">
-                                        <div><span>路由</span><b>{{ action.businessPrefix || action.routeId }}</b></div>
-                                        <div><span>目标版本</span><b>{{ wbActionTarget(action) }}</b></div>
-                                        <div><span>Raw Weight</span>
-                                            <b>{{ action.beforeWeight }} → {{ action.desiredWeight }}</b>
-                                        </div>
-                                        <div><span>预计流量占比</span><b>{{ wbActionTrafficPercent(action) }}</b></div>
-                                        <div><span>请求口径</span><b>{{ wbActionRequestText(action) }}</b></div>
-                                        <div>
-                                            <span>当前 revision</span>
-                                            <b>{{ action.expectedRevision }}<template v-if="action.appliedRevision != null"> → {{ action.appliedRevision }}</template></b>
-                                        </div>
+                                    <div class="wb-action-subject">
+                                        <code>{{ action.businessPrefix || action.routeId }}</code>
+                                        <span>{{ wbActionTarget(action) }}</span>
                                     </div>
-                                    <div v-if="action.impact" class="muted wb-action-impact">{{ action.impact }}</div>
-                                    <div v-if="action.preview && action.preview.length" class="wb-action-preview">
-                                        <div v-for="(line, index) in action.preview" :key="index" class="muted">
-                                            <code>{{ line }}</code>
-                                        </div>
-                                    </div>
-                                    <div v-if="action.errorMessage" class="banner warn slim">{{ action.errorMessage }}</div>
-                                    <div v-if="wbActionError[action.actionId]" class="banner warn slim">
-                                        {{ wbActionError[action.actionId] }}
+                                    <div class="wb-action-delta">
+                                        <span>权重</span>
+                                        <b class="from">{{ action.beforeWeight }}</b><i>→</i><b>{{ action.desiredWeight }}</b>
+                                        <template v-if="wbActionShare(action)">
+                                            <span>流量</span>
+                                            <b class="from">{{ wbActionShare(action).from }}</b><i>→</i><b>{{ wbActionShare(action).to }}</b>
+                                        </template>
                                     </div>
                                     <div class="wb-action-progress" :class="wbActionProgress(action).tone">
                                         {{ wbActionProgress(action).mark }} {{ wbActionProgress(action).text }}
+                                    </div>
+                                    <div class="muted wb-action-facts">
+                                        按「{{ wbActionRequestText(action) }}」提出 · 路由表版本 {{ action.expectedRevision }}<template v-if="action.appliedRevision != null"> → {{ action.appliedRevision }}</template>
+                                    </div>
+                                    <div v-if="wbActionPreviewNote(action)" class="muted wb-action-facts">{{ wbActionPreviewNote(action) }}</div>
+                                    <details v-else-if="action.preview && action.preview.length" class="wb-action-diff">
+                                        <summary>整条路由改前 / 改后</summary>
+                                        <table v-if="wbActionDiffRows(action)" class="wb-action-diff-table">
+                                            <thead><tr><th>分组</th><th>改前</th><th>改后</th></tr></thead>
+                                            <tbody>
+                                            <tr v-for="row in wbActionDiffRows(action)" :key="row.group" :class="{ changed: row.changed }">
+                                                <td>{{ row.label }}</td><td>{{ row.before }}</td><td>{{ row.after }}</td>
+                                            </tr>
+                                            </tbody>
+                                        </table>
+                                        <template v-else>
+                                            <code v-for="(line, index) in action.preview" :key="index">{{ line }}</code>
+                                        </template>
+                                    </details>
+                                    <div v-if="action.errorMessage" class="banner warn slim">{{ action.errorMessage }}</div>
+                                    <div v-if="wbActionError[action.actionId]" class="banner warn slim">
+                                        {{ wbActionError[action.actionId] }}
                                     </div>
                                     <div class="wb-action-foot">
                                         <span class="muted wb-action-meta">{{ wbActionMeta(action) }}</span>
@@ -1235,22 +1265,30 @@
                 </select>
             </div>
             <div class="field" v-if="showDiscoveryFields">
-                <label>版本目标（同一服务的不同 group，权重决定放量比例）*</label>
+                <label>按分组分流（同一个服务，每个分组一行，各拿一份权重）*</label>
+                <div class="target-row target-head">
+                    <span>服务名</span><span>分组（版本）</span>
+                    <span class="w-weight">权重</span><span class="target-share">占比</span>
+                    <span class="target-actions"></span>
+                </div>
                 <div class="target-row" v-for="(t, i) in routeForm.targets" :key="i">
                     <input v-model="t.serviceName" :placeholder="serviceNameHint()">
-                    <input v-model="t.group" placeholder="版本，如 v1">
+                    <input v-model="t.group" placeholder="如 v1；留空 = 不限分组">
                     <input v-model.number="t.weight" type="number" min="0" step="1" class="w-weight" title="权重">
                     <span class="target-share">{{ targetShare(t) }}</span>
-                    <button class="btn mini ghost" @click="removeTarget(i)">移除</button>
-                    <!-- 编辑已有路由时，才能用「只改这一个版本」的专用原语 -->
-                    <button v-if="editingPrefix" class="btn mini" @click="applyTargetWeight(t)"
-                            title="只调整这一个版本的权重，不动同一条路由上的其它目标">调权重</button>
-                    <button v-if="editingPrefix && t.weight > 0" class="btn mini danger" @click="stopTarget(t)"
-                            title="把这个版本的权重归零，即停推">停推</button>
+                    <span class="target-actions">
+                        <button class="btn mini ghost" @click="removeTarget(i)">移除</button>
+                        <!-- 编辑已有路由时，才能用「只改这一个分组」的专用原语 -->
+                        <button v-if="editingPrefix" class="btn mini" @click="applyTargetWeight(t)"
+                                title="只调整这一个分组的权重，不动同一条路由上的其它分组">调权重</button>
+                        <button v-if="editingPrefix && t.weight > 0" class="btn mini danger" @click="stopTarget(t)"
+                                title="把这个分组的权重归零，即停推">停推</button>
+                    </span>
                 </div>
-                <button class="btn mini" @click="addTarget">加一个版本</button>
+                <button class="btn mini" @click="addTarget">加一个分组</button>
                 <p class="field-hint">
-                    权重只表示相对比例：v1=95、v2=5 就是 5% 放量。把某个版本改成 0 即停推该版本；
+                    分组留空表示不区分分组，会打到这个服务的全部实例（v1、v2 都算），做灰度时每一行都要填分组。
+                    权重只表示同一服务各分组之间的相对比例：v1=95、v2=5 就是 v2 拿 5% 流量。把某个分组改成 0 即停推；
                     没有可接流实例的版本会让这条路由直接返回 503，不会偷偷改投其它版本。
                     上面的「调权重 / 停推」只改你这一个版本，不会误动同一条路由上的其它目标。
                 </p>
@@ -1271,12 +1309,24 @@
                 <input v-model="routeForm.stickyHeader" placeholder="留空则按客户端 IP 粘住同一版本">
             </div>
             <div class="field" v-if="showStaticFields">
-                <label>targetUrl</label>
-                <input v-model="routeForm.targetUrl" placeholder="http://127.0.0.1:8081">
-            </div>
-            <div class="field" v-if="showStaticFields">
-                <label>targetUrls（多机，可带|权重）</label>
-                <input v-model="routeForm.targetUrls" placeholder="http://127.0.0.1:8081,http://127.0.0.1:8082|200">
+                <label>静态地址（一行一台机器，按权重分流）*</label>
+                <div class="target-row target-head">
+                    <span>地址</span><span class="w-weight">权重</span><span class="target-share">占比</span>
+                    <span class="target-actions narrow"></span>
+                </div>
+                <div class="target-row" v-for="(t, i) in routeForm.staticTargets" :key="i">
+                    <input v-model="t.url" placeholder="http://127.0.0.1:8081">
+                    <input v-model="t.weight" type="number" min="1" step="1" class="w-weight" placeholder="100">
+                    <span class="target-share">{{ staticShare(t) }}</span>
+                    <span class="target-actions narrow">
+                        <button class="btn mini ghost" @click="removeStaticTarget(i)">移除</button>
+                    </span>
+                </div>
+                <button class="btn mini" @click="addStaticTarget">加一台机器</button>
+                <p class="field-hint">
+                    权重不填就按 100 算，所以两台都不填就是各拿 50%。权重只看相对比例：8081 填 200、8082 不填，
+                    就是 8081 拿 66.7%、8082 拿 33.3%。权重最小是 1，想让某台不接流量就直接移除这一行。
+                </p>
             </div>
         </div>
         <div class="form-actions">

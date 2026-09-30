@@ -305,7 +305,9 @@ code {
 .table tbody tr:hover { background: var(--accent-soft); }
 .table td { font-variant-numeric: tabular-nums; }
 .table .w-actions { width: 120px; }
-.row-actions { display: flex; gap: 6px; }
+/* 保持 table-cell：设成 flex 会脱离表格布局，行高撑开时这一格的底线就和整行错位 */
+.row-actions { white-space: nowrap; }
+.row-actions .btn + .btn { margin-left: 6px; }
 .row-error { background: var(--danger-soft); }
 
 /* ============ 徽标 ============ */
@@ -357,6 +359,34 @@ code {
     color: var(--muted);
     font-variant-numeric: tabular-nums;
 }
+/* 按钮区定宽：「停推」按行出现，不定宽的话每行输入框宽度不同，表头就对不齐 */
+.field .target-actions { flex: 0 0 168px; display: flex; gap: 6px; }
+.field .target-actions .btn { white-space: nowrap; }
+.field .target-head { margin-bottom: 2px; font-size: 12px; color: var(--muted); }
+.field .target-head span { flex: 1; min-width: 0; }
+.field .target-head span.w-weight { flex: 0 0 72px; }
+.field .target-head span.target-share { flex: 0 0 52px; text-align: right; }
+.field .target-head span.target-actions { flex: 0 0 168px; }
+.field .target-actions.narrow,
+.field .target-head span.target-actions.narrow { flex: 0 0 48px; }
+
+/* 路由列表「转发到」：服务一行，下面每个分组一行 */
+.route-service { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+/* 同一路由的所有行共用一张网格，名字长短不一时权重列也能上下对齐；列不拉伸铺满单元格 */
+.route-targets {
+    display: grid;
+    grid-template-columns: max-content max-content max-content;
+    justify-content: start;
+    column-gap: 16px;
+    padding-left: 12px;
+    font-size: 12px;
+    line-height: 1.9;
+    font-variant-numeric: tabular-nums;
+}
+.route-target { display: contents; }
+.route-target-weight { color: var(--muted); }
+.route-target-share { text-align: right; font-weight: 500; }
+.route-target.stopped > * { color: var(--muted); text-decoration: line-through; }
 .field .field-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
 
 /* 路由变更预览：一行一条差异，类型用浅底小标签区分，沿用 badge 的色板 */
@@ -420,6 +450,8 @@ code {
 
 .btn.mini { padding: 3px 8px; font-size: 12px; border-radius: var(--radius-sm); background: var(--card); color: var(--ink); border: 1px solid var(--line); }
 .btn.mini:hover { background: var(--bg); }
+.btn.mini.primary { background: var(--accent); color: #f4f5f2; border-color: var(--accent); }
+.btn.mini.primary:hover:not(:disabled) { background: #2f442b; }
 .btn.mini.danger { color: var(--danger); border-color: #e3b8b4; background: var(--card); }
 .btn.mini.danger:hover { background: var(--danger-soft); }
 
@@ -770,6 +802,11 @@ code {
 .wb-md pre.wb-code code { padding: 0; background: transparent; font-size: 12px; line-height: 1.6; white-space: pre; }
 .wb-md blockquote { margin: 0 0 8px; padding: 2px 0 2px 10px; border-left: 2px solid var(--line); color: var(--muted); }
 .wb-md hr { margin: 10px 0; border: 0; border-top: 1px solid var(--line); }
+.wb-md table.wb-table { width: 100%; border-collapse: collapse; margin: 0 0 8px; font-size: 13px; }
+.wb-md table.wb-table th, .wb-md table.wb-table td {
+    border-bottom: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; word-break: break-all;
+}
+.wb-md table.wb-table th { color: var(--muted); font-weight: 600; }
 .wb-md a { color: var(--accent); }
 .wb-md strong { font-weight: 600; }
 
@@ -985,16 +1022,53 @@ code {
 .wb-actions { display: flex; flex-direction: column; gap: 10px; }
 .wb-action { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--card); }
 .wb-action-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
-.wb-action-impact { font-size: 12px; }
-/* 预览是网关给的原始差异行，用等宽字：与服务端日志、路由页看到的同一份文本 */
-.wb-action-preview { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; }
+.wb-action-head .badge { white-space: nowrap; }
+.wb-action-kind {
+    white-space: nowrap;
+    font-size: 11px;
+    padding: 0 6px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+}
+.wb-action-subject { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; min-width: 0; }
+.wb-action-subject span { color: var(--muted); overflow-wrap: anywhere; }
+/* 卡片的主角：改前灰、改后实，两行共用列宽让箭头上下对齐 */
+.wb-action-delta {
+    display: grid;
+    grid-template-columns: auto auto auto 1fr;
+    align-items: baseline;
+    column-gap: 8px;
+    row-gap: 2px;
+    padding: 8px 10px;
+    background: var(--wash);
+    border-radius: var(--radius-sm);
+    font-variant-numeric: tabular-nums;
+}
+.wb-action-delta span { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.wb-action-delta b { font-family: var(--mono); font-size: 15px; font-weight: 600; }
+.wb-action-delta b.from { font-weight: 400; color: var(--muted); text-align: right; }
+.wb-action-delta i { font-style: normal; color: var(--muted); }
+.wb-action-facts { font-size: 11.5px; }
+.wb-action-diff { font-size: 11.5px; overflow-x: auto; }
+.wb-action-diff summary { cursor: pointer; color: var(--muted); }
+.wb-action-diff summary:hover { color: var(--ink); }
+.wb-action-diff code { display: block; margin-top: 4px; overflow-wrap: anywhere; }
+.wb-action-diff-table { width: 100%; margin-top: 6px; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.wb-action-diff-table th,
+.wb-action-diff-table td { padding: 3px 4px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.wb-action-diff-table th:first-child,
+.wb-action-diff-table td:first-child { text-align: left; }
+.wb-action-diff-table th { font-weight: 500; color: var(--muted); }
+.wb-action-diff-table tr.changed td { font-weight: 600; }
 .wb-action-progress { font-size: 12px; font-weight: 700; }
 .wb-action-progress.idle { color: var(--muted); }
 .wb-action-progress.run { color: var(--accent); }
 .wb-action-progress.ok { color: var(--ok); }
 .wb-action-progress.bad { color: var(--danger); }
 .wb-action-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
-.wb-action-meta { font-size: 11.5px; }
+/* 署名独占一行，按钮统一落到下一行右侧：否则两个按钮会一个跟在署名后、一个掉到下一行 */
+.wb-action-meta { font-size: 11.5px; flex-basis: 100%; }
 .wb-action-foot .btn { margin-left: auto; }
 .wb-action-foot .btn + .btn { margin-left: 0; }
 
@@ -1330,7 +1404,7 @@ code {
     top: 0;
     right: 0;
     bottom: 0;
-    width: 420px;
+    width: 600px;
     max-width: 92vw;
     background: var(--card);
     z-index: 81;
