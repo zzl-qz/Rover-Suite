@@ -14,6 +14,7 @@ import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
@@ -56,6 +57,8 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     private final Object registrationLock = new Object();
 
     private final ThreadPoolExecutor workers;
+    private final ScheduledThreadPoolExecutor deadlines;
+    private final AgentRunLimits runLimits;
 
     /** 内存实现与默认执行参数；接入持久化后由组合根注入具体实现。 */
     public InvestigationTaskRegistry() {
@@ -83,11 +86,24 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     public InvestigationTaskRegistry(AgentTaskRepository records, AgentExecutionSettings settings,
                                      TaskEventBus events, AgentMetrics metrics,
                                      AgentCheckpointRepository checkpoints) {
+        this(records, settings, events, metrics, checkpoints, AgentRunLimits.defaults());
+    }
+
+    public InvestigationTaskRegistry(AgentTaskRepository records, AgentExecutionSettings settings,
+                                     TaskEventBus events, AgentMetrics metrics,
+                                     AgentCheckpointRepository checkpoints, AgentRunLimits runLimits) {
         this.records = records;
         this.settings = settings;
         this.events = events;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
         this.checkpoints = checkpoints == null ? new InMemoryAgentCheckpointRepository() : checkpoints;
+        this.runLimits = runLimits;
+        this.deadlines = new ScheduledThreadPoolExecutor(1, runnable -> {
+            Thread thread = new Thread(runnable, "rover-agent-deadline");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.deadlines.setRemoveOnCancelPolicy(true);
         this.workers = new ThreadPoolExecutor(settings.workerThreads(), settings.workerThreads(), 0,
                 TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(settings.queueCapacity()), runnable -> {
                     Thread thread = new Thread(runnable, "rover-agent-worker");
@@ -114,7 +130,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
                 throw new RejectedExecutionException("调查任务已满");
             }
             InvestigationTask task = new InvestigationTask(UUID.randomUUID().toString(), sessionId, question,
-                    records::save, events, metrics, checkpoints);
+                    records::save, events, metrics, checkpoints, runLimits, deadlines);
             executing.put(task.taskId(), task);
             records.save(task.view());
             // 通道随登记一起开：全程无人订阅时，终态事件也不会丢，晚连上的订阅者仍能读到并收尾。
@@ -200,6 +216,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
 
     @PreDestroy
     public void stop() {
+        deadlines.shutdownNow();
         workers.shutdownNow();
     }
 

@@ -27,6 +27,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
@@ -81,9 +84,19 @@ public final class InvestigationTask implements InvestigationReporter {
     private volatile boolean cancelled;
     /** 当前执行该任务的线程；取消时用于中断阻塞中的取数/模型调用（不参与快照，故 transient）。 */
     private transient Thread runner;
+    private final AgentRunBudget budget;
+    private final ScheduledExecutorService deadlines;
+    private ScheduledFuture<?> deadlineTimer;
 
     InvestigationTask(String taskId, String sessionId, String question, Consumer<TaskView> snapshotSink,
                       TaskEventBus events, AgentMetrics metrics, AgentCheckpointRepository checkpoints) {
+        this(taskId, sessionId, question, snapshotSink, events, metrics, checkpoints,
+                AgentRunLimits.defaults(), null);
+    }
+
+    InvestigationTask(String taskId, String sessionId, String question, Consumer<TaskView> snapshotSink,
+                      TaskEventBus events, AgentMetrics metrics, AgentCheckpointRepository checkpoints,
+                      AgentRunLimits limits, ScheduledExecutorService deadlines) {
         this.taskId = taskId;
         this.sessionId = sessionId;
         this.question = question;
@@ -91,6 +104,12 @@ public final class InvestigationTask implements InvestigationReporter {
         this.events = events;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
         this.checkpoints = checkpoints;
+        this.budget = new AgentRunBudget(limits);
+        this.deadlines = deadlines;
+    }
+
+    public AgentRunBudget budget() {
+        return budget;
     }
 
     public String taskId() {
@@ -240,6 +259,9 @@ public final class InvestigationTask implements InvestigationReporter {
      * 澄清提问写进快照，前端据此在任务卡上提问；任务不占用会话并发位，用户可以继续追问。
      */
     public synchronized void waitForInput(String clarification) {
+        if (status.terminal() || cancelled()) {
+            return;
+        }
         this.clarification = clarification;
         this.completedAtMillis = System.currentTimeMillis();
         this.status = TaskStatus.WAITING_INPUT;
@@ -268,6 +290,11 @@ public final class InvestigationTask implements InvestigationReporter {
 
     /** 协作式取消的判据：执行线程据此在检查点停下。volatile 读，允许非同步快速轮询。 */
     public boolean cancelled() {
+        // 模型调用方可能把异常降级为规则结果；预算耗尽仍然必须结束整个任务。
+        if (!cancelled && budget.stopReason() != null) {
+            fail(budget.stopReason());
+            return true;
+        }
         return cancelled;
     }
 
@@ -277,28 +304,53 @@ public final class InvestigationTask implements InvestigationReporter {
      * 标记取消后把状态置为 {@link TaskStatus#CANCELLED}、发布 {@link TaskEventType#TASK_CANCELLED} 并落定指标；
      * 执行线程看到 {@link #cancelled()} 后应在下一个检查点停下，不再产出结论。已终态或已取消的任务返回 false。
      */
-    public synchronized boolean cancel(String reason) {
-        if (status != TaskStatus.PENDING && status != TaskStatus.RUNNING) {
-            return false;
+    public boolean cancel(String reason) {
+        synchronized (this) {
+            if (status != TaskStatus.PENDING && status != TaskStatus.RUNNING) {
+                return false;
+            }
+            cancelled = true;
+            this.completedAtMillis = System.currentTimeMillis();
+            this.status = TaskStatus.CANCELLED;
+            persist();
+            publish(TaskEventType.TASK_CANCELLED, Map.of("status", status,
+                    "reason", reason == null || reason.isBlank() ? "任务已被用户取消" : reason));
+            settle();
         }
-        cancelled = true;
-        this.completedAtMillis = System.currentTimeMillis();
-        this.status = TaskStatus.CANCELLED;
-        persist();
-        publish(TaskEventType.TASK_CANCELLED, Map.of("status", status,
-                "reason", reason == null || reason.isBlank() ? "任务已被用户取消" : reason));
-        settle();
+        budget.stop(reason == null || reason.isBlank() ? "任务已被用户取消" : reason);
         return true;
     }
 
     /** 记录当前执行线程：取消时用来中断阻塞中的取数/模型调用。仅在 Agent Worker 线程内调用。 */
     public synchronized void markRunning() {
         this.runner = Thread.currentThread();
+        budget.enter();
+        if (deadlines != null && deadlineTimer == null && status.active()) {
+            deadlineTimer = deadlines.schedule(this::expire,
+                    budget.remaining().toNanos(), TimeUnit.NANOSECONDS);
+        }
     }
 
     /** 执行线程退场前清除记录，避免持有线程引用。 */
     public synchronized void clearRunning() {
         this.runner = null;
+        if (deadlineTimer != null) {
+            deadlineTimer.cancel(false);
+        }
+        budget.leave();
+    }
+
+    /** 截止时间只设一次；持续输出不延期，迟到的完成/失败不得覆盖这个终态。 */
+    private void expire() {
+        synchronized (this) {
+            if (!status.active()) {
+                return;
+            }
+            cancelled = true;
+            fail(budget.timeoutReason());
+        }
+        budget.stop(budget.timeoutReason());
+        interruptRunner();
     }
 
     /** 中断执行线程：最差情况是阻塞调用自然返回后由检查点兜底，不会损坏状态。 */
@@ -316,6 +368,9 @@ public final class InvestigationTask implements InvestigationReporter {
      */
     @Override
     public synchronized void step(AgentStepType type, String name, StepStatus status, String detail) {
+        if (this.status.terminal()) {
+            return;
+        }
         this.currentStage = type;
         if (status != StepStatus.RUNNING) {
             for (int i = steps.size() - 1; i >= 0; i--) {
@@ -363,6 +418,9 @@ public final class InvestigationTask implements InvestigationReporter {
     }
 
     public synchronized void complete(InvestigationReport report) {
+        if (status.terminal() || cancelled()) {
+            return;
+        }
         this.report = report;
         this.completedAtMillis = System.currentTimeMillis();
         this.status = TaskStatus.COMPLETED;
@@ -378,6 +436,9 @@ public final class InvestigationTask implements InvestigationReporter {
     }
 
     public synchronized void fail(String error) {
+        if (status.terminal()) {
+            return;
+        }
         this.error = error;
         this.completedAtMillis = System.currentTimeMillis();
         this.status = TaskStatus.FAILED;

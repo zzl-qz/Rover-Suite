@@ -52,7 +52,7 @@ public final class SpringAiConversationModel implements ConversationModel {
         long startedAt = System.nanoTime();
         ModelCallOutcome outcome = ModelCallOutcome.OK;
         try {
-            gateway.chatClient().prompt()
+            AgentBudgetAdvisor.client(gateway.chatClient(), tools.budget(), gateway::reasoningDelta).prompt()
                     .system(systemPrompt)
                     .user(userMessage)
                     .tools(tools)
@@ -61,7 +61,9 @@ public final class SpringAiConversationModel implements ConversationModel {
                     // 也能从每帧是否携带工具调用来区分「中间轮次」与「最终回答」。
                     .chatResponse()
                     .doOnNext(response -> collect(response, answer, thinking, onDelta, onThinking))
-                    .blockLast();
+                    .takeUntilOther(tools.budget().stopSignal())
+                    .doOnComplete(tools.budget()::check)
+                    .blockLast(tools.budget().remaining());
             if (answer.isEmpty()) {
                 outcome = ModelCallOutcome.EMPTY;
             }

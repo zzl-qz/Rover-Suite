@@ -215,7 +215,10 @@ public final class ToolLoopService {
 
     /** 失败说明：把「哪一步出问题」说清楚，并保住已经取到的数据，而不是笼统报一句失败。 */
     private static String failureText(Exception ex, OpsTools tools) {
-        String reason = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+        String reason = tools.budget().stopReason();
+        if (reason == null) {
+            reason = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+        }
         return tools.callCount() == 0
                 ? "模型调用失败，本次没有取到任何数据：" + reason
                 : "模型调用失败（已取数 " + tools.callCount() + " 次，这些数据仍可在步骤里查看）：" + reason;

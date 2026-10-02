@@ -60,6 +60,33 @@ falling back to the rule-based conclusion when there is none. The "investigation
 started / continued" notice stays in the process row instead of taking the
 answer's place.
 
+## Agent execution limits
+
+Every task has a shared budget. Target interpretation, model retries, investigation
+planning, and the conversation's tool loop use the same counters. Configure these
+values in the external Spring configuration; changes take effect after restart:
+
+| Property | Default | Meaning |
+| --- | --- | --- |
+| `rover.agent.limits.max-model-calls` | `20` | Maximum model requests per task, including retries |
+| `rover.agent.limits.max-output-tokens` | `4096` | Maximum output per model request; streamed reasoning is included in local accounting |
+| `rover.agent.limits.max-total-tokens` | `100000` | Task budget for cumulative input and output, including repeated conversation history and tool results |
+| `rover.agent.limits.task-timeout-seconds` | `180` | Total time from Worker execution start; incoming stream chunks do not extend it |
+| `rover.agent.limits.max-repeated-tool-results` | `3` | Stop when the same tool and JSON arguments return the same result this many times in a row for that argument set |
+
+Input is estimated before each request using the local tokenizer; streamed output
+is accounted for while it arrives. When provider usage is available, larger
+reported counts replace the estimates. Estimates vary by model and do not promise
+an exact billing ceiling. Output limits are also sent to the provider.
+
+Spring AI additionally limits conversation tool calls to **30 total / 10 per
+tool**, using `spring.ai.tools.limits.*` and `on-limit-exceeded: THROW`. Model and
+task budget exhaustion produce `FAILED` with a readable reason, cancel the model
+response stream, and keep the evidence already saved. Late responses cannot
+replace the terminal state. Cancelling a request stops local execution; a provider
+may continue work already accepted, and blocking tools must cooperate with
+interruption or enforce their own IO timeouts.
+
 ## First login
 
 The console stops on the login page. The default username and password are both

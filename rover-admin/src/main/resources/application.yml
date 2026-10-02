@@ -39,10 +39,20 @@ spring:
         # 表现就是「问题稍微多一点就答不全」。
         max-calls-per-tool-default: 10
         max-total-tool-calls: 30
+        on-limit-exceeded: THROW
 
 # Admin 只调组件管理口，自己不持有真实配置
 rover:
   agent:
+    limits:
+      # 每个任务共用：目标解析、重试、调查规划和工具循环都不重置预算。
+      max-model-calls: 20
+      max-output-tokens: 4096
+      # 服务商未返回 usage 时按本地 tokenizer 估算；累计包含输入、输出和思考。
+      max-total-tokens: 100000
+      # 从 Worker 开始执行计时，持续输出不会延长时限。
+      task-timeout-seconds: 180
+      max-repeated-tool-results: 3
     context:
       # 上下文窗口：每次提问最多带上最近多少条会话消息；历史不会被无限制发给模型
       recent-message-limit: ${ROVER_AGENT_CONTEXT_MESSAGE_LIMIT:8}
