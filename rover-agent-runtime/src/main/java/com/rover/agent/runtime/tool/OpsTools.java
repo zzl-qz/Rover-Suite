@@ -23,6 +23,7 @@ import com.rover.agent.core.util.Texts;
 import com.rover.agent.runtime.action.ActionProposal;
 import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.task.InvestigationTask;
+import com.rover.agent.runtime.task.AgentRunBudget;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -316,6 +317,10 @@ public final class OpsTools {
     /** 本次实际调用工具的次数。 */
     public int callCount() {
         return calls.get();
+    }
+
+    public AgentRunBudget budget() {
+        return task.budget();
     }
 
     /**

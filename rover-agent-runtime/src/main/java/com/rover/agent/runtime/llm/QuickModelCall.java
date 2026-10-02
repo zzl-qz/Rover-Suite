@@ -1,6 +1,7 @@
 package com.rover.agent.runtime.llm;
 
 import com.rover.agent.runtime.metrics.ModelCallOutcome;
+import com.rover.agent.runtime.task.AgentRunBudget;
 import java.io.InterruptedIOException;
 import java.util.function.Function;
 import org.slf4j.Logger;
@@ -30,13 +31,15 @@ final class QuickModelCall {
     static String content(ChatModelGateway gateway, int timeoutSeconds, String scene,
                           Function<ChatClient, String> call) {
         try {
-            return call.apply(gateway.chatClient(timeoutSeconds));
+            return call.apply(AgentBudgetAdvisor.client(gateway.chatClient(timeoutSeconds),
+                    AgentRunBudget.current(), gateway::reasoningDelta));
         } catch (RuntimeException failure) {
             if (timeoutSeconds <= 0 || !timedOut(failure)) {
                 throw failure;
             }
             log.warn("Agent 模型调用超时（{}），重试一次", scene);
-            return call.apply(gateway.chatClient(timeoutSeconds));
+            return call.apply(AgentBudgetAdvisor.client(gateway.chatClient(timeoutSeconds),
+                    AgentRunBudget.current(), gateway::reasoningDelta));
         }
     }
 

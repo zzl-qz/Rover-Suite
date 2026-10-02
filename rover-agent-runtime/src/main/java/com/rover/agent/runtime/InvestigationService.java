@@ -230,7 +230,7 @@ public final class InvestigationService {
                 return;
             }
             log.error("Agent 诊断任务异常", ex);
-            task.fail("诊断任务执行失败");
+            task.fail(task.budget().stopReason() == null ? "诊断任务执行失败" : task.budget().stopReason());
         } finally {
             task.clearRunning();
         }

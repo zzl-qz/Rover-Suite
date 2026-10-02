@@ -7,6 +7,7 @@ import com.rover.agent.core.model.Hypothesis;
 import com.rover.agent.core.model.Verdict;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.metrics.ModelCallOutcome;
+import com.rover.agent.runtime.task.AgentRunBudget;
 import com.rover.agent.runtime.tool.SnapshotTools;
 import java.util.List;
 import java.util.Map;
@@ -111,7 +112,8 @@ public final class ModelExplainer {
         long startedAt = System.nanoTime();
         ModelCallOutcome outcome = ModelCallOutcome.OK;
         try {
-            gateway.chatClient().prompt()
+            AgentBudgetAdvisor.client(gateway.chatClient(),
+                    AgentRunBudget.current(), gateway::reasoningDelta).prompt()
                     .system(SYSTEM_PROMPT)
                     .user("请求路径：" + path + "\n" + UntrustedText.block("用户问题", question)
                             + describeHypotheses(hypotheses) + describeSnapshots(core))

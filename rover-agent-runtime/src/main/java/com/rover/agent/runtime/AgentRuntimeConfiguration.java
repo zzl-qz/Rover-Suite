@@ -40,6 +40,7 @@ import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import com.rover.agent.runtime.planning.LlmInvestigationPlanner;
 import com.rover.agent.runtime.repository.AgentStore;
 import com.rover.agent.runtime.task.AgentExecutionSettings;
+import com.rover.agent.runtime.task.AgentRunLimits;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
 import com.rover.agent.runtime.task.TaskEventBus;
@@ -154,6 +155,17 @@ public class AgentRuntimeConfiguration {
     }
 
     @Bean
+    public AgentRunLimits agentRunLimits(
+            @Value("${rover.agent.limits.max-model-calls:20}") int maxModelCalls,
+            @Value("${rover.agent.limits.max-output-tokens:4096}") int maxOutputTokens,
+            @Value("${rover.agent.limits.max-total-tokens:100000}") long maxTotalTokens,
+            @Value("${rover.agent.limits.task-timeout-seconds:180}") int timeoutSeconds,
+            @Value("${rover.agent.limits.max-repeated-tool-results:3}") int maxRepeatedToolResults) {
+        return new AgentRunLimits(maxModelCalls, maxOutputTokens, maxTotalTokens,
+                java.time.Duration.ofSeconds(timeoutSeconds), maxRepeatedToolResults);
+    }
+
+    @Bean
     public InvestigationTaskRegistry agentTaskRegistry(AgentTaskRepository agentTaskRepository,
                                                        AgentCheckpointRepository agentCheckpointRepository,
                                                        @Value("${rover.agent.execution.worker-threads:2}")
@@ -162,11 +174,11 @@ public class AgentRuntimeConfiguration {
                                                        int queueCapacity,
                                                        @Value("${rover.agent.execution.task-capacity:200}")
                                                        int taskCapacity,
-                                                       AgentMetrics agentMetrics) {
+                                                       AgentMetrics agentMetrics, AgentRunLimits agentRunLimits) {
         // 参数越界时在装配阶段直接失败：配置错误必须早暴露，而不是运行期以「任务莫名被拒」出现。
         AgentExecutionSettings settings = new AgentExecutionSettings(workerThreads, queueCapacity, taskCapacity);
         return new InvestigationTaskRegistry(agentTaskRepository, settings, new TaskEventBus(), agentMetrics,
-                agentCheckpointRepository);
+                agentCheckpointRepository, agentRunLimits);
     }
 
     @Bean
@@ -277,8 +289,7 @@ public class AgentRuntimeConfiguration {
     /**
      * 对话主路径：模型自主决定查什么、查几次、怎么答；工具来自只读能力执行器。
      *
-     * 刻意不收紧超时：一次对话可能包含多轮工具调用（先看实例、再查它的指标），
-     * 用十秒级的快速上限会把它掐断在取数途中。等得久一些但答得完整，比快而残缺更符合这个入口的用途。
+     * 对话沿用模型配置的单次超时；任务层另设总截止时间，预算 Advisor 约束每轮请求。
      */
     @Bean
     public ToolLoopService agentToolLoopService(CapabilityExecutor agentCapabilityExecutor,

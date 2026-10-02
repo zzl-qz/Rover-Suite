@@ -2,6 +2,7 @@ package com.rover.admin.agent.model;
 
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.TracingToolCallingManager;
+import com.rover.agent.runtime.task.AgentRunLimits;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.micrometer.observation.ObservationRegistry;
 import jakarta.annotation.PostConstruct;
@@ -29,6 +30,7 @@ import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.openai.OpenAiChatModel;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.retry.RetryPolicy;
 import org.springframework.core.retry.RetryTemplate;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -49,6 +51,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
 
     private final ModelConfigStore store;
     private final ObjectProvider<ToolCallingManager> toolCallingManagers;
+    private final AgentRunLimits runLimits;
 
     private volatile ModelSettings applied = ModelSettings.none();
     private volatile ChatClient client;
@@ -64,8 +67,15 @@ public class AdminChatModelGateway implements ChatModelGateway {
     private volatile Instant appliedAt;
 
     public AdminChatModelGateway(ModelConfigStore store, ObjectProvider<ToolCallingManager> toolCallingManagers) {
+        this(store, toolCallingManagers, AgentRunLimits.defaults());
+    }
+
+    @Autowired
+    public AdminChatModelGateway(ModelConfigStore store, ObjectProvider<ToolCallingManager> toolCallingManagers,
+                                AgentRunLimits runLimits) {
         this.store = store;
         this.toolCallingManagers = toolCallingManagers;
+        this.runLimits = runLimits;
     }
 
     @PostConstruct
@@ -322,6 +332,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
     private ChatModel thinkingCapableModel(ModelSettings settings, boolean thinking) {
         DeepSeekChatOptions.Builder options = DeepSeekChatOptions.builder();
         options.model(settings.model());
+        options.maxTokens(runLimits.maxOutputTokens());
         if (supportsThinking(settings.model())) {
             if (thinking) {
                 options.enableThinking();
@@ -352,6 +363,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
                 .baseUrl(settings.baseUrl())
                 .apiKey(key(settings))
                 .model(settings.model())
+                .maxTokens(runLimits.maxOutputTokens())
                 .timeout(Duration.ofSeconds(ModelSettings.clampTimeout(settings.timeoutSeconds())))
                 .maxRetries(0)
                 .build();
