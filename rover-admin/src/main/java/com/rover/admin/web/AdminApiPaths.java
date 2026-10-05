@@ -9,15 +9,12 @@ public final class AdminApiPaths {
     public static final String PREFIX = "/api";
     public static final String OVERVIEW = "/overview";
     public static final String LIVE = "/live";
+    public static final String METRICS = "/metrics";
+    public static final String METRICS_ROUTES = "/metrics/routes";
     public static final String ROUTES = "/routes";
     /** 路由变更预览：只校验与比对，不落盘、不生效。 */
     public static final String ROUTES_PREVIEW = "/routes/preview";
-    /**
-     * 单版本权重调整：灰度放量 / 停推的专用原语。
-     *
-     * 与「打开整条路由编辑再整体保存」的区别是它只改一个版本的权重，内部仍走整表 + 乐观锁，
-     * 因此既窄（不会误改别的目标）又安全（并发修改照样被 revision 拦下）。
-     */
+    /** 单个版本目标的权重调整接口，使用 revision 乐观锁。 */
     public static final String ROUTES_TARGET_WEIGHT = "/routes/targets/weight";
     /** 回滚到最近某次已应用的路由快照（产生新版本，不是覆盖历史）。 */
     public static final String ROUTES_ROLLBACK = "/routes/rollback";

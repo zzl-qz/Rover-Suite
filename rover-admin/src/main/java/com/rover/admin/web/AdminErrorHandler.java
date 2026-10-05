@@ -21,14 +21,7 @@ public class AdminErrorHandler {
         return response(HttpStatus.BAD_REQUEST, "请求参数或下游校验失败");
     }
 
-    /**
-     * 下游管理口的拒绝原样透传。
-     *
-     * 4xx 用下游自己的状态码与文案：版本冲突（409）必须让操作者看到「期望几、当前几」，
-     * 否则前端只能按 400 理解成「参数写错了」，于是反复重提同一个过期版本。
-     * 5xx 或没拿到响应（statusCode=0）按 502 处理，且不回声下游正文——
-     * 下游的堆栈与内部地址不该出现在浏览器里。
-     */
+    /** 透传管理口 4xx 状态与文案；5xx 或未收到响应时返回 502，隐藏下游正文。 */
     @ExceptionHandler(ManageApiCallException.class)
     public ResponseEntity<Map<String, Object>> downstreamRejected(ManageApiCallException ex) {
         log.warn("Admin 调用下游管理口失败: status={}, message={}", ex.statusCode(), ex.getMessage());

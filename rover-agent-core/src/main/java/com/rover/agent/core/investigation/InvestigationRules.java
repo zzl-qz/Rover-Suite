@@ -38,12 +38,7 @@ public final class InvestigationRules {
      */
     static final long RECENT_TRACE_WINDOW_MILLIS = TimeUnit.MINUTES.toMillis(5);
 
-    /**
-     * 判断单个上游实例是否异常所需的最小窗口请求数。
-     *
-     * 窗口内请求数低于该阈值时，5xx 与错误率都只是小样本噪音，证据表述与假设判定都必须给出
-     * 「无法判断」而不是「健康」或「异常」。证据表述与判定共用这一个阈值，避免两处口径分叉。
-     */
+    /** 实例异常判定的最小窗口样本量，低于阈值时只报告事实并标记无法判断。 */
     public static final int MIN_INSTANCE_SAMPLE = 5;
 
     private InvestigationRules() { }
@@ -58,8 +53,8 @@ public final class InvestigationRules {
         String summary;
         Confidence confidence = Confidence.LOW;
         boolean evaluateDownstream = false;
-        // 「实例齐全但没有任何假设被确认」时才成立的收尾话术。一旦 H6 点名了 5xx 实例，这句话必须撤掉，
-        // 否则同一份报告会一边说「数据不足以确定原因」一边给出确定的异常实例。
+        // H6 确认异常实例后，移除无法确定原因的收尾文案。
+        // 未确认任何异常时保留该文案。
         String inconclusiveClause = null;
         if (route == null) {
             hypotheses.add(hypothesis("H1", "该路径未命中任何路由",
@@ -139,13 +134,7 @@ public final class InvestigationRules {
         return new Findings(List.copyOf(hypotheses), summary, confidence);
     }
 
-    /**
-     * H6：该路由的某个上游实例返回了 5xx。
-     *
-     * 判定只用窗口内样本量达标的实例：样本不足的实例不参与「确认 / 排除」，否则一两个请求里的 5xx
-     * 会被当成故障实例。窗口内没有样本时只能是「无法验证」——这正是「停止流量后不能凭旧样本
-     * 声称已经恢复」的落点：没有新样本就既不能说异常仍在，也不能说已经恢复。
-     */
+    /** H6：仅使用窗口内样本量达标的实例判定上游 5xx；无样本时无法验证。 */
     private static Hypothesis upstreamInstanceHypothesis(List<RouteUpstreamSnapshot> rows) {
         if (rows == null) {
             return hypothesis("H6", H6_STATEMENT, Verdict.UNKNOWN,
@@ -185,13 +174,7 @@ public final class InvestigationRules {
                 "窗口内样本达标的 " + adequate.size() + " 个上游实例均未返回 5xx", List.of(SOURCE_METRICS));
     }
 
-    /**
-     * H5 只判定「该路径近期是否返回 503」这一可观察事实，结论只有「确认」与「无法验证」两种。
-     *
-     * 没有追踪数据、追踪已关闭、或最近五分钟未采到该 503 时，都只能判定为无法验证：
-     * 采样与缓冲意味着「没采到」既不能证明没有请求，也不能排除同段时间内曾出现过 503。
-     * 确认时不推断 503 的来源，因为该状态码也可能由 Gateway 自身产生。
-     */
+    /** H5：确认近期采样追踪中出现过 503；未采到时无法验证，也不推断来源。 */
     private static Hypothesis downstreamTraceHypothesis(TraceSnapshot traces, String path) {
         if (traces == null) {
             return hypothesis("H5", H5_STATEMENT, Verdict.UNKNOWN, "追踪数据不可用，无法验证", List.of());

@@ -32,14 +32,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 /**
- * Agent Workbench 接口：会话、消息、任务与事件的只读查询与提问入口。
- *
- * 本层只做三件事：从认证上下文取用户身份、把 HTTP 入参翻译成领域参数、把结果映射成响应。
- * 上下文装配、目标解析、事件复用与调查执行全部在 {@link AgentOrchestrator}（应用层）里完成，
- * 这里不直接调用路由/实例/指标/追踪查询，也不直接调用模型。
- *
- * 用户身份一律来自后端认证上下文：未启用登录时为空，此时会话也不带归属；
- * 前端提交的任何 userId 字段都会被忽略（请求体里根本没有这个字段）。
+ * Agent 会话、消息、任务与事件接口。
+ * 用户身份取自认证上下文，调查流程委托 {@link AgentOrchestrator}。
  */
 @RestController
 @RequestMapping("/api/agent")
@@ -74,16 +68,8 @@ public class AgentController {
     }
 
     /**
-     * 发一条消息：只做校验与登记，随即返回任务句柄（202 Accepted）。
-     *
-     * 目标解析与调查执行在 Agent Worker 中进行，因此本接口不会被管理口 HTTP 或模型调用阻塞；
-     * 进度经 {@code GET /api/agent/tasks/{taskId}} 与任务事件流观察。
-     *
-     * <ul>
-     *   <li>202：{@code {sessionId, taskId, status}}，status 初始为 PENDING；</li>
-     *   <li>409：同会话已有执行中的任务（{@code SESSION_TASK_RUNNING}）；</li>
-     *   <li>429：任务容量或执行队列已满（{@code TASK_BUSY}）。</li>
-     * </ul>
+     * 登记消息并返回 202 任务句柄，调查由 Worker 异步执行。
+     * 同会话已有任务返回 409；任务容量或队列已满返回 429。
      */
     @PostMapping("/sessions/{sessionId}/messages")
     public ResponseEntity<?> sendMessage(@PathVariable String sessionId, Authentication authentication,
@@ -122,10 +108,8 @@ public class AgentController {
     }
 
     /**
-     * Workbench 聚合视图：会话、对话、事件与最近任务一次取齐，避免前端为每个任务各发一次请求。
-     *
-     * {@code limit} 只约束任务条数（默认 20，上限 100）；{@code tasks} 按创建时间倒序，
-     * 完整任务详情仍由 {@code GET /tasks/{taskId}} 按需取。
+     * 聚合会话、消息、事件和最近任务；任务按创建时间倒序。
+     * limit 默认 20，上限 100，仅限制任务条数。
      */
     @GetMapping("/sessions/{sessionId}/workspace")
     public ResponseEntity<AgentOrchestrator.Workspace> workspace(@PathVariable String sessionId,
@@ -146,13 +130,8 @@ public class AgentController {
     }
 
     /**
-     * 取消一个仍在执行中的任务（协作式）。
-     *
-     * <ul>
-     *   <li>404：任务不存在或不属于当前用户（与任务详情同一归属判定）；</li>
-     *   <li>409：任务已结束（{@code TASK_NOT_CANCELLABLE}），取消无意义；</li>
-     *   <li>200：已标记取消并中断执行线程，结论不会再产出，事件流随 {@code TASK_CANCELLED} 收尾。</li>
-     * </ul>
+     * 协作式取消任务并发送 TASK_CANCELLED 事件。
+     * 任务不存在或无权访问返回 404，任务已结束返回 409。
      */
     @PostMapping("/tasks/{taskId}/cancel")
     public ResponseEntity<?> cancelTask(@PathVariable String taskId, Authentication authentication) {
@@ -168,14 +147,8 @@ public class AgentController {
     }
 
     /**
-     * 事件接入：告警 / 网关切面异常等事件触发一次自动调查。
-     *
-     * <p>接入方把一次告警转成「对哪条路由、在什么窗口、怀疑什么」三要素即可；本端点会为它独立开一个会话、
-     * 记一笔 {@code ALERT} 来源的事件、并复用与人工提问完全相同的取数链路开始调查。调查异步执行，
-     * 返回 {@code 202} 与任务视图，接入方凭 {@code taskId} 轮询详情或订阅 {@code /tasks/{taskId}/events}。
-     *
-     * <p>考虑到这是机器对机器入口，需要登录（建议用服务账号）；但产生的会话不归属任何人工用户，
-     * 以免与人工会话的并发锁冲突，也便于在事件视图里单独聚合。
+     * 接收告警事件，创建独立会话并异步调查，返回 202 任务视图。
+     * 接口需要登录；告警会话不归属人工用户。
      */
     @PostMapping("/events/ingest")
     public ResponseEntity<?> ingestEvent(@RequestBody IngestRequest request, Authentication authentication) {
@@ -199,14 +172,9 @@ public class AgentController {
     }
 
     /**
-     * 任务事件流（SSE）：事件名是事件类型（{@code SNAPSHOT}/{@code STEP_STARTED}/…），
-     * 数据是完整的事件信封（{@code eventId}、{@code type}、{@code timestampMillis}、{@code payload}）。
-     *
-     * 订阅先补发一份任务快照，再按增量推送；任务进入终态或停在澄清点时收尾，
-     * 前端据此结束本次观察而不是悬着等超时。发送在事件总线的派发线程上完成，
-     * 不在任务锁里做客户端网络 IO，慢客户端也不会拖慢模型调用与调查执行。
-     *
-     * 任务不存在、已不可观察或不属于当前用户时返回 404——归属判定与任务详情一致，不靠 UUID 难猜。
+     * 任务 SSE：先发送全量快照，再推送增量事件；终态或澄清时结束。
+     * 事件类型作为名称，完整事件信封作为数据；发送由派发线程处理。
+     * 任务不存在、不可观察或无权访问时返回 404。
      */
     @GetMapping(path = "/tasks/{taskId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public ResponseEntity<SseEmitter> taskEvents(@PathVariable String taskId, Authentication authentication) {
@@ -236,12 +204,7 @@ public class AgentController {
         return authentication.getName();
     }
 
-    /**
-     * 把结构化任务事件写成 SSE：事件名即事件类型，数据是完整信封。
-     *
-     * 发送与收尾都吞掉异常：客户端断开时这里不能再抛回派发线程，
-     * 否则一次连接抖动就会连带影响本次调查的执行观测。
-     */
+    /** 将任务事件写为 SSE；客户端断开时忽略发送和收尾异常。 */
     private static final class TaskEventSseSubscriber implements TaskEventSubscriber {
 
         private final SseEmitter emitter;

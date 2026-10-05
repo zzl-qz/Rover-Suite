@@ -62,28 +62,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Agent 聚合链的一条 JDBC 持久化通道：会话 → 事件 → 任务 → 步骤 / 证据。
- *
- * <p><b>关系表才是真相，{@link TaskView} 只是投影。</b>上层继续调用
- * {@link AgentSessionRepository} / {@link IncidentRepository} / {@link AgentTaskRepository}，
- * 读写口完全没有变化；JDBC 实现内部把一次任务快照拆成 {@code agent_task} + {@code agent_step} +
- * {@code agent_evidence} 三张表，读的时候再组装回 {@link TaskView}。旧版把整颗 TaskView 序列化成
- * 一个 CLOB 的做法已经退役：局部结构（调查计划、证据的统计口径、报告的适用边界与假设）仍然用 JSON，
- * 但"查得动"的事实（状态、会话、事件、目标、时间、置信度）都是列。
- *
- * <p><b>一次快照一次事务。</b>任务状态、步骤与证据在同一个事务里落下，因此不会出现
- * "步骤已完成、证据没写进去"这种重启后才暴露的坏状态；失败整组回滚。
- *
- * <p><b>引用是外键。</b>会话指向事件、事件指向任务、任务指向步骤与证据都由外键约束保证，
- * 删会话会连带清掉它的事件、消息与任务。因此"会话指向一个已经消失的事件"不再可能发生。
- *
- * <p><b>会话上的事件列表与事件上的任务列表是查出来的。</b>它们不再作为冗余列表存两份，
- * 而是从 {@code agent_incident.session_id} / {@code agent_task.incident_id} 派生，
- * 不可能与事实不一致。
- *
- * <p>SQL 只用 H2 与 MySQL 都认的写法（{@code CREATE TABLE IF NOT EXISTS}、{@code TEXT}、
- * {@code BIGINT AUTO_INCREMENT}、{@code UPDATE} 未命中再 {@code INSERT}），
- * 不用 {@code MERGE INTO ... KEY} 之类的方言语法，也不写两套业务 SQL——换数据源只换连接来源。
+ * 通过 JDBC 保存会话、事件、任务、步骤和证据，TaskView 为查询投影。
+ * 任务快照在同一事务内保存，关联记录由外键及级联删除约束。
+ * 使用 H2 和 MySQL 兼容 SQL，局部复杂结构保存为 JSON。
  */
 public final class JdbcAgentStore implements AutoCloseable {
 
@@ -509,12 +490,7 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     // ---------------------------------------------------------------- 安全恢复点
 
-    /**
-     * 安全恢复点的落库实现。
-     *
-     * <p>写入与任务快照共用同一个事务：任务、步骤、证据与恢复点一起落下，因此不会出现
-     * 「恢复点说证据 3 条、库里只有 2 条」这种恢复时才暴露的坏状态。
-     */
+    /** 恢复点的 JDBC 存储，与任务状态、步骤和证据共用事务。 */
     private final class Checkpoints implements AgentCheckpointRepository {
 
         @Override
@@ -574,14 +550,7 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     // ---------------------------------------------------------------- 变更记录
 
-    /**
-     * 变更记录的落库实现。
-     *
-     * <p>{@link #transition} 用「带状态条件的 UPDATE + 影响行数」做 CAS，而不是先查再改：
-     * 返回 0 行就说明状态已经被别人改过（例如另一个人抢先批准），调用方据此放弃执行。
-     * 连接被 {@link JdbcAgentStore} 的同步块串行化，因此同一进程内不会出现两个线程同时看到
-     * PENDING_APPROVAL 的情况；SQL 里的状态条件则保证即使换多进程部署，语义也不会破。
-     */
+    /** 变更记录的 JDBC 存储，通过条件 UPDATE 的影响行数实现状态 CAS。 */
     private final class Actions implements AgentActionRepository {
 
         @Override
@@ -874,14 +843,8 @@ public final class JdbcAgentStore implements AutoCloseable {
                              List<ForeignKey> foreignKeys, List<Index> indexes) { }
 
     /**
-     * 版本化迁移：只前进、只新增，已发布过的版本不再改动。
-     *
-     * <p>这是 Agent 库 Schema v1 的起点。v2 清掉旧 JSON 快照表——开发阶段不保留旧数据，
-     * 免得"整颗 TaskView 的 CLOB"被再次当成真相来源。
-     *
-     * <p>索引与外键在应用前先查元数据，已存在就跳过：MySQL 的 DDL 不能回滚，
-     * 万一某条迁移只执行到一半，重跑必须还能通过。索引同理不用 {@code CREATE INDEX IF NOT EXISTS}
-     * （MySQL 不支持该写法）。
+     * 按版本执行 Schema 迁移；v2 删除旧 JSON 快照表。
+     * 索引与外键先检查元数据，保证部分 DDL 已执行后可重试。
      */
     private static final List<Migration> MIGRATIONS = List.of(
             new Migration(1, "agent aggregate v1: session / message / incident / task / step / evidence",
@@ -1192,13 +1155,8 @@ public final class JdbcAgentStore implements AutoCloseable {
     }
 
     /**
-     * 重启恢复：重启后仍在执行（PENDING / RUNNING）的任务没有线程了，不能假装还在跑。
-     *
-     * <p>把它们标成 {@link TaskStatus#INTERRUPTED}，并把「最近一个安全恢复点跑到哪」写进错误说明——
-     * 这一步只动状态、错误与完成时间三列，步骤、证据与恢复点都原样保留，所以已采集的事实不丢：
-     * 调查路径可以就着这些事实续跑，人工会话可以就着它们重问一次。
-     *
-     * <p>停在澄清点的任务没有线程在跑，不受影响。
+     * 重启时将 PENDING/RUNNING 任务标记为 INTERRUPTED，保留步骤、证据和恢复点。
+     * 等待澄清的任务不受影响。
      */
     private void recoverInterrupted() {
         synchronized (this) {
@@ -1218,14 +1176,8 @@ public final class JdbcAgentStore implements AutoCloseable {
     }
 
     /**
-     * 重启恢复：把「停在半路」的变更挪到一个诚实的终态。
-     *
-     * <p>判断依据只有一条——<b>幂等号有没有落库</b>。它是在发请求之前写的，因此：
-     * 没有号说明写请求根本没发出去，可以确定地判为「没生效」；有号说明请求可能已经生效，
-     * 只能判为「结果未知」，让人用同一个号去确认。
-     *
-     * <p>回滚中断是唯一需要退回 {@link ActionStatus#SUCCESS} 的情况：那条变更确实生效过，
-     * 只是补偿没发出去，人还能再点一次回滚。
+     * 恢复中断变更：无幂等号判定未提交，有幂等号则标记结果未知。
+     * 尚未提交补偿的回滚退回 SUCCESS，允许再次回滚。
      */
     private void recoverInterruptedActions() {
         synchronized (this) {
@@ -1262,13 +1214,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         T map(ResultSet rows) throws SQLException;
     }
 
-    /**
-     * 一组写入要么全成、要么全败。
-     *
-     * 任务是"状态 + 步骤 + 证据"的聚合：分开写会出现"步骤完成了、证据没落库"这种重启后才发现的坏状态。
-     * 这里用显式事务而不是 Spring 的 {@code @Transactional}，运行层因此不必引入事务管理器依赖；
-     * 换数据源时只换连接来源，语义不变。
-     */
+    /** 通过显式 JDBC 事务原子保存任务状态、步骤与证据。 */
     private <T> T inTransaction(SqlWork<T> work) {
         try {
             boolean autoCommit = connection.getAutoCommit();

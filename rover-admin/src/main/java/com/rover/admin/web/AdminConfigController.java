@@ -59,6 +59,24 @@ public class AdminConfigController {
         return configService.loadLive(ManageApiPaths.clampLiveRange(range));
     }
 
+    /** 完整 Gateway 快照：使用网关配置的窗口，供低频人工诊断。 */
+    @GetMapping(AdminApiPaths.METRICS)
+    public JsonNode metrics() {
+        return safeMetrics(configService::loadMetrics);
+    }
+
+    /** 路由下的实例与版本观测；空 rows 表示没有窗口样本，不是读取失败。 */
+    @GetMapping(AdminApiPaths.METRICS_ROUTES)
+    public JsonNode routeMetrics(
+            @RequestParam(name = ManageApiPaths.PARAM_ROUTE_ID, required = false) String routeId,
+            @RequestParam(name = ManageApiPaths.PARAM_RANGE, required = false) String range) {
+        if (routeId == null || routeId.isBlank()) {
+            throw new IllegalArgumentException("routeId 不能为空");
+        }
+        return safeMetrics(() -> configService.loadRouteUpstreams(
+                routeId, ManageApiPaths.clampLiveRange(range)));
+    }
+
     /** 路由表 + 当前版本号；前端提交时必须回传 revision。 */
     @GetMapping(AdminApiPaths.ROUTES)
     public Map<String, Object> routes() {
@@ -71,12 +89,7 @@ public class AdminConfigController {
         return configService.saveRoute(route);
     }
 
-    /**
-     * 预览路由变更差异：body 形如 {"routes":[...]}，只校验与比对，不落盘、不生效。
-     *
-     * 语义上是只读操作，但对外仍按写请求对待——CSRF 由安全配置统一拦截，前端也照常带令牌，
-     * 不给「只读接口」开后门。
-     */
+    /** 预览 routes 候选表的校验结果与差异，不提交变更；请求仍校验 CSRF。 */
     @PostMapping(AdminApiPaths.ROUTES_PREVIEW)
     public Map<String, Object> previewRoutes(@RequestBody Map<String, Object> body) {
         Object routes = body.get("routes");
@@ -102,35 +115,19 @@ public class AdminConfigController {
         return configService.deleteRoute(businessPrefix, revision);
     }
 
-    /**
-     * 查一次路由写操作的终态：APPLIED / CONFLICT / REJECTED / FAILED / UNKNOWN。
-     *
-     * 存在的意义是「请求超时后确认到底执行了没有」：超时的那次写可能已经生效，
-     * 也可能没有，只有网关的操作记录能回答，靠重提是猜。
-     */
+    /** 按 operationId 查询写操作结果，用于确认超时请求是否生效。 */
     @GetMapping(AdminApiPaths.ROUTE_OPERATION)
     public Map<String, Object> routeOperation(@PathVariable String operationId) {
         return configService.routeOperation(operationId);
     }
 
-    /**
-     * 灰度放量 / 停推：只改一个版本目标的权重。
-     *
-     * body 需含 routeId / serviceName / group / weight，以及读到的 revision。
-     * 与「保存整条路由」的区别是它走网关收窄的专用原语：不会误改同一条路由上的其它目标；
-     * 乐观锁与 operationId 回查机制则与保存路由完全一致。
-     */
+    /** 调整单个版本目标的权重，入参包含 routeId、serviceName、group、weight 和 revision。 */
     @PostMapping(AdminApiPaths.ROUTES_TARGET_WEIGHT)
     public Map<String, Object> adjustTargetWeight(@RequestBody Map<String, Object> body) {
         return configService.adjustTargetWeight(body);
     }
 
-    /**
-     * 回滚路由到最近某次已应用的快照。
-     *
-     * body 需含 toRevision 与当前 revision。网关以「产生新版本」的方式回滚（不覆盖历史），
-     * 因此同样返回可回查的 operationId。
-     */
+    /** 按 toRevision 和当前 revision 回滚，生成新版本并返回可回查的 operationId。 */
     @PostMapping(AdminApiPaths.ROUTES_ROLLBACK)
     public Map<String, Object> rollbackRoutes(@RequestBody Map<String, Object> body) {
         return configService.rollbackRoutes(body);
@@ -154,10 +151,7 @@ public class AdminConfigController {
         return configService.loadEvents();
     }
 
-    /**
-     * 落盘记录库的历史区间查询：配置变更/回滚/部署/实例事件等证据，回答「上周还好好的现在为什么挂了」。
-     * 不传 target/type 则按全量时间范围查；limit 默认 200，上限 5000。
-     */
+    /** 按时间范围查询历史记录，可按 target/type 过滤；limit 默认 200，上限 5000。 */
     @GetMapping(AdminApiPaths.LOGS)
     public List<Map<String, Object>> logs(
             @RequestParam(required = false) String target,

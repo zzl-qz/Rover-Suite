@@ -6,13 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * 会话消息的内存实现。
- *
- * 容量按「全部会话累计条数」限制：这是刻意的短期上下文窗口，保留策略在容量满时丢弃最早的对话，
- * 与 {@code AgentContextManager} 只取最近若干条交给模型是同一个口径。
- * 消息是叶子记录（除会话外无人引用它），因此丢弃不产生孤儿引用；会话级联清理时按会话整组删除。
- */
+/** 消息内存存储，容量限制为全部会话的累计条数，由上层保留策略清理。 */
 public final class InMemoryAgentMessageRepository implements AgentMessageRepository {
 
     private final BoundedStore<String, AgentMessage> messages;

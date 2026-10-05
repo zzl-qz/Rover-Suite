@@ -1,22 +1,8 @@
 package com.rover.agent.core.model;
 
 /**
- * 一条变更的状态机。
- *
- * <pre>
- *             ┌── 人拒绝 ────────────────► REJECTED
- * PENDING_APPROVAL
- *             └── 人批准 ──► EXECUTING ──► VERIFYING ──► SUCCESS ──► ROLLING_BACK ──► ROLLED_BACK
- *                              │            │                         │
- *                              │            │                         └─► ROLLBACK_PRECONDITION_FAILED
- *                              │            │                             （目标已被别人改过，补偿未提交）
- *                              │            └─► FAILED（提交了但回读不一致）
- *                              ├─► PRECONDITION_FAILED（预检没过，Gateway 一个字节都没动）
- *                              └─► UNCERTAIN（提交了，但连回查都拿不到结果）
- * </pre>
- *
- * <p>状态刻意分成「没提交」与「提交了但不知道结果」两类：前者可以安全地改参数重来，
- * 后者只能拿同一个 operationId 去回查，绝不能重新执行一次——这是幂等与「重试」的分界线。
+ * 变更审批、执行、验证与回滚状态。
+ * UNCERTAIN 表示提交结果未知，只能按原 operationId 确认。
  */
 public enum ActionStatus {
 

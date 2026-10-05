@@ -5,12 +5,7 @@ import com.rover.agent.core.model.ResourceTarget;
 import java.util.List;
 
 /**
- * 规划输入：模型规划所需的全部只读上下文，一次给全，避免 Planner 自己到处取数。
- *
- * {@code evidence} 是已经采到的证据——第二轮起模型据此判断「还差什么」，
- * 这也是动态调查与固定链路的分水岭：下一步由当前事实决定，而不是由写死的边决定。
- *
- * 这里没有「意图」这一层：规划读的是问题原文与已知事实，不需要调用方先把问题归成一类。
+ * 规划输入，包含用户问题、调查目标、已采集证据和判断边界。
  *
  * @param question    用户问题原文
  * @param target      本次请求的目标对象

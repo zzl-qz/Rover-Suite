@@ -1,11 +1,6 @@
 package com.rover.agent.core.capability;
 
-/**
- * Agent 可调用的能力：不再把能力写死成图节点，而是先声明「Rover 有哪些能力」，再由计划去选择。
- *
- * 命名与数据源对应，不出现任意函数名或工具地址：执行映射（哪个能力调哪个只读端口）由
- * {@link CapabilityExecutor} 用代码固定下来，模型无法凭空创造新能力。
- */
+/** Agent 能力标识，执行映射由 {@link CapabilityExecutor} 固定。 */
 public enum AgentCapability {
 
     /** 查询 Gateway 路由与上游服务发现模式 */

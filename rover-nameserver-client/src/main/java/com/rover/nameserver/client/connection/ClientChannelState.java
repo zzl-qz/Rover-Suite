@@ -4,13 +4,8 @@ import io.netty.channel.Channel;
 import java.util.Objects;
 
 /**
- * Nameserver 客户端连接状态。所有 channel 发布/摘除都在同一把锁下完成，保证：
- *
- * <ul>
- *   <li>连接建立后、发布前已经失活的 channel 不会成为当前连接；</li>
- *   <li>旧 channel 的延迟 {@code channelInactive} 不会清掉新连接；</li>
- *   <li>客户端关闭后，不再接收晚到的连接成功结果。</li>
- * </ul>
+ * 在同一锁下管理客户端连接，拒绝失活或关闭后晚到的连接。
+ * 旧 channel 的延迟关闭事件不清除新连接。
  */
 final class ClientChannelState {
 

@@ -109,13 +109,7 @@ public final class EvidenceNarrator {
         return instances(instances, service, group);
     }
 
-    /**
-     * 实例快照的证据表述（按服务/分组口径）。
-     *
-     * 「这个服务没注册」与「这个服务注册了但没有健康实例」必须分开说：前者是查错了对象，
-     * 后者才是一个需要处置的故障。混为一谈时，读的人（和模型）会把一个不存在的服务
-     * 当成一个挂掉的服务，并给出一个确定的错误结论。
-     */
+    /** 按服务和分组描述实例，区分未注册与无健康实例。 */
     public static EvidenceNarration instances(List<InstanceSnapshot> instances, String serviceName, String group) {
         List<InstanceSnapshot> rows = instances == null ? List.of() : instances;
         String service = Texts.orEmpty(serviceName);
@@ -180,12 +174,7 @@ public final class EvidenceNarrator {
                 metric.windowRequests(), METRIC_WINDOW_SECONDS);
     }
 
-    /**
-     * 「路由 × 上游实例」窗口观测的证据表述。
-     *
-     * 样本量即该实例在窗口内的请求数。样本不足时只报事实、不给出「健康 / 异常」的倾向性判断——
-     * 一两个请求里的 5xx 与几百个请求里的 5xx 不是同一件事，这里必须把差异说清楚。
-     */
+    /** 描述路由的上游窗口观测；样本不足时仅报告事实。 */
     public static EvidenceNarration routeUpstream(RouteUpstreamSnapshot row) {
         String detail = "上游 " + Texts.orEmpty(row.hostPort()) + "：窗口请求数=" + row.windowRequests()
                 + "，5xx=" + row.status5xx() + "，连接失败=" + row.connectFail() + "，超时=" + row.timeout()
@@ -200,7 +189,7 @@ public final class EvidenceNarrator {
         return new EvidenceNarration(detail, List.copyOf(limitations), row.windowRequests(), row.windowSeconds());
     }
 
-    /** 「路由 × 上游实例」窗口内没有转发记录时的证据表述：这是「没有样本」，不是「数据不可用」。 */
+    /** 描述路由上游窗口内无转发样本的情况。 */
     public static EvidenceNarration routeUpstreamsEmpty(String routeId, int windowSeconds) {
         return new EvidenceNarration("路由 " + Texts.orEmpty(routeId) + " 最近 " + windowSeconds
                 + " 秒没有上游转发记录，无法按实例归因",

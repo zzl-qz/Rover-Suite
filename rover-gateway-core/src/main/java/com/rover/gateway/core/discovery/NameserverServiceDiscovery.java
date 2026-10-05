@@ -113,15 +113,7 @@ public class NameserverServiceDiscovery implements ServiceDiscovery {
         }
     }
 
-    /**
-     * 从本地缓存取实例：<b>只返回健康实例</b>，全部不健康就返回空列表。
-     *
-     * 这里刻意不做「全不健康就退回全部缓存」的兜底。那种兜底会让「实例已被标记不可接流」
-     * 被静默绕过——调用方以为拿到的是可接流实例，实际打到了一台明确不可用的机器上，
-     * 而且失败会被记成上游 5xx，与「压根没有可用上游」混成同一个现象。
-     * 返回空列表后，由 {@code RouteAndProxyFilter} 明确给出 503 与 {@code REJECT_NO_UPSTREAM}，
-     * 让「没得打」和「打得不好」在指标上是两件可区分的事。
-     */
+    /** 从本地缓存返回健康实例，无健康实例时返回空列表，由转发层拒绝请求。 */
     @Override
     public List<ServiceInstance> getInstances(String serviceName, String group) {
         List<ServiceInstance> cached = client.getCachedInstances(serviceName, group);

@@ -52,13 +52,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * 运行层装配：只依赖只读端口与模型端口，不依赖任何具体数据源或 Web 框架。
- *
- * 端口实现（如 Admin 管理口适配器、Admin 模型适配器）由宿主进程提供，
- * 因此运行层可以在同一个 JVM 内复用，也可以整体搬到独立进程。
- *
- * 会话、消息、事件、任务、步骤与证据在配置了记录库路径时写进同一份库，重启后整条链可恢复；
- * 没配路径（单测、无状态运行）时全部走内存。资源笔记只保存被证据确认的根因。
+ * 装配 Agent 运行层，端口实现由宿主进程提供。
+ * 配置记录库路径时持久化，否则使用内存；资源笔记仅保存已验证根因。
  */
 @Configuration(proxyBeanMethods = false)
 public class AgentRuntimeConfiguration {
@@ -305,23 +300,14 @@ public class AgentRuntimeConfiguration {
                 agentActionService);
     }
 
-    /**
-     * 权重调整执行器：整条链路上唯一会写 Gateway 的实现。
-     *
-     * <p>它只依赖「可写路由端口 + 变更记录」，既不认识模型也不认识 HTTP 层：
-     * 想换一种变更（例如以后加配置变更）时，加一个实现即可，流程与权限层不用动。
-     */
+    /** 装配依赖路由控制端口和变更仓储的权重执行器。 */
     @Bean
     public ActionExecutor agentActionExecutor(RouteControlPort routeControlPort,
                                              AgentActionRepository agentActionRepository) {
         return new RouteWeightActionExecutor(routeControlPort, agentActionRepository);
     }
 
-    /**
-     * 受控变更的应用入口：提议 / 批准 / 拒绝 / 回滚 / 结果确认。
-     *
-     * <p>模型只被允许调用它的 {@code propose}；批准之后的每一步都由人在控制台触发。
-     */
+    /** 装配受控变更服务；模型仅可调用 propose，人工接口负责审批和后续操作。 */
     @Bean
     public AgentActionService agentActionService(AgentActionRepository agentActionRepository,
                                                  AgentSessionRepository agentSessionRepository,

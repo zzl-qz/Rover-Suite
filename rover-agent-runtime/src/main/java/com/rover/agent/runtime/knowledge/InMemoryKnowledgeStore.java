@@ -5,12 +5,7 @@ import com.rover.agent.core.port.KnowledgeReadPort;
 import java.util.Comparator;
 import java.util.List;
 
-/**
- * 内存知识库：按关键词命中数排序的轻量检索，回答「怎么配置 / 怎么接入 / 怎么排查」类问题。
- *
- * <p>条目由装配层注入（当前为内置 FAQ 种子）；命中排序只看关键词与词重合，刻意不用向量库——
- * 运维 FAQ 条目少、词表明确，关键词检索即可，后续要上向量/语义检索时替换本实现、不改业务。
- */
+/** 装配层注入的内存知识库，按关键词命中数排序检索。 */
 public class InMemoryKnowledgeStore implements KnowledgeReadPort {
 
     private static final int DEFAULT_LIMIT = 5;

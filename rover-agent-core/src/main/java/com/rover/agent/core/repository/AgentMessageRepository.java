@@ -4,13 +4,7 @@ import com.rover.agent.core.model.AgentMessage;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * 会话消息存储契约：多轮上下文的原始素材。
- *
- * 上下文窗口（取最近多少条交给模型）由上下文管理器决定，本接口只负责按写入顺序保存与读取。
- * 当前由内存实现承载，容量是「全部会话累计条数」的短期窗口：满了由上层保留策略丢弃最早的对话，
- * 消息除会话外无人引用，丢弃不会留下孤儿引用。
- */
+/** 按写入顺序保存和读取会话消息；上下文窗口由上下文管理器控制。 */
 public interface AgentMessageRepository {
 
     /** 保存一条消息。 */

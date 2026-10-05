@@ -22,19 +22,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 遥测采集器：周期拉取 Gateway / Nameserver 管理口，把可观测数据「蒸馏」后写进落盘记录库，
- * 作为后续开放给 Agent / LLM 工具做历史证据检索的数据源。
- *
- * <p>采集四类，粒度面向 LLM 消费做了取舍：
- * <ul>
- *   <li>{@link RecordType#METRICS_SAMPLE}：每组件每周期一条聚合指标快照（时间序列趋势）。</li>
- *   <li>{@link RecordType#INSTANCE_EVENT}：组件可达性 + 单实例健康「状态翻转」，只在变化时记一条
- *       （问「何时宕机 / 哪个实例掉线 / 何时注册或移除」）。</li>
- *   <li>{@link RecordType#REQUEST_TRACE}：慢请求（slow）+ 错误请求（statusCode≥500）链路，traceId 去重。</li>
- * </ul>
- * 原始心跳、逐请求日志不入库：量大、对 LLM 是噪声，且正常态可用指标采样的时间线覆盖。
- *
- * <p>自身用 {@link PeriodicTask} 固定延迟调度，单次失败不中断；实现 {@link AutoCloseable} 随容器关闭。
+ * 周期采集 Gateway 和 Nameserver 的指标、健康变化及慢请求和错误链路。
+ * 指标按周期聚合，健康事件仅在状态变化时记录，链路按 traceId 去重。
+ * 采集结果写入记录库；单次失败不终止调度，容器关闭时停止采集。
  */
 @Slf4j
 public class TelemetryCollector implements AutoCloseable {

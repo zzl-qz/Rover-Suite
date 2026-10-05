@@ -5,15 +5,8 @@ import com.rover.agent.core.model.AgentAction;
 import java.util.List;
 
 /**
- * 变更记录的迁移草稿：只描述「这一次改了什么」，其余字段从原记录原样带过去。
- *
- * <p>为什么需要它：{@link AgentAction} 是不可变记录，状态机每走一步都要产生一条新记录。
- * 如果每一步都手写 24 个字段的构造，改一个字段时漏带另一个字段的事故迟早会发生
- * （例如回滚时把 {@code beforeWeight} 忘了，补偿就永远回不到原值）。这里把「改哪几个字段」
- * 收敛到几个具名方法上，其余字段由构造器负责保持。
- *
- * <p>{@code updatedAtMillis} 只在 {@link #toAction(long)} 落定时写一次，因此「记录是什么时候变成现在这样的」
- * 是调用方给定的时刻，而不是某次不小心触发的写库动作的时间。
+ * 变更记录的迁移草稿，未修改字段沿用原记录。
+ * updatedAtMillis 在 toAction 时由调用方指定。
  */
 final class ActionDraft {
 

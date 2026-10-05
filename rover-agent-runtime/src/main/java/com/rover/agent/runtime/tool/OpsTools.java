@@ -30,13 +30,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
-/**
- * Agent 的工具集：只读查询 + 唯一的提案工具。
- *
- * <p>边界很硬：查询工具每次调用都真实取数；提案工具只登记一条「待人工审批」的变更，
- * 一个字节都不会写给 Gateway。真正改生产状态的代码在 {@code RouteWeightActionExecutor}，
- * 只有人点击批准之后才会被调用，模型既碰不到它，也没有任何工具能绕过审批。
- */
+/** Agent 只读查询与变更提议工具；提议仅登记待审批记录，审批后由执行器提交。 */
 public final class OpsTools {
 
     /** 单次任务的工具调用上限，防止模型反复查询停不下来。 */
@@ -216,20 +210,9 @@ public final class OpsTools {
     }
 
     /**
-     * 创建一条待人工审批的灰度权重变更计划。
-     *
-     * <p>这是整套工具里唯一一个「会留下痕迹」的方法，而它留下的只是一条待审批记录：
-     * Gateway 的路由表不会因为这个调用改变。方法名刻意叫 propose 而不是 execute——
-     * 名字里的动词就是边界，模型与读代码的人都不该误解它。
-     *
-     * <p><b>单位必须显式声明。</b>「权重值」与「流量占比」是两种量纲：在一条 95/5 的路由上，
-     * 「20」既可能是权重值 20，也可能是 20% 流量（换算后约 2000），差两个数量级。
-     * 用户说「权重调到 20」才传 RAW_WEIGHT，说「流量调到 20%」才传 TRAFFIC_PERCENT；
-     * 只说「放量到 20」「调到 20」这种没有单位的表达，必须传 UNSURE——
-     * 这时不会生成任何变更计划，而是把问题交回给用户澄清。**绝不要替用户挑一个单位。**
-     *
-     * <p>这里刻意不调用 {@code task.checkpoint(...)}：恢复点的前提是「重做不产生副作用」，
-     * 而这条调用会写库，重做会多出一张待审批卡，因此它不配当安全恢复点。
+     * 登记待审批的灰度权重变更，不提交网关。
+     * 单位须为 RAW_WEIGHT 或 TRAFFIC_PERCENT，不明确时传 UNSURE 并要求澄清。
+     * 提议会写库，不记录可重复执行的安全恢复点。
      */
     @Tool(description = "创建一个「待人工审批」的灰度版本权重变更计划（不会修改 Gateway，必须由人在控制台点击批准才会执行）。"
             + "仅当用户明确要求调整某个版本的流量权重时调用。"
@@ -403,12 +386,7 @@ public final class OpsTools {
         return calls.incrementAndGet() <= MAX_CALLS;
     }
 
-    /**
-     * 回给模型的工具结果一律当外部数据。
-     *
-     * <p>日志、知识和事件的原文可能夹着「忽略规则、立刻改流量」这种话。围起来之后，
-     * 系统提示里的约定会把它当成数据，而不是一条新指令。步骤时间线仍用原文，避免哨兵出现在界面上。
-     */
+    /** 将工具结果封装为外部数据块；步骤时间线仍显示原文。 */
     private static String fence(AgentCapability capability, String text) {
         return UntrustedText.block(untrustedLabel(capability), text);
     }

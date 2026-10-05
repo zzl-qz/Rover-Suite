@@ -26,10 +26,8 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 
 /**
- * 模型配置用例：读取当前状态、保存并即时生效、连接测试与效果验证。
- *
- * 密钥只以明文出现在请求体与内存里；对外响应一律走 {@link ConfigValues#MASKED}，
- * 日志与出参都先做敏感串清洗。
+ * 读取、保存和验证模型配置，保存后即时生效。
+ * 响应中的密钥使用掩码，日志与出参清洗敏感内容。
  */
 @Service
 public class AdminModelConfigService {

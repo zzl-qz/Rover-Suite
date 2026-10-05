@@ -1,10 +1,8 @@
 package com.rover.admin.agent.model;
 
 /**
- * 一次模型配置的不可变快照。
- *
- * {@code apiKey} 是明文，只应存在于内存与请求体中；任何对外响应都必须走掩码，
- * 不得把本对象直接序列化返回。
+ * 模型配置的不可变快照，apiKey 为明文。
+ * 不得直接序列化返回；对外响应必须掩码处理。
  */
 public record ModelSettings(boolean enabled, String baseUrl, String apiKey, String model,
                             int timeoutSeconds, Source source, KeyState keyState, FastModel fast) {
@@ -47,10 +45,8 @@ public record ModelSettings(boolean enabled, String baseUrl, String apiKey, Stri
     }
 
     /**
-     * 是否「配置了快速模型」：与主模型同启用态，且快速模型地址与模型名齐全。
-     *
-     * 配置后，目标解析 / 调查规划这类廉价调用由网关路由到快速模型；
-     * 未配置则回退主模型 + 显式禁用思考（{@code fast} 永不为 null，缺失用 {@link FastModel#none()}）。
+     * 主模型已启用且快速模型地址、名称完整时返回 true。
+     * 未配置快速模型时，目标解析和规划回退到禁用思考的主模型。
      */
     public boolean fastConfigured() {
         return enabled && fast != null && fast.configured();

@@ -1,20 +1,8 @@
 package com.rover.agent.core.model;
 
 /**
- * 一个安全恢复点：调查可以从此处接着继续，而不必重跑已经落库的外部观测。
- *
- * <p>它是<b>业务级恢复契约</b>，不是某个 Agent 框架的内部状态快照——框架换掉、图节点改名，
- * 恢复语义都不变。因此这里存的是「高水位」而不是「清单」：
- *
- * <ul>
- *   <li>{@code lastStepSequence} / {@code lastEvidenceSequence}：已经可靠完成的步骤与证据条数。
- *       具体是哪些步骤、哪些证据，从 {@code agent_step} / {@code agent_evidence} 按序号读回来即可，
- *       不在这里再复制一份 ID 列表。</li>
- *   <li>{@code roundNo} / {@code toolCallCount}：规划轮数与只读调用次数，恢复时接着算预算，
- *       不让一次重启把「调用上限」清零。</li>
- *   <li>{@code resumeStateJson}：只放无法从关系表重建的小块运行态；能从库里查出来的东西不写在这里。</li>
- *   <li>{@code runtimeNode}：运行时节点名，仅供诊断——恢复流程<b>不</b>依赖它。</li>
- * </ul>
+ * 业务恢复点，记录已完成步骤、证据高水位和已使用预算。
+ * resumeStateJson 仅存无法从关系表重建的状态；runtimeNode 仅用于诊断。
  *
  * @param checkpointId          恢复点标识
  * @param taskId                所属任务

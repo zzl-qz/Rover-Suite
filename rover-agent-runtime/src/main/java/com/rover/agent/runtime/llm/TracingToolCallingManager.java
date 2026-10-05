@@ -16,12 +16,8 @@ import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 
 /**
- * 在真正执行工具之前，把模型这次返回的 toolCallId 绑到当前线程。
- *
- * <p>Spring AI 的默认管理器不会把调用号放进 {@link ToolContext}，证据层又不能直接看见模型消息。
- * 这里按返回顺序包一层回调：框架每执行一个工具，就绑上对应的调用号，执行完立刻清掉。
- *
- * <p>ponytail: 假设同一次返回里的工具是串行执行的。框架如果改成并行调用，调用号会串。
+ * 工具回调前按返回顺序绑定 toolCallId，执行后清除。
+ * ponytail: 依赖串行工具调用；框架改为并行时须改为按调用绑定。
  */
 public final class TracingToolCallingManager implements ToolCallingManager {
 

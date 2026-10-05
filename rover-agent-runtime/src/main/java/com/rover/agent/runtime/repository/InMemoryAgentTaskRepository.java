@@ -7,13 +7,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * 调查任务快照的内存实现：单机、进程内、重启即失。
- *
- * 容量满时拒绝写入（{@link StoreCapacityExceededException}）：任务记录是调查事实的真相来源，
- * 静默淘汰最早的任务会让"结论仍在事件摘要里、任务却查不到"。腾出位置由
- * {@code InvestigationTaskRegistry} 淘汰最早的已结束任务完成。
- */
+/** 任务快照内存存储；容量满时拒绝新增，由登记表淘汰已结束任务。 */
 public final class InMemoryAgentTaskRepository implements AgentTaskRepository {
 
     private final BoundedStore<String, TaskView> tasks;

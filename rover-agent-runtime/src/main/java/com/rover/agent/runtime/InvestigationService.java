@@ -41,18 +41,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 机器事件触发的只读调查用例入口：登记调查任务并执行「调查图 + 模型解读」的完整闭环。
- *
- * 这是告警侧的执行形态：目标由事件自带（路径来自告警），不经过自然语言解析，也没有模型自主选工具这一步——
- * 规划器产出只读步骤、评估节点按证据决定继续或收尾。人工会话不走这里（那条路径由
- * {@code AgentOrchestrator} 交给对话主路径）。
- *
- * 提交与执行是分开的：{@link #register} 只登记 PENDING 任务（不阻塞调用线程），
- * {@link #run} 在 Agent Worker 线程里执行调查；编排层需要自己登记任务时也走这两个入口。
- *
- * 调查事实全部来自 {@code com.rover.agent.core.port} 的只读端口；模型只做解读，
- * 不可用时降级为规则诊断。任务状态写入任务仓储：配了记录库路径时重启后仍可查询，
- * 仍在执行的任务由存储层统一标注为「重启中断」。
+ * 机器事件的只读调查入口：register 登记任务，run 在 Worker 中执行调查与解读。
+ * 事实来自只读端口；模型不可用时保留规则结论，任务状态通过仓储保存。
  */
 public final class InvestigationService {
 
@@ -79,12 +69,7 @@ public final class InvestigationService {
     private final PlanningLimits limits;
     private final OpsJournal journal;
 
-    /**
-     * 默认装配：确定性规划器 + 标准能力注册表 + 默认规划上限。
-     *
-     * 未显式注入规划组件的调用方（旧入口与既有测试）走这里，行为与固定调查链一致：
-     * 计划顺序仍是路由 → 实例 → 指标 → 追踪，只是改由动态图按同样的边界执行。
-     */
+    /** 默认装配规则规划器、标准能力注册表和规划上限。 */
     public InvestigationService(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                                 TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
                                 LogQueryPort logs, KnowledgeReadPort knowledge,
@@ -98,12 +83,7 @@ public final class InvestigationService {
                 PlanningLimits.defaults(), OpsJournal.none());
     }
 
-    /**
-     * 完整装配：由配置层注入规划器（可含模型建议）、计划校验器、能力执行器与规划上限。
-     *
-     * 只读端口不在这里出现：取数统一经 {@link CapabilityExecutor}，本服务不再各自持有端口，
-     * 避免出现「图走执行器、服务又直连端口」的两套取数口径。
-     */
+    /** 注入规划器、校验器、能力执行器和规划上限；取数统一经 CapabilityExecutor。 */
     public InvestigationService(IncidentRegistry incidents, InvestigationTaskRegistry tasks,
                                 ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
                                 CapabilityExecutor executor, PlanningLimits limits) {
@@ -125,13 +105,8 @@ public final class InvestigationService {
     }
 
     /**
-     * 事件接入入口：告警 / 网关切面异常等事件触发一次自动调查——这是本服务唯一的提交入口。
-     *
-     * 人工提问不走这里（人工会话由 {@code AgentOrchestrator} 交给对话主路径），因此不保留
-     * 「一次性诊断」那种产品里并不存在的调用方式：多一个入口，就多一套与真实链路不同的行为要被维护。
-     *
-     * 事件来源记为 {@link IncidentOrigin#ALERT}，且事件自带一个观测窗口（不传则按默认窗口）。
-     * 会话按事件独立开（userId 为 null），因此不会与某个人工会话的「单活跃任务」锁冲突（不会 409）。
+     * 接收 ALERT 事件，创建无用户归属的独立会话并开始自动调查。
+     * 未指定观测窗口时使用默认值。
      */
     public TaskView submitAlert(String path, String alertMessage, TimeRange timeRange) {
         String question = "告警自动调查："
@@ -184,13 +159,8 @@ public final class InvestigationService {
     }
 
     /**
-     * 执行一次已解析目标的调查：调查图 → 规则结论 → 模型解读 → 结论回写事件。
-     *
-     * 调用前必须已通过 {@code task.bind(...)} 绑定事件、取数路径与结构化目标。
-     * 本方法只在 Agent Worker 线程里调用，绝不占用 Servlet 请求线程。
-     *
-     * {@code onReport} 在任务定型之前回调：客户端收到 TASK_COMPLETED 就会重新拉取会话，
-     * 结论若在此之后才落库，它会先看到一条只有「已继续调查…」的时间线。
+     * 在 Worker 中执行调查、规则结论、模型解读和事件回写；任务须先绑定目标。
+     * onReport 在任务终态事件发布前执行，保证完成时能读到结论。
      */
     public void run(InvestigationTask task, Consumer<InvestigationReport> onReport) {
         task.start();
@@ -263,13 +233,7 @@ public final class InvestigationService {
         return tasks.get(taskId);
     }
 
-    /**
-     * 订阅某任务的事件流（供 SSE 展示）；任务不在执行登记表里时返回空，由调用方回 404。
-     *
-     * 订阅成功后先补发一份全量快照（状态 + 已产生的解读文本），再按增量投递；
-     * 因此晚连上、掉队重连的客户端都不会看到空白或重复内容。事件写往订阅者队列是非阻塞的，
-     * 客户端断开只影响它自己这条订阅。
-     */
+    /** 订阅任务事件，先发送快照再推送增量；任务不在执行登记表时返回空。 */
     public Optional<TaskEventSubscription> subscribeEvents(String taskId, TaskEventSubscriber subscriber) {
         InvestigationTask task = tasks.find(taskId);
         return task == null ? Optional.empty() : Optional.of(task.subscribe(subscriber));

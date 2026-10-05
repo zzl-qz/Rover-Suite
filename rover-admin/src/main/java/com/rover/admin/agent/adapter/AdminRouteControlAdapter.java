@@ -20,16 +20,7 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 
-/**
- * 路由控制端口的管理口实现：把 Admin 的管理口调用翻译成领域端口。
- *
- * <p>依赖方向刻意保持 {@code Admin → Runtime → Core}：运行层只认 {@link RouteControlPort}，
- * 因此它既可以在 Admin 进程内跑，也可以整体搬到别的进程；换网关、换调用方式只改这一层。
- *
- * <p>这一层只做两件事：<b>翻译结构</b>（整表 JSON ↔ 领域对象）与<b>翻译失败性质</b>。
- * 后者比前者重要：管理口的 409、400、5xx 与「连不上」在领域里对应四种完全不同的处置
- * （重读版本 / 改参数 / 同号重试 / 原号回查），压成一句「调用失败」就等于把这四种处置也一起丢了。
- */
+/** 通过 Admin 管理口实现 {@link RouteControlPort}，转换路由数据与异常类型。 */
 @Component
 public class AdminRouteControlAdapter implements RouteControlPort {
 
@@ -209,13 +200,7 @@ public class AdminRouteControlAdapter implements RouteControlPort {
         return lines;
     }
 
-    /**
-     * 把管理口异常翻译成「失败性质」。
-     *
-     * <p>三种状态码的处置完全不同，因此这里不能一律当成失败：
-     * 409 是「别人先改了，重读版本即可」，0 是「没拿到响应，只能原号回查」，
-     * 其余 4xx 是「请求本身有问题」，5xx 才是「网关自己出错了」。
-     */
+    /** 映射管理口异常：409 为版本冲突，其他 4xx 为请求拒绝，5xx 为执行失败，0 为响应未知。 */
     private static RouteControlException translate(String action, RuntimeException ex) {
         if (ex instanceof RouteControlException control) {
             return control;

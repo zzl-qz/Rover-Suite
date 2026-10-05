@@ -21,22 +21,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 调查任务登记与并发执行。
- *
- * 任务记录写入 {@link AgentTaskRepository}（配了记录库路径时是关系表，重启后仍在），它才是任务快照的真相来源；
- * 本类另外持有的只是在当前进程里仍在执行的任务——线程池与事件订阅通道天生无法持久化，
- * 重启后自然消失。
- *
- * 三条并发规则在这里统一执行：
- * <ol>
- *   <li>同一会话同时最多一个仍在执行的任务：重复提交抛 {@link SessionTaskRunningException}（HTTP 409），
- *       避免同一事件上两个任务并发、结论互相覆盖；</li>
- *   <li>任务登记容量到达上限时先淘汰最早的已结束任务，仍在执行的任务不淘汰；淘汰后仍满则拒绝新任务；</li>
- *   <li>执行队列是有界的：队列满时提交被拒（HTTP 429），不使用无界队列也不使用缓存线程池。</li>
- * </ol>
- *
- * 线程池与容量都由 {@link AgentExecutionSettings} 配置，本类不硬编码。
- * 被拒、登记、结束与队列深度都上报给 {@link AgentMetrics}：这些计数是"容量配得对不对"的唯一依据。
+ * 登记任务并管理有界线程池，同一会话最多一个执行中的任务。
+ * 容量满时优先淘汰最早结束的任务，仍满或队列满则拒绝提交。
+ * 任务快照通过仓储保存，执行态与事件通道仅存在于当前进程。
  */
 public final class InvestigationTaskRegistry implements TaskRetirement {
 
@@ -198,11 +185,8 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     }
 
     /**
-     * 回收会话下的全部任务：记录、执行登记与事件通道一起删。
-     *
-     * 调用方必须先确认该会话没有执行中的任务（见 {@link #hasActiveTasksInSession(String)}）：
-     * 正在跑的任务还在写自己的快照，删了会在下一次状态变更时"复活"。
-     * 这里仍然跳过执行中的任务，只是兜底，不作为正常路径。
+     * 回收会话的任务记录、执行登记与事件通道；调用前须确认无执行中任务。
+     * 执行中任务会被跳过。
      */
     @Override
     public int retireBySession(String sessionId) {

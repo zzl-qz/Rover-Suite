@@ -9,13 +9,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
 
-/**
- * 变更记录的内存实现：单机、进程内、重启即失，用于未配记录库路径的运行与单测。
- *
- * <p>{@link #transition} 的原子性靠 {@link BoundedStore} 的同一把锁保证：读当前状态、比对、
- * 写回在同一个同步块里完成，因此「双击批准」在内存实现下同样只会有一次成功。
- * 这条语义必须在两种实现里一致——否则测试通过、上生产就出两笔变更。
- */
+/** 变更记录的内存存储；transition 在同一同步块内比较状态并写入。 */
 public final class InMemoryAgentActionRepository implements AgentActionRepository {
 
     private final BoundedStore<String, AgentAction> actions;

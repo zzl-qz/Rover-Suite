@@ -21,22 +21,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 受控变更的应用入口：提议、批准、拒绝、回滚、结果确认，以及「谁能动这一条」。
- *
- * <p>这一层负责的是<b>流程与权限</b>，不是技术执行：它把「谁在什么状态下能做什么」钉死，
- * 把「怎么把 Gateway 改对」交给 {@link ActionExecutor}。两者分开的好处是，
- * 想加一种新变更时只需要写一个新的执行器，流程与权限不用再改一遍、也不会两处不一致。
- *
- * <p>三条刻意的设计：
- *
- * <ol>
- *   <li><b>提议不执行</b>：{@link #propose} 只登记，一行写请求都不会发出去；
- *       模型能到达的最远处就是这里。</li>
- *   <li><b>状态迁移用 CAS</b>：批准与回滚都先做原子状态迁移，抢不到就说明别人先动了，
- *       于是「连点三下批准」只会有一次真实执行。</li>
- *   <li><b>归属即权限</b>：变更属于创建它的会话所属用户；不是本人创建的变更，对当前用户一律按不存在处理。
- *       审批对象必须对应用户自己看到的状态，这一点不接受「帮忙代批」。</li>
- * </ol>
+ * 管理变更提议、审批、拒绝、回滚、结果确认与用户归属。
+ * 提议仅登记；批准和回滚通过 CAS 迁移状态后委托 {@link ActionExecutor}。
+ * 非当前用户的变更按不存在处理。
  */
 public final class AgentActionService {
 
@@ -58,19 +45,8 @@ public final class AgentActionService {
     // ---------------------------------------------------------------- 提议
 
     /**
-     * 提议一条灰度权重变更：读当前路由、定位版本、把请求值换算成真实权重、登记一条待审批记录。
-     *
-     * <p>这是模型唯一能触达的写入口，而它做的事情只有「读 + 记一条建议」：
-     * Gateway 的路由表不会因为这里被调用而改变一个字节。
-     *
-     * <p><b>单位必须由调用方显式给出。</b>「权重值」与「流量占比」是两种量纲，
-     * 在一条权重为 95/5 的路由上，「20」既可能是权重值 20，也可能是 20% 流量（换算后约 2000），
-     * 两者相差两个数量级。让模型在两者之间挑一个等于把一次真实变更押在语气判断上，
-     * 因此 {@code unit} 缺失时这里不猜，直接返回 {@link ActionProposal#clarificationRequired}，
-     * 让对话回到用户那里问清楚。
-     *
-     * <p>百分比到权重的换算也由这里完成：占比取决于整条路由的权重分布，
-     * 只有代码读得到全部目标，模型手里只有它想改的那一个。
+     * 读取路由与目标，换算请求值并登记待审批变更，不提交网关。
+     * 单位须显式提供；缺失时要求澄清，百分比按整条路由权重换算。
      *
      * @param sessionId      会话（决定归属与审计）
      * @param taskId         产生这条建议的任务
@@ -170,12 +146,8 @@ public final class AgentActionService {
     }
 
     /**
-     * 把「请求值 + 单位」换成真正要写进路由表的权重。
-     *
-     * <p>占比换权重：设目标当前权重 {@code w}、同路由其他目标权重合计 {@code o}，
-     * 要让目标承接 {@code p}% 流量，需要 {@code w' / (o + w') = p / 100}，即 {@code w' = o * p / (100 - p)}。
-     * 这是一次只改一个目标的前提下的唯一解。解不存在，或者算出来的权重超出单目标上限时，
-     * 这里不截断成一个近似值，而是让调用方回去说明「只改这一个版本做不到」。
+     * 将请求值转换为目标权重：w' = o * p / (100 - p)，o 为其他目标权重合计。
+     * 无解或超过权重上限时拒绝，不截断近似。
      */
     private static WeightResolution resolve(int currentWeight, int totalWeight, int requestedValue,
                                            WeightRequestUnit unit) {
@@ -214,7 +186,7 @@ public final class AgentActionService {
         return Math.round(weight * 1000.0 / totalWeight) / 10.0;
     }
 
-    /** 请求值 → 真实权重的换算结论：要么给出一个权重，要么给出一句「为什么算不出来」。 */
+    /** 请求值到权重的换算结果，包含权重或失败原因。 */
     private record WeightResolution(boolean passed, int weight, String message) {
 
         static WeightResolution ok(int weight) {
@@ -226,12 +198,7 @@ public final class AgentActionService {
         }
     }
 
-    /**
-     * 提议阶段的预览：只是把差异提前摊开给人看。
-     *
-     * <p>预览失败不阻止提议——真正的把关点在批准之后（预检 + 预览 + 乐观锁，三道都在），
-     * 这里失败就把原因写成一行备注，别让「预览接口不可用」把「提个建议」也一起挡住。
-     */
+    /** 读取提议阶段的差异预览；失败时保留原因备注，不阻止登记提议。 */
     private List<String> previewOf(RouteControlRoute route, RouteControlTarget target, int desiredWeight) {
         try {
             RouteChangePreview preview = control.preview(route.routeId(), target.serviceName(),
@@ -269,7 +236,7 @@ public final class AgentActionService {
 
     // ---------------------------------------------------------------- 人工动作
 
-    /** 批准并<b>立即执行</b>：抢到「待审批 → 执行中」的那一次请求才会真正提交变更。 */
+    /** 通过 CAS 批准并立即执行，仅成功迁移状态的请求可提交。 */
     public AgentAction approve(String actionId, String userId) {
         AgentAction pending = require(actionId, userId);
         if (!pending.status().awaitingApproval()) {
@@ -329,7 +296,7 @@ public final class AgentActionService {
         return execute(action);
     }
 
-    /** 按变更类型选执行器；目前只有一种，越界直接拒绝而不是「随便找个执行器试试」。 */
+    /** 按变更类型选择执行器，不支持的类型直接拒绝。 */
     private AgentAction execute(AgentAction action) {
         if (action.type() != executor.type()) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
@@ -342,7 +309,7 @@ public final class AgentActionService {
                 default -> executor.resolve(action);
             };
         } catch (RuntimeException ex) {
-            // 执行器约定不抛业务异常；真抛出来时也要留痕，否则库里会永远停在「执行中」。
+            // 记录未预期的执行异常，避免状态停留在执行中。
             log.error("执行变更 {} 时出现未预期的异常", action.actionId(), ex);
             long now = System.currentTimeMillis();
             AgentAction failed = new ActionDraft(action).appliedRevision(null)

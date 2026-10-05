@@ -17,22 +17,9 @@ import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * 基于 JDBC 的追加式记录库：异步写入 + 时间区间查询 + 超期清理。
- *
- * <p>SQL 与方言无关（建表、索引、查询都只用 H2 与 MySQL 都认的写法），
- * 连接来源当前是 H2 嵌入式文件；换成连接池或 MySQL 时只换连接来源，本类逻辑不变。
- *
- * <p>写入路径：{@link #log(Record)} 按类型分级入队，单写线程后台批量落盘，绝不阻塞主链路。
- * <ul>
- *   <li>诊断证据（{@code isCritical()}）：进高优队列，容量更大，入队时短暂阻塞等待
- *       （{@link #CRITICAL_OFFER_TIMEOUT_MS}）而非直接丢弃，尽量不丢；仅持续积压到极端才计数丢弃。</li>
- *   <li>遥测（心跳/请求 trace）：进普通队列，满则 best-effort 丢弃并计数，绝不拖慢业务。</li>
- * </ul>
- *
- * <p>读取/清理：每次新建短连接查询（不与写线程共享连接，规避单连接并发问题）。
- * 表上有 (ts) 与 (target, ts) 两个 B-tree 索引，百万级数据下的区间查询仍为索引扫描、毫秒级。
- *
- * <p>数据膨胀由应用层 retention（{@link #purgeOlderThan}）控制，与底层是哪一种库无关。
+ * JDBC 追加式记录库，支持异步写入、时间范围查询与超期清理，兼容 H2 和 MySQL。
+ * 高优记录入队短暂等待，遥测队列满时丢弃并计数；单写线程批量落盘。
+ * 查询与清理使用独立连接。
  */
 @Slf4j
 public class JdbcRecordStore implements RecordStore {
@@ -90,12 +77,8 @@ public class JdbcRecordStore implements RecordStore {
     }
 
     /**
-     * 轻量自研迁移（Flyway 思路的精简版）：用 schema_migrations 表记录已应用版本，
-     * 启动时只把「比当前库版本更高」的迁移按顺序补应用。
-     *
-     * <p>与单纯 CREATE TABLE IF NOT EXISTS 的区别：老库已存在时，IF NOT EXISTS 会整段跳过、
-     * 完全不比对结构；而迁移层会按版本增量 ALTER，结构演进不丢历史、也不静默失效。
-     * 只前进不回退（与 Flyway 一致）——要撤销某次变更，写一条更高版本的前向迁移去还原它。
+     * 通过 schema_migrations 记录版本，按序执行尚未应用的迁移。
+     * 仅支持前向迁移，撤销变更需新增版本。
      */
     private static final List<Migration> MIGRATIONS = List.of(
             new Migration(1, "baseline",

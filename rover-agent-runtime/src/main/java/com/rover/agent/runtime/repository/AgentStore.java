@@ -9,13 +9,8 @@ import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.runtime.journal.OpsJournal;
 
 /**
- * Agent 存储组合根：会话 / 消息 / 事件 / 任务 / 资源笔记一次装配好。
- *
- * <p>没配记录库路径（单测、无状态运行）时全部走内存，重启即失；配了路径就落到同一份库，
- * 重启后整条链——会话 → 事件 → 任务 → 步骤 / 证据——都还能读回来。
- *
- * <p>上层只认 {@code com.rover.agent.core.repository} 里的接口，因此换实现不影响任何业务代码；
- * 容量只对内存实现有意义，落库实现不受它约束。
+ * 装配 Agent 存储；配置记录库路径时使用 JDBC，否则使用内存实现。
+ * 容量限制仅作用于内存实现。
  */
 public final class AgentStore implements AutoCloseable {
 

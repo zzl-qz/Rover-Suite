@@ -14,14 +14,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 用已配置的模型做目标结构化辅助：规则匹配不出对象时，让模型从候选清单里挑一个。
- *
- * 模型只做"选择"，不做"生成"：候选是现有路由 / 服务 / 实例的枚举，回复必须原样命中候选行，
- * 命中不了就当作没有把握。这样即使模型胡说，也不会把诊断带到不存在的对象上。
- *
- * 模型未配置、不可用或调用失败时一律返回空，由 {@link com.rover.agent.core.context.TargetResolver}
- * 回退到澄清提问——辅助能力缺失不能变成能力退化后的猜测。调用按场景收紧超时并只为超时重试一次
- * （见 {@link QuickModelCall}）：等不到就尽快转为澄清，而不是让用户等满模型配置里的超时。
+ * 通过模型从现有路由、服务和实例候选中选择目标，输出须匹配候选。
+ * 未配置、不可用或失败时返回空；按场景限制超时，仅在超时后重试一次。
  */
 public final class ModelTargetInterpreter implements TargetInterpreter {
 
