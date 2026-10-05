@@ -38,15 +38,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 只读能力执行器：把「能力标识」翻译成对只读端口的一次真实调用，并产出可追溯的证据。
- *
- * 这是模型与生产数据之间唯一的执行口：模型只能提出能力请求（{@link AgentCapability}），
- * 真实调用、取数口径、证据表述都由这里的代码固定下来。管理口地址、HTTP 客户端与凭证
- * 从不进入提示词，也不出现在能力清单里。
- *
- * 执行失败不抛异常：数据不可用是调查的常见事实，转成判断边界（limitation）与失败步骤如实上报，
- * 让结论说清「数据不足」而不是让整次调查失败。所有证据都带上统计口径元数据
- * （窗口秒数、样本量、取证时刻），样本不足的结论因此可以从证据本身复核。
+ * 执行只读能力并生成包含窗口、样本量和取证时间的证据。
+ * 读取失败记录为失败步骤和判断边界；管理口地址与凭证不进入提示词。
  */
 public final class CapabilityExecutor {
 
@@ -118,11 +111,7 @@ public final class CapabilityExecutor {
     }
 
     /**
-     * 执行一次只读能力，并带上本次调查已经读到的路由事实。
-     *
-     * 能力之间彼此独立，但取数口径必须与已确认的事实一致：实例数据按「该路由的目标服务与分组」
-     * 统计，而不是按用户描述里的服务名——两者不一致时（例如路由指向 demo/11 而用户只说了
-     * demo-service）证据会各说各话。路由事实由调用方在读完路由后传入；未读到时传 {@code null}。
+     * 按已读取的路由服务与分组执行只读能力；无路由事实时传 null。
      *
      * @param route 已读到的路由快照；为 {@code null} 表示本次没有可用路由事实
      */
@@ -223,11 +212,8 @@ public final class CapabilityExecutor {
     }
 
     /**
-     * 指标取数：全局窗口指标 + 「路由 × 上游实例」窗口观测。
-     *
-     * 全局指标回答「这条链路整体有没有异常」，按上游实例的观测回答「是哪台实例异常」——后者才是
-     * 处置决策的依据。调用方没有传路由时，这里用本地的路由匹配补一次，避免模型把指标能力排在路由
-     * 能力之前时丢掉实例维度；路由确实取不到时只记录判断边界，不影响全局指标的产出。
+     * 读取全局指标和路由的上游实例观测；缺少路由时补做匹配。
+     * 路由不可用时记录判断边界，保留全局指标。
      */
     private CapabilityResult readMetrics(AgentCapability capability, CapabilityDescriptor descriptor,
                                          RouteSnapshot route, String lookup, String taskId) {
@@ -320,12 +306,7 @@ public final class CapabilityExecutor {
         return sorted;
     }
 
-    /**
-     * 配置读取：按组件聚合，每个组件一条证据。
-     *
-     * 配置是时点快照（窗口口径为 0），因此样本量记为该组件的配置条目数。读取失败是能力级失败：
-     * 拿不到配置就无法确认当前生效值，不做局部降级猜测。
-     */
+    /** 按组件生成配置证据，窗口为 0，样本量为配置项数；读取失败不降级。 */
     private CapabilityResult readConfigs(AgentCapability capability, CapabilityDescriptor descriptor,
                                          String taskId) {
         List<ConfigEntrySnapshot> snapshot;
@@ -358,12 +339,7 @@ public final class CapabilityExecutor {
         return CapabilityResult.success(capability, descriptor, evidence, limitations).withConfigs(rows);
     }
 
-    /**
-     * 事件查询：注册中心最近事件。
-     *
-     * 事件缓冲区按条数滚动，因此「最近窗口内的条数」与「缓冲区总条数」由证据表述分别说明，
-     * 判定只认窗口内的部分。
-     */
+    /** 读取注册中心事件，仅使用当前窗口内事件判定。 */
     private CapabilityResult readEvents(AgentCapability capability, CapabilityDescriptor descriptor,
                                         String taskId) {
         List<RegistryEventSnapshot> snapshot;
@@ -406,10 +382,7 @@ public final class CapabilityExecutor {
     }
 
     /**
-     * 查询落盘历史日志。参数模型与其它能力不同（需要类型过滤与时间范围），因此独立于通用 {@link #execute}。
-     *
-     * <p>历史日志回答「这段时间发生了什么」：配置改了什么、回滚过没有、哪个实例什么时候上下线、
-     * 出过什么错、指标采样与慢/错误链路的经过。类型字符串由适配器映射回存储层枚举，未知类型忽略。
+     * 按目标、类型和时间范围查询历史日志；未知类型忽略。
      *
      * @param target 目标实体（服务名/路由路径/实例），{@code null} 或空表示全部
      * @param types  类型过滤（枚举名字符串），{@code null} 或空表示全部类型
@@ -437,11 +410,7 @@ public final class CapabilityExecutor {
         }
     }
 
-    /**
-     * 检索运维知识库：回答「怎么配置 / 怎么接入 / 怎么排查」类问题。
-     *
-     * <p>与状态查询不同：知识条目回答的是「方法」，不读任何实时数据，因此证据不带统计窗口口径。
-     */
+    /** 检索运维知识，证据不包含实时统计窗口。 */
     private CapabilityResult readKnowledge(AgentCapability capability, CapabilityDescriptor descriptor,
                                           String query, String taskId) {
         if (query == null || query.isBlank()) {

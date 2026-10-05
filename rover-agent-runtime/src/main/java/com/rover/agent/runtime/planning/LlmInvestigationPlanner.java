@@ -21,20 +21,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 模型辅助的调查规划器：模型提建议，确定性兜底与校验把边界钉死。
- *
- * 分工是刻意的：
- * <ul>
- *   <li><b>计划</b>：先由 {@link RuleBasedPlanner} 产出确定性计划（无模型时它就是最终计划），
- *       再把「问题 + 可用能力 + 已采证据」交给模型补充或调整步骤；模型给出的能力名必须命中注册表，
- *       否则直接丢弃，必查项被模型漏掉时由确定性计划补齐；</li>
- *   <li><b>停止条件</b>：由 {@link RuleBasedPlanner#evaluate} 决定，不交给模型——
- *       「什么时候算查够了」如果由模型自由裁量，调查就可能无限进行或过早收尾；</li>
- *   <li><b>边界</b>：轮数、调用次数与步数上限全部由 {@link com.rover.agent.core.planning.PlanningLimits}
- *       在图上强制，提示词里只是提前告知。</li>
- * </ul>
- *
- * 因此「模型不可用」不是降级路径，而是与既有固定调查链等价的一条正常路径。
+ * 在规则兜底计划上补充模型建议，能力和目标须通过确定性校验，必查项由规则补齐。
+ * 停止条件由规则判断，轮数、调用次数和步数由 PlanningLimits 控制。
  */
 public final class LlmInvestigationPlanner implements InvestigationPlanner {
 

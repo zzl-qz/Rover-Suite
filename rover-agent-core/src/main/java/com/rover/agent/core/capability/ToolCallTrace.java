@@ -1,10 +1,8 @@
 package com.rover.agent.core.capability;
 
 /**
- * 当前线程正在执行的模型工具调用号。
- *
- * <p>工具方法跑在模型框架的回调里，证据是在这次回调期间由 {@link CapabilityExecutor} 产生的。
- * 调用号由外层在进入回调前绑定、离开时清掉，证据落库时直接读这里，不必给每个只读方法再加一个参数。
+ * 当前线程的模型工具调用号，用于关联证据。
+ * 进入回调前绑定，退出回调时清除。
  */
 public final class ToolCallTrace {
 

@@ -21,13 +21,9 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 /**
- * 模型配置的落盘与内存当前值。
- *
- * 用例：文件存在且字段完整 → 文件优先；否则用环境变量播种
- * （{@code ROVER_AGENT_MODEL_CHAT / ROVER_AGENT_API_KEY / ROVER_AGENT_BASE_URL / ROVER_AGENT_MODEL}）。
- * 于是"环境变量作为首次启动默认值"成立：既有用法不改，此后以页面保存的配置为准。
- *
- * 文件损坏或读不动只 WARN 并回落到播种值，不抛异常也不删文件。
+ * 模型配置的文件存储与内存快照。
+ * 文件存在且完整时优先读取，否则使用环境变量播种。
+ * 文件读取失败时告警并回退，不删除原文件。
  */
 @Component
 public class ModelConfigStore {

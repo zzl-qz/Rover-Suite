@@ -44,16 +44,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 动态只读调查图：{@code PLAN → EXECUTE → EVALUATE →（继续规划 / 澄清 / 合成结论）}。
- *
- * 与固定调查链的区别只有一件事，但很关键：<b>下一步查什么由当前证据决定</b>。
- * 计划由 {@link InvestigationPlanner} 产出（模型可参与建议），每一步都要过 {@link PlanValidator}
- * 的只读与目标边界校验，实际取数由 {@link CapabilityExecutor} 完成；轮数、能力调用次数与计划步数
- * 由 {@link PlanningLimits} 强制封顶——「模型负责理解与建议，代码负责权限、执行与限制」。
- *
- * 图状态里只放标量（任务、路径、轮数、调用次数、判定结果）。证据、结构化快照与结论都放在本实例
- * 字段上：框架会把 {@code invoke()} 的状态做序列化快照，记录内部的嵌套集合与枚举回读时会退化，
- * 这个约束与固定链路一致，因此每次调查仍然新建一个图实例。
+ * 动态只读调查：规划、执行、评估，再继续、澄清或合成结论。
+ * 计划经 PlanValidator 校验，执行和预算由 CapabilityExecutor 与 PlanningLimits 控制。
+ * 图状态仅保存标量，快照和证据保存在实例字段，每次调查新建实例。
  */
 public final class DynamicInvestigationGraph {
 
@@ -206,12 +199,7 @@ public final class DynamicInvestigationGraph {
         return state.value(STATE_VERDICT, VERDICT_FINISH);
     }
 
-    /**
-     * 规划节点：产出并校验本轮计划。
-     *
-     * 模型建议在这里被压缩成「注册表里已接入的只读能力」；越界建议静默丢弃（但计划里保留用户可见的
-     * 步骤依据），保证任何情况下都不会出现无法执行或越权的步骤。
-     */
+    /** 生成并校验本轮计划，丢弃不可用或越界的能力。 */
     private Map<String, Object> planNode(OverAllState state) {
         int round = state.value(STATE_ROUNDS, 0) + 1;
         this.rounds = round;
@@ -241,12 +229,7 @@ public final class DynamicInvestigationGraph {
         return Map.of(STATE_ROUNDS, round, STATE_HAS_PLAN, !validated.isEmpty());
     }
 
-    /**
-     * 执行节点：按计划顺序执行本轮尚未处理的能力。
-     *
-     * 有些能力对本目标没有判定价值（例如路由未知、静态上游或非 Nameserver 时的实例数据），
-     * 这类步骤按事实跳过并记录依据；跳过同样计入「已处理」，下一轮不会重复规划它。
-     */
+    /** 按序执行未处理能力；无判定价值的步骤跳过并计入已处理。 */
     private Map<String, Object> executeNode(OverAllState state) {
         for (PlannedStep step : plan.steps()) {
             AgentCapability capability = step.capability();
@@ -303,12 +286,7 @@ public final class DynamicInvestigationGraph {
         return Map.of(STATE_TOOL_CALLS, toolCalls);
     }
 
-    /**
-     * 评估节点：判定继续、澄清还是收尾。
-     *
-     * 判定来自 Planner 的确定性实现；这里再叠加轮数与调用次数上限——触到上限时如实记录一条判断边界，
-     * 而不是悄悄继续调查或假装已经查完。
-     */
+    /** 评估继续、澄清或收尾；达到轮数或调用上限时记录判断边界。 */
     private Map<String, Object> evaluateNode(OverAllState state) {
         PlanningRequest request = planningRequest();
         PlanProgress progress = PlanProgress.of(rounds, toolCalls, settled, 0);
@@ -435,13 +413,7 @@ public final class DynamicInvestigationGraph {
         return result.limitations().isEmpty() ? "能力执行未产出证据" : result.limitations().get(0);
     }
 
-    /**
-     * 能力对应的步骤类型。
-     *
-     * 刻意穷举、不写 default：步骤名与类型必须与 {@code CapabilityRegistry} 注册的一致，
-     * 否则「执行中」与「已完成」两次上报会因步骤名不同而无法合并，时间线上会留下一条永远在转的步骤。
-     * 将来新增能力时，这里不补分支就编译不过——把「对齐」交给编译器而不是靠人记得。
-     */
+    /** 穷举能力对应的步骤类型，新增能力时由编译器检查映射完整性。 */
     private static AgentStepType stepType(AgentCapability capability) {
         return switch (capability) {
             case ROUTE_QUERY -> AgentStepType.ROUTE_INVESTIGATION;

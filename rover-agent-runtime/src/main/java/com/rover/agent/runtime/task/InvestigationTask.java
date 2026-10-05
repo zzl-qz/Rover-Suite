@@ -33,16 +33,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 /**
- * 一次调查任务的运行状态；状态变更、快照落库与事件发布都在同步块内完成，保证观察者看到的
- * 顺序与真实状态变化一致。
- *
- * 任务在登记时只有会话与问题——「调查哪个对象」由执行线程在目标解析阶段确定（{@link #bind}），
- * 解析不出对象则停在 {@link TaskStatus#WAITING_INPUT}（{@link #waitForInput}）。
- * 因此快照里的目标、路径与事件 ID 在执行开始前是空的，这是刻意的：登记不阻塞 Servlet 线程。
- *
- * 每次状态变更做两件事：把最新快照推给 {@code snapshotSink}（由登记方接到任务记录存储上），
- * 以及向事件总线发布一条结构化事件。前者是事实来源，后者只是通知——发布本身不做网络 IO，
- * 订阅者掉队或断开都不会影响本对象的执行。
+ * 调查任务运行状态；状态变更、快照保存和事件发布在同一同步块内完成。
+ * 执行线程解析并绑定目标，无法解析时进入 WAITING_INPUT。
+ * 事件发布不执行网络 IO，慢订阅者不阻塞任务。
  */
 public final class InvestigationTask implements InvestigationReporter {
 
@@ -165,14 +158,7 @@ public final class InvestigationTask implements InvestigationReporter {
         persist();
     }
 
-    /**
-     * 标明本次任务走的是人工对话主路径（{@link TaskType#CONVERSATION}）。
-     *
-     * 任务形态不是一次状态迁移，而是结构化事实；用一次全量快照事件通知订阅者，
-     * 前端按「快照覆盖」语义合并，既能看到形态，也不会打乱步骤与解读的增量流。
-     *
-     * 这里刻意不再写任何「意图判断」：对话主路径上不存在预分类——查什么、怎么答由模型在对话中决定。
-     */
+    /** 标记人工对话执行形态，并发布全量快照通知订阅者。 */
     public synchronized void markConversation() {
         this.taskType = TaskType.CONVERSATION;
         persist();
@@ -215,12 +201,7 @@ public final class InvestigationTask implements InvestigationReporter {
         evidence.addAll(collected);
     }
 
-    /**
-     * 推进一个安全恢复点。
-     *
-     * <p>调用方必须先完成状态变更（步骤已终态、证据已交付）：一次恢复点写入会把当前任务快照、
-     * 证据与恢复点一起落库，恢复点表达的是「截至这里，一切已确定」，而不是「准备干到这里」。
-     */
+    /** 步骤完成、证据交付后推进恢复点，与任务快照和证据一起保存。 */
     @Override
     public synchronized void checkpoint(CheckpointStage stage, int roundNo, int toolCallCount, String runtimeNode) {
         if (stage == null) {

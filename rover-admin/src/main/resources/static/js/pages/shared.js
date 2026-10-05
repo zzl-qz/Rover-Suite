@@ -7,6 +7,7 @@ window.RoverAdminPages.shared = {
             page: 'dashboard',
             nav: [
                 { id: 'dashboard', label: '仪表盘', icon: ICONS.dashboard },
+                { id: 'metrics', label: '指标诊断', icon: ICONS.traces },
                 { id: 'workbench', label: 'Agent 工作台', icon: ICONS.workbench },
                 { id: 'traces', label: '请求追踪', icon: ICONS.traces },
                 { id: 'routes', label: '路由管理', icon: ICONS.routes },
@@ -39,6 +40,7 @@ window.RoverAdminPages.shared = {
         pageSubtitle() {
             return {
                 dashboard: '数字看不懂就悬停；顶栏 1m/5m 决定「近窗」多长',
+                metrics: '全局指标、版本与上游实例观测；可见时每 10 秒刷新',
                 workbench: '多轮追问的调查工作台。会话、原话和调查过程会保留',
                 traces: '点一行在表内展开阶段耗时',
                 routes: '路由规则热更新与落盘',
@@ -114,13 +116,14 @@ window.RoverAdminPages.shared = {
         ...RoverAdminFormatters,
         switchPage(page) {
             this.page = page;
-            this.refreshAll();
+            const refreshing = this.refreshAll();
             if (page === 'dashboard') {
                 this.disposeCharts();
                 this.$nextTick(() => this.initCharts());
             } else if (page !== 'traces') {
                 this.selectedTrace = null;
             }
+            return refreshing;
         },
         async refreshAll() {
             this.loading = true;
@@ -132,6 +135,7 @@ window.RoverAdminPages.shared = {
                 if (this.page === 'traces') await this.fetchTraces();
                 if (this.page === 'workbench') await this.wbRefresh();
                 if (this.page === 'routes') await this.fetchRoutes();
+                if (this.page === 'metrics') await Promise.all([this.fetchRoutes(), this.refreshMetrics()]);
                 if (this.page === 'instances') await this.fetchInstances();
                 if (this.page === 'events') await this.fetchEvents();
                 if (this.page === 'configs') await this.fetchConfigs();

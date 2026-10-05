@@ -130,19 +130,14 @@ public class ManageHttpClient {
             Thread.currentThread().interrupt();
             throw new ManageApiCallException(0, "调用管理接口被中断: " + path, ex);
         } catch (IOException ex) {
-            // 连接失败/超时：这是「下游没回应」，不是「请求写错了」。
+            // 连接失败或超时按下游不可用处理。
             // 用状态码 0 表示，上层按下游不可用（502）处理；写请求这时可能已经落盘，
             // 只能靠 operationId 回查，所以这里不吞掉任何信息。
             throw new ManageApiCallException(0, "调用管理接口失败（连接失败或超时）: " + path, ex);
         }
     }
 
-    /**
-     * 非 2xx 一律抛出带上游状态码的异常。
-     *
-     * 以前这里只把 message 包成 IllegalStateException，调用方没法知道下游到底是 400 还是 409，
-     * 最后统一被 Admin 的异常边界压成 400；前端于是把「版本冲突」当成「参数写错了」。
-     */
+    /** 非 2xx 响应抛出异常，保留上游状态码。 */
     private void ensureOk(HttpResponse<String> response) {
         if (response.statusCode() < 400) {
             return;

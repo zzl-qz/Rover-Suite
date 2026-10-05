@@ -19,23 +19,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 把自然语言问题解析成结构化调查对象（路由 / 服务 / 实例）。
- *
- * 解析优先级固定：
- * <ol>
- *   <li>调用方显式给出的 path / service / instance（高级上下文里的手工指定）；</li>
- *   <li>问题文本里能匹配到 Gateway 现有路由、注册中心现有服务或实例的部分；</li>
- *   <li>规则都匹配不上时，交给 {@link TargetInterpreter} 用已配置模型从候选中选一个；</li>
- *   <li>仍然确定不了就返回澄清，绝不猜测。</li>
- * </ol>
- *
- * 名称匹配以"是否为已有对象"为准：路由必须命中 Gateway 现有路由的业务前缀，服务名与实例地址
- * 必须出现在当前注册数据里。只有用户明确写了请求路径、而该路径没有对应路由时才退回澄清，
- * 避免对着一个不存在的对象做一轮"看似成功"的诊断。
- *
- * 本类不处理"追问沿用上一个目标"：那是会话连续性，不是解析。调用方（编排层）在拿到澄清结果、
- * 且 {@link AgentContext#currentTarget()} 已经是确定对象时，应沿用当前目标继续调查，
- * 只有确实没有可继承目标时才把澄清提问回给用户。
+ * 按显式目标、规则匹配、模型候选选择的顺序解析调查对象。
+ * 无法确定时要求澄清；服务和实例目标须定位到现有路由。
+ * 追问继承当前目标由编排层处理。
  */
 public final class TargetResolver {
 
@@ -105,13 +91,7 @@ public final class TargetResolver {
                 + "请给出具体的请求路径、服务名或实例地址。" + availableHint(routeList, instanceList));
     }
 
-    /**
-     * 可调查对象的提示：把当前确实存在的路由前缀与服务名摆出来。
-     *
-     * 澄清时手里已经有这两份列表，只回一句「请给出对象」等于让用户对着空对话框猜；
-     * 列出候选既省一轮往返，也不会猜错对象——列出的都是真实存在、可以直接调查的对象。
-     * 没有任何可列举对象时返回空串，不编造。
-     */
+    /** 返回当前可调查的路由与服务候选；无候选时返回空串。 */
     private static String availableHint(List<RouteSnapshot> routeList, List<InstanceSnapshot> instanceList) {
         List<String> paths = (routeList == null ? List.<RouteSnapshot>of() : routeList).stream()
                 .map(route -> Texts.orEmpty(route.businessPrefix()))
@@ -138,12 +118,7 @@ public final class TargetResolver {
         return hint.toString();
     }
 
-    /**
-     * 把对象落到可调查的路由上：路由目标直接用它自己的取值，服务与实例目标要先找到一条现有路由。
-     *
-     * 路由目标不做"该路由是否存在"的检查，因为它已经是用户给出的取数口径本身——
-     * 调查会照常执行并把"未匹配到路由"作为结论如实报出，这与既有链路的行为一致。
-     */
+    /** 将服务和实例目标定位到现有路由；路由目标直接使用请求路径。 */
     private static TargetResolution forTarget(ResourceTarget target, List<RouteSnapshot> routeList,
                                              List<InstanceSnapshot> instanceList) {
         if (target.type() == TargetType.ROUTE) {

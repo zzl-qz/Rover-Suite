@@ -7,15 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-/**
- * 能力注册表：Agent 能做什么的唯一声明处。
- *
- * 它只保证一件事：Planner 只能选择注册表里 <b>已接入且只读</b> 的能力，凭空生成的能力名会被校验丢弃。
- * 「你能做什么」这类问题的答案是对话主路径的模型按其工具集给出的，注册表不产出任何面向用户的文案——
- * 需要结构化能力清单时从这里的描述元数据动态生成，不在这里放一份会过期的硬编码话术。
- *
- * 注册表是纯数据，不含执行逻辑：执行映射在 {@link CapabilityExecutor}。
- */
+/** 声明可用的只读能力；执行映射由 {@link CapabilityExecutor} 提供。 */
 public final class CapabilityRegistry {
 
     private final List<CapabilityDescriptor> descriptors;
@@ -24,13 +16,7 @@ public final class CapabilityRegistry {
         this.descriptors = descriptors == null ? List.of() : List.copyOf(descriptors);
     }
 
-    /**
-     * 本阶段的标准注册表：八个已接入的只读能力。
-     *
-     * 未接入数据适配器的能力照样登记（{@code available=false}），但不可被 Planner 选择，
-     * 也不会出现在执行映射里。目前八个能力全部接入，因此没有「已登记但未开放」项——一旦某个适配器被移除，
-     * 把对应能力改为 {@code available=false} 即可，规划与执行都会自动跟着收口。
-     */
+    /** 标准只读能力注册表；available=false 的能力不参与规划。 */
     public static CapabilityRegistry standard() {
         return new CapabilityRegistry(List.of(
                 new CapabilityDescriptor(AgentCapability.ROUTE_QUERY, "路由查询", "查询 Gateway 路由及目标服务",

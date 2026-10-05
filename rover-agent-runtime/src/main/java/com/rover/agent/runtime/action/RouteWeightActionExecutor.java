@@ -18,24 +18,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 灰度权重调整的执行器：整条链路上唯一会把变更真正写给 Gateway 的代码。
- *
- * <p>执行顺序刻意固定，每一步都在回答一个「如果这里断了会怎样」：
- *
- * <ol>
- *   <li><b>预检</b>：重新读整表，核对 revision、目标是否存在、当前权重是否还等于提议时的值。
- *       不一致就 {@link ActionStatus#PRECONDITION_FAILED}——<b>一个字节都不写给网关</b>。
- *       审批卡可能在人面前放了十分钟，这十分钟里别人改过的路由不能被这张卡覆盖。</li>
- *   <li><b>预览</b>：把候选整表交给网关校验并比对差异，不落盘、不生效。预览失败同样不提交。</li>
- *   <li><b>先落库再提交</b>：幂等号必须在发请求之前写进库，否则超时的那一刻就永远认不出「那一次」了。</li>
- *   <li><b>回读验证</b>：网关说成功只代表请求生效，目标状态是否达成要自己读回来确认；
- *       回读不一致就是失败，不回读就报成功等于谎报。</li>
- *   <li><b>补偿回滚</b>：只把这一次改过的那个目标改回去，而且当前权重必须仍等于这次写入的值。
- *       已经被别人改过就停在 {@link ActionStatus#ROLLBACK_PRECONDITION_FAILED}，一个字节都不写。</li>
- * </ol>
- *
- * <p>失败处理不按「抛没抛异常」分类，而按<b>网关到底动没动</b>分类：没拿到的响应才有「可能已经生效」的问题，
- * 这时只能用原 operationId 回查（{@link ActionStatus#UNCERTAIN}），绝不换号重试。
+ * 灰度权重执行器：预检、预览、保存幂等号、提交与回读验证。
+ * 预检核对 revision、目标和原权重；不一致时不提交。
+ * 回滚仅恢复目标权重，当前值须仍等于本次写入值；响应未知时按原 operationId 确认。
  */
 public final class RouteWeightActionExecutor implements ActionExecutor {
 
@@ -65,7 +50,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         try {
             preview = control.preview(action.routeId(), action.serviceName(), action.group(), action.desiredWeight());
         } catch (RuntimeException ex) {
-            // 预览失败发生在任何写请求之前：网关状态是可以确定的，因此这里不是「结果未知」。
+            // 预览失败时尚未提交，不标记为结果未知。
             return settle(action, ActionStatus.FAILED,
                     "变更预览未通过，未提交任何写请求：" + failureText(ex));
         }
@@ -217,12 +202,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
 
     // ---------------------------------------------------------------- 提交后的两种收尾
 
-    /**
-     * 提交后回读确认：把期望权重读回来比对，一致才算成功。
-     *
-     * <p>读不回来时判 {@link ActionStatus#UNCERTAIN} 而不是失败：写请求已经发出去了，
-     * 这时候说「失败」同样是谎报——正确的说法是「结果未知，用原操作号确认」。
-     */
+    /** 提交后回读权重，一致才判定成功；读取失败时标记 UNCERTAIN。 */
     private AgentAction verifyApplied(AgentAction action, int appliedRevision, int expectedWeight,
                                      ActionStatus verifying, ActionStatus success) {
         AgentAction submitted = new ActionDraft(action).appliedRevision(appliedRevision)
@@ -252,12 +232,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         return settle(submitted, success, null);
     }
 
-    /**
-     * 写请求失败后的分类收尾。
-     *
-     * <p>「没拿到响应」是唯一需要回查的情况；其余三类都是网关明确记账的「没生效」，
-     * 直接落成对应的终态即可，多查一次只会多一次网络往返。
-     */
+    /** 写请求失败时记录对应结果，仅未收到响应时回查 operationId。 */
     private AgentAction recoverOrFail(AgentAction action, RouteControlException failure, boolean rollbackPhase) {
         String detail = failureText(failure);
         switch (failure.kind()) {
@@ -308,12 +283,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         };
     }
 
-    /**
-     * 回滚在提交之前就失败了：把状态退回 {@link ActionStatus#SUCCESS} 并留下说明。
-     *
-     * <p>为什么不落成 FAILED：这条变更确实生效过，只是「回滚这一步没做成」。
-     * 落成 FAILED 会让「已完成、可回滚」的事实凭空消失，而人真正需要的是「还能再点一次回滚」。
-     */
+    /** 补偿提交前失败时退回 SUCCESS 并记录原因，允许再次回滚。 */
     private AgentAction backToSuccess(AgentAction action, String message) {
         log.warn("变更 {} 的回滚未提交：{}", action.actionId(), message);
         return settle(action, ActionStatus.SUCCESS, message);
@@ -341,7 +311,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         return System.currentTimeMillis();
     }
 
-    /** 预检结论：要么放行，要么带一句「为什么不能执行」的说明。 */
+    /** 预检结果，包含是否允许执行及拒绝原因。 */
     private record Precondition(boolean passed, String message) {
 
         static Precondition accepted() {

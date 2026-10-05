@@ -93,6 +93,11 @@
                     </div>
                 </div>
 
+                <div class="diagnostic-entry">
+                    <span class="muted">查看全局 P99、拒绝与重试，以及版本和实例的诊断指标</span>
+                    <button class="btn ghost" @click="openMetrics()">打开指标诊断</button>
+                </div>
+
                 <div class="pulse-bar">
                     <div class="pulse-item" title="上一整秒完成了多少请求。本秒还在涨时会显示本秒已有多少。空闲时是 0 很正常。">
                         <div class="stat-label">瞬时 QPS <i class="hint-dot">?</i></div>
@@ -165,14 +170,15 @@
                                 </tr>
                                 <tr v-if="selectedRoute && selectedRoute.instances">
                                     <td colspan="5" class="expand-cell">
-                                        <div class="upstream-note">该路由近窗打到各上游的次数（带版本，看灰度放量与负载是否均匀）</div>
+                                        <div class="upstream-note">该路由自进程启动以来打到各上游的累计次数（带版本）</div>
                                         <div class="upstream-chips">
                                             <span v-for="(cnt, host) in selectedRoute.instances" :key="host" class="chip"
-                                                  :title="host + (groupOf(selectedRoute, host) ? '（版本 ' + groupOf(selectedRoute, host) + '）' : '') + ' 近窗命中 ' + cnt + ' 次'">
+                                                  :title="host + (groupOf(selectedRoute, host) ? '（版本 ' + groupOf(selectedRoute, host) + '）' : '') + ' 累计命中 ' + cnt + ' 次'">
                                                 <span v-if="groupOf(selectedRoute, host)" class="muted">{{ groupOf(selectedRoute, host) }} · </span>{{ host }} · {{ cnt }}
                                             </span>
                                             <span v-if="!instanceEntries(selectedRoute).length" class="muted">还没有上游命中</span>
                                         </div>
+                                        <button class="btn mini ghost" @click="openMetrics(selectedRoute.routeId)">查看窗口内版本与实例指标</button>
                                     </td>
                                 </tr>
                                 </tbody>
@@ -335,6 +341,134 @@
                 </div>
             </section>
 
+            <!-- ================= 指标诊断 ================= -->
+            <section v-if="page === 'metrics'" class="page metrics-page">
+                <div class="card">
+                    <div class="card-head">
+                        <h2>Gateway 全局快照</h2>
+                        <span class="card-hint">窗口 {{ fullMetrics ? metricNum(fullMetrics.windowSeconds) : '—' }} 秒 · 使用网关配置</span>
+                        <span class="card-hint ml-auto" v-if="fullMetricsAt">读取于 {{ fmtTime(fullMetricsAt) }}</span>
+                    </div>
+                    <div v-if="fullMetricsError" class="banner warn" role="status">
+                        读取失败：{{ fullMetricsError }}<span v-if="fullMetricsAt">；以下为上次成功读取的快照</span>
+                    </div>
+                    <div v-if="fullMetrics && fullMetrics.enabled === false" class="banner warn">Gateway 指标采集已关闭，保留计数不能代表当前流量。</div>
+                    <div v-else-if="fullMetrics && fullMetrics.enabled !== true" class="banner warn">指标采集状态未知，无法确认快照有效性。</div>
+                    <template v-else-if="fullMetrics">
+                        <div class="diagnostic-stats">
+                            <div class="stat-card" v-for="stat in metricsWindowStats" :key="stat.label">
+                                <div class="stat-label">{{ stat.label }}</div>
+                                <div class="stat-value">{{ stat.value }}</div>
+                            </div>
+                        </div>
+                        <p class="card-hint">耗时采用网关端到端口径；P95/P99 基于窗口采样估计。无窗口请求时耗时显示 —。</p>
+                        <div class="diagnostic-counters">
+                            <div v-for="counter in metricsCounters" :key="counter.label">
+                                <span>{{ counter.label }} <small>累计</small></span><b>{{ metricNum(counter.value) }}</b>
+                            </div>
+                        </div>
+                        <p class="card-hint">累计计数自进程启动以来累加，窗口切换不会清零；拒绝与上游 5xx 分开展示。</p>
+                    </template>
+                    <div v-else-if="!fullMetricsError" class="empty">{{ fullMetricsLoading ? '正在读取全量指标…' : '尚未读取指标' }}</div>
+                </div>
+
+                <template v-if="fullMetrics && fullMetrics.enabled === true">
+                    <div class="card">
+                        <div class="card-head"><h2>全部已观测路由</h2><span class="card-hint">最近 {{ metricNum(fullMetrics.windowSeconds) }} 秒；状态码为累计值</span></div>
+                        <div v-if="!metricsRoutes.length" class="empty">尚无路由请求记录；无流量的已配置路由可在下方选择诊断。</div>
+                        <div v-else class="diagnostic-table-wrap">
+                            <table class="table">
+                                <thead><tr><th>路由</th><th>窗口请求</th><th>累计请求</th><th>窗口错误率</th><th>平均耗时</th><th>P95</th><th>累计 2xx / 3xx / 4xx / 5xx</th><th>详情</th></tr></thead>
+                                <tbody><tr v-for="r in metricsRoutes" :key="r.routeId">
+                                    <td><code>{{ routeLabel(r.routeId) }}</code></td><td>{{ metricNum(r.windowRequests) }}</td><td>{{ metricNum(r.requests) }}</td>
+                                    <td>{{ r.windowRequests > 0 ? metricPercent(r.errorRate) : '—' }}</td>
+                                    <td>{{ metricLatency(r.avgMillis, r.windowRequests) }}</td><td>{{ metricLatency(r.p95Millis, r.windowRequests) }}</td>
+                                    <td>{{ metricNum(r.status && r.status['2xx']) }} / {{ metricNum(r.status && r.status['3xx']) }} / {{ metricNum(r.status && r.status['4xx']) }} / {{ metricNum(r.status && r.status['5xx']) }}</td>
+                                    <td><button class="btn mini ghost" @click="openMetrics(r.routeId)">诊断</button></td>
+                                </tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <div class="card-head"><h2>全部已观测上游</h2><span class="card-hint">按地址跨路由汇总；平均耗时是窗口内上游往返耗时</span></div>
+                        <div v-if="!metricsUpstreams.length" class="empty">尚无上游转发记录</div>
+                        <div v-else class="diagnostic-table-wrap">
+                            <table class="table">
+                                <thead><tr><th>上游地址</th><th>窗口请求</th><th>累计请求</th><th>平均耗时</th><th>累计连接失败</th><th>累计超时</th></tr></thead>
+                                <tbody><tr v-for="u in metricsUpstreams" :key="u.hostPort">
+                                    <td><code>{{ u.hostPort }}</code></td><td>{{ metricNum(u.windowRequests) }}</td><td>{{ metricNum(u.requests) }}</td>
+                                    <td>{{ metricLatency(u.avgMillis, u.windowRequests) }}</td><td>{{ metricNum(u.connectFail) }}</td><td>{{ metricNum(u.timeout) }}</td>
+                                </tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </template>
+
+                <div class="card" id="route-diagnostic">
+                    <div class="card-head"><h2>路由诊断详情</h2><span class="card-hint">版本与实例使用独立的 1m/5m 窗口</span></div>
+                    <div class="diagnostic-controls">
+                        <label for="diagnostic-route">路由</label>
+                        <select id="diagnostic-route" class="nice-select" v-model="diagnosticRouteId" @change="selectDiagnosticRoute">
+                            <option value="">选择路由</option>
+                            <option v-for="id in diagnosticRouteOptions" :key="id" :value="id">{{ routeLabel(id) }}</option>
+                        </select>
+                        <div class="range-chip" aria-label="路由统计窗口">
+                            <button :class="{ on: diagnosticRange === 60 }" :aria-pressed="diagnosticRange === 60" @click="setDiagnosticRange(60)">1m</button>
+                            <button :class="{ on: diagnosticRange === 300 }" :aria-pressed="diagnosticRange === 300" @click="setDiagnosticRange(300)">5m</button>
+                        </div>
+                        <span class="card-hint ml-auto" v-if="routeMetricsAt">观测于 {{ fmtTime(routeMetricsAt) }}</span>
+                        <span class="card-hint" v-if="routeMetricsLoading">读取中…</span>
+                    </div>
+                    <div v-if="routesError" class="banner warn">路由配置读取失败：{{ routesError }}；仍可选择已有观测路由。</div>
+                    <div v-if="routeMetricsError" class="banner warn" role="status">
+                        路由观测读取失败：{{ routeMetricsError }}<span v-if="routeMetricsAt">；以下为上次成功读取的数据</span>
+                    </div>
+                    <div v-if="!diagnosticRouteId" class="empty">选择路由，查看版本分流和上游实例。无 ID 的路由无法独立统计。</div>
+                    <div v-else-if="routeMetrics && routeMetrics.enabled === false" class="banner warn">Gateway 指标采集已关闭，无法读取当前路由观测。</div>
+                    <template v-else-if="routeMetrics">
+                        <div class="diagnostic-section-head"><h3>版本观测</h3><span class="card-hint">最近 {{ metricNum(routeMetrics.windowSeconds) }} 秒 · 真实转发 {{ metricNum(diagnosticRequests) }} 次</span></div>
+                        <p class="card-hint" v-if="diagnosticVersionCheck.missingGroups && diagnosticVersionCheck.missingGroups.length">
+                            声明版本在窗口内无流量：{{ diagnosticVersionCheck.missingGroups.map(versionLabel).join('、') }}（含权重为 0 的版本，不直接判为故障）。
+                        </p>
+                        <p class="card-hint" v-if="diagnosticVersionCheck.unexpectedGroups && diagnosticVersionCheck.unexpectedGroups.length">
+                            观测到未声明版本：{{ diagnosticVersionCheck.unexpectedGroups.map(versionLabel).join('、') }}，请核对近期配置变化。
+                        </p>
+                        <div v-if="!diagnosticVersions.length" class="empty slim">{{ routeMetrics.byVersion ? '无版本观测或声明，静态路由可直接查看下方实例。' : '当前网关未提供版本汇总。' }}</div>
+                        <div v-else class="diagnostic-table-wrap">
+                            <table class="table">
+                                <thead><tr><th>版本 / 分组</th><th>配置权重 / 占比</th><th>窗口请求 / 实际占比</th><th>样本</th><th>窗口 5xx / 错误率</th><th>平均耗时</th><th>实例 P95 最大值</th><th>窗口连接失败 / 超时</th><th>累计无上游 / 熔断拒绝</th></tr></thead>
+                                <tbody><tr v-for="v in diagnosticVersions" :key="v.group">
+                                    <td>{{ versionLabel(v.group) }} <span v-if="!v.declared" class="badge comp">未声明</span></td>
+                                    <td>{{ metricNum(v.weight) }} / {{ versionConfiguredShare(v) }}</td><td>{{ metricNum(v.windowRequests) }} / {{ versionTrafficShare(v) }}</td>
+                                    <td><span class="badge" :class="v.sufficient ? 'comp' : 'warn'">{{ metricSampleState(v.sampleSize, v.sufficient) }}</span></td>
+                                    <td>{{ metricNum(v.status5xx) }} / {{ v.windowRequests > 0 ? metricPercent(v.errorRate) : '—' }}</td>
+                                    <td>{{ metricLatency(v.avgMillis, v.windowRequests) }}</td><td>{{ metricLatency(v.p95Millis, v.windowRequests) }}</td>
+                                    <td>{{ metricNum(v.connectFail) }} / {{ metricNum(v.timeout) }}</td><td>{{ metricNum(v.noUpstreamRejects) }} / {{ metricNum(v.circuitOpenRejects) }}</td>
+                                </tr></tbody>
+                            </table>
+                        </div>
+                        <p class="card-hint">配置占比是权重比例，实际占比只统计窗口内真实转发；粘性分流和样本量可能影响两者差异。版本耗时列取各实例 P95 的最大值，属于保守上界。</p>
+                        <p class="card-hint">无上游 / 熔断拒绝为启动以来累计值，不代表当前窗口有故障；少于 {{ diagnosticVersionCheck.sampleThreshold || 5 }} 个样本时不据此判定版本异常。</p>
+
+                        <div class="diagnostic-section-head"><h3>上游实例观测</h3><span class="card-hint">全部计数为最近 {{ metricNum(routeMetrics.windowSeconds) }} 秒；耗时为上游往返口径</span></div>
+                        <div v-if="!diagnosticInstances.length" class="empty slim">窗口内没有转发样本（也可能是路由未知）；不代表采集失败或实例健康。</div>
+                        <div v-else class="diagnostic-table-wrap">
+                            <table class="table">
+                                <thead><tr><th>地址</th><th>版本 / 分组</th><th>请求 / 样本</th><th>2xx / 3xx / 4xx / 5xx</th><th>错误率</th><th>平均耗时</th><th>P95 / 耗时样本数</th><th>连接失败</th><th>超时</th></tr></thead>
+                                <tbody><tr v-for="u in diagnosticInstances" :key="u.hostPort">
+                                    <td><code>{{ u.hostPort }}</code></td><td>{{ versionLabel(u.group) }}</td>
+                                    <td>{{ metricNum(u.windowRequests) }} / {{ metricSampleState(u.windowRequests) }}</td>
+                                    <td>{{ metricNum(u.status && u.status['2xx']) }} / {{ metricNum(u.status && u.status['3xx']) }} / {{ metricNum(u.status && u.status['4xx']) }} / {{ metricNum(u.status && u.status['5xx']) }}</td>
+                                    <td>{{ u.windowRequests > 0 ? metricPercent(u.errorRate) : '—' }}</td><td>{{ metricLatency(u.avgMillis, u.windowRequests) }}</td>
+                                    <td>{{ metricLatency(u.p95Millis, u.windowRequests) }} / {{ metricNum(u.p95Samples) }}</td><td>{{ metricNum(u.connectFail) }}</td><td>{{ metricNum(u.timeout) }}</td>
+                                </tr></tbody>
+                            </table>
+                        </div>
+                    </template>
+                    <div v-else-if="diagnosticRouteId && !routeMetricsError" class="empty">正在读取路由观测…</div>
+                </div>
+            </section>
+
             <!-- ================= 路由管理 ================= -->
             <section v-if="page === 'routes'" class="page">
                 <div class="card">
@@ -377,6 +511,8 @@
                             </td>
                             <td>{{ r.stripPrefix || '-' }}</td>
                             <td class="row-actions">
+                                <button class="btn mini ghost" @click="openMetrics(r.id)" :disabled="!r.id"
+                                        :title="r.id ? '查看版本与实例的窗口指标' : '路由未设置 ID，无法独立统计'">诊断</button>
                                 <button class="btn mini" @click="openRouteDrawer(r)">编辑</button>
                                 <button class="btn mini danger" @click="deleteRoute(r.businessPrefix)">删除</button>
                             </td>
@@ -1355,6 +1491,7 @@
 <script src="/js/formatters.js"></script>
 <script src="/js/pages/shared.js"></script>
 <script src="/js/pages/dashboard.js"></script>
+<script src="/js/pages/metrics.js"></script>
 <script src="/js/pages/workbench.js"></script>
 <script src="/js/pages/traces.js"></script>
 <script src="/js/pages/routes.js"></script>

@@ -1,14 +1,8 @@
 package com.rover.agent.core.port;
 
 /**
- * 一次路由写请求的结果。
- *
- * <p>{@code status} 是网关的原始记账口径：{@code APPLIED} 表示这次请求真的生效了，
- * {@code REPLAYED} 表示同一个 operationId 之前已经生效过、这次没有再次改动。
- * 两者对调用方都是「目标状态已经达成」，但保留区别是因为它们对应的日志与解释完全不同。
- *
- * <p>注意：这里返回成功只代表<b>请求被受理并生效</b>，不代表调用方要的目标已经达成——
- * 目标达成与否必须靠自己回读路由确认（网关可能同时被别的手改过）。
+ * 路由写请求结果：APPLIED 为首次生效，REPLAYED 为幂等重放。
+ * 目标状态仍须通过回读验证。
  *
  * @param status      {@code APPLIED} / {@code REPLAYED}
  * @param revision    生效后的路由版本

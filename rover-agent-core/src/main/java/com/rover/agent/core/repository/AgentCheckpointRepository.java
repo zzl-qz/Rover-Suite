@@ -5,14 +5,7 @@ import com.rover.agent.core.model.TaskView;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * 安全恢复点存储契约：记录「这次调查可以安全地接着跑到哪里」。
- *
- * <p>写入不是孤立的一行插入，而是<b>推进一条任务的高水位</b>：任务状态、步骤、证据与恢复点必须在同一次写入里落下，
- * 否则会出现「恢复点说证据 3 条，库里其实只有 2 条」这种恢复时才暴露的坏状态。实现负责保证这一点，
- * 落库的那批证据就是 {@link TaskView#evidence()}——任务跑到一半时结论还没合成，但工具已经落过证据了，
- * 那正是最需要记录恢复点的时刻。
- */
+/** 安全恢复点存储契约；任务状态、步骤、证据与恢复点必须在同次写入中保存。 */
 public interface AgentCheckpointRepository {
 
     /**

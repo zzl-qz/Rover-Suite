@@ -14,6 +14,7 @@ createApp({
             {},
             P.shared.data(),
             P.dashboard.data(),
+            P.metrics.data(),
             P.workbench.data(),
             P.traces.data(),
             P.routes.data(),
@@ -28,6 +29,7 @@ createApp({
         {},
         P.shared.computed,
         P.dashboard.computed,
+        P.metrics.computed,
         P.workbench.computed,
         P.traces.computed,
         P.routes.computed,
@@ -49,9 +51,11 @@ createApp({
         this.liveTimer = setInterval(() => this.fetchLive(), 1000);
         this.overviewTimer = setInterval(() => this.fetchOverview(), 15000);
         this.pageTimer = setInterval(() => this.pollCurrentPage(), 3000);
+        this.metricsTimer = setInterval(() => this.refreshMetrics(), 10000);
         this._resizeHandler = () => this.resizeCharts();
         this._visibilityHandler = () => {
             if (!document.hidden && this.page === 'dashboard') this.fetchLive();
+            if (!document.hidden && this.page === 'metrics') this.refreshMetrics();
             if (!document.hidden && this.page === 'workbench') this.wbPollSession();
         };
         window.addEventListener('resize', this._resizeHandler);
@@ -62,6 +66,7 @@ createApp({
         clearInterval(this.liveTimer);
         clearInterval(this.overviewTimer);
         clearInterval(this.pageTimer);
+        clearInterval(this.metricsTimer);
         window.removeEventListener('resize', this._resizeHandler);
         document.removeEventListener('visibilitychange', this._visibilityHandler);
     },
@@ -70,6 +75,7 @@ createApp({
         {},
         P.shared.methods,
         P.dashboard.methods,
+        P.metrics.methods,
         P.workbench.methods,
         P.traces.methods,
         P.routes.methods,

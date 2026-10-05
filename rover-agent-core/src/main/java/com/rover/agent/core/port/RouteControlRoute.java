@@ -3,11 +3,7 @@ package com.rover.agent.core.port;
 import java.util.List;
 
 /**
- * 一条路由在「可写视图」下的状态：标识、匹配前缀与全部版本目标及其权重。
- *
- * <p>只读调查视图（{@code RouteSnapshot}）刻意不带权重——它回答的是「这条路径打到哪个服务」；
- * 变更执行需要的是「这条路由有哪些版本、各自多少权重、当前版本号是多少」，两者用途不同，
- * 因此各自建模，而不是给只读快照挂上一堆写路径才关心的字段。
+ * 可写路由视图，包含匹配前缀和版本目标权重。
  *
  * @param routeId        Gateway 给出的路由 ID
  * @param businessPrefix 业务前缀（路径匹配用）

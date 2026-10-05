@@ -18,6 +18,8 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | --- | --- | --- |
 | GET | `/api/overview` | Gateway/Nameserver status, discovery mode, metric self-consistency checks |
 | GET | `/api/live?range=60\|300` | Lightweight live snapshot polled by the dashboard |
+| GET | `/api/metrics` | Full Gateway snapshot, including global P99, routes, upstreams and cumulative rejects/retries; uses the Gateway-configured `windowSeconds` |
+| GET | `/api/metrics/routes?routeId=..&range=60\|300` | Route × instance observations, declared targets, per-version rollup and declared/observed version comparison |
 | GET | `/api/routes` | Gateway route list |
 | POST | `/api/routes` | Create or update a route; body is the route object |
 | DELETE | `/api/routes?businessPrefix=/api/demo` | Delete a route by business prefix |

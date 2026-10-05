@@ -6,14 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
 
-/**
- * 变更记录的存储契约。
- *
- * <p>它比普通的 CRUD 多一件必须由实现保证的事：{@link #transition} 的<b>状态比对与写入是一个原子动作</b>。
- * 「待审批 → 执行中」这一步就是双击批准的闸门：两个线程同时调用，只能有一个拿到非空结果，
- * 另一个必须拿到空（说明别人先动了）。用「先查再改」实现的话，两个人会同时看到
- * PENDING_APPROVAL 然后各执行一次——这正是生产上「点两下，放量执行两遍」的经典事故。
- */
+/** 变更记录存储契约；transition 必须原子完成状态比较与写入。 */
 public interface AgentActionRepository {
 
     /** 新建或整体覆盖一条变更记录。 */

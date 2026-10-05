@@ -1225,6 +1225,33 @@ code {
     color: var(--muted);
     line-height: 1.45;
 }
+
+/* 指标诊断沿用统计卡片与表格；宽表在卡片内部滚动。 */
+.diagnostic-entry, .diagnostic-controls, .diagnostic-section-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.diagnostic-entry { justify-content: space-between; }
+.diagnostic-controls { margin-bottom: 14px; }
+.diagnostic-controls select { max-width: 100%; }
+.diagnostic-section-head { margin: 18px 0 10px; }
+.diagnostic-section-head h3 { margin: 0; font-size: 14px; }
+.diagnostic-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.diagnostic-stats .stat-card { border: 1px solid var(--line-soft); border-radius: var(--radius-sm); }
+.diagnostic-stats .stat-value { font-size: 20px; }
+.diagnostic-counters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; }
+.diagnostic-counters > div { display: flex; justify-content: space-between; gap: 8px; }
+.diagnostic-counters span, .diagnostic-counters small { color: var(--muted); }
+.diagnostic-table-wrap { overflow-x: auto; }
+.diagnostic-table-wrap td { white-space: nowrap; }
+#route-diagnostic { scroll-margin-top: 90px; }
+.metrics-page .card-head { flex-wrap: wrap; }
+@media (max-width: 768px) {
+    .diagnostic-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .diagnostic-counters { grid-template-columns: 1fr; }
+}
 .hint-dot {
     display: inline-flex;
     align-items: center;

@@ -19,12 +19,8 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 
 /**
- * 模型解读：在规则诊断之上补充解释，并守住「未读证据不采信」的边界。
- *
- * 路由与实例这两份最小依据由运行时预读后写进提示词，模型不必依赖自觉调用工具；
- * 其余证据（指标、追踪）仍只经由只读工具按需读取。解释失败（未配置模型、模型报错、
- * 未返回内容）不会影响调查结论，由调用方降级为规则诊断并明确标注。
- * 模型来源全部由 {@link ChatModelGateway} 决定，本类不关心是哪个服务商、密钥从哪来。
+ * 基于预读路由、实例及按需查询的证据生成模型解读。
+ * 模型接入由 ChatModelGateway 提供，失败时由调用方回退规则结论。
  */
 public final class ModelExplainer {
 
@@ -40,13 +36,7 @@ public final class ModelExplainer {
     /** 指标里的场景名：与「目标解析 / 调查规划 / 对话」并列，便于按用途分开看模型表现。 */
     private static final String SCENE = "解读";
 
-    /**
-     * 解读提示词 = 环境画像 + 术语表 + 本模块的取数与表述纪律。
-     *
-     * 环境画像与术语表来自 {@link AgentGrounding}，与对话主路径共用同一份文本：模型先知道
-     * 「一次调用会经过哪几环」「用户说的『卡』是什么意思」，才可能把快照里的数字对上用户的问题；
-     * 这里只放静态背景，任何运行态事实仍然只经由下方给出的只读快照与只读工具获得。
-     */
+    /** 解读提示词包含共用系统背景、术语表和取证约束；运行状态由快照与工具提供。 */
     private static final String SYSTEM_PROMPT = "你是 Rover Ops Agent 的诊断解读模块。\n"
             + AgentGrounding.environment() + "\n" + AgentGrounding.glossary() + "\n"
             + "【你的任务】只根据提示词里给出的只读快照、只读工具返回的快照和已完成的假设验证解释问题。"
@@ -90,16 +80,8 @@ public final class ModelExplainer {
     public record Explanation(String text, List<String> prefetched, List<String> tools) { }
 
     /**
-     * 基于本次调查的只读快照与假设验证结果生成解释，并把增量边产生边交给 {@code onDelta}
-     * （供 SSE 实时展示）；返回的是截断后的完整文本，用于落库展示。
-     *
-     * 深度思考模型会在正式回答前先产出思考内容，这部分交给 {@code onThinking} 单独推送——
-     * 思考是过程、答案是结论，两者在界面上占不同位置，不该混在一条流里。当前模型不产出思考时
-     * 该回调一次也不会被调用，调用方据此自然得到「没有思考过程」的界面。
-     *
-     * 路由与实例快照由运行时预读后放进提示词，模型是否自觉调用工具都不影响解读有据可依；
-     * 模型未返回内容时才抛异常，由调用方降级。推送与返回文本都受同一长度上限约束，
-     * 因此前端看到的增量拼接结果与最终文本一致。预读与模型另调的工具各自如实记录，供调用方展示。
+     * 生成证据解读，分别推送回答与思考增量，并返回截断后的完整文本。
+     * 推送与返回使用相同长度上限；模型返回空内容时抛出异常。
      */
     public Explanation explainStreaming(String path, String question, List<Evidence> evidence,
                                        List<Hypothesis> hypotheses, Consumer<String> onDelta,
@@ -142,13 +124,7 @@ public final class ModelExplainer {
         }
     }
 
-    /**
-     * 累积一帧响应的文本与思考增量并转发；超出上限的部分直接丢弃，保证推送内容与最终文本逐字一致。
-     *
-     * 这里从静态方法改为实例方法，只因为思考内容要经 {@link ChatModelGateway#reasoningDelta} 取——
-     * 厂商差异收在那一层，本类不自己辨认消息类型。思考取不到或回调缺失都只是没有思考内容可看，
-     * 不影响文本与用量的正常累积。
-     */
+    /** 累积并转发回答与思考增量；超出长度上限的内容丢弃。 */
     private void collect(ChatResponse response, StringBuilder answer, StringBuilder thinking,
                          Consumer<String> onDelta, Consumer<String> onThinking, UsageTotals tokens) {
         if (response == null) {
@@ -173,13 +149,7 @@ public final class ModelExplainer {
         tokens.absorb(response);
     }
 
-    /**
-     * 流式响应的用量累加：用量多数只在最后一帧给出，因此保留「最后一次非空值」而不是求和。
-     *
-     * 求和会把部分服务商在每帧都报的累计值重复叠加，得到成倍的假数字；保留末值则对
-     * 「只在末帧给」与「每帧给累计」两种形态都成立。整段都没给（部分服务商流式不返回用量）时保持沉默，
-     * 不猜、也不补零——把「未知」记成 0 会让成本看起来比实际低。
-     */
+    /** 流式用量保留最后一个非空值，不累加；未提供用量时不补零。 */
     private static final class UsageTotals {
 
         private long promptTokens;

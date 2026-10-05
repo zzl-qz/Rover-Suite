@@ -38,11 +38,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 /**
- * Admin 的 OpenAI 兼容模型适配器：把页面保存的配置变成运行层可用的 {@link ChatClient}，
- * 并按"先构建成功再替换引用"的方式支持保存即生效（无需重启）。
- *
- * 这里刻意不依赖 Spring AI 的自动配置：{@code spring.ai.model.chat} 保持 {@code none}，
- * 全进程只有这一条模型构建路径，{@code available()} 才不会因为存在第二个 ChatModel 而失真。
+ * 将模型配置转换为 {@link ChatClient}，构建成功后替换当前客户端。
+ * 模型由本类显式创建，禁用 Spring AI 模型自动配置。
  */
 @Component
 public class AdminChatModelGateway implements ChatModelGateway {
@@ -84,11 +81,8 @@ public class AdminChatModelGateway implements ChatModelGateway {
     }
 
     /**
-     * 应用一份配置。
-     *
-     * 构建成功才替换生效引用；构建失败只记 {@link #lastError()}，保留上一个能用的客户端，
-     * 避免一次改错把可用的诊断链弄坏。密钥解不开时明确停用（configured 为真、available 为假），
-     * 因为这是配置状态问题，必须被看见，而不是假装"尚未配置模型"。
+     * 构建成功后应用配置；失败保留原客户端并记录 lastError。
+     * 密钥解密失败时停用客户端，保留已配置状态。
      */
     public void apply(ModelSettings candidate) {
         if (!candidate.configured()) {
@@ -165,12 +159,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
         return current;
     }
 
-    /**
-     * 按场景超时上限取客户端：只收紧不放宽，请求值不小于配置超时时直接返回当前客户端。
-     *
-     * 更短的上限才另建一个客户端并缓存下来（同一场景的下一次调用直接复用），
-     * 因此这条路径不会每次调用都新建模型对象。
-     */
+    /** 按场景收紧超时并缓存客户端；请求上限不小于配置值时复用当前客户端。 */
     @Override
     public ChatClient chatClient(int timeoutSeconds) {
         ModelSettings settings = applied;
@@ -255,11 +244,8 @@ public class AdminChatModelGateway implements ChatModelGateway {
     }
 
     /**
-     * 用一份配置建一个覆写超时的客户端：不落盘，也不改动当前生效配置。
-     *
-     * 页面连通性测试与运行层的场景超时客户端都走这里。
-     *
-     * @param timeoutSeconds 覆写的超时；越界值按 {@link ModelSettings#clampTimeout(int)} 收敛
+     * 构建覆写超时的客户端，不修改当前配置或文件。
+     * @param timeoutSeconds 超时秒数，按 {@link ModelSettings#clampTimeout(int)} 限制范围
      */
     public ChatClient transientClient(ModelSettings settings, int timeoutSeconds) {
         // 场景客户端服务的是「廉价调用」（见 ChatModelGateway#chatClient(int)），因此不开深度思考：
@@ -274,12 +260,8 @@ public class AdminChatModelGateway implements ChatModelGateway {
     }
 
     /**
-     * 构建客户端。
-     *
-     * @param thinking 是否允许深度思考。只有主客户端开——它服务的是「AI 解读」这类需要推理质量的长调用；
-     *                 场景客户端走 {@code false}：目标解析、调查规划都是 10 秒上限的廉价调用，
-     *                 让它们先想一遍既拖慢用户等待，也更容易撞上超时后回退规则，
-     *                 反而丢掉了模型本该贡献的那点判断
+     * 构建模型客户端。
+     * @param thinking 主客户端允许深度思考，场景客户端禁用
      */
     protected ChatClient build(ModelSettings settings, boolean thinking) {
         ChatModel model = switch (vendorOf(settings.baseUrl())) {
@@ -292,12 +274,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
                 ToolCallingAdvisor.builder().toolCallingManager(toolCallingManager())).build();
     }
 
-    /**
-     * 接入协议：由服务地址决定，用户只填地址与模型名，不必理解协议差异。
-     *
-     * 智谱与 DeepSeek 共走一条「能解析思考内容」的构建路径——两家的思考内容都放在
-     * {@code delta.reasoning_content}，同属一套 Chat Completions 约定；其余服务走通用兼容协议。
-     */
+    /** 按服务地址选择协议；智谱和 DeepSeek 使用支持 reasoning_content 的客户端。 */
     private enum Vendor {
         ZHIPU,
         DEEPSEEK,
@@ -316,18 +293,9 @@ public class AdminChatModelGateway implements ChatModelGateway {
     }
 
     /**
-     * 能解析思考内容的 OpenAI 兼容客户端（智谱与 DeepSeek 共用）。
-     *
-     * 这里用 DeepSeek 的客户端实现，把它当作「一个会解析 {@code reasoning_content} 的
-     * OpenAI 兼容客户端」，只换 baseUrl 与模型名。之所以不用智谱自己的
-     * {@code ZhiPuAiChatModel}：{@code spring-ai-zhipuai} 的可用版本（2.0.0-M1～M4）
-     * 都停留在 Spring AI 2.0.0-M1 的 API 上，连 {@code ModelOptionsUtils.copyToTarget/merge}
-     * 这类基础方法在 2.0.1 都已被移除——补类型救不了：类加载能过，一调用就
-     * {@code NoSuchMethodError}。两家的请求与响应结构一致，换 baseUrl 即可。
-     *
-     * 等智谱模块发布与 2.0.1 对齐的版本，把它换成 {@code ZhiPuAiChatModel} 即可。
-     * 模型名支持深度思考时才带 thinking 参数——不认识的模型名一律不带，
-     * 不传这个参数永远不会因参数不兼容而失败。
+     * 通过 DeepSeek 客户端接入智谱和 DeepSeek，解析 reasoning_content。
+     * 智谱模块的 Spring AI API 版本不兼容；兼容后可改用 ZhiPuAiChatModel。
+     * 仅为支持深度思考的模型传递 thinking 参数。
      */
     private ChatModel thinkingCapableModel(ModelSettings settings, boolean thinking) {
         DeepSeekChatOptions.Builder options = DeepSeekChatOptions.builder();
@@ -400,16 +368,8 @@ public class AdminChatModelGateway implements ChatModelGateway {
     }
 
     /**
-     * 带超时的 HTTP 客户端：原生协议的选项里没有超时字段，等待上限只能落在 HTTP 层。
-     *
-     * 这层超时是必要的——目标解析这类场景靠 {@code chatClient(timeoutSeconds)} 收紧等待，
-     * 底层不设超时那层收紧就形同虚设。这条 RestClient 只服务非流式调用（目标解析、
-     * 调查规划、连接测试），流式对话走另一条 WebClient 路径，不经过这里。
-     *
-     * 用 {@link JdkClientHttpRequestFactory}（JDK 的 {@link HttpClient}）而不是
-     * {@code SimpleClientHttpRequestFactory}：后者基于 {@code HttpURLConnection}，读超时后
-     * keep-alive 连接可能被复用为半开连接，重试会读到上一个请求的残留响应、把
-     * content-type 解析成 {@code application/octet-stream}。JDK 客户端连接管理更稳，不会复用坏连接。
+     * 为非流式调用配置 HTTP 超时；流式调用使用独立 WebClient。
+     * 使用 JDK 客户端，避免 HttpURLConnection 在超时后复用异常连接。
      */
     private static RestClient.Builder restClient(ModelSettings settings) {
         Duration timeout = Duration.ofSeconds(ModelSettings.clampTimeout(settings.timeoutSeconds()));
@@ -421,25 +381,14 @@ public class AdminChatModelGateway implements ChatModelGateway {
         return RestClient.builder().requestFactory(factory);
     }
 
-    /**
-     * 该模型是否支持深度思考。
-     *
-     * 按模型名判断而不是加一个配置开关：模型名本身就是最准确的判据，多一个开关只会多一处
-     * 「配错就报错」的地方。不认识的模型名一律不开——不传这个参数，永远不会因参数不兼容而失败。
-     */
+    /** 按模型名判断深度思考支持；未知模型默认禁用。 */
     private static boolean supportsThinking(String model) {
         String name = model == null ? "" : model.trim().toLowerCase(Locale.ROOT);
         return name.startsWith("glm-4.5") || name.startsWith("glm-4.6") || name.startsWith("glm-4.7")
                 || name.startsWith("glm-5") || name.startsWith("glm-z1");
     }
 
-    /**
-     * 取一帧响应里的思考增量。
-     *
-     * 只有能解析 {@code reasoning_content} 的消息类型带这个字段（见
-     * {@link #thinkingCapableModel}）；取不到一律返回空串——思考内容只是解释过程的陪衬，
-     * 不能因为它缺失或类型不符而让一次解读失败。
-     */
+    /** 读取响应帧中的 reasoning_content 增量；字段缺失或类型不符时返回空串。 */
     @Override
     public String reasoningDelta(ChatResponse response) {
         if (response == null || response.getResult() == null) {

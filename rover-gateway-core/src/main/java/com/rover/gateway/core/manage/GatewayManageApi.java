@@ -471,11 +471,8 @@ public class GatewayManageApi extends AbstractManageApi {
     }
 
     /**
-     * 组装 GET /_manage/discovery/snapshot：网关自己观察到哪些 service@group、本地缓存版本与实例数。
-     *
-     * 这是「网关视角」的证据，用于和注册中心视角对账（如灰度验收时确认两边看到的是同一批实例）。
-     * 非动态发现或没有客户端时如实返回 supported=false 并附空列表，<b>不抛异常</b>——
-     * 「没有这项能力」与「读取失败」必须在调用方那里是可区分的两件事。
+     * 组装网关发现快照，包含服务分组、缓存版本与实例数。
+     * 非动态发现或无客户端时返回 supported=false 和空列表。
      */
     private String discoverySnapshotJson() {
         Map<String, Object> resp = new LinkedHashMap<>();

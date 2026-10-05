@@ -38,17 +38,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Agent 应用入口：接收用户消息，异步交给对话主路径处理，并把结论落回会话。
- *
- * 这里只有两条执行路径，彼此不共用判据：
- * <ul>
- *   <li>人工消息：{@code submit} → Worker → 背景构建 → 目标 best-effort 绑定 → 对话主路径
- *       （模型自主决定调用哪些只读工具）；</li>
- *   <li>机器事件：{@link #ingestAlert} → {@link InvestigationService} → 有界自动调查图。</li>
- * </ul>
- *
- * 不存在「先判断这句话属于查询、解释还是调查，再分流」的中间层：那正是被证明会限制自然语言
- * 灵活性、并已从主链上撤下的旧做法。
+ * Agent 应用入口，人工消息异步交给对话模型，机器事件交给 InvestigationService。
+ * 执行结果写回会话。
  */
 public final class AgentOrchestrator {
 
@@ -269,12 +260,8 @@ public final class AgentOrchestrator {
     }
 
     /**
-     * 事件接入：告警 / 网关切面异常等事件触发一次自动调查。
-     *
-     * 这是机器事件的唯一入口，走的是与人工会话不同的执行形态：没有模型自主选工具这一步，
-     * 而是由规划器产出只读步骤、执行器按硬边界执行。取数口与人工会话相同（都经 CapabilityExecutor），
-     * 事件来源记为 {@code ALERT}，且可选自带观测窗口；窗口不传则按各数据源默认窗口取数。
-     * 会话按事件独立开（无归属用户），不会与人工会话争「单活跃任务」锁。
+     * 接收告警并创建无用户归属的独立会话，异步执行只读调查。
+     * 事件来源为 ALERT；未指定窗口时使用数据源默认值。
      *
      * @return 已受理的调查任务视图（异步执行，可凭 taskId 轮询 / 订阅事件）
      */

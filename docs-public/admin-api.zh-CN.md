@@ -14,6 +14,8 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | --- | --- | --- |
 | GET | `/api/overview` | Gateway/Nameserver 状态、发现模式和指标自洽检查 |
 | GET | `/api/live?range=60\|300` | 轻量实时快照，供仪表盘轮询 |
+| GET | `/api/metrics` | Gateway 全量快照：全局 P99、路由、上游及累计拒绝/重试；使用网关配置的 `windowSeconds` |
+| GET | `/api/metrics/routes?routeId=..&range=60\|300` | 路由 × 实例窗口观测、声明版本、版本汇总及声明/观测版本对比 |
 | GET | `/api/routes` | Gateway 路由列表 |
 | POST | `/api/routes` | 新增或更新路由，请求体为路由对象 |
 | DELETE | `/api/routes?businessPrefix=/api/demo` | 按业务前缀删除路由 |

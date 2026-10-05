@@ -8,14 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 
-/**
- * 廉价模型调用的统一形态：短超时上限 + 只为超时重试一次。
- *
- * 目标解析、调查规划都属于"失败也能确定性兜底"的小调用，等满配置里的 30 秒没有意义：
- * 偶发的网络卡顿会让用户白等一场，最后还是落回规则。这里把等待上限压到场景值，超时后再给一次
- * 机会——能自愈的卡顿自愈，不能自愈的尽快走兜底。只有超时才重试：鉴权失败、模型不存在、
- * 参数错误这类失败，重试一次结果也一样。
- */
+/** 目标解析和规划的模型调用策略：短超时上限，仅对超时重试一次。 */
 final class QuickModelCall {
 
     private static final Logger log = LoggerFactory.getLogger(QuickModelCall.class);

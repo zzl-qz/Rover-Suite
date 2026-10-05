@@ -10,12 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * 安全恢复点的内存实现：单机、进程内、重启即失，用于未配记录库路径的运行与单测。
- *
- * <p>写入语义与落库实现一致——恢复点保存的就是调用方给出的那份状态，不存在"存了一半"的中间态。
- * 区别只在重启之后：内存里没有可恢复的恢复点。
- */
+/** 安全恢复点的内存实现，按调用方快照原子保存，重启后丢失。 */
 public final class InMemoryAgentCheckpointRepository implements AgentCheckpointRepository {
 
     private final Map<String, List<AgentCheckpoint>> marksByTask = new ConcurrentHashMap<>();

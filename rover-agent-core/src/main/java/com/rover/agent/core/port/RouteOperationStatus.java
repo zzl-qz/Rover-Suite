@@ -1,12 +1,6 @@
 package com.rover.agent.core.port;
 
-/**
- * Gateway 对一次写操作的记账结果。
- *
- * <p>四种终态互斥且穷尽：要么生效，要么三种「没生效」之一。另有一个 {@link #UNKNOWN} 表示
- * 「网关没有这条操作的记录」——它<b>不等于失败</b>：可能是从未提交过，也可能是操作记录已超出网关的
- * 保留窗口。调用方必须把 UNKNOWN 当成「结果仍未确认」处理，而不是当成成功或失败。
- */
+/** 网关写操作状态；UNKNOWN 表示无操作记录，结果仍未确认。 */
 public enum RouteOperationStatus {
 
     /** 已生效并落盘。 */

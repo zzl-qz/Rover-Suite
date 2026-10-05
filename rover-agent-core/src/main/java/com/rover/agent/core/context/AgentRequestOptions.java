@@ -4,11 +4,7 @@ import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TimeRange;
 
 /**
- * 用户为一次提问手工补充的高级上下文（页面上的可折叠区域）。
- *
- * 全部字段可选：都不填时按问题文本解析目标、按数据源默认窗口取数。
- * 这是"用户明确指定"，因此优先级高于文本解析——但依然要经解析器落到可调查的路由上，
- * 指定了对象却找不到对应路由时同样要求澄清。
+ * 提问的可选上下文，显式目标优先于文本解析；无法定位时要求澄清。
  *
  * @param target          手工指定的调查对象；未指定时为 {@link ResourceTarget#unknown()}
  * @param timeRange       手工指定的时间范围；未指定时为 {@link TimeRange#unspecified()}

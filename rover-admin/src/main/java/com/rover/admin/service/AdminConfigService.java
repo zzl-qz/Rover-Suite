@@ -105,13 +105,8 @@ public class AdminConfigService {
     }
 
     /**
-     * 新增/更新一条路由并热更新。
-     *
-     * 调用方必须带上读到的 {@code revision}：版本不一致时网关回 409，Admin 原样抛给前端，
-     * 由人决定是重新拉取还是放弃，绝不做「自动重试覆盖别人」。
-     *
-     * {@code operationId} 优先用调用方给的：前端自己生成才能在自己的请求超时后
-     * 用同一个号回查「到底执行了没有」。调用方没给（脚本、curl）时才补一个。
+     * 新增或更新路由，revision 冲突时透传 409，不自动重试。
+     * 优先使用调用方的 operationId，未提供时生成。
      */
     public Map<String, Object> saveRoute(Map<String, Object> route) {
         Map<String, Object> payload = new LinkedHashMap<>(route);
@@ -130,12 +125,7 @@ public class AdminConfigService {
         }
     }
 
-    /**
-     * 预览候选路由表的差异：整表交给网关做校验与比对，不落盘、不生效。
-     *
-     * 失败原因和保存/删除一样原样透给前端，不吞异常——预览的意义就是把校验错误与差异
-     * 先摊开给操作者看，吞掉就只剩一个「失败」了。
-     */
+    /** 校验并预览候选路由表的差异，不提交变更；失败原因透传。 */
     public Map<String, Object> previewRoutes(List<Map<String, Object>> routes) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("routes", routes);
@@ -170,12 +160,7 @@ public class AdminConfigService {
         }
     }
 
-    /**
-     * 按 operationId 查一次路由写操作的终态。
-     *
-     * 回答的是「我超时的这次写到底执行了没有」，所以不允许把失败吞成「查不到」：
-     * 网关不可达就如实报错，前端才知道「结果仍未确认、可以稍后用同一个号再查」。
-     */
+    /** 按 operationId 查询写操作结果；管理口不可达时抛出异常。 */
     public Map<String, Object> routeOperation(String operationId) {
         if (operationId == null || operationId.isBlank()) {
             throw new IllegalArgumentException("需要 operationId");
@@ -194,12 +179,8 @@ public class AdminConfigService {
     }
 
     /**
-     * 单版本权重调整：灰度放量 / 停推的专用原语。
-     *
-     * 只改一个版本目标的权重，内部仍走「整表 + 乐观锁」（读整表 → 定位目标 → 改权重 → 整表提交）。
-     * 因此它比「打开整条路由编辑再整体保存」更窄——不会误改别的目标，同时并发修改照样被 revision 拦下。
-     *
-     * @param body 需含 routeId / serviceName / group / weight，以及读到的 revision
+     * 调整单个版本目标的权重，通过整表提交和 revision 乐观锁更新。
+     * @param body routeId、serviceName、group、weight 和 revision
      */
     public Map<String, Object> adjustTargetWeight(Map<String, Object> body) {
         Map<String, Object> payload = new LinkedHashMap<>(body);
@@ -221,11 +202,8 @@ public class AdminConfigService {
     }
 
     /**
-     * 回滚路由到最近某次已应用的快照。
-     *
-     * 网关语义是「产生新版本」而不是覆盖历史，所以回滚本身也是一次可回查的写操作。
-     *
-     * @param body 需含 toRevision 与当前读到的 revision（乐观锁）
+     * 将历史路由快照应用为新版本。
+     * @param body toRevision 和当前 revision
      */
     public Map<String, Object> rollbackRoutes(Map<String, Object> body) {
         Map<String, Object> payload = new LinkedHashMap<>(body);
@@ -297,10 +275,8 @@ public class AdminConfigService {
     }
 
     /**
-     * 读取指定路由下各上游实例的窗口观测（/_manage/metrics/routes）。
-     *
-     * 窗口只认 60 / 300 两档，与 live 指标同口径；路由未知或窗口内没有转发记录时，
-     * 网关返回的是合法 JSON 加空 rows，而不是错误——「没有样本」与「取不到数据」必须分开。
+     * 读取路由的上游实例观测，支持 60/300 秒窗口。
+     * 未知路由或无转发记录返回空 rows。
      */
     public JsonNode loadRouteUpstreams(String routeId, int rangeSeconds) {
         try {
@@ -375,11 +351,8 @@ public class AdminConfigService {
     }
 
     /**
-     * 记录一次运维写操作作为诊断证据。recordStore 为空（未装配或测试）时静默跳过，
-     * 记录本身失败也只 debug，绝不影响业务写操作。
-     *
-     * <p>类型语义：成功审计按操作性质记 {@link RecordType#CONFIG_CHANGE} / {@link RecordType#ROLLBACK}，
-     * 失败统一记 {@link RecordType#ERROR}（错误证据与成功审计分库，便于后续按类型检索）。
+     * 记录写操作审计：成功记 CONFIG_CHANGE 或 ROLLBACK，失败记 ERROR。
+     * 记录库未装配时跳过；记录失败不影响业务操作。
      */
     private void recordOperation(RecordType type, String action, String routeId, String serviceName, String detail) {
         if (recordStore == null) {

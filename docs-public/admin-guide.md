@@ -228,6 +228,7 @@ effect verification.
 | Page | Purpose |
 | --- | --- |
 | Dashboard | QPS, latency, status codes, in-flight requests, JVM and registry overview |
+| Metric diagnostics | Full Gateway snapshot plus route, version and upstream instance observations |
 | Request tracing | Sampled Gateway request timelines |
 | Routes | Create, update and delete routes |
 | Instances | Registered Nameserver instances and health |
@@ -294,7 +295,21 @@ Before saving, the editor previews the per-route diff (`ADDED` / `REMOVED` /
 the routes first, Gateway returns `409`, the page refreshes to the latest
 revision and asks you to save again instead of silently overwriting.
 
-### Version metrics
+### Metric diagnostics and version metrics
+
+Open **指标诊断** in the sidebar, or use the diagnosis button on the dashboard or a route row.
+The global snapshot shows sampled P95/P99, all observed routes/upstreams, and cumulative rejects
+and connection retries. It uses the Gateway-configured `windowSeconds`; the route detail has its
+own 1m/5m selector. Global latency is end-to-end, while instance latency measures the upstream round trip.
+Both reads refresh every 10 seconds only while this page is visible. A failed refresh preserves the
+last successful snapshot and its timestamp with a warning. Disabled collection, absent samples and
+read failures have separate states; missing values and latency without requests display `—`.
+
+Route details are available through the same-origin `/api/metrics/routes` API. The picker includes
+configured routes without traffic as well as historical observed routes. Routes without an ID cannot
+be diagnosed independently. The dashboard's expanded upstream hit counts are cumulative since startup;
+use this detail view for window counts. Empty instance rows can mean no traffic or an unknown route,
+and do not prove that instances are healthy. P99 currently exists only at the global level.
 
 For a versioned route, `GET /_manage/metrics/routes?routeId=..&range=60|300`
 returns the declared `targets`, a per-version `byVersion` rollup, and a

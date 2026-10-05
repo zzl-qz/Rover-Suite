@@ -4,13 +4,7 @@ import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.planning.InvestigationPlan;
 import java.util.List;
 
-/**
- * 任务对外视图：Admin 轮询与任务记录都使用这个对象。
- *
- * <p>{@code evidence} 是「本次执行已取到的全部证据」，与结论是否已经产出无关——工具一返回，
- * 取到的事实就成立。结论里的证据（{@link InvestigationReport#evidence()}）是同一批：
- * 报告存的是「这次结论建立在哪些事实上」，两者在完成态下逐条一致。
- */
+/** 任务对外快照；evidence 包含本次已采集证据，完成时与报告证据一致。 */
 public record TaskView(String taskId, String sessionId, String incidentId, TaskStatus status,
                        AgentStepType currentStage, String path, ResourceTarget target, String question,
                        long createdAtMillis, long completedAtMillis, List<Step> steps,

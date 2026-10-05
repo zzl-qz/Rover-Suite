@@ -10,11 +10,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 确定性规划器：不依赖模型也能产出计划，是无模型环境与模型失败时的兜底。
- *
- * 计划内容与既有固定调查链保持一致（路由 → 实例 → 指标 → 追踪），因此「模型不可用」只是少了解读，
- * 不会让故障调查退化。实例步骤在该能力对本目标无判定价值时（路由未知、静态上游、非 Nameserver）
- * 由执行侧跳过，跳过同样计入已处理，不会被下一轮重新规划。
+ * 规则规划器，提供路由、实例、指标和追踪的确定性兜底计划。
+ * 无判定价值的能力由执行侧跳过，并计入已处理。
  */
 public final class RuleBasedPlanner implements InvestigationPlanner {
 
@@ -57,16 +54,7 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         return new InvestigationPlan(goal(context, target, hasPath), hypotheses(hasPath), steps);
     }
 
-    /**
-     * 问题本身点到配置或事件时，才追加对应的可选步骤。
-     *
-     * 这两类事实对常见故障调查没有普遍判定价值，因此不做成必查项：每次都读会凭空增加两跳只读调用，
-     * 也会让证据里塞进与问题无关的内容。是否点到由 {@link InvestigationCueDetector} 判断，
-     * 这里是唯一的调用方，不维护第二份关键词。
-     *
-     * 两个方向各自成立、互不排斥：一句话同时提到配置与变更（「限流阈值是不是改了」）时两条都追加。
-     * 提示只说明「这个方向值得看一眼」，不构成「该查哪一类」的裁决——真的根因不该由先命中的关键词决定。
-     */
+    /** 按 {@link InvestigationCueDetector} 的独立提示追加配置和事件查询步骤。 */
     private void addQuestionDrivenSteps(List<PlannedStep> steps, PlanningRequest request, ResourceTarget target) {
         String question = request.question();
         if (InvestigationCueDetector.mentionsConfig(question)) {

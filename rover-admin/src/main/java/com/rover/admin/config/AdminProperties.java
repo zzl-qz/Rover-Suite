@@ -8,11 +8,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * Author: Daylight
  * Created: 2026-08-09 13:45:00
- * Description: Admin 连接 Gateway / Nameserver 管理口的地址配置
- *
- * <p>字段上的注释就是这份配置的说明书：读配置的人只看这里就该知道每个值干什么、
- * 缺省是什么，因此注释留在字段上，存取方法交给 Lombok——把 90 行 getter/setter
- * 换成一行注解，改一个配置项时不会再改漏一处。
+ * Description: Admin 管理口连接与运行配置。
  */
 @Data
 @ConfigurationProperties(prefix = AdminProperties.PREFIX)

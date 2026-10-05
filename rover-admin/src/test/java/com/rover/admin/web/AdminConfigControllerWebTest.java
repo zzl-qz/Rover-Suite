@@ -2,13 +2,17 @@ package com.rover.admin.web;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.admin.client.ManageApiCallException;
 import com.rover.admin.service.AdminConfigService;
 import java.util.List;
@@ -48,6 +52,71 @@ class AdminConfigControllerWebTest {
         mockMvc.perform(get("/api/nameserver/metrics"))
                 .andExpect(status().isOk())
                 .andExpect(content().json("{\"registrations\":1}"));
+    }
+
+    @Test
+    void exposesFullGatewaySnapshotWithoutLosingDiagnosticFields() throws Exception {
+        var snapshot = new ObjectMapper().readTree("""
+                {"enabled":true,"windowSeconds":300,"total":{"p99Millis":123},
+                 "resources":{"rejects":{"noUpstream":7},"retries":{"connect":2}},
+                 "routes":[{"routeId":"orders","p95Millis":90}],
+                 "upstreams":[{"hostPort":"localhost:8081","timeout":3}]}
+                """);
+        when(configService.loadMetrics()).thenReturn(snapshot);
+
+        mockMvc.perform(get("/api/metrics"))
+                .andExpect(status().isOk())
+                .andExpect(content().json(snapshot.toString()));
+        verify(configService).loadMetrics();
+    }
+
+    @Test
+    void exposesRouteInstancesAndVersionsWithClampedWindow() throws Exception {
+        var snapshot = new ObjectMapper().readTree("""
+                {"routeId":"orders / v2","windowSeconds":300,"observedAtMillis":123,
+                 "rows":[{"hostPort":"localhost:8081","group":"v2","windowRequests":3}],
+                 "byVersion":[{"group":"v2","sampleSize":3,"sufficient":false}],
+                 "versionCheck":{"missingGroups":["v1"]}}
+                """);
+        when(configService.loadRouteUpstreams("orders / v2", 300)).thenReturn(snapshot);
+
+        mockMvc.perform(get("/api/metrics/routes").param("routeId", "orders / v2").param("range", "900"))
+                .andExpect(status().isOk())
+                .andExpect(content().json(snapshot.toString()));
+        verify(configService).loadRouteUpstreams("orders / v2", 300);
+    }
+
+    @Test
+    void keepsNoSamplesAndDisabledMetricsDistinctFromReadFailures() throws Exception {
+        var empty = new ObjectMapper().readTree("{\"windowSeconds\":60,\"rows\":[],\"byVersion\":[]}");
+        when(configService.loadRouteUpstreams("unknown", 60)).thenReturn(empty);
+        when(configService.loadMetrics()).thenReturn(JsonNodeFactory.instance.objectNode().put("enabled", false));
+
+        mockMvc.perform(get("/api/metrics/routes").param("routeId", "unknown"))
+                .andExpect(status().isOk())
+                .andExpect(content().json(empty.toString()));
+        mockMvc.perform(get("/api/metrics"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.error").doesNotExist());
+
+        when(configService.loadMetrics()).thenThrow(new IllegalStateException("internal-url"));
+        when(configService.loadRouteUpstreams("unknown", 60)).thenThrow(new IllegalStateException("internal-url"));
+        mockMvc.perform(get("/api/metrics"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"error\":\"读取失败\"}"));
+        mockMvc.perform(get("/api/metrics/routes").param("routeId", "unknown").param("range", "invalid"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"error\":\"读取失败\"}"));
+    }
+
+    @Test
+    void rejectsMissingOrBlankRouteIdBeforeCallingGateway() throws Exception {
+        mockMvc.perform(get("/api/metrics/routes"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/metrics/routes").param("routeId", " "))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(configService);
     }
 
     @Test

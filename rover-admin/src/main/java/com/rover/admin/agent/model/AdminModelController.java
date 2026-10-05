@@ -11,12 +11,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-/**
- * 模型配置接口：读取当前状态、保存并即时生效、连接测试与效果验证。
- *
- * 返回体里只有掩码 {@code ******}，不出现明文密钥也不出现密文；
- * 密钥只在 {@code POST} 的请求体里出现一次。
- */
+/** 模型配置读写与验证接口；响应中的密钥仅返回掩码。 */
 @RestController
 @RequestMapping(AdminApiPaths.PREFIX)
 @Slf4j

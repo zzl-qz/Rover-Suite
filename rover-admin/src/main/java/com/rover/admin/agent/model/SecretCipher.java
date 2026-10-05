@@ -21,17 +21,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
- * API 密钥的落盘保护：AES-256-GCM，密文格式为 {@code base64(IV || 密文)}。
- *
- * 主密钥解析顺序：显式配置（环境变量 {@code ROVER_ADMIN_MASTER_KEY} 或
- * {@code rover.admin.model.master-key}，base64 解出 32 字节则直接用，否则按口令 PBKDF2 派生）
- * → 主密钥文件 → 首次加密时随机生成并写入主密钥文件（开发环境免配置，这条路径保留）。
- *
- * 这只是"落盘静态保护"，不是 KMS：主密钥文件必须与模型配置文件**分开备份**，
- * 两者放在一起等于没有加密。因此当主密钥文件仍落在默认的同目录时，启动阶段会输出
- * SECURITY WARNING——生产环境应改用环境变量或 {@code master-key-file} 指向独立目录
- * （判定见 {@link AdminModelProperties#isMasterKeyIsolated()}）。
- * Windows 没有 POSIX 权限，机密性靠加密而不是文件模式。
+ * 使用 AES-256-GCM 加密 API 密钥，格式为 base64(IV || 密文)。
+ * 主密钥优先使用显式配置，其次密钥文件；缺失时首次加密生成。
+ * 配置解码为 32 字节时直接使用，否则通过 PBKDF2 派生。
+ * 主密钥与密文应分开存储和备份；默认同目录存储会触发启动告警。
  */
 @Component
 public class SecretCipher {

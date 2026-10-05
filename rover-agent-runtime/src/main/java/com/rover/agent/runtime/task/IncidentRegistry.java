@@ -16,13 +16,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * 会话与事件登记：把「一次提问」固定成「一个会话下的一个事件」，事件再承载调查任务。
- *
- * 记录存放在 {@link AgentSessionRepository} 与 {@link IncidentRepository}，本类不直接持有任何集合，
- * 因此换实现不影响这里：组合根注入落库实现时会话与事件重启后仍在，无参构造（测试）用内存实现。
- *
- * 会话与事件数量有上限：启用保留策略（{@link WorkspaceRetention}）时，容量满会整组清理最早的会话
- * 或最早的事件，不留孤儿记录；未启用时（如测试里的小容量场景）容量满会直接拒绝写入并报错。
+ * 通过仓储登记会话与事件。
+ * 容量满时由保留策略整组清理；未启用保留策略时拒绝新增。
  */
 public final class IncidentRegistry {
 

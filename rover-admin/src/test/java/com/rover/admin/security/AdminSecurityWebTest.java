@@ -30,6 +30,10 @@ class AdminSecurityWebTest {
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(401))
                 .andExpect(jsonPath("$.message").value("请先登录控制台"));
+        mockMvc.perform(get("/api/metrics"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/metrics/routes").param("routeId", "orders"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test

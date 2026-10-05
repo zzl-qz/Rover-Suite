@@ -2,10 +2,7 @@ package com.rover.agent.core.port;
 
 import java.util.List;
 
-/**
- * 只读端口：Agent 基于历史日志做证据检索（如「上周还好好的现在为什么挂了」）。
- * 领域层只依赖此端口，底层存储（H2 等）由运行/管理侧适配器提供。
- */
+/** 历史日志查询端口，底层存储由宿主适配器提供。 */
 public interface LogQueryPort {
 
     /**

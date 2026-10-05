@@ -6,12 +6,7 @@ import com.rover.agent.core.snapshot.RouteSnapshot;
 import java.util.List;
 import java.util.Optional;
 
-/**
- * 目标推断端口：当规则匹配不出调查对象时，用已配置的模型做一次结构化辅助。
- *
- * 实现只能从传入的候选中挑选，不允许凭空构造不存在的对象——把自然语言映射成"目标"这件事，
- * 错判的代价高于不判：宁可让用户澄清，也不能对着错误的服务做诊断。
- */
+/** 规则无法匹配时，辅助从已有候选中选择调查对象；不确定时返回空。 */
 @FunctionalInterface
 public interface TargetInterpreter {
 

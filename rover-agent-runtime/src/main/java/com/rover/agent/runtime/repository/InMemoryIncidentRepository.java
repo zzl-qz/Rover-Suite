@@ -6,13 +6,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
-/**
- * 事件的内存实现：单机、进程内、重启即失。
- *
- * 容量满时拒绝写入（{@link StoreCapacityExceededException}），不淘汰已有事件：
- * 事件是任务的聚合点，被丢掉的会议让"任务挂在哪个事件上"出现悬空引用。
- * 腾出位置由上层保留策略整组清理（最早的事件连同它的任务）。
- */
+/** 事件内存存储；容量满时拒绝新增，由上层连同关联任务整组清理。 */
 public final class InMemoryIncidentRepository implements IncidentRepository {
 
     private final BoundedStore<String, Incident> incidents;

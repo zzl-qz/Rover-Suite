@@ -3,25 +3,8 @@ package com.rover.agent.core.model;
 import java.util.List;
 
 /**
- * 一条运维变更记录：Agent 提议、人批准、确定性执行器落地、结果可回读、必要时可补偿。
- *
- * <p><b>它是「建议」的载体，不是「已经做过」的证明。</b>只有 {@link ActionStatus#SUCCESS} /
- * {@link #ROLLED_BACK} 才代表 Gateway 上确实发生过一次被回读确认过的变更；
- * 其余状态要么没写、要么写完不确定，字段本身就是给人和后续回查用的证据。
- *
- * <p>字段分成四组，各回答一个问题：
- *
- * <ul>
- *   <li><b>改什么</b>：{@code type} / {@code routeId} / {@code serviceName} / {@code group} /
- *       {@code beforeWeight} / {@code desiredWeight}。变更的对象与两端取值全部显式落库，
- *       因此「这次到底想改什么」不依赖任何对话上下文。</li>
- *   <li><b>凭什么改</b>：{@code expectedRevision} 是提议时读到的路由版本，批准时会重新比对；
- *       {@code preview} 是网关给出的差异预览（不落盘、不生效），{@code impact} 是给人看的一句话影响说明。</li>
- *   <li><b>怎么追踪</b>：{@code applyOperationId} / {@code rollbackOperationId} 是两次写请求的幂等号，
- *       {@code appliedRevision} 是提交后网关生效的版本。它们让「超时了到底改没改」这件事可查，而不是靠重试去赌。</li>
- *   <li><b>谁动的手</b>：{@code requestedBy}（提议人，来自会话归属）与 {@code approvedBy} / {@code approvedAtMillis}
- *       （批准人），两者都必须能在事后回答「这条变更经谁的手生效」。</li>
- * </ul>
+ * 运维变更记录，包含目标、审批、执行与回滚信息。
+ * SUCCESS 和 ROLLED_BACK 表示已通过回读验证。
  *
  * @param actionId            变更 ID
  * @param sessionId           所属会话
@@ -64,12 +47,7 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
                           List<String> preview, String impact, String errorMessage,
                           long createdAtMillis, long updatedAtMillis) {
 
-    /**
-     * 权重上限。
-     *
-     * <p>与 Gateway {@code RouteTarget.MAX_WEIGHT} 同口径。领域层不能依赖网关实现，
-     * 因此这里显式再声明一次：两边漂移时，网关会拒掉越界值，而这里负责在提议阶段就拦下它。
-     */
+    /** 权重上限，与 Gateway 的 RouteTarget.MAX_WEIGHT 保持一致。 */
     public static final int MAX_WEIGHT = 10_000;
 
     public AgentAction {
@@ -117,12 +95,7 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
         return formatPercent(beforeTrafficPercent) + " → " + formatPercent(desiredTrafficPercent);
     }
 
-    /**
-     * 请求方当初到底要的是什么：{@code 权重值 20} / {@code 流量占比 20%}。
-     *
-     * <p>审批卡上必须保留这一行：真正被人批准的是「20% 流量」还是「权重 20」，
-     * 事后只能靠它回答，而 {@code desiredWeight} 只是换算结果。
-     */
+    /** 展示原始请求数值与单位，供审批和审计使用。 */
     public String requestText() {
         if (requestedUnit == null) {
             return "权重 " + desiredWeight + "（未声明单位）";

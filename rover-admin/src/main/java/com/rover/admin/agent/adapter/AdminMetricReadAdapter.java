@@ -46,11 +46,8 @@ public class AdminMetricReadAdapter implements MetricReadPort {
     }
 
     /**
-     * 读取指定路由下各上游实例的窗口观测。
-     *
-     * 网关把「路由未知」与「窗口内没有转发记录」都表达为空 rows，因此这里返回空列表；
-     * 只有指标未启用或端点不可达才抛 {@link SnapshotUnavailableException}——
-     * 「没有样本」不能变成「数据不可用」，否则结论会把采样空白当成采集失败。
+     * 读取路由的上游窗口观测；未知路由或无转发记录返回空列表。
+     * 指标未启用或端点不可达时抛 {@link SnapshotUnavailableException}。
      */
     @Override
     public List<RouteUpstreamSnapshot> routeUpstreams(String routeId, int windowSeconds) {

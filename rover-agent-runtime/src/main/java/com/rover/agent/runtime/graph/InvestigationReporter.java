@@ -7,14 +7,8 @@ import com.rover.agent.core.planning.InvestigationPlan;
 import java.util.List;
 
 /**
- * 调查过程上报口：除步骤进度外，还要把「这次打算查什么、实际用到了哪些能力、已经取到哪些证据」
- * 写进任务快照，并在安全边界上推进恢复点。
- *
- * <p>计划与已用能力不是过程日志，而是结果的一部分：用户要能看到 Agent 为什么查这几项、
- * 以及结论建立在哪几个只读能力上。因此它们由任务对象持有并随轮询快照一起暴露。
- *
- * <p>{@link #recordEvidence} 与 {@link #checkpoint} 是配套的一对：工具执行完先把证据交上来，
- * 再在同一个恢复点上推进高水位——两者之间崩溃，等于这个工具没跑过，重来一次不会重复也无害。
+ * 将调查计划、已用能力和证据写入任务快照，并推进安全恢复点。
+ * 步骤完成、证据交付后才能记录恢复点。
  */
 public interface InvestigationReporter extends StepSink {
 

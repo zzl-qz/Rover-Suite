@@ -3,13 +3,7 @@ package com.rover.gateway.core.filter.ratelimit;
 import java.util.Locale;
 import lombok.Data;
 
-/**
- * Gateway 内置本地限流配置。默认关闭，避免改变现有部署行为。
- *
- * <p>字段是 {@code volatile} 的：这份配置支持运行时热更新，写线程与转发线程不是同一个。
- * 存取方法交给 Lombok，只把「需要归一化」的两个 setter 留在明处——
- * 算法名与限流维度来自配置文本，大小写和空白不该影响匹配，这一段逻辑必须看得见。
- */
+/** 本地限流配置，默认关闭；volatile 字段支持热更新，文本配置由 setter 归一化。 */
 @Data
 public class RateLimitSettings {
 
