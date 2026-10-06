@@ -1,11 +1,4 @@
-/**
- * 模型配置页：厂商收敛 + 保存即生效 + 连接测试与效果验证。
- *
- * 用户只选「厂商」+ 填 key，服务地址 / 主模型 / 快速模型都由后台按厂商映射，不再要求用户
- * 理解「glm-4.6 和 glm-4-air 的区别」。本地部署（Ollama / vLLM）没有厂商概念，走「自定义」。
- *
- * 密钥只在这里被"写"一次，读回来永远是掩码：留空 = 不改，显式点「清除已存密钥」才会清除。
- */
+/** 模型配置、热切换与连接验证；密钥回读仅展示掩码。 */
 window.RoverAdminPages = window.RoverAdminPages || {};
 window.RoverAdminPages.model = {
     data() {
@@ -73,7 +66,7 @@ window.RoverAdminPages.model = {
         modelThinkingHint() {
             if (this.isCustom) return '自定义模型走 OpenAI 兼容协议，是否产出思考内容取决于模型本身。';
             if (this.modelVendor === 'zhipu') {
-                return '主模型 glm-4.6 是思考模型，对话里能看到推理过程；快速模型 glm-4-air 不思考。';
+                return '主模型用于对话和解读；快速模型用于目标解析和调查规划，具体模型名以后台映射为准。';
             }
             if (this.modelVendor === 'deepseek') {
                 return 'deepseek-chat 不产出思考内容。';

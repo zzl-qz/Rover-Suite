@@ -17,11 +17,11 @@ Shortest checklist for **single-node / small private-network** deploys. Details:
 1. **Use production samples, not demo tokens.** Start from `deploy/production/*.example.yml`.
 2. **Strict security on.** `ROVER_STRICT_SECURITY=true` (or `-Drover.strictSecurity=true`) so blank tokens fail startup.
 3. **Split manage vs data plane.** Restrict Nameserver protocol/manage, Gateway data, and Admin by network; keep Admin off the public internet.
-4. **Distinct tokens.** Gateway admin, Nameserver admin, and protocol tokens must differ.
+4. **Separate protocol and management tokens.** Use long random values. A single Admin currently uses one `admin-token`, which must match the Gateway/Nameserver management tokens it calls.
 5. **Disable unused surfaces.** e.g. `clientApiEnabled: false`, CORS off unless required.
 6. **Boot order.** Nameserver → Gateway → apps / Admin; see `deploy/systemd/`.
 7. **Health in monitoring.** `GET /_manage/health` with `X-Rover-Admin-Token`; Compose smoke: `deploy/scripts/smoke-compose.sh`.
-8. **Backup overlays.** Run `deploy/scripts/backup-overlays.sh` on a schedule; do not commit `backups/`.
+8. **Back up configuration and records.** Use `deploy/scripts/backup-overlays.sh` for overlays. Stop Admin before a separate record-store backup; keep model configuration and master keys apart and out of Git.
 9. **Keep logs sane.** Access log is debug + `filters.accessLog`; raise DEBUG only while debugging.
 10. **Own the memory boundary.** If Nameserver dies, the registry is gone until apps re-register — not silent HA.
 

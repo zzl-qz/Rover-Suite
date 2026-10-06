@@ -70,7 +70,9 @@ rover:
     routes:
       - id: demo-api
         businessPrefix: /api
-        serviceName: demo-service
+        targets:
+          - serviceName: demo-service
+            weight: 100
         stripPrefix: ""
 ```
 
@@ -141,7 +143,7 @@ with the default configuration.
 | :--- | :--- |
 | Gateway cannot bind | Confirm that the external Gateway config uses `8080`, not the bundled default `80`. |
 | Gateway returns no available instance | Start Nameserver before the demo, then check that both use `127.0.0.1:8888`. The Java provider retries every 5 seconds. If Gateway started first, the current version may wait until the next 30-second reconciliation; restarting Gateway also refreshes immediately. |
-| Gateway route is not found | Check `businessPrefix: /api`, `serviceName: demo-service`, and that a stale `config/routes.overlay.json` is not overriding YAML routes. |
+| Gateway route is not found | Check `businessPrefix: /api`, `targets` with `serviceName: demo-service`, and that a stale `config/routes.overlay.json` is not overriding YAML routes. |
 | Gateway gets connection refused from the provider | `rover.nameserver.host` must be reachable from the Gateway. `127.0.0.1` is only correct when all processes run on one machine. |
 | Authentication fails | Nameserver, Starter, and Gateway discovery must use the same protocol token. See the [User Guide](./user-guide.md). |
 

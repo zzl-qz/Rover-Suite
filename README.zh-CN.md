@@ -52,7 +52,7 @@ Admin 地址：<http://127.0.0.1:9090>。停止、验收脚本和生产安全提
 
 - **网关和注册发现一套小栈解决：** Gateway 通过本地实例缓存转发请求，Nameserver 负责注册、健康检查和快照推送。
 - **混合语言接入：** Java 服务可用 Starter，Node.js、Python、Go、PHP、C++ 可通过 HTTP+JSON API 注册。
-- **运行态可观察：** Admin 提供路由、实例、最近事件、请求追踪、指标和可热更新配置视图。
+- **运行态可观察：** Admin 提供实时仪表盘与完整指标诊断，展示全局 P95/P99、路由版本、上游实例和累计拒绝/重试计数，并提供请求追踪、注册事件和可热更新配置视图。
 - **轻量扩展：** Java SPI Filter / LoadBalancer 覆盖常见定制场景，不必一上来引入完整服务网格。
 - **运维 Agent（预览）：** Rover Ops Agent 基于 Gateway 与 Nameserver 的运行态数据做只读故障调查，输出结论、证据来源和采集时间；它还能把一类运维变更——灰度版本权重调整——开成待人工审批的变更单，批准后才执行、执行后回读确认，并可补偿回滚；定位与边界见 [Rover Ops Agent](docs-public/ops-agent.zh-CN.md)。
 
@@ -67,7 +67,13 @@ Rover-Suite 面向多单体、旁路服务和混合语言服务逐渐变多的�
 </p>
 
 <p align="center">
-  <img src="docs-public/images/admin/01-dashboard-overview.png" alt="Rover-Admin 仪表盘概览" width="100%">
+  <img src="docs-public/images/admin/01-dashboard-overview.jpg" alt="Rover-Admin 仪表盘概览" width="100%">
+</p>
+
+截图来自真实运行的本地演示进程，指标由实际 HTTP 模拟请求产生。
+
+<p align="center">
+  <img src="docs-public/images/admin/11-metrics-global.jpg" alt="Rover-Admin 完整指标诊断" width="100%">
 </p>
 
 <div align="center">
@@ -80,7 +86,8 @@ Rover-Suite 面向多单体、旁路服务和混合语言服务逐渐变多的�
 
 - 当前版本：`1.0.0-SNAPSHOT` 单机预览版。
 - Nameserver 当前是纯内存软状态，重启后的实例由客户端重新注册。
-- WebSocket/SSE、分组发现、冷启动恢复和集群高可用不应按已实现能力理解。
+- 已支持按组发现和 `targets` 加权版本路由；`group` 是路由过滤维度，不是租户安全边界。
+- Gateway 不代理 WebSocket/SSE，也不终止客户端 HTTPS。发现链路依赖重新注册与查询对账恢复；尚未实现 Nameserver 高可用和持久化恢复。
 - 默认配置适合本地或可信网络零配置启动；跨越信任边界时，请收紧监听地址并配置协议、管理面 token 和外层 TLS/ACL。
 - SDK 构件暂未发布到 Maven Central；第一个公开 SDK 版本发布前，请从源码构建。
 

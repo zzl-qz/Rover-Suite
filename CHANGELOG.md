@@ -30,11 +30,14 @@ All notable changes to Rover-Suite are documented here. Releases follow
   human approval in the Workbench triggers a deterministic executor that
   re-checks the revision and target weight, commits under the gateway's
   optimistic lock with a pre-persisted `operationId`, reads the route back to
-  verify, and compensates a failed change through the same narrow primitive.
+  verify, and can compensate a successful change when a human requests rollback.
   Unknown outcomes stay `UNCERTAIN` and are resolved by re-querying that same
   `operationId`, never by resubmitting. Persisted in a new `agent_action` table
   (schema v4).
 - Fixed Admin configuration type detection for `gateway.loadbalance.strategy`.
+- Added full Admin metrics diagnostics: global P95/P99, routes, upstreams, version/instance observations, and cumulative reject/retry counters with explicit window and sample semantics.
+- Updated bilingual guides, current `targets` route examples, real Admin screenshots, and the architecture GIF/PNG/interactive diagram for metrics and human-approved Agent changes.
+- Fixed Compose smoke sign-in to send a CSRF token and cookie before checking Admin overview and full metrics.
 
 ## Release process
 

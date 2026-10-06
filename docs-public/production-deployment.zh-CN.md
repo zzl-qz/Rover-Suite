@@ -21,7 +21,7 @@ Rover-Suite 当前定位是轻量单机或小规模内网部署。生产部署�
 ## 最小安全配置
 
 1. Gateway、Nameserver 的业务/协议 token 使用随机非空值。
-2. Gateway admin token 与 Nameserver admin token 使用不同随机值；Admin 携带对应管理 token。
+2. 协议 token 与管理 token 分开。当前 Admin 只有一个 `admin-token`；同一 Admin 同时管理 Gateway/Nameserver 时，该值需与两端管理 token 一致。
 3. 管理端口只允许运维网段访问，Admin 不直接暴露公网。
 4. HTTP/TCP 前放置 TLS 终止、ACL 或 VPN；token 本身不加密链路。Gateway 到上游默认是明文 HTTP。调用方 HTTPS 在反向代理上终止。上游地址必须是 `https://` 时，再把 `rover.gateway.proxy.outbound` 设为 `jdk` 并重启；吞吐会回到 JDK 出站那一档。
 5. 关闭不使用的 HTTP Registration API 和 CORS。
@@ -89,7 +89,8 @@ curl -fsS -H "X-Rover-Admin-Token: YOUR_TOKEN" http://GW_HOST:80/_manage/health
 
 - 先跑备份脚本：`./deploy/scripts/backup-overlays.sh`（或指向你的 config 目录）
 - 备份 `config/*overlay.json` 和静态路由配置。
+- Admin 显式配置 `rover.admin.log-store-path` 并保留该目录；停 Admin 后备份 `<路径>.mv.db`，同时保留模型配置，主密钥独立备份。Overlay 脚本不包含记录库和密钥。
 - 先在同版本 Gateway/Nameserver 上验证 Admin API / `_manage/health`。
 - 滚动升级时确保协议 token 和管理 token 不变。
-- 升级后检查 `/api/overview`、路由数量、健康实例数和错误率。
+- 登录 Admin 后检查 `/api/overview`、完整指标诊断、路由数量、健康实例数和错误率；认证方法见 [Admin API](./admin-api.zh-CN.md#鉴权会话与-csrf)。
 - 发布冒烟：`./deploy/scripts/smoke-compose.sh`（需本机 Docker）。

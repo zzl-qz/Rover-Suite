@@ -35,5 +35,7 @@ rover:
     routes:
       - id: demo-api
         businessPrefix: /api
-        serviceName: demo-service
+        targets:
+          - serviceName: demo-service
+            weight: 100
         stripPrefix: ""

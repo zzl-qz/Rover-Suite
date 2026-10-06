@@ -1,8 +1,8 @@
 # Rover-Admin API
 
 Admin API is same-origin with the console at `http://127.0.0.1:9090` and all paths use the `/api`
-prefix. Admin is a static console plus an aggregation layer; it stores no business data of its own and
-calls the Gateway and Nameserver manage APIs.
+prefix. Admin calls the Gateway and Nameserver manage APIs without owning their business configuration. Its local
+record store persists sign-in accounts, Agent conversations, investigation evidence, and controlled change records.
 
 Console pages and `/api/*` require sign-in: pages redirect to `/login.html` and API calls return
 `401`. The account is the `admin_user` row in the record store. The default username and password are
@@ -21,8 +21,11 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | GET | `/api/metrics` | Full Gateway snapshot, including global P99, routes, upstreams and cumulative rejects/retries; uses the Gateway-configured `windowSeconds` |
 | GET | `/api/metrics/routes?routeId=..&range=60\|300` | Route × instance observations, declared targets, per-version rollup and declared/observed version comparison |
 | GET | `/api/routes` | Gateway route list |
+| POST | `/api/routes/preview` | Validate and preview a full candidate table, body `{"routes":[...]}`, without applying it |
+| POST | `/api/routes/targets/weight` | Change one target weight: `routeId`, `serviceName`, `group`, `weight`, `revision`, optional `operationId` |
+| POST | `/api/routes/rollback` | Apply a retained snapshot as a new revision: `toRevision`, current `revision`, optional `operationId` |
 | POST | `/api/routes` | Create or update a route; body is the route object |
-| DELETE | `/api/routes?businessPrefix=/api/demo` | Delete a route by business prefix |
+| DELETE | `/api/routes?businessPrefix=/api/demo&revision=0` | Delete a route by business prefix |
 | GET | `/api/routes/operations/{operationId}` | Route write-operation record: after a write times out, reuse the same `operationId` to confirm whether it was applied (`APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` / `UNKNOWN`) |
 | GET | `/api/instances` | Nameserver registered instances |
 | GET | `/api/nameserver/metrics` | Nameserver metric snapshot |
@@ -38,6 +41,12 @@ restricted by bind address, firewall, reverse proxy, or VPN.
 | GET | `/api/agent/tasks/{taskId}/events` | Task event stream (SSE): replay `SNAPSHOT`, then push structured events |
 | POST | `/api/agent/tasks/{taskId}/cancel` | Cooperative cancel of a task that is still running: 404 when the task is unknown or not owned, 409 `TASK_NOT_CANCELLABLE` when it has finished, 200 once it is marked cancelled and its thread is interrupted |
 | POST | `/api/agent/events/ingest` | Event ingestion: turn one alert into an automatic investigation (route + window + suspicion); `202` returns a task handle |
+| GET | `/api/agent/actions/sessions/{sessionId}` | Current user's session changes, newest first |
+| GET | `/api/agent/actions/{actionId}` | Latest change state |
+| POST | `/api/agent/actions/{actionId}/approve` | Approve and synchronously execute a weight change with read-back verification |
+| POST | `/api/agent/actions/{actionId}/reject` | Reject a pending change |
+| POST | `/api/agent/actions/{actionId}/rollback` | Compensate a successful change and verify the result |
+| POST | `/api/agent/actions/{actionId}/resolve` | Resolve an uncertain result using the original operationId |
 | GET | `/api/auth/status` | Sign-in state and CSRF token; public |
 | POST | `/login` | Form sign-in (`username`, `password`, `_csrf`); on success 302 to `redirect` or `/`, on failure 302 to `/login.html?error=1` |
 | POST | `/api/logout` | Sign out; returns 200. POST only |
@@ -82,8 +91,9 @@ execution path:
 
 `taskType` is the shape users see, so it always matches what actually happened. There is no `intent` field: the main
 path performs no intent pre-classification — which of querying, explaining, or investigating a sentence means is
-decided by the model during the conversation, so there is no verdict to display. There is no action plan either:
-no write capability exists in the catalogue, and an `ACTION_PLAN` shape never existed.
+decided by the model during the conversation, so there is no verdict to display. A proposal tool can register a
+pending version-weight change, but the model cannot submit management writes. Change records do not introduce a
+third `taskType`.
 
 The task event stream `GET /api/agent/tasks/{taskId}/events` serves every structured event of a task as
 `text/event-stream`: the SSE event name is the event type and the data is the full event envelope
@@ -140,7 +150,8 @@ and how to answer; the table lists what actually happens):
 | `为什么 /api/demo/tt 调用失败？` | Conversation: the model decides which facts to query (route → instances → metrics → traces) and composes the answer; a resolved target groups the task under an incident |
 | `你能做什么？` | Conversation: the model answers from the real capability set (route / instance / gateway metrics / trace / configuration / registry events / historical logs / operations knowledge) |
 | `你好` / chit-chat | Conversation: nothing is queried; no "please provide a request path" clarification |
-| `把 order-03 摘掉` | Read-only boundary: no write capability exists, so the model can only return read-only facts and rationale instead of a pretend-executable remediation plan |
+| `把 order-03 摘掉` | Capability boundary: controlled changes support version weights, not instance removal; the model can query facts and explain the limit |
+| `把 order-api 的 v2 流量占比改为 20%` | Read the route and file a pending weight change; execution requires human approval |
 | `每天 9 点自动巡检并发邮件` | Capability boundary: scheduling and notification are not wired up; says so plainly |
 
 Planning limits (rounds / capability calls / steps per round) are documented in `configuration-reference`;
@@ -229,27 +240,35 @@ curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 
 ## Request examples
 
+These examples assume sign-in using the authentication section below: `$jar` is the cookie file and `$token` is a fresh post-login CSRF token.
+
 Read a one-minute dashboard window:
 
 ```bash
-curl "http://127.0.0.1:9090/api/live?range=60"
+curl -b "$jar" "http://127.0.0.1:9090/api/live?range=60"
 ```
 
 Create or update a route:
 
 ```bash
+revision=$(curl -s -b "$jar" http://127.0.0.1:9090/api/routes | sed -E 's/.*"revision":([0-9]+).*/\1/')
+operationId="manual-$(date +%s)-$RANDOM-$RANDOM"
 curl -X POST "http://127.0.0.1:9090/api/routes" \
-  -H "Content-Type: application/json" \
-  -d '{"id":"demo-api","businessPrefix":"/api","serviceName":"demo-service"}'
+  -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
+  -d "{\"revision\":$revision,\"operationId\":\"$operationId\",\"id\":\"demo-api\",\"businessPrefix\":\"/api\",\"targets\":[{\"serviceName\":\"demo-service\",\"weight\":100}],\"stripPrefix\":\"\"}"
 ```
 
 Update a configuration entry:
 
 ```bash
 curl -X POST "http://127.0.0.1:9090/api/configs" \
-  -H "Content-Type: application/json" \
+  -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
   -d '{"component":"gateway","key":"gateway.trace.sampleRate","value":"1"}'
 ```
+
+Create/update, target-weight, and rollback requests must carry the revision read from Gateway. Use a new operationId
+for a new write and query that same ID after a timeout; Admin generates one when it is omitted. Delete requires the
+prefix and revision, with an operationId generated by Admin.
 
 Route bodies must match the Gateway route model. For configuration updates `component` is either
 `gateway` or `nameserver`, and `key`/`value` are validated again by the downstream component.
@@ -281,11 +300,11 @@ Scripted calls with a signed-in session:
 
 ```bash
 jar=$(mktemp)
-token=$(curl -s -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken":"([^"]*)".*/\1/')
+token=$(curl -s -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
 curl -s -b "$jar" -c "$jar" -o /dev/null -w '%{http_code}\n' \
   -d "username=admin&password=<your-password>&_csrf=$token" http://127.0.0.1:9090/login
 # The token is rotated after sign-in; read it again before writing
-token=$(curl -s -b "$jar" -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken":"([^"]*)".*/\1/')
+token=$(curl -s -b "$jar" -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
 curl -s -b "$jar" -H "X-XSRF-TOKEN: $token" http://127.0.0.1:9090/api/model/config
 ```
 
@@ -295,6 +314,28 @@ without a session this returns `401`):
 ```bash
 curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 ```
+
+## Controlled change API
+
+Only the proposal tool in an Agent conversation creates a change. Human endpoints inspect and handle it. The only
+supported type is a version-weight adjustment; instance removal, route deletion, process restart, and arbitrary
+configuration writes are unavailable. Ownership comes from the authenticated user; all POST requests require CSRF.
+
+| Operation | Allowed state | Behavior |
+| --- | --- | --- |
+| `approve` / `reject` | `PENDING_APPROVAL` | Execute after approval, or reject without a write |
+| `rollback` | `SUCCESS` | Precheck the current weight, then compensate to the previous value without overwriting later edits |
+| `resolve` | `UNCERTAIN` | Confirm the original operationId; do not retry blindly under a new ID |
+
+Handling returns 200 with the latest change record. `SUCCESS` / `ROLLED_BACK` require a matching read-back;
+failure or uncertainty is expressed in the record's status. Approval and rollback wait for precheck, submission,
+and verification, so HTTP 200 alone does not mean the change succeeded. Missing or inaccessible records return
+404; invalid state or concurrent handling returns 409.
+
+Key fields are `actionId`, `sessionId`, `taskId`, `type`, `status`, `routeId`, `serviceName`, `group`,
+`beforeWeight` / `desiredWeight`, `requestedValue` / `requestedUnit`, `beforeTrafficPercent` /
+`desiredTrafficPercent`, `expectedRevision` / `appliedRevision`, `applyOperationId` / `rollbackOperationId`,
+`preview`, `impact`, `errorMessage`, and approval/timestamp fields. See [Ops Agent](./ops-agent.md) for the workflow.
 
 ## Model configuration API
 
@@ -311,12 +352,17 @@ curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 | `apiKeyMasked` | Either `******` or empty; plain text and cipher text never appear in any response |
 | `apiKeyReadable` / `masterKeyState` | Whether the key can be decrypted; `MISMATCH` means the key must be entered again in the console |
 | `configFile` | Absolute path of the configuration file, for backup and troubleshooting |
-| `presets` | Built-in presets (DeepSeek, Zhipu GLM) that fill the console dropdown |
+| `vendor` / `vendors` | Current vendor and server mappings: `deepseek`, `zhipu`, `custom`, with URL and main/fast models |
+| `fastConfigured` / `fastBaseUrl` / `fastModel` / `fastApiKeyMasked` | Optional fast model and masked key; falls back to the main model when absent |
+| `presets` / `fastPresets` | Model presets retained for older callers; the current page uses `vendors` |
 
-`POST /api/model/config` accepts the same field names:
+`POST /api/model/config` accepts `enabled`, `vendor`, `apiKey`, `clearApiKey`, and `timeoutSeconds`.
+For `vendor=deepseek|zhipu`, the server supplies URLs and model names. For `vendor=custom`, also supply
+`baseUrl`, `model`, and optional `fastBaseUrl`, `fastModel`, `fastApiKey`, `clearFastApiKey`. Older requests
+without vendor can still infer it from the submitted URL.
 
-- No `apiKey` field, or `******`: keep the stored key. Only `"clearApiKey":true` clears it (for local
-  models without authentication).
+- Omit `apiKey`, or send `******`, to keep the stored key. Sending an empty string or `"clearApiKey":true`
+  clears it. The console omits a blank key field to retain the stored key.
 - `enabled=false` only disables model capability while keeping the configuration; when enabled, both
   `baseUrl` and `model` are required, and the URL must start with `http://` or `https://`.
 - A successful save applies the new client immediately and also returns `message` ("model configuration
@@ -347,7 +393,8 @@ proving that what is applied is exactly what was saved.
 ## Lightweight usage notes
 
 - `/api/live` polls roughly once per second only while the dashboard is visible; background tabs and
-  other pages do not keep pulling full snapshots.
+  other pages do not keep polling this endpoint.
+- `/api/metrics` and `/api/metrics/routes` refresh about every 10 seconds while diagnostics is visible; the global window follows Gateway configuration and the route window accepts 60/300 seconds.
 - `/api/overview` suits low-frequency liveness checks; do not use it as a high-frequency collector.
 - `/api/traces` volume is bounded by the Gateway sample rate and ring buffer; for slow-request
   investigations prefer `slow=1` rather than leaving full sampling on.

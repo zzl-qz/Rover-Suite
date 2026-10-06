@@ -5,6 +5,7 @@
 # 环境变量：
 #   SMOKE_KEEP=1     结束后不 down（排障用）
 #   SMOKE_TIMEOUT=120 等待就绪秒数
+#   SMOKE_ADMIN_USER / SMOKE_ADMIN_PASSWORD 控制台账号（默认 admin）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -13,10 +14,12 @@ COMPOSE=(docker compose -f "$COMPOSE_FILE")
 TIMEOUT="${SMOKE_TIMEOUT:-120}"
 ADMIN_TOKEN="${SMOKE_ADMIN_TOKEN:-rover-compose-gateway-admin-token}"
 HEADER=("X-Rover-Admin-Token: $ADMIN_TOKEN")
+COOKIE_JAR="$(mktemp)"
 
 cd "$ROOT/deploy/docker"
 
 cleanup() {
+  rm -f "$COOKIE_JAR"
   if [[ "${SMOKE_KEEP:-0}" == "1" ]]; then
     echo "SMOKE_KEEP=1，保留容器"
     return
@@ -56,7 +59,16 @@ wait_http() {
 echo "==> wait ready (timeout=${TIMEOUT}s)"
 wait_http "http://127.0.0.1:8889/_manage/health" "nameserver-health" admin
 wait_http "http://127.0.0.1:8080/_manage/health" "gateway-health" admin
-wait_http "http://127.0.0.1:9090/api/overview" "admin-overview"
+wait_http "http://127.0.0.1:9090/api/auth/status" "admin-auth"
+CSRF_TOKEN="$(curl -fsS -c "$COOKIE_JAR" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')"
+curl -fsS -b "$COOKIE_JAR" -c "$COOKIE_JAR" \
+  --data-urlencode "username=${SMOKE_ADMIN_USER:-admin}" \
+  --data-urlencode "password=${SMOKE_ADMIN_PASSWORD:-admin}" \
+  --data-urlencode "_csrf=$CSRF_TOKEN" \
+  http://127.0.0.1:9090/login >/dev/null
+curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:9090/api/overview >/dev/null
+curl -fsS -b "$COOKIE_JAR" http://127.0.0.1:9090/api/metrics >/dev/null
+echo "ok: admin sign-in, overview, metrics"
 
 echo "==> business path"
 BUSINESS_OK=0

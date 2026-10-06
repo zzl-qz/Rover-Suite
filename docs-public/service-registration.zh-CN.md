@@ -91,7 +91,7 @@ rover:
 | `service-name` | `spring.application.name` | 注册服务名 |
 | `instance-id` | 解析后的 `host:port` | 服务内唯一实例键 |
 | `host`、`port` | 自动探测 | 向 Gateway 公布的地址 |
-| `group`、`zone`、`metadata` | 空 | 部署与自定义元数据；当前版本建议 `group` 保持为空 |
+| `group`、`zone`、`metadata` | 空 | 部署与自定义元数据；使用分组路由时，`group` 必须匹配对应 `targets` 项 |
 | `weight` | `100` | 负载均衡权重 |
 | `ephemeral` | `true` | 断连/过期后摘除 |
 | `token` | 空 | Nameserver 协议 token |

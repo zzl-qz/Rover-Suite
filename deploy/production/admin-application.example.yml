@@ -12,7 +12,6 @@ rover:
   admin:
     gateway-url: http://10.0.10.12:80
     nameserver-manage-url: http://10.0.10.11:8889
-    # 若 Gateway / Nameserver 的 adminToken 不同，当前 Admin 只支持配一个；
-    # 生产建议先统一管理 token，或只管理一侧并分两个 Admin 进程（按需）。
-    # 与 Gateway adminToken 保持一致（调用管理口用 X-Rover-Admin-Token）
+    log-store-path: "${ROVER_ADMIN_LOG_STORE_PATH:./rover-logs/rover}"
+    # 当前 Admin 只有一个管理 token，需与所管理的两端一致。
     admin-token: "REPLACE_WITH_LONG_GATEWAY_ADMIN_TOKEN"

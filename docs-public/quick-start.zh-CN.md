@@ -69,7 +69,9 @@ rover:
     routes:
       - id: demo-api
         businessPrefix: /api
-        serviceName: demo-service
+        targets:
+          - serviceName: demo-service
+            weight: 100
         stripPrefix: ""
 ```
 
@@ -135,7 +137,7 @@ Nameserver 会立即删除已注销实例；当前 Gateway 对最后一个实例
 | :--- | :--- |
 | Gateway 端口绑定失败 | 确认外部 Gateway 配置使用 `8080`，而不是内置默认值 `80`。 |
 | Gateway 提示无可用实例 | 先启动 Nameserver，再确认 demo 与 Gateway 都使用 `127.0.0.1:8888`。Java 服务每 5 秒固定重试；如果 Gateway 先于 Nameserver 启动，当前版本最迟在下一次 30 秒对账时补齐发现，也可以直接重启 Gateway。 |
-| 匹配不到路由 | 检查 `businessPrefix: /api`、`serviceName: demo-service`，并确认没有遗留的 `config/routes.overlay.json` 覆盖 YAML 路由。 |
+| 匹配不到路由 | 检查 `businessPrefix: /api`、`targets` 中的 `serviceName: demo-service`，并确认没有遗留的 `config/routes.overlay.json` 覆盖 YAML 路由。 |
 | Gateway 连接业务服务被拒绝 | `rover.nameserver.host` 需要是 Gateway 可达地址。只有三个进程都在同一台机器上时才能使用 `127.0.0.1`。 |
 | 鉴权失败 | Nameserver、Starter 与 Gateway 发现需要使用同一个协议 token。参见[使用指南](./user-guide.zh-CN.md)。 |
 

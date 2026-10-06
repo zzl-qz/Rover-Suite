@@ -12,13 +12,15 @@
   <img src="./assets/rover-suite-architecture.gif" alt="Rover-Suite 动态系统架构" width="100%">
 </p>
 
-> 动态信号覆盖服务注册、发现对账、请求处理和 Admin 管理链路。如果当前阅读器不播放 GIF，请使用下方的静态预览或可交互架构图。
+> 动态信号覆盖请求与发现、完整指标诊断、Agent 调查与人工审批；仅示意依赖和数据方向，不代表实时流量或自动批准。如果阅读器不播放 GIF，请使用静态预览或交互图。
 
 <div align="center">
 
 [静态架构图](./assets/rover-suite-architecture.png) · [打开可交互架构图](./rover-suite-architecture-editorial.html)
 
 </div>
+
+GIF、PNG、[SVG](./assets/rover-suite-architecture.svg) 与交互图使用同一份[架构源文件](./assets/rover-suite-architecture.architecture.json)。交互图可按「请求与发现」「完整指标诊断」「调查与人工审批」三个章节查看。
 
 ## 1. 概览
 
@@ -45,7 +47,9 @@ Rover-Gateway
 | Gateway | 路由、本地发现缓存、负载均衡、反向代理与 Filter |
 | Java Client / Starter | TCP 注册、心跳、重连、状态重放与 Spring Boot 生命周期集成 |
 | HTTP Registrar | 最小化的跨语言注册、心跳、重试与尽力注销 |
-| Admin | 可选管理台：仪表盘可见时 1 秒拉 live 快照，切走/后台停轮询；不进转发热路径 |
+| Admin | 可选管理台：实时 Dashboard、完整指标诊断、模型配置与人工审批；不进入转发热路径 |
+| Ops Agent | 在 Admin JVM 内查询事实、调查告警和登记待审批的版本权重变更 |
+| 本地记录库 | 配置路径后以 H2 持久化会话、证据、变更和遥测；独立于 Nameserver 注册表 |
 
 Nameserver 有意保留两种服务提供方传输方式，但只维护一套注册模型：
 
@@ -107,6 +111,14 @@ flowchart TB
 `rover.nameserver.token`、收紧监听地址或增加外层网络策略。
 
 ---
+
+### 2.1 Admin 与 Ops Agent
+
+Admin 通过管理 API 读取 Gateway 与 Nameserver；Dashboard 可见时每秒请求 live，指标诊断可见时约每 10 秒读取完整快照。全局展示 P99，路由/实例展示 P95；版本耗时取实例 P95 的最大值。统计口径见 [Admin 手册](./admin-guide.zh-CN.md)。
+
+Ops Agent 与 Admin 同一 JVM 运行。可用模型参与对话、规划和解释，只读工具查询运行事实，提议工具登记待审批权重变更。人工批准后，执行器核对 revision 和原权重，提交并回读；成功后可人工补偿回滚，结果未知时按原 operationId 确认。模型不能直接调用写端口。流程见 [Ops Agent](./ops-agent.zh-CN.md) 与 [Admin API](./admin-api.zh-CN.md)。
+
+Admin 配置记录库路径后，会话、调查证据、变更与遥测写入本地 H2；Nameserver 注册表仍在内存。未配置模型时对话如实提示不可用，告警调查可使用规则兜底。
 
 ## 3. 服务提供方注册面
 
@@ -266,11 +278,12 @@ Gateway 启动
 真正的 pull 链路是 Gateway 查询与对账。Push 是低延迟通知路径；query 是修复路径，用于启动、重连、
 推送丢失或被拒绝，以及 `epoch` / `revision` 对账。
 
-这不是强实时一致性承诺。当前实现有两个明确边界：最后一个实例产生的空快照会先被 Gateway 的推空保护拒绝，
-最迟到下一次周期对账才清空；Gateway 启动时如果 Nameserver 不可用，首次订阅失败也可能到下一次对账才恢复。
-默认 `reconcileIntervalMs=30000`，所以两类窗口最长约 30 秒。本地 Compose 本场停最后一个实例后立刻 502，约 17 秒后变为 `503 NO_UPSTREAM`。
+这不是强实时一致性承诺。最后一个实例注销或过期后，服务端推进 revision 并推送空名单；Gateway 接受更新的空快照后清空该组。
+只有不比本地新的空包才会被推空保护拒绝。丢失推送、连接中断或首次订阅失败时，由周期对账修复，默认
+`reconcileIntervalMs=30000`；不要把旧测试中的约 17 秒延迟当作当前固定摘除时间。
 
-`group` 是查询与订阅过滤条件，不属于实例唯一键。当前多组快照推送隔离仍在收口，默认空 group 是推荐使用方式。
+`group` 是查询、订阅和版本路由的过滤维度，不属于实例唯一键。推送与本地缓存按 service+group 分键，具体组没有实例时
+不会回落到其他组。它可用于版本或环境区分，但不提供租户鉴权，详见 [服务注册指南](./service-registration.zh-CN.md#23-当前分组边界)。
 
 相关实现：
 
@@ -394,11 +407,11 @@ flowchart TB
 - `*-core` 模块保存业务逻辑。
 - `*-bootstrap` 模块是进程入口。
 - `rover-admin` 是通过 HTTP 调用管理 API 的可选控制台，编译时不依赖 Nameserver 或 Gateway core 模块。
-- `rover-agent-core` 是 Ops Agent 的领域与规则层（领域对象、只读端口、中立快照），不依赖 Spring / Jackson / Spring AI。
+- `rover-agent-core` 是 Ops Agent 的领域与规则层（领域对象、只读快照与受控变更端口），不依赖 Spring / Jackson / Spring AI。
 - `rover-agent-runtime` 承载 Spring AI 与 Spring AI Alibaba Graph 编排；只被 `rover-admin` 依赖，当前与 Admin 同一 JVM 运行。
   详见 [Rover Ops Agent](ops-agent.zh-CN.md#61-代码布局与模块边界)。
 - `rover-agent-runtime` 的运行层只依赖端口 `ChatModelGateway`（`com.rover.agent.runtime.llm.ChatModelGateway`，默认实现 `NoopChatModelGateway`）；
-  Admin 侧提供 OpenAI 兼容适配器 `AdminChatModelGateway`（热切换、三态），以及 `ModelConfigStore`、`SecretCipher`、`ModelPresets`。
+  Admin 侧提供 OpenAI 兼容适配器 `AdminChatModelGateway`（热切换、三态），以及 `ModelConfigStore`、`SecretCipher`、`ModelVendor` 和 `ModelPresets`。
   Spring AI 依赖只出现在 `rover-agent-runtime` 与 `rover-admin` 两个模块。
 - Admin 控制台鉴权：`AdminSecurityConfiguration` 提供 `SecurityFilterChain`；登录限流过滤器 `LoginAttemptGuardFilter`
   插在 `UsernamePasswordAuthenticationFilter` 之前；登录态查询在 `AdminAuthController`；登出由 Spring Security 的 `LogoutFilter` 处理。

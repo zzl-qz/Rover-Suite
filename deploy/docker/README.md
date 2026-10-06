@@ -14,6 +14,11 @@ docker compose up --build
 - Gateway demo: <http://127.0.0.1:8080/api/hello>
 - Nameserver HTTP: <http://127.0.0.1:8889>
 
+Gateway 动态路由使用 `targets: [{serviceName, group, weight}]`；本例未指定 group，目标权重为 100。
+在 Admin「指标诊断」查看全局 P99 和完整上游；路由「诊断」入口可查看版本与实例窗口指标。
+`smoke-compose.sh` 会以默认 `admin` 账号登录，再检查 overview 和完整指标；自定义账号可设置 `SMOKE_ADMIN_USER`、`SMOKE_ADMIN_PASSWORD`。
+操作与统计口径见 [Admin 使用手册](../../docs-public/admin-guide.zh-CN.md)。
+
 停止并清理：
 
 ```bash
@@ -62,7 +67,9 @@ docker compose down
 | 4 | 停 Nameserver | 约 2s 内仍能转到缓存里的两个实例 |
 | 5 | 停最后一个实例 | 立刻 502（还打死人）；约 **17s** 首次 `503 NO_UPSTREAM` |
 
-强杀快，不是心跳变成了 0。心跳要用「连接还在、心跳停」才能看到。最后一个实例的空快照保护本场大约二十秒，上限仍按对账间隔约 30s 理解。
+以上是 2026-08-26 的历史测量，保留作对照。当前实现会接纳更新 revision 的空推送并清空该组，
+不能把旧场景的约 17 秒当成当前固定摘除延迟；只有丢失推送、连接中断或旧包被拒时才靠对账修复。
+强杀快不代表心跳超时为 0；心跳过期需用「连接还在、心跳停」验证。
 
 hello 响应里的 `host` 来自 `rover.nameserver.host`，用来区分两个 demo。默认四件套仍然只有一个 demo，日常 `compose up` 不用叠 `docker-compose.fault.yml`。
 

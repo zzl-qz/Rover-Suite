@@ -1,0 +1,396 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Rover-Suite 系统架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "views": [
+      {
+        "id": "http-traffic",
+        "label": "请求与发现",
+        "focus": [
+          "http_client",
+          "gateway",
+          "upstream",
+          "providers",
+          "nameserver",
+          "discovery"
+        ],
+        "note": "业务请求只读取 Gateway 本地实例缓存；服务提供方注册到 Nameserver，推送与查询对账维护缓存。"
+      },
+      {
+        "id": "metrics-diagnostics",
+        "label": "完整指标诊断",
+        "focus": [
+          "operator_console",
+          "admin_api",
+          "gateway",
+          "record_store"
+        ],
+        "note": "Admin 展示 live 与 full 快照，包含全局 P99、路由版本、实例与累计拒绝/重试；遥测采集另存历史证据。"
+      },
+      {
+        "id": "agent-approval",
+        "label": "调查与人工审批",
+        "focus": [
+          "operator_console",
+          "admin_api",
+          "ops_agent",
+          "model_service",
+          "record_store",
+          "gateway"
+        ],
+        "note": "Agent 查询事实并登记待审批权重变更；人工批准后由确定性执行器预检、提交和回读，可补偿回滚。"
+      }
+    ],
+    "viewBox": [
+      1390,
+      996
+    ]
+  },
+  "components": [
+    {
+      "id": "nacos_adapter",
+      "type": "external",
+      "label": "Nacos（可选）",
+      "sublabel": "服务发现适配器",
+      "pos": [
+        50,
+        95
+      ],
+      "size": [
+        200,
+        68
+      ]
+    },
+    {
+      "id": "discovery",
+      "type": "database",
+      "label": "Gateway Discovery",
+      "sublabel": "service + group 本地实例缓存",
+      "pos": [
+        380,
+        95
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "nameserver",
+      "type": "backend",
+      "label": "Rover-Nameserver",
+      "sublabel": "注册 / 租约 / 纯内存注册表",
+      "pos": [
+        710,
+        95
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "providers",
+      "type": "external",
+      "label": "服务提供方",
+      "sublabel": "Java Starter / 跨语言 Registrar",
+      "pos": [
+        1050,
+        95
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "http_client",
+      "type": "external",
+      "label": "业务客户端",
+      "sublabel": "HTTP 请求",
+      "pos": [
+        50,
+        345
+      ],
+      "size": [
+        200,
+        68
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "Rover-Gateway",
+      "sublabel": "保护 / 路由 / 加权版本 / 代理",
+      "pos": [
+        380,
+        345
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "upstream",
+      "type": "backend",
+      "label": "业务服务实例",
+      "sublabel": "按 targets / group 选择版本",
+      "pos": [
+        1050,
+        345
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "operator_console",
+      "type": "frontend",
+      "label": "Admin 控制台",
+      "sublabel": "指标诊断 / Agent / 人工审批",
+      "pos": [
+        50,
+        640
+      ],
+      "size": [
+        200,
+        68
+      ]
+    },
+    {
+      "id": "admin_api",
+      "type": "backend",
+      "label": "Admin API / 审批执行",
+      "sublabel": "聚合 / 遥测 / 预检与回读",
+      "pos": [
+        380,
+        640
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "ops_agent",
+      "type": "backend",
+      "label": "Ops Agent",
+      "sublabel": "只读调查 / 登记待审批变更",
+      "pos": [
+        710,
+        640
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "model_service",
+      "type": "external",
+      "label": "模型服务（可选配置）",
+      "sublabel": "DeepSeek / GLM / 自定义",
+      "pos": [
+        1050,
+        640
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "record_store",
+      "type": "database",
+      "label": "本地记录库（H2）",
+      "sublabel": "会话 / 证据 / 变更 / 遥测",
+      "pos": [
+        710,
+        860
+      ],
+      "size": [
+        220,
+        68
+      ],
+      "tag": "配置路径后持久化"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Gateway 进程",
+      "wraps": [
+        "discovery",
+        "gateway"
+      ],
+      "pad": 24
+    },
+    {
+      "kind": "security-group",
+      "label": "Admin 进程（可选）",
+      "wraps": [
+        "admin_api",
+        "ops_agent"
+      ],
+      "pad": 24
+    }
+  ],
+  "connections": [
+    {
+      "id": "traffic-entry",
+      "from": "http_client",
+      "to": "gateway",
+      "label": "HTTP",
+      "variant": "emphasis"
+    },
+    {
+      "id": "traffic-proxy",
+      "from": "gateway",
+      "to": "upstream",
+      "label": "HTTP 反向代理",
+      "variant": "emphasis"
+    },
+    {
+      "id": "provider-registration",
+      "from": "providers",
+      "to": "nameserver",
+      "label": "注册 / 心跳"
+    },
+    {
+      "id": "discovery-query",
+      "from": "discovery",
+      "to": "nameserver",
+      "label": "查询 / 订阅",
+      "variant": "dashed"
+    },
+    {
+      "id": "snapshot-push",
+      "from": "nameserver",
+      "to": "discovery",
+      "label": "快照推送",
+      "labelAt": [
+        655,
+        175
+      ]
+    },
+    {
+      "id": "nacos-snapshot",
+      "from": "nacos_adapter",
+      "to": "discovery",
+      "label": "事件快照",
+      "variant": "dashed"
+    },
+    {
+      "id": "local-instance-read",
+      "from": "discovery",
+      "to": "gateway",
+      "label": "本地缓存",
+      "labelAt": [
+        490,
+        250
+      ]
+    },
+    {
+      "id": "operator-actions",
+      "from": "operator_console",
+      "to": "admin_api",
+      "label": "诊断 / 审批"
+    },
+    {
+      "id": "gateway-management",
+      "from": "admin_api",
+      "to": "gateway",
+      "label": "快照 / 批准后调权重",
+      "variant": "security",
+      "labelAt": [
+        490,
+        510
+      ]
+    },
+    {
+      "id": "agent-session",
+      "from": "admin_api",
+      "to": "ops_agent",
+      "label": "会话 / 调查"
+    },
+    {
+      "id": "agent-registry-read",
+      "from": "ops_agent",
+      "to": "nameserver",
+      "label": "只读注册信息",
+      "variant": "dashed",
+      "via": [
+        [
+          820,
+          560
+        ],
+        [
+          1340,
+          560
+        ],
+        [
+          1340,
+          250
+        ],
+        [
+          820,
+          250
+        ]
+      ]
+    },
+    {
+      "id": "model-call",
+      "from": "ops_agent",
+      "to": "model_service",
+      "label": "模型调用"
+    },
+    {
+      "id": "agent-records",
+      "from": "ops_agent",
+      "to": "record_store",
+      "label": "会话 / 证据 / 提议",
+      "labelAt": [
+        820,
+        782
+      ]
+    },
+    {
+      "id": "admin-records",
+      "from": "admin_api",
+      "to": "record_store",
+      "label": "遥测 / 变更记录"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "完整指标",
+      "items": [
+        "全局 P95/P99；版本与实例展示 P95",
+        "窗口请求与累计拒绝 / 重试分开读取"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "受控变更",
+      "items": [
+        "Agent 只提议版本权重，人工批准后预检 → 提交 → 回读",
+        "结果未知按原 operationId 确认；成功后可补偿回滚"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "运行与存储",
+      "items": [
+        "Admin / Agent 不进入请求转发热路径",
+        "Nameserver 注册表在内存；Admin 记录库可持久化"
+      ]
+    }
+  ]
+}

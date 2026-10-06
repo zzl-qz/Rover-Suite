@@ -30,6 +30,8 @@ rover:
     routes:
       - id: nacos-demo-api
         businessPrefix: /api/nacos
-        serviceName: demo-service
-        group: DEFAULT_GROUP
+        targets:
+          - serviceName: demo-service
+            group: DEFAULT_GROUP
+            weight: 100
         stripPrefix: /api/nacos

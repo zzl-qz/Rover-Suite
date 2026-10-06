@@ -1,6 +1,6 @@
 # Rover-Admin API
 
-Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有接口前缀为 `/api`。Admin 本身是静态控制台加聚合层，默认不保存业务数据；它会调用 Gateway 和 Nameserver 的管理接口。
+Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有接口前缀为 `/api`。Admin 调用 Gateway 和 Nameserver 管理接口，不保存它们的业务配置；本地记录库保存登录账号、Agent 会话、调查证据和受控变更记录。
 
 控制台页面与 `/api/*` 必须先登录：未登录时页面跳 `/login.html`，接口回 `401`。账号在记录库的
 `admin_user` 表，默认用户名和口令都是 `admin`，多人共用这一个账号。
@@ -17,8 +17,11 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | GET | `/api/metrics` | Gateway 全量快照：全局 P99、路由、上游及累计拒绝/重试；使用网关配置的 `windowSeconds` |
 | GET | `/api/metrics/routes?routeId=..&range=60\|300` | 路由 × 实例窗口观测、声明版本、版本汇总及声明/观测版本对比 |
 | GET | `/api/routes` | Gateway 路由列表 |
+| POST | `/api/routes/preview` | 校验并预览候选完整路由表；请求体 `{"routes":[...]}`，不提交变更 |
+| POST | `/api/routes/targets/weight` | 修改单个目标权重；`routeId`、`serviceName`、`group`、`weight`、`revision` 与可选 `operationId` |
+| POST | `/api/routes/rollback` | 应用历史快照为新版本；`toRevision`、当前 `revision` 与可选 `operationId` |
 | POST | `/api/routes` | 新增或更新路由，请求体为路由对象 |
-| DELETE | `/api/routes?businessPrefix=/api/demo` | 按业务前缀删除路由 |
+| DELETE | `/api/routes?businessPrefix=/api/demo&revision=0` | 按业务前缀删除路由 |
 | GET | `/api/routes/operations/{operationId}` | 路由写操作记录查询：写请求超时后用同一个 `operationId` 确认是否已执行（`APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` / `UNKNOWN`） |
 | GET | `/api/instances` | Nameserver 注册实例列表 |
 | GET | `/api/nameserver/metrics` | Nameserver 指标快照 |
@@ -34,6 +37,12 @@ Admin API 默认与控制台同源，地址为 `http://127.0.0.1:9090`，所有�
 | GET | `/api/agent/tasks/{taskId}/events` | 任务事件流（SSE）：先补发 `SNAPSHOT`，再按增量推送结构化事件 |
 | POST | `/api/agent/tasks/{taskId}/cancel` | 协作式取消仍在执行的任务：404=任务不存在或不属于当前用户，409=`TASK_NOT_CANCELLABLE`（已结束），200=已标记取消并中断执行线程 |
 | POST | `/api/agent/events/ingest` | 事件接入：把一条告警转成一次自动调查（路由 + 窗口 + 怀疑点），`202` 返回任务句柄 |
+| GET | `/api/agent/actions/sessions/{sessionId}` | 当前用户指定会话的变更记录，按创建时间倒序 |
+| GET | `/api/agent/actions/{actionId}` | 变更最新状态 |
+| POST | `/api/agent/actions/{actionId}/approve` | 批准并同步执行权重变更，提交后回读验证 |
+| POST | `/api/agent/actions/{actionId}/reject` | 拒绝待审批变更 |
+| POST | `/api/agent/actions/{actionId}/rollback` | 对成功变更做补偿回滚并回读验证 |
+| POST | `/api/agent/actions/{actionId}/resolve` | 按原 operationId 回查结果未知的变更 |
 | GET | `/api/auth/status` | 登录态与 CSRF 令牌；免登录 |
 | POST | `/login` | 表单登录（`username`、`password`、`_csrf`）；成功 302 到 `redirect` 或 `/`，失败 302 到 `/login.html?error=1` |
 | POST | `/api/logout` | 登出，成功后回 200；只认 POST |
@@ -68,8 +77,8 @@ Agent 任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED`、`F
   `target`、`required`）与 `executedCapabilities`（实际调用或按事实跳过的只读能力）。
 
 `taskType` 是给用户看的执行形态，必须与实际发生的动作一致。快照里没有 `intent` 这类字段：主路径不做意图预分类，
-「这句话是想查询、解释还是调查」由模型在对话中自行决定，不存在一份需要展示的判定结果，也没有处置计划——
-能力清单里没有任何写能力，`ACTION_PLAN` 这种形态从不存在。
+「这句话是想查询、解释还是调查」由模型在对话中自行决定，不存在一份需要展示的判定结果。
+模型可以调用提案工具登记待人工审批的版本权重变更，但不能直接提交管理写请求；变更记录不增加新的 `taskType`。
 
 任务事件流 `GET /api/agent/tasks/{taskId}/events` 用 `text/event-stream` 推送该任务的全部结构化事件：SSE 事件名即事件类型，
 数据是完整的事件信封（`eventId`、`taskId`、`type`、`timestampMillis`、`payload`）。建连时先补发一份 `SNAPSHOT`
@@ -115,7 +124,8 @@ Agent 任务状态为 `PENDING`、`RUNNING`、`WAITING_INPUT`、`COMPLETED`、`F
 | `为什么 /api/demo/tt 调用失败？` | 智能问答：模型自行决定查哪几项（例如路由 → 实例 → 指标 → 追踪）并组织回答；识别出对象时按对象聚合成事件 |
 | `你能做什么？` | 智能问答：模型回答当前真实能力清单（路由 / 实例 / 网关指标 / 追踪 / 配置 / 注册事件 / 历史日志 / 运维知识） |
 | `你好` / 闲聊 | 智能问答：不查任何数据，直接回答；不会反问「请给出请求路径」 |
-| `把 order-03 摘掉` | 只读边界：能力清单里没有任何写能力，模型只能给出只读事实与依据，不会假装有一份可执行的处置计划 |
+| `把 order-03 摘掉` | 能力边界：当前受控变更只支持版本权重调整，不支持摘实例；模型可查询事实并说明限制 |
+| `把 order-api 的 v2 流量占比改为 20%` | 查询路由并登记待审批权重变更；必须由当前用户人工批准后才执行 |
 | `每天 9 点自动巡检并发邮件` | 能力边界：不接入调度与通知，如实说明未开放 |
 
 `planning`（轮数 / 能力调用次数 / 单轮步数）上限见 `configuration-reference`；触顶时任务会把限制写进
@@ -193,27 +203,34 @@ curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 
 ## 请求示例
 
+以下示例假定已按下文「鉴权、会话与 CSRF」登录，得到 `$jar`（Cookie 文件）与登录后重新读取的 `$token`。
+
 读取仪表盘的 1 分钟窗口：
 
 ```bash
-curl "http://127.0.0.1:9090/api/live?range=60"
+curl -b "$jar" "http://127.0.0.1:9090/api/live?range=60"
 ```
 
 新增或更新路由：
 
 ```bash
+revision=$(curl -s -b "$jar" http://127.0.0.1:9090/api/routes | sed -E 's/.*"revision":([0-9]+).*/\1/')
+operationId="manual-$(date +%s)-$RANDOM-$RANDOM"
 curl -X POST "http://127.0.0.1:9090/api/routes" \
-  -H "Content-Type: application/json" \
-  -d '{"id":"demo-api","businessPrefix":"/api","serviceName":"demo-service"}'
+  -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
+  -d "{\"revision\":$revision,\"operationId\":\"$operationId\",\"id\":\"demo-api\",\"businessPrefix\":\"/api\",\"targets\":[{\"serviceName\":\"demo-service\",\"weight\":100}],\"stripPrefix\":\"\"}"
 ```
 
 更新配置：
 
 ```bash
 curl -X POST "http://127.0.0.1:9090/api/configs" \
-  -H "Content-Type: application/json" \
+  -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
   -d '{"component":"gateway","key":"gateway.trace.sampleRate","value":"1"}'
 ```
+
+新增/更新、调权重和回滚必须带读取时的 `revision`。新操作使用新 `operationId`，超时后用原 ID 查询；
+POST 不传操作号时 Admin 代为生成。删除接口需要前缀与 revision，操作号当前由 Admin 生成。
 
 路由请求体字段应与 Gateway 的路由模型一致；配置更新的 `component` 只能是 `gateway` 或 `nameserver`，`key` 和 `value` 会由下游组件再次校验。`gateway.loadbalance.strategy` 属于启动/插件装配配置，不通过 Admin API 修改。
 
@@ -233,11 +250,11 @@ curl -X POST "http://127.0.0.1:9090/api/configs" \
 
 ```bash
 jar=$(mktemp)
-token=$(curl -s -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken":"([^"]*)".*/\1/')
+token=$(curl -s -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
 curl -s -b "$jar" -c "$jar" -o /dev/null -w '%{http_code}\n' \
   -d "username=admin&password=你的口令&_csrf=$token" http://127.0.0.1:9090/login
 # 登录后令牌被轮换，写请求前重新读一次
-token=$(curl -s -b "$jar" -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken":"([^"]*)".*/\1/')
+token=$(curl -s -b "$jar" -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
 curl -s -b "$jar" -H "X-XSRF-TOKEN: $token" http://127.0.0.1:9090/api/model/config
 ```
 
@@ -246,6 +263,26 @@ curl -s -b "$jar" -H "X-XSRF-TOKEN: $token" http://127.0.0.1:9090/api/model/conf
 ```bash
 curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 ```
+
+## 受控变更接口
+
+变更只能由 Agent 对话中的提案工具创建，人工接口负责查看和处置。当前唯一类型是版本权重调整，
+不支持摘实例、删除路由、重启进程或任意配置修改。用户身份取自登录上下文，所有 POST 操作都需要 CSRF 令牌。
+
+| 操作 | 允许的状态 | 行为 |
+| --- | --- | --- |
+| `approve` / `reject` | `PENDING_APPROVAL` | 批准后执行，或拒绝且不提交写请求 |
+| `rollback` | `SUCCESS` | 预检当前权重，再补偿到变更前值；不会覆盖后续人工修改 |
+| `resolve` | `UNCERTAIN` | 使用原 operationId 确认结果，禁止用新 ID 盲目重提 |
+
+处置接口返回 `200` 和最新变更记录；`SUCCESS` / `ROLLED_BACK` 表示提交与回读一致，
+失败或结果未知也会在记录状态里明确表达。同步批准/回滚会等待预检、提交与回读；`200` 本身不等于变更成功。
+不存在或不属于当前用户时返回 `404`，不允许的状态或并发处置冲突返回 `409`。
+
+主要字段：`actionId`、`sessionId`、`taskId`、`type`、`status`、`routeId`、`serviceName`、`group`、
+`beforeWeight` / `desiredWeight`、`requestedValue` / `requestedUnit`、`beforeTrafficPercent` / `desiredTrafficPercent`、
+`expectedRevision` / `appliedRevision`、`applyOperationId` / `rollbackOperationId`、`preview`、`impact`、`errorMessage`、
+审批人与时间戳。操作细节见 [Ops Agent：受控变更](./ops-agent.zh-CN.md)。
 
 ## 模型配置接口
 
@@ -262,11 +299,15 @@ curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 | `apiKeyMasked` | 只可能是 `******` 或空串；明文与密文都不会出现在任何响应里 |
 | `apiKeyReadable` / `masterKeyState` | 密钥能否解密；`masterKeyState` 为 `MISMATCH` 时需要在页面上重新填写密钥 |
 | `configFile` | 配置文件绝对路径，便于备份与排障 |
-| `presets` | 内置预设（DeepSeek、智谱 GLM），页面用它填充下拉 |
+| `vendor` / `vendors` | 当前厂商及后台映射清单：`deepseek`、`zhipu`、`custom`，含地址、主模型与快速模型 |
+| `fastConfigured` / `fastBaseUrl` / `fastModel` / `fastApiKeyMasked` | 可选快速模型及密钥掩码；未配置时回退主模型 |
+| `presets` / `fastPresets` | 兼容旧调用方的模型预设；当前页面使用 `vendors` |
 
-`POST /api/model/config` 的请求体字段与上表同名：
+`POST /api/model/config` 接受 `enabled`、`vendor`、`apiKey`、`clearApiKey` 与 `timeoutSeconds`。
+`vendor=deepseek|zhipu` 时地址与模型由后台映射；`vendor=custom` 时可填 `baseUrl`、`model` 及可选
+`fastBaseUrl`、`fastModel`、`fastApiKey`、`clearFastApiKey`。不传 vendor 的旧调用仍可按提交地址推断厂商。
 
-- 不带 `apiKey` 字段、或传 `******`：保留已存密钥；只有 `"clearApiKey":true` 才清除（本地无鉴权模型用）。
+- 不带 `apiKey` 字段、或传 `******`：保留已存密钥。传空字符串或 `"clearApiKey":true` 会清除；控制台留空时不发送该字段，以保留已存密钥。
 - `enabled=false` 只停用模型能力，配置仍保留；启用时 `baseUrl` 与 `model` 都不能为空，地址须以 `http://` 或 `https://` 开头。
 - 保存成功后新客户端立即生效，同时返回 `message`（"模型配置已生效，无需重启 Admin"或"已保存，但当前不可用"）。
 
@@ -287,7 +328,8 @@ curl -N -b "$jar" "http://127.0.0.1:9090/api/agent/tasks/<taskId>/events"
 
 ## 轻量调用建议
 
-- `/api/live` 只在仪表盘可见时按约 1 秒轮询；后台标签页和其他页面不持续拉取全量数据。
+- `/api/live` 只在仪表盘可见时按约 1 秒轮询；后台标签页和其他页面不持续请求此接口。
+- `/api/metrics` 与 `/api/metrics/routes` 在指标诊断页可见时约每 10 秒刷新；全局使用 Gateway 配置窗口，路由可选 60/300 秒。
 - `/api/overview` 适合低频探活，避免把它当作高频监控采集接口。
 - `/api/traces` 的数据量受 Gateway 采样率和环形缓冲限制；排查慢请求时优先使用 `slow=1`，避免长期打开全量采样。
 - 写接口成功后再刷新列表，避免重复提交同一个配置或路由变更。
