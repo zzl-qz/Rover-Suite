@@ -233,6 +233,10 @@ Gateway 的 live 快照已再瘦身（不算 p99 / 上游 Top；路由 Top 约 5
 请求追踪遵循 Gateway `gateway.trace.sampleRate`：`0` 只记慢请求（默认）；在 Admin 配置里改成 `1`
 即可采集普通流量，无需重启。
 
+在侧栏「指标诊断」查看全局 P95/P99、完整路由/上游和累计拒绝/重试；从路由行「诊断」进入版本与实例明细，
+切换 1/5 分钟并核对配置权重与实际请求。全局快照使用 Gateway 配置窗口，路由窗口单独选择。
+样本不足或没有记录不能认定健康，版本 P95 是实例 P95 的最大值；截图和口径见 [Admin 手册](./admin-guide.zh-CN.md)。
+
 若 Gateway 不在默认端口（仓库常见默认是 `80`），请把 Rover-Admin 的 Gateway 地址改成对应监听口。
 
 ## 8. 可选部署加固
@@ -278,7 +282,7 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
 | Java 服务鉴权失败 | 应用的 `rover.nameserver.token` 与 Nameserver 不一致。 |
 | Gateway 无法发现服务 | 检查 `rover.gateway.discovery.nameserver.address` 和 `.token`；它们是 Gateway 配置，不是 Starter 配置。 |
 | Nameserver 已恢复但 Gateway 仍无实例 | 当前初始订阅失败可能等到下一次对账；等待 `reconcileIntervalMs` 或重启 Gateway。 |
-| 最后一个实例退出后仍短暂收到转发 | Gateway 的空快照保护等待对账清空，默认最长约 30 秒。本场立刻 502，约 17 秒后 503。 |
+| 最后一个实例退出后仍短暂收到转发 | 检查该组的新 revision 和空快照是否已到 Gateway；更新的空推送会清空该组。丢失推送或连接中断时由周期对账修复。 |
 | HTTP Registrar 收到 `404 NOT_FOUND` | `clientApiEnabled` 未开启、路径错误或 HTTP 监听器未启动。开启 Registration API 后需重启。 |
 | HTTP Registrar 收到 `409 STALE_SESSION` | 另一个进程注册了相同 `serviceName + instanceId`。每副本应使用唯一 ID，每端点只有一个 owner。 |
 | 实例可见但不可达 | 注册的 host/port 对 Gateway 不可达。 |
@@ -286,6 +290,8 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
 | 启动或热更新提示只支持 http 上游 | 默认 Netty 出站不转发 `https://`。改成 `http://`，或设 `proxy.outbound: jdk`。 |
 | 想确认当前 I/O 实现 | 看启动日志里的 `ioTransport=`。Docker Linux 容器里 `auto` 一般为 epoll；在 macOS 上直接运行进程才是 kqueue。 |
 | 自定义 LB 在 Admin 看不到 | 正常。`gateway.loadbalance.strategy` 是启动/插件装配配置，请在 `rover-gateway.yml` 中填写内置策略、SPI `name()` 或实现类全名并重启 Gateway；Admin 不再提供修改入口，避免覆盖自定义插件。 |
+
+以下为历史测试对照，最后实例摘除时间不代表当前实现。
 
 本地 Compose 想把发现故障跑一遍，用 `./deploy/scripts/demo-fault.sh`。
 本场参考：20 次 hello 为 10 / 10；`docker stop` / `docker kill` 其中一个都是立刻躲开（注销或 TCP 断连清理）；

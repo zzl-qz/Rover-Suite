@@ -43,7 +43,7 @@ The system is easiest to understand as three cooperating surfaces: the Gateway r
 
 </div>
 
-> **Current status / 当前状态:** `1.0.0-SNAPSHOT` single-node preview. The guides describe released code and call out explicit boundaries such as in-memory recovery, grouped discovery, WebSocket/SSE, and client HTTPS termination.
+> **Current status / 当前状态:** `1.0.0-SNAPSHOT` single-node preview. Group-aware version routing, full Admin metrics diagnostics, and human-approved weight changes are available. Nameserver HA/persistent recovery, Gateway WebSocket/SSE proxying, and client HTTPS termination remain outside the current implementation. 已支持分组版本路由、Admin 完整指标诊断和人工审批后的权重变更；高可用、注册实例持久化恢复、Gateway WebSocket/SSE 代理及客户端 HTTPS 终止尚未实现。
 
 ## Choose by task / 按任务找文档
 
@@ -104,13 +104,13 @@ and are not documented as published to a public Maven repository yet.
 
 当前源码状态：JDK 17+、Maven 构建、版本 `1.0.0-SNAPSHOT`。SNAPSHOT 构件需要从源码构建，尚不能按已发布到公共 Maven 仓库使用。
 
-This is currently a single-node preview. It is complete enough for the documented ordinary HTTP and empty-group
-workflow, while operational boundaries such as last-instance reconciliation, grouped discovery, cold-start recovery,
-WebSocket/SSE, and client HTTPS termination are listed in
+This is currently a single-node preview with ordinary HTTP, group-aware version routing, live and full metrics views,
+and a human-approved weight-change workflow. Discovery reconciliation, restart recovery, Gateway WebSocket/SSE,
+and client HTTPS termination boundaries are listed in
 [User Guide: Current runtime boundaries](./user-guide.md#9-current-runtime-boundaries).
 
-当前定位是单机预览版，已覆盖文档中的普通 HTTP 与默认空分组链路。最后实例对账、分组发现、冷启动恢复、WebSocket/SSE，
-以及网关进程不终止 HTTPS 等运行边界，统一记录在[使用指南：当前运行边界](./user-guide.zh-CN.md#9-当前运行边界)，
+当前定位是单机预览版，已支持普通 HTTP、分组版本路由、实时与完整指标视图，以及人工审批后的权重变更。
+发现对账、重启恢复、Gateway WebSocket/SSE 和 HTTPS 终止等运行边界，统一记录在[使用指南：当前运行边界](./user-guide.zh-CN.md#9-当前运行边界)，
 避免 README 与真实代码能力不一致。
 
 Documentation should describe released code, not planned behavior. When a public contract, configuration key, or

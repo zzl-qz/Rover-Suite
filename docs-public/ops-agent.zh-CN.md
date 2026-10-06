@@ -152,7 +152,7 @@ START → plan ──有可执行步骤──→ execute（逐条执行只读能
   `Map` / `List`（节点执行期间读写正常）。因此结论由 `synthesise` 节点直接产出、步骤上报口由节点闭包持有，
   二者都不从返回状态回读。
 
-尚未启用的 Graph 能力是 checkpoint 与 interrupt：当前只读任务短、无需恢复，等进入 Level C 的审批与长任务阶段再评估。
+尚未接入的是 Graph 框架自身的 checkpoint 与 interrupt。当前已有业务级安全恢复点和显式任务恢复，人工审批走独立 REST 接口与状态 CAS；二者不依赖框架中断，详见后文恢复与受控变更说明。
 
 ## 6.1 代码布局与模块边界
 

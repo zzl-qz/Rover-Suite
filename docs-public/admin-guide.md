@@ -28,8 +28,9 @@ running is marked "interrupted" with its latest safe resume point, and the steps
 stay readable. Only with no record store path configured (`rover.admin.log-store-path` blank) does the agent fall back
 to in-memory storage.
 
-The workbench works with route and instance snapshots even when no model is configured. To enable AI explanations,
-set these environment variables:
+Human conversations require an available model. Without one, the workbench reports the limitation rather than
+inventing an answer. Alert investigations can still use the rule-based graph and retain their steps, evidence, and
+limitations. To seed a model on first boot, set these environment variables:
 
 | Variable | Value |
 | --- | --- |
@@ -44,10 +45,11 @@ Model configuration page, the file wins and later changes to these variables do
 not overwrite it. The existing startup method still works and is not deprecated,
 but the Model configuration page (below) is the recommended long-term path.
 
-Keep the key outside the repository. Investigations and workbench sessions are
-stored in the local record store and survive a restart. The Agent only reads
-management snapshots; it does not send requests to business paths or change routes
-and configuration.
+Keep the key outside the repository. Sessions, investigation incidents, and evidence are persisted in the record
+store; confirmed resource notes are stored by route or service. Recent Nameserver registry events remain an in-memory
+snapshot. Diagnosis only reads management snapshots and never probes business paths. Conversations can also propose
+version weight changes; only human approval triggers execution and read-back verification. Other write actions are
+not supported.
 
 Once a model is configured, the answer is written into the reply bubble as it is
 generated (the console subscribes to deltas over SSE; a dropped connection does
@@ -111,48 +113,29 @@ icacls "<file>" /inheritance:r /grant:r "%USERNAME%:F"
 
 ## Agent HTTP API
 
-调查任务的触发、查询、取消与事件接入入口（均位于 `/api/agent` 之下，需登录；CSRF 保护的写操作需带 CSRF token）：
+All Agent endpoints require sign-in, and POST requests require a CSRF token. The main endpoints are:
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/api/agent/sessions/{sessionId}/submit` | 在会话中提问（人工排查入口） |
-| POST | `/api/agent/investigate` | 按路由前缀直接发起一次调查 |
-| GET  | `/api/agent/tasks/{taskId}` | 任务详情：步骤、证据、结论 |
-| GET  | `/api/agent/tasks/{taskId}/events` | 任务事件流（SSE），终态/澄清点自动收尾 |
-| POST | `/api/agent/tasks/{taskId}/cancel` | 取消仍在执行中的任务（协作式） |
-| POST | `/api/agent/events/ingest` | 事件接入：告警 / 网关切面异常触发一次自动调查 |
+| POST | `/api/agent/sessions` | Create a conversation |
+| POST | `/api/agent/sessions/{sessionId}/messages` | Submit a question or follow-up; returns a task handle with 202 |
+| GET | `/api/agent/sessions/{sessionId}/workspace` | Read the conversation, incident, and recent task |
+| GET | `/api/agent/tasks/{taskId}` | Read task steps, evidence, and conclusion |
+| GET | `/api/agent/tasks/{taskId}/events` | Subscribe to task events over SSE |
+| POST | `/api/agent/tasks/{taskId}/cancel` | Cooperatively cancel a running task |
+| POST | `/api/agent/events/ingest` | Start a rule/model investigation from an alert |
 
-### 取消任务
+The alert body is `{"path":"/api","message":"5xx alert"}`; optional `fromMillis` and `toMillis` must be supplied
+together. Alert sessions are independent of human conversations. Cancellation returns 404 for inaccessible tasks,
+409 for tasks that cannot be cancelled, and 200 once local cancellation is requested.
 
-`POST /api/agent/tasks/{taskId}/cancel` 为协作式取消：
-
-- `404`：任务不存在或不属于当前用户（与任务详情同一归属判定）；
-- `409`（`TASK_NOT_CANCELLABLE`）：任务已结束，取消无意义；
-- `200`：已标记取消并中断执行线程，结论不会再产出，事件流随 `TASK_CANCELLED` 收尾。
-
-前端的任务卡片在任务处于 `PENDING` / `RUNNING` 时显示「取消」按钮。
-
-### 事件接入（自动调查）
-
-`POST /api/agent/events/ingest` 把一次告警转成「对哪条路由、在什么窗口、怀疑什么」三要素，为该事件独立开会话、记一笔 `ALERT` 来源的事件，并复用与人工提问完全相同的取数链路开始调查。调查异步执行，返回 `202` 与任务视图，接入方凭 `taskId` 轮询详情或订阅事件流。
-
-请求体：
-
-```json
-{ "path": "/api/demo/tt", "message": "5xx 告警", "fromMillis": 0, "toMillis": 0 }
-```
-
-- `path`（必填）：要排查的路由前缀；
-- `message`（可选）：告警文本，作为调查问题上下文；
-- `fromMillis` / `toMillis`（可选，需同时给出）：观测窗口；不传则按各数据源默认窗口取数。
-
-会话按事件独立开（无归属用户），因此不会与某个人工会话争「单活跃任务」锁（不会 409）。
+Human-approved changes use `/api/agent/actions`. See the [Admin API](./admin-api.md) for request fields, approval,
+rejection, rollback, result confirmation, ownership checks, and error semantics.
 
 ## Model configuration
 
-The entry point is the "Model configuration" item in the console's left
-navigation. The form combines a preset dropdown with free-text fields: after
-choosing a preset you can still edit the base URL and model name.
+Open "Model configuration" in the sidebar. DeepSeek and Zhipu use server-provided URL and main/fast model mappings;
+enter the key and timeout. Select "Custom / local" to enter your own base URL, main model, and optional fast model.
 
 The four buttons:
 
@@ -198,27 +181,18 @@ Storage and backup:
 | `ROVER_ADMIN_MASTER_KEY` | empty | A base64 value that decodes to 32 bytes is used directly as the AES key; otherwise it is treated as a passphrase and derived with PBKDF2-HMAC-SHA256 (65536 rounds) |
 | `ROVER_ADMIN_MASTER_KEY_FILE` | `master.key` next to the configuration file | Master key file; a 32-byte random key is written on first encryption |
 
-Built-in presets (still editable after selection):
+Built-in vendor mappings (the values returned by the server are authoritative):
 
-| Preset | Base URL | Model |
-| --- | --- | --- |
-| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` |
-| Zhipu GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` |
+| Vendor | Base URL | Main model | Fast model |
+| --- | --- | --- | --- |
+| DeepSeek | `https://api.deepseek.com` | `deepseek-chat` | Not separately configured; uses the main model |
+| Zhipu GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4.6` | `glm-4-flash` |
+| Custom / local | User-supplied | User-supplied | Optional; falls back to the main model |
 
-Only these two are preseted because they are the common choices. Other OpenAI-compatible services still
-work (base URL and model name are free-form; unauthenticated local Ollama / vLLM included) — they simply
-have no thinking content to show.
-
-**To see the model's reasoning**: use `deepseek-reasoner` on DeepSeek, or `glm-4.6` or later on Zhipu.
-Both are integrated over their native protocols, and the workbench then shows a "deep thinking" panel —
-streaming while the model reasons, collapsed to a single line with elapsed time once the answer starts.
-
-**About the Zhipu compatibility shim**: the available `spring-ai-zhipuai` versions (2.0.0-M1..M4) predate
-`spring-ai-model` 2.0.1, and the `ToolExecutionEligibilityPredicate` types they reference were renamed in
-that version — class loading fails before any request is made. The project supplies two shim types under
-`org.springframework.ai.model.tool` in `rover-admin`: they only fill in the missing types and do not
-invent semantics (the verdict matches 2.0.1 exactly), which lets Zhipu use its native protocol. Delete
-both once that module ships a 2.0.1-aligned release.
+The fast model handles target interpretation and investigation planning; the main model handles conversation and
+explanation. Custom mode also supports local Ollama / vLLM without authentication. Thinking-capable Zhipu and DeepSeek
+models use a client that parses `reasoning_content`; the workbench displays "deep thinking" when reasoning deltas are
+available. Vendor presets ignore manually supplied model names; use custom mode for another model.
 
 The page also shows three status cards: effective status, connection test and
 effect verification.
@@ -234,23 +208,25 @@ effect verification.
 | Instances | Registered Nameserver instances and health |
 | Recent events | Registration, removal, health and push events |
 | Configuration | Runtime Gateway/Nameserver settings |
-| Diagnosis | Hypothesis-based read-only investigation over route, instance, metric, trace, configuration, and registry-event evidence, with an optional streamed-live AI explanation |
+| Agent Workbench | Conversations and evidence-based investigation; version-weight proposals require human approval |
+| Model configuration | Vendor/key or custom model configuration, applied without restart |
 
 ## Screenshots and quick orientation
 
-The following screenshots come from a local demo environment. Addresses,
-service names, timestamps and traffic are demonstration data.
+These screenshots were captured from real local Nameserver, Gateway, Admin, and demo backend processes. Metrics and
+traces come from actual HTTP test requests, including normal, slow, and error responses. This is simulated traffic,
+not production traffic. The Agent and model pages show the real state with no external model configured.
 
 ### Dashboard
 
-![Admin dashboard overview](images/admin/01-dashboard-overview.png)
+![Admin dashboard overview](images/admin/01-dashboard-overview.jpg)
 
 The dashboard separates **instant** values (the previous full second), **near
 window** values (the selected 1m/5m window), and **cumulative/process** values
 (JVM, CPU, threads, GC and uptime). The QPS axis follows the observed peak; it
 is not a Gateway capacity limit.
 
-![Admin process and environment](images/admin/02-dashboard-process.png)
+![Admin process and environment](images/admin/02-dashboard-process.jpg)
 
 Use the process section when latency rises without an obvious error-rate
 increase. Check heap, old generation, CPU, threads and GC, then confirm the
@@ -258,13 +234,13 @@ Gateway port, discovery mode, load-balancer strategy and Nameserver settings.
 
 ### Request tracing
 
-![Request tracing list](images/admin/03-traces-list.png)
+![Request tracing list](images/admin/03-traces-list.jpg)
 
 Tracing contains only sampled requests. Filter by `traceId`, path or slow
 requests. Higher sampling improves visibility but increases Gateway recording
 and memory overhead.
 
-![Request tracing phases](images/admin/04-traces-detail.png)
+![Request tracing phases](images/admin/04-traces-detail.jpg)
 
 Expand a row to inspect decode, filters, route matching, discovery,
 load-balancing, upstream processing and response writing. Start with the phase
@@ -272,13 +248,13 @@ that owns the largest share of total time.
 
 ### Routes
 
-![Route list](images/admin/05-routes-list.png)
+![Route list](images/admin/05-routes-list.jpg)
 
 The route list shows `businessPrefix`, the versioned targets and their weights,
 static targets and `stripPrefix`. Saving applies the update to Gateway and
 persists it. Check for overlapping prefixes before changing a route.
 
-![Route editor](images/admin/06-route-editor.png)
+![Route editor](images/admin/06-route-editor.jpg)
 
 In dynamic discovery, pick registry or static address first. Registry routes use
 a `targets` list of `{serviceName, group, weight}` — here the registry's `group`
@@ -296,6 +272,10 @@ the routes first, Gateway returns `409`, the page refreshes to the latest
 revision and asks you to save again instead of silently overwriting.
 
 ### Metric diagnostics and version metrics
+
+![Global metrics diagnostics](images/admin/11-metrics-global.jpg)
+
+![Route version and upstream instance diagnostics](images/admin/12-metrics-route.jpg)
 
 Open **指标诊断** in the sidebar, or use the diagnosis button on the dashboard or a route row.
 The global snapshot shows sampled P95/P99, all observed routes/upstreams, and cumulative rejects
@@ -330,7 +310,7 @@ conservative upper bound), not the version's true p95.
 
 ### Instances
 
-![Instances](images/admin/07-instances.png)
+![Instances](images/admin/07-instances.jpg)
 
 Check service name, instance address, group, health, ephemeral status, weight,
 last heartbeat and idle time. When Gateway cannot find a service, verify this
@@ -338,7 +318,7 @@ page before debugging the route.
 
 ### Recent events
 
-![Recent events](images/admin/08-events.png)
+![Recent events](images/admin/08-events.jpg)
 
 The ring buffer retains up to 200 recent events. The filter always contains
 registration, unregistration, expiration eviction, unhealthy marking and
@@ -347,7 +327,7 @@ individual events so they do not hide lifecycle changes.
 
 ### Configuration
 
-![Configuration overview](images/admin/09-configs-overview.png)
+![Configuration overview](images/admin/09-configs-overview.jpg)
 
 Green “hot reload” badges identify settings that can be applied immediately.
 Save controls appear only after a value changes. Gateway also exposes the
@@ -365,7 +345,7 @@ Gateway settings. Their fields use the same save and rollback flow as built-in
 settings; only mounted plugins that declare properties appear. If no plugin
 setting appears, the plugin may still be mounted.
 
-![Configuration details](images/admin/10-configs-detail.png)
+![Configuration details](images/admin/10-configs-detail.jpg)
 
 `gateway.loadbalance.strategy` is a startup/plugin-mounting setting and is not
 edited from Admin. Configure a built-in strategy, SPI `name()`, or implementation
@@ -373,6 +353,19 @@ FQCN in `rover-gateway.yml`, then restart Gateway. `gateway.trace.sampleRate`
 accepts a decimal from 0 to 1; `0` records only slow requests and `1` records
 all requests. Window values use seconds, while most timeouts and health settings
 use milliseconds.
+
+### Agent Workbench and model configuration
+
+![Agent Workbench](images/admin/13-agent-workbench.jpg)
+
+The workbench retains conversation and investigation context and reports when no model is available. With a model,
+it can query real management snapshots and file pending version-weight changes. Approval, rejection, rollback, and
+result-confirmation boundaries are documented in the [Admin API](./admin-api.md).
+
+![Model configuration](images/admin/14-model-config.jpg)
+
+Vendor mappings come from the server; custom mode accepts a local or other compatible model. The screenshot shows
+an unsaved vendor selection in an isolated demo configuration; no external model or key is configured.
 
 ## Lightweight usage
 

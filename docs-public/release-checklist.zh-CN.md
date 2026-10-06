@@ -23,10 +23,20 @@ curl -fsS -H "X-Rover-Admin-Token: rover-compose-gateway-admin-token" \
   http://127.0.0.1:8889/_manage/health
 curl -fsS -H "X-Rover-Admin-Token: rover-compose-gateway-admin-token" \
   http://127.0.0.1:8080/_manage/health
-curl http://127.0.0.1:9090/api/overview
+jar=$(mktemp)
+token=$(curl -fsS -c "$jar" http://127.0.0.1:9090/api/auth/status | sed -E 's/.*"csrfToken"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
+curl -fsS -b "$jar" -c "$jar" --data-urlencode 'username=admin' \
+  --data-urlencode 'password=admin' --data-urlencode "_csrf=$token" http://127.0.0.1:9090/login
+curl -fsS -b "$jar" http://127.0.0.1:9090/api/overview
+curl -fsS -b "$jar" http://127.0.0.1:9090/api/metrics
+curl -fsS -b "$jar" 'http://127.0.0.1:9090/api/metrics/routes?routeId=demo-api&range=300'
+rm -f "$jar"
 curl http://127.0.0.1:8080/api/hello
 docker compose -f deploy/docker/docker-compose.yml down
 ```
+
+上面使用本地演示默认账号；记录库中的账号不同时，冒烟脚本可通过 `SMOKE_ADMIN_USER`、
+`SMOKE_ADMIN_PASSWORD` 覆盖。组件管理 token 不用于 Admin 会话登录。
 
 ## 构件和许可证
 
@@ -46,6 +56,8 @@ docker compose -f deploy/docker/docker-compose.yml down
 
 - 中英文 README、Admin 使用手册、API、配置、部署、故障排查、插件和兼容性说明已同步。
 - Admin 截图中的地址、服务名、时间、实例和请求数据已确认是演示数据或完成脱敏。
+- 架构 GIF、PNG 和交互 HTML 来自同一份源图；指标诊断已核对全局 P99、路由/版本/实例、空或不足样本，以及累计与窗口口径。
+- Agent 变更已核对人工审批、回读、结果未知时原操作号确认及回滚前提；HTTP 200 本身不代表 `SUCCESS`。
 - Docker Compose 示例中的 token、端口映射、镜像 Tag 和 ACL 已替换为发布环境值；
   生产请改用 [`deploy/production/`](../deploy/production/)。
 - 性能边界文档已补充目标机器、JDK、CPU、内存、压测工具和真实 P50/P95/P99 数据

@@ -1,0 +1,309 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1390" height="1270" viewBox="0 0 1390 1270"><style>.c-grid{ stroke: #e2e8f0; fill: none; }
+.c-mask{ fill: #ffffff; stroke: none; }
+.c-frontend{ fill: rgba(34, 211, 238, 0.15);   stroke: #0891b2; }
+.c-backend{ fill: rgba(52, 211, 153, 0.18);    stroke: #059669; }
+.c-database{ fill: rgba(167, 139, 250, 0.2);   stroke: #7c3aed; }
+.c-cloud{ fill: rgba(251, 191, 36, 0.18);      stroke: #d97706; }
+.c-security{ fill: rgba(251, 113, 133, 0.15);   stroke: #e11d48; }
+.c-messagebus{ fill: rgba(251, 146, 60, 0.15); stroke: #ea580c; }
+.c-external{ fill: rgba(148, 163, 184, 0.18);   stroke: #64748b; }
+.t-primary{ fill: #0f172a; }
+.t-muted{ fill: #64748b; }
+.t-dim{ fill: #94a3b8; }
+.t-frontend{ fill: #0891b2; }
+.t-backend{ fill: #059669; }
+.t-database{ fill: #7c3aed; }
+.t-cloud{ fill: #d97706; }
+.t-security{ fill: #e11d48; }
+.t-messagebus{ fill: #ea580c; }
+.t-external{ fill: #64748b; }
+.a-default{ stroke: #94a3b8; fill: none; }
+.a-emphasis{ stroke: #059669; fill: none; }
+.a-security{ stroke: #e11d48; fill: none; stroke-dasharray: 5,5; }
+.a-dashed{ stroke: #7c3aed; fill: none; stroke-dasharray: 4,4; }
+.m-default{ fill: #94a3b8; }
+.m-emphasis{ fill: #059669; }
+.m-security{ fill: #e11d48; }
+.m-dashed{ fill: #7c3aed; }
+.c-security-group{ fill: transparent; stroke: #e11d48; stroke-dasharray: 4,4; }
+.c-region{ fill: rgba(251, 191, 36, 0.05); stroke: #d97706; stroke-dasharray: 8,4; }
+.c-lane{ fill: rgba(248, 250, 252, 0.65); stroke: #cbd5e1; stroke-dasharray: 6,6; }
+text{font-family:'Microsoft YaHei',Arial,sans-serif}.semantic-sigil{fill:none;stroke-width:1.2} [data-animate]{animation:none}</style><rect width="100%" height="100%" fill="#f8fafc"/><text x="50" y="44" font-size="27" font-weight="700" fill="#0f172a">Rover-Suite 系统架构</text><text x="50" y="72" font-size="12" fill="#64748b">请求与发现 · 完整指标诊断 · Agent 调查与人工审批</text><g transform="translate(0 84)">
+        <title id="archify-diagram-title">Rover-Suite 系统架构</title>
+        <desc id="archify-diagram-description">由 Archify 生成的架构图。</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)" />
+
+        <!-- Boundaries (behind everything) -->
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="security-group" data-composition-frame-id="0" data-composition-frame-label="Gateway 进程" x="356" y="71" width="268" height="362" rx="8" class="c-security-group" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="security-group" data-composition-frame-id="1" data-composition-frame-label="Admin 进程（可选）" x="356" y="616" width="598" height="112" rx="8" class="c-security-group" stroke-width="1"/>
+
+        <!-- Connection paths (before components for correct z-order) -->
+        <path data-edge-from="http_client" data-edge-to="gateway" data-edge-label="HTTP" data-edge-key="0" data-edge-id="traffic-entry" data-composition-points="250,379;380,379" d="M 250 379 L 380 379" class="a-emphasis" data-animate="edge" style="--step:0" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="gateway" data-edge-to="upstream" data-edge-label="HTTP 反向代理" data-edge-key="1" data-edge-id="traffic-proxy" data-composition-points="600,379;1050,379" d="M 600 379 L 1050 379" class="a-emphasis" data-animate="edge" style="--step:1" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="providers" data-edge-to="nameserver" data-edge-label="注册 / 心跳" data-edge-key="2" data-edge-id="provider-registration" data-composition-points="1050,129;930,129" d="M 1050 129 L 930 129" class="a-default" data-animate="edge" style="--step:2" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="discovery" data-edge-to="nameserver" data-edge-label="查询 / 订阅" data-edge-key="3" data-edge-id="discovery-query" data-composition-points="600,129;710,129" d="M 600 129 L 710 129" class="a-dashed" data-animate="edge" style="--step:3" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="nameserver" data-edge-to="discovery" data-edge-label="快照推送" data-edge-key="4" data-edge-id="snapshot-push" data-composition-points="710,129;600,129" d="M 710 129 L 600 129" class="a-default" data-animate="edge" style="--step:4" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="nacos_adapter" data-edge-to="discovery" data-edge-label="事件快照" data-edge-key="5" data-edge-id="nacos-snapshot" data-composition-points="250,129;380,129" d="M 250 129 L 380 129" class="a-dashed" data-animate="edge" style="--step:5" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="discovery" data-edge-to="gateway" data-edge-label="本地缓存" data-edge-key="6" data-edge-id="local-instance-read" data-composition-points="490,163;490,345" d="M 490 163 L 490 345" class="a-default" data-animate="edge" style="--step:6" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="operator_console" data-edge-to="admin_api" data-edge-label="诊断 / 审批" data-edge-key="7" data-edge-id="operator-actions" data-composition-points="250,674;380,674" d="M 250 674 L 380 674" class="a-default" data-animate="edge" style="--step:7" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="admin_api" data-edge-to="gateway" data-edge-label="快照 / 批准后调权重" data-edge-key="8" data-edge-id="gateway-management" data-composition-points="490,640;490,413" d="M 490 640 L 490 413" class="a-security" data-animate="edge" style="--step:8" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="admin_api" data-edge-to="ops_agent" data-edge-label="会话 / 调查" data-edge-key="9" data-edge-id="agent-session" data-composition-points="600,667;710,667" d="M 600 667 L 710 667" class="a-default" data-animate="edge" style="--step:9" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="ops_agent" data-edge-to="nameserver" data-edge-label="只读注册信息" data-edge-key="10" data-edge-id="agent-registry-read" data-composition-points="820,640;820,560;1340,560;1340,250;820,250;820,163" d="M 820 640 L 820 568 Q 820 560 828 560 L 1332 560 Q 1340 560 1340 552 L 1340 258 Q 1340 250 1332 250 L 828 250 Q 820 250 820 242 L 820 163" class="a-dashed" data-animate="edge" style="--step:10" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="ops_agent" data-edge-to="model_service" data-edge-label="模型调用" data-edge-key="11" data-edge-id="model-call" data-composition-points="930,674;1050,674" d="M 930 674 L 1050 674" class="a-default" data-animate="edge" style="--step:11" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="ops_agent" data-edge-to="record_store" data-edge-label="会话 / 证据 / 提议" data-edge-key="12" data-edge-id="agent-records" data-composition-points="820,708;820,860" d="M 820 708 L 820 860" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="admin_api" data-edge-to="record_store" data-edge-label="遥测 / 变更记录" data-edge-key="13" data-edge-id="admin-records" data-composition-points="600,681;655,681;655,894;710,894" d="M 600 681 L 647 681 Q 655 681 655 689 L 655 886 Q 655 894 663 894 L 710 894" class="a-default" data-animate="edge" style="--step:12" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+
+        <!-- Components -->
+        <g id="node-nacos_adapter" data-node-id="nacos_adapter" data-node-label="Nacos（可选）" tabindex="0" role="button" aria-label="聚焦Nacos（可选），服务发现适配器, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="服务发现适配器" data-node-context="架构组件">
+          <title>Nacos（可选） · 服务发现适配器 · 架构组件</title>
+          <rect x="50" y="95" width="200" height="68" rx="6" class="c-mask"/>
+          <rect x="50" y="95" width="200" height="68" rx="6" class="c-external" data-animate="node" style="--step:5" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 101) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="150" y="127" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Nacos（可选）</text>
+        <text data-detail="context" x="150" y="143" class="t-muted" font-size="9" text-anchor="middle">服务发现适配器</text>
+        </g>
+
+        <g id="node-discovery" data-node-id="discovery" data-node-label="Gateway Discovery" tabindex="0" role="button" aria-label="聚焦Gateway Discovery，service + group 本地实例缓存, Gateway 进程" aria-pressed="false" data-node-kind="database" data-node-sublabel="service + group 本地实例缓存" data-node-context="Gateway 进程">
+          <title>Gateway Discovery · service + group 本地实例缓存 · Gateway 进程</title>
+          <rect x="380" y="95" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="380" y="95" width="220" height="68" rx="6" class="c-database" data-animate="node" style="--step:3" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(386 101) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="490" y="127" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Gateway Discovery</text>
+        <text data-detail="context" x="490" y="143" class="t-muted" font-size="9" text-anchor="middle">service + group 本地实例缓存</text>
+        </g>
+
+        <g id="node-nameserver" data-node-id="nameserver" data-node-label="Rover-Nameserver" tabindex="0" role="button" aria-label="聚焦Rover-Nameserver，注册 / 租约 / 纯内存注册表, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="注册 / 租约 / 纯内存注册表" data-node-context="架构组件">
+          <title>Rover-Nameserver · 注册 / 租约 / 纯内存注册表 · 架构组件</title>
+          <rect x="710" y="95" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="710" y="95" width="220" height="68" rx="6" class="c-backend" data-animate="node" style="--step:3" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(716 101) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="820" y="127" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Rover-Nameserver</text>
+        <text data-detail="context" x="820" y="143" class="t-muted" font-size="9" text-anchor="middle">注册 / 租约 / 纯内存注册表</text>
+        </g>
+
+        <g id="node-providers" data-node-id="providers" data-node-label="服务提供方" tabindex="0" role="button" aria-label="聚焦服务提供方，Java Starter / 跨语言 Registrar, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="Java Starter / 跨语言 Registrar" data-node-context="架构组件">
+          <title>服务提供方 · Java Starter / 跨语言 Registrar · 架构组件</title>
+          <rect x="1050" y="95" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="1050" y="95" width="220" height="68" rx="6" class="c-external" data-animate="node" style="--step:2" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1056 101) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1160" y="127" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">服务提供方</text>
+        <text data-detail="context" x="1160" y="143" class="t-muted" font-size="9" text-anchor="middle">Java Starter / 跨语言 Registrar</text>
+        </g>
+
+        <g id="node-http_client" data-node-id="http_client" data-node-label="业务客户端" tabindex="0" role="button" aria-label="聚焦业务客户端，HTTP 请求, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="HTTP 请求" data-node-context="架构组件">
+          <title>业务客户端 · HTTP 请求 · 架构组件</title>
+          <rect x="50" y="345" width="200" height="68" rx="6" class="c-mask"/>
+          <rect x="50" y="345" width="200" height="68" rx="6" class="c-external" data-animate="node" style="--step:0" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(56 351) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="150" y="377" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">业务客户端</text>
+        <text data-detail="context" x="150" y="393" class="t-muted" font-size="9" text-anchor="middle">HTTP 请求</text>
+        </g>
+
+        <g id="node-gateway" data-node-id="gateway" data-node-label="Rover-Gateway" tabindex="0" role="button" aria-label="聚焦Rover-Gateway，保护 / 路由 / 加权版本 / 代理, Gateway 进程" aria-pressed="false" data-node-kind="backend" data-node-sublabel="保护 / 路由 / 加权版本 / 代理" data-node-context="Gateway 进程">
+          <title>Rover-Gateway · 保护 / 路由 / 加权版本 / 代理 · Gateway 进程</title>
+          <rect x="380" y="345" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="380" y="345" width="220" height="68" rx="6" class="c-backend" data-animate="node" style="--step:1" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(386 351) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="490" y="377" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Rover-Gateway</text>
+        <text data-detail="context" x="490" y="393" class="t-muted" font-size="9" text-anchor="middle">保护 / 路由 / 加权版本 / 代理</text>
+        </g>
+
+        <g id="node-upstream" data-node-id="upstream" data-node-label="业务服务实例" tabindex="0" role="button" aria-label="聚焦业务服务实例，按 targets / group 选择版本, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="按 targets / group 选择版本" data-node-context="架构组件">
+          <title>业务服务实例 · 按 targets / group 选择版本 · 架构组件</title>
+          <rect x="1050" y="345" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="1050" y="345" width="220" height="68" rx="6" class="c-backend" data-animate="node" style="--step:2" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1056 351) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1160" y="377" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">业务服务实例</text>
+        <text data-detail="context" x="1160" y="393" class="t-muted" font-size="9" text-anchor="middle">按 targets / group 选择版本</text>
+        </g>
+
+        <g id="node-operator_console" data-node-id="operator_console" data-node-label="Admin 控制台" tabindex="0" role="button" aria-label="聚焦Admin 控制台，指标诊断 / Agent / 人工审批, 架构组件" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="指标诊断 / Agent / 人工审批" data-node-context="架构组件">
+          <title>Admin 控制台 · 指标诊断 / Agent / 人工审批 · 架构组件</title>
+          <rect x="50" y="640" width="200" height="68" rx="6" class="c-mask"/>
+          <rect x="50" y="640" width="200" height="68" rx="6" class="c-frontend" data-animate="node" style="--step:7" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(56 646) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="150" y="672" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admin 控制台</text>
+        <text data-detail="context" x="150" y="688" class="t-muted" font-size="9" text-anchor="middle">指标诊断 / Agent / 人工审批</text>
+        </g>
+
+        <g id="node-admin_api" data-node-id="admin_api" data-node-label="Admin API / 审批执行" tabindex="0" role="button" aria-label="聚焦Admin API / 审批执行，聚合 / 遥测 / 预检与回读, Admin 进程（可选）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="聚合 / 遥测 / 预检与回读" data-node-context="Admin 进程（可选）">
+          <title>Admin API / 审批执行 · 聚合 / 遥测 / 预检与回读 · Admin 进程（可选）</title>
+          <rect x="380" y="640" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="380" y="640" width="220" height="68" rx="6" class="c-backend" data-animate="node" style="--step:8" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(386 646) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="490" y="672" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admin API / 审批执行</text>
+        <text data-detail="context" x="490" y="688" class="t-muted" font-size="9" text-anchor="middle">聚合 / 遥测 / 预检与回读</text>
+        </g>
+
+        <g id="node-ops_agent" data-node-id="ops_agent" data-node-label="Ops Agent" tabindex="0" role="button" aria-label="聚焦Ops Agent，只读调查 / 登记待审批变更, Admin 进程（可选）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="只读调查 / 登记待审批变更" data-node-context="Admin 进程（可选）">
+          <title>Ops Agent · 只读调查 / 登记待审批变更 · Admin 进程（可选）</title>
+          <rect x="710" y="640" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="710" y="640" width="220" height="68" rx="6" class="c-backend" data-animate="node" style="--step:10" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(716 646) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="820" y="672" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Ops Agent</text>
+        <text data-detail="context" x="820" y="688" class="t-muted" font-size="9" text-anchor="middle">只读调查 / 登记待审批变更</text>
+        </g>
+
+        <g id="node-model_service" data-node-id="model_service" data-node-label="模型服务（可选配置）" tabindex="0" role="button" aria-label="聚焦模型服务（可选配置），DeepSeek / GLM / 自定义, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="DeepSeek / GLM / 自定义" data-node-context="架构组件">
+          <title>模型服务（可选配置） · DeepSeek / GLM / 自定义 · 架构组件</title>
+          <rect x="1050" y="640" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="1050" y="640" width="220" height="68" rx="6" class="c-external" data-animate="node" style="--step:12" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1056 646) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1160" y="672" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">模型服务（可选配置）</text>
+        <text data-detail="context" x="1160" y="688" class="t-muted" font-size="9" text-anchor="middle">DeepSeek / GLM / 自定义</text>
+        </g>
+
+        <g id="node-record_store" data-node-id="record_store" data-node-label="本地记录库（H2）" tabindex="0" role="button" aria-label="聚焦本地记录库（H2），会话 / 证据 / 变更 / 遥测, 架构组件" aria-pressed="false" data-node-kind="database" data-node-sublabel="会话 / 证据 / 变更 / 遥测" data-node-tag="配置路径后持久化" data-node-context="架构组件">
+          <title>本地记录库（H2） · 会话 / 证据 / 变更 / 遥测 · 架构组件 · 配置路径后持久化</title>
+          <rect x="710" y="860" width="220" height="68" rx="6" class="c-mask"/>
+          <rect x="710" y="860" width="220" height="68" rx="6" class="c-database" data-animate="node" style="--step:12" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(716 866) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="820" y="892" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">本地记录库（H2）</text>
+        <text data-detail="context" x="820" y="908" class="t-muted" font-size="9" text-anchor="middle">会话 / 证据 / 变更 / 遥测</text>
+        <text data-detail="fine" x="820" y="920" class="t-database" font-size="7" text-anchor="middle">配置路径后持久化</text>
+        </g>
+
+        <!-- Connection labels -->
+        <g data-detail="context" data-edge-from="http_client" data-edge-to="gateway" data-edge-label="HTTP" data-edge-key="0" data-edge-id="traffic-entry">
+          <rect x="300" y="359" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="315" y="369" class="t-backend" font-size="8" text-anchor="middle">HTTP</text>
+        </g>
+        <g data-detail="context" data-edge-from="gateway" data-edge-to="upstream" data-edge-label="HTTP 反向代理" data-edge-key="1" data-edge-id="traffic-proxy">
+          <rect x="788.8" y="359" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="825" y="369" class="t-backend" font-size="8" text-anchor="middle">HTTP 反向代理</text>
+        </g>
+        <g data-detail="context" data-edge-from="providers" data-edge-to="nameserver" data-edge-label="注册 / 心跳" data-edge-key="2" data-edge-id="provider-registration">
+          <rect x="958.6" y="109" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="990" y="119" class="t-muted" font-size="8" text-anchor="middle">注册 / 心跳</text>
+        </g>
+        <g data-detail="context" data-edge-from="discovery" data-edge-to="nameserver" data-edge-label="查询 / 订阅" data-edge-key="3" data-edge-id="discovery-query">
+          <rect x="623.6" y="109" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="655" y="119" class="t-messagebus" font-size="8" text-anchor="middle">查询 / 订阅</text>
+        </g>
+        <g data-detail="context" data-edge-from="nameserver" data-edge-to="discovery" data-edge-label="快照推送" data-edge-key="4" data-edge-id="snapshot-push">
+          <rect x="630.8" y="165" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="655" y="175" class="t-muted" font-size="8" text-anchor="middle">快照推送</text>
+        </g>
+        <g data-detail="context" data-edge-from="nacos_adapter" data-edge-to="discovery" data-edge-label="事件快照" data-edge-key="5" data-edge-id="nacos-snapshot">
+          <rect x="290.8" y="109" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="315" y="119" class="t-messagebus" font-size="8" text-anchor="middle">事件快照</text>
+        </g>
+        <g data-detail="context" data-edge-from="discovery" data-edge-to="gateway" data-edge-label="本地缓存" data-edge-key="6" data-edge-id="local-instance-read">
+          <rect x="465.8" y="240" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="490" y="250" class="t-muted" font-size="8" text-anchor="middle">本地缓存</text>
+        </g>
+        <g data-detail="context" data-edge-from="operator_console" data-edge-to="admin_api" data-edge-label="诊断 / 审批" data-edge-key="7" data-edge-id="operator-actions">
+          <rect x="283.6" y="654" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="315" y="664" class="t-muted" font-size="8" text-anchor="middle">诊断 / 审批</text>
+        </g>
+        <g data-detail="context" data-edge-from="admin_api" data-edge-to="gateway" data-edge-label="快照 / 批准后调权重" data-edge-key="8" data-edge-id="gateway-management">
+          <rect x="439.4" y="500" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="490" y="510" class="t-security" font-size="8" text-anchor="middle">快照 / 批准后调权重</text>
+        </g>
+        <g data-detail="context" data-edge-from="admin_api" data-edge-to="ops_agent" data-edge-label="会话 / 调查" data-edge-key="9" data-edge-id="agent-session">
+          <rect x="623.6" y="647" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="655" y="657" class="t-muted" font-size="8" text-anchor="middle">会话 / 调查</text>
+        </g>
+        <g data-detail="context" data-edge-from="ops_agent" data-edge-to="nameserver" data-edge-label="只读注册信息" data-edge-key="10" data-edge-id="agent-registry-read">
+          <rect x="1046.2" y="540" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1080" y="550" class="t-messagebus" font-size="8" text-anchor="middle">只读注册信息</text>
+        </g>
+        <g data-detail="context" data-edge-from="ops_agent" data-edge-to="model_service" data-edge-label="模型调用" data-edge-key="11" data-edge-id="model-call">
+          <rect x="965.8" y="654" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="990" y="664" class="t-muted" font-size="8" text-anchor="middle">模型调用</text>
+        </g>
+        <g data-detail="context" data-edge-from="ops_agent" data-edge-to="record_store" data-edge-label="会话 / 证据 / 提议" data-edge-key="12" data-edge-id="agent-records">
+          <rect x="771.8" y="772" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="820" y="782" class="t-muted" font-size="8" text-anchor="middle">会话 / 证据 / 提议</text>
+        </g>
+        <g data-detail="context" data-edge-from="admin_api" data-edge-to="record_store" data-edge-label="遥测 / 变更记录" data-edge-key="13" data-edge-id="admin-records">
+          <rect x="614" y="767.5" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="655" y="777.5" class="t-muted" font-size="8" text-anchor="middle">遥测 / 变更记录</text>
+        </g>
+
+        <!-- Boundary labels (foreground masks keep routes out of titles) -->
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="security-group" data-composition-frame-label="Gateway 进程">
+          <rect data-graph-role="structural-frame-label-mask" x="360" y="75" width="74.8" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="364" y="88" class="t-security" font-size="9" font-weight="600">Gateway 进程</text>
+        </g>
+
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="security-group" data-composition-frame-label="Admin 进程（可选）">
+          <rect data-graph-role="structural-frame-label-mask" x="360" y="620" width="107.2" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="364" y="633" class="t-security" font-size="9" font-weight="600">Admin 进程（可选）</text>
+        </g>
+
+        <!-- Legend -->
+        <g data-legend="" data-legend-bridge="">
+          <text x="40" y="960" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="前端" data-legend-x="40" data-legend-baseline="980" data-legend-width="63">
+            <rect x="40" y="971" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
+            <text x="62" y="980" class="t-muted" font-size="10" font-weight="500">前端</text>
+          </g>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="后端" data-legend-x="125" data-legend-baseline="980" data-legend-width="63">
+            <rect x="125" y="971" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="147" y="980" class="t-muted" font-size="10" font-weight="500">后端</text>
+          </g>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="数据库" data-legend-x="210" data-legend-baseline="980" data-legend-width="73">
+            <rect x="210" y="971" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
+            <text x="232" y="980" class="t-muted" font-size="10" font-weight="500">数据库</text>
+          </g>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部系统" data-legend-x="305" data-legend-baseline="980" data-legend-width="83">
+            <rect x="305" y="971" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
+            <text x="327" y="980" class="t-muted" font-size="10" font-weight="500">外部系统</text>
+          </g>
+        </g>
+      </g><rect x="50" y="1080" width="420" height="145" rx="10" fill="white" stroke="#cbd5e1"/><text x="66" y="1110" font-size="17" font-weight="600" fill="#0f172a">完整指标</text><text x="66" y="1140" font-size="12" fill="#475569">全局 P95/P99；版本与实例展示 P95</text><text x="66" y="1159" font-size="12" fill="#475569">窗口请求与累计拒绝 / 重试分开读取</text><rect x="488" y="1080" width="420" height="145" rx="10" fill="white" stroke="#cbd5e1"/><text x="504" y="1110" font-size="17" font-weight="600" fill="#0f172a">受控变更</text><text x="504" y="1140" font-size="12" fill="#475569">Agent 只提议版本权重，人工批准后预检 → 提交 → 回读</text><text x="504" y="1159" font-size="12" fill="#475569">结果未知按原 operationId 确认；成功后可补偿回滚</text><rect x="926" y="1080" width="420" height="145" rx="10" fill="white" stroke="#cbd5e1"/><text x="942" y="1110" font-size="17" font-weight="600" fill="#0f172a">运行与存储</text><text x="942" y="1140" font-size="12" fill="#475569">Admin / Agent 不进入请求转发热路径</text><text x="942" y="1159" font-size="12" fill="#475569">Nameserver 注册表在内存；Admin 记录库可持久化</text><text x="50" y="1252" font-size="11" fill="#64748b">动效示意依赖与数据方向；不代表实时流量或自动批准。</text></svg>

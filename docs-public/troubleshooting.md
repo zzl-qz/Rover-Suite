@@ -36,7 +36,7 @@ If health checks fail, verify bind address, port mapping, firewall rules and tok
 Check these items in order:
 
 1. Nameserver is running at the address configured by Gateway.
-2. The route `serviceName` matches the provider service name.
+2. The selected route target's `serviceName` and `group` match the provider.
 3. Java Starter or HTTP Registrar registered successfully.
 4. Protocol tokens match.
 5. The registered `host:port` is reachable from the Gateway process.
@@ -51,7 +51,7 @@ If Gateway starts before Nameserver, discovery may be completed by the next reco
 | --- | --- |
 | `businessPrefix` | The request path starts with this prefix |
 | `stripPrefix` | The upstream path is rewritten as expected |
-| `serviceName` | Nameserver has a healthy service with this name |
+| `targets[].serviceName` / `group` | Nameserver has healthy instances for this service and group |
 | `targetUrl/targetUrls` | Static upstreams are reachable. Default outbound forwards `http://` only; see section 4.1 for `https://` |
 
 If routes were changed from Admin, `config/routes.overlay.json` overrides the YAML route list.
@@ -75,6 +75,10 @@ Pick one:
 
 Check Gateway logs for the matched route and selected upstream. Then verify upstream process state, port reachability, Nameserver health and custom Filter behavior.
 
+Select the route in Admin's metrics diagnostics to compare version requests, 5xx, connect failures, timeouts, and
+instance P95. No-upstream/all-circuit-open rejects are cumulative; combine them with window samples. Empty instance
+rows may simply mean no traffic and do not prove health.
+
 ## 6. Configuration changes do not take effect
 
 Configuration precedence:
@@ -97,3 +101,10 @@ When `rover.gateway.adminEnabled: true`, runtime values saved by Admin are writt
 ```
 
 Restore the default level after diagnosis to avoid long-term disk and I/O overhead.
+
+## 8. Investigate latency and capacity
+
+Start with the live Admin dashboard for traffic and process resources, then open metrics diagnostics for global P99,
+route versions, and upstream instances. Use request tracing for individual slow requests. See the
+[Admin guide](./admin-guide.md) for metric semantics and the [Performance Report](./performance-report.md) for capacity
+tests, reproducible commands, and their limits.

@@ -40,7 +40,7 @@ curl -H "X-Rover-Admin-Token: <nameserver-admin-token>" \
 建议按顺序检查：
 
 1. Nameserver 是否已启动，并监听 Gateway 配置中的地址。
-2. 业务服务的 `serviceName` 是否与路由中的 `serviceName` 一致。
+2. 业务服务的 `serviceName`、`group` 是否与路由 `targets` 中选中的版本一致。
 3. Java Starter 或 HTTP Registrar 是否已经注册成功。
 4. 协议 token 是否一致。
 5. 实例注册的 `host:port` 是否能从 Gateway 进程访问。
@@ -55,7 +55,7 @@ curl -H "X-Rover-Admin-Token: <nameserver-admin-token>" \
 | --- | --- |
 | `businessPrefix` | 请求路径是否以该前缀开头 |
 | `stripPrefix` | 转发给上游前是否正确裁剪路径 |
-| `serviceName` | 是否能在 Nameserver 中找到同名服务 |
+| `targets[].serviceName` / `group` | 是否能在 Nameserver 中找到对应服务与组的健康实例 |
 | `targetUrl/targetUrls` | 静态上游地址是否可访问。默认只转发 `http://`；`https://` 见第 4.1 节 |
 
 如果使用 Admin 修改过路由，`config/routes.overlay.json` 会整体覆盖 YAML 路由。YAML 修改不生效时，优先检查这个 overlay 文件。
@@ -74,6 +74,9 @@ curl -H "X-Rover-Admin-Token: <nameserver-admin-token>" \
 502 更常见于上游连接失败或响应异常。503 更常见于无可用实例、资源不足或插件拒绝。
 
 建议先看 Gateway 日志中的路由命中和上游地址，再检查：
+
+在 Admin「指标诊断」选择该路由，可比较版本请求数、5xx、连接失败、超时与上游实例 P95。
+无实例/全熔断拒绝属于累计计数，需结合窗口样本判断当前状态；空实例行也可能只是没有流量，不能等同于健康。
 
 - 上游进程是否还在运行。
 - 上游端口是否能从 Gateway 所在机器访问。
@@ -112,4 +115,5 @@ Logback 示例：
 
 ## 8. 性能问题看哪里
 
-如果问题和吞吐、延迟、503 或 CPU 有关，请看独立的[性能报告与压测方法](./performance-report.zh-CN.md)。性能报告里记录了测试前提、可复现命令和数据解读边界。
+先在 Admin 实时仪表盘看流量与资源，再打开「指标诊断」查看全局 P99、路由版本和上游实例；慢请求细节到「请求追踪」查看。
+使用步骤与统计口径见 [Admin 手册](./admin-guide.zh-CN.md)。容量评估请看独立的[性能报告与压测方法](./performance-report.zh-CN.md)，其中记录了测试前提、可复现命令和数据解读边界。

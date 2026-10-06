@@ -12,13 +12,15 @@
   <img src="./assets/rover-suite-architecture.gif" alt="Rover-Suite animated system architecture" width="100%">
 </p>
 
-> Animated signals cover provider registration, discovery reconciliation, request processing, and Admin control paths. If GIF playback is unavailable, use the static preview or interactive diagram below.
+> Animated signals cover requests and discovery, full metrics diagnostics, and Agent investigation with human approval. They illustrate dependencies and data direction, not live traffic or automatic approval. If GIF playback is unavailable, use the static preview or interactive diagram below.
 
 <div align="center">
 
 [Static preview](./assets/rover-suite-architecture.png) · [Open the interactive architecture diagram](./rover-suite-architecture-editorial.html)
 
 </div>
+
+The GIF, PNG, [SVG](./assets/rover-suite-architecture.svg), and interactive diagram share one [architecture specification](./assets/rover-suite-architecture.architecture.json). The viewer has three chapters: requests and discovery, full metrics diagnostics, and investigation with human approval.
 
 ## 1. Overview
 
@@ -45,7 +47,9 @@ Rover-Gateway
 | Gateway | Routing, local discovery cache, load balancing, reverse proxy, and filters |
 | Java Client / Starter | TCP registration, heartbeat, reconnect, state replay, and Spring Boot lifecycle integration |
 | HTTP Registrar | Minimal cross-language registration, heartbeat, retry, and best-effort deregistration |
-| Admin | Optional console: 1s live snapshot while the dashboard tab is visible (pauses when hidden); off the proxy hot path |
+| Admin | Optional console with a live dashboard, full metrics diagnostics, model configuration, and human approval; off the proxy hot path |
+| Ops Agent | Runs inside the Admin JVM to query facts, investigate alerts, and file pending version-weight changes |
+| Local record store | With a configured path, H2 persists conversations, evidence, changes, and telemetry independently of the Nameserver registry |
 
 The Nameserver deliberately supports two provider-side transports while keeping one registration model:
 
@@ -108,6 +112,14 @@ deployment crosses a trust boundary, it can configure `rover.nameserver.token`, 
 outer network policy.
 
 ---
+
+### 2.1 Admin and Ops Agent
+
+Admin reads Gateway and Nameserver through management APIs. The visible dashboard polls live once per second; visible diagnostics reads full snapshots about every 10 seconds. Global metrics show P99, route/instance metrics show P95, and a version reports the maximum instance P95. See the [Admin guide](./admin-guide.md) for the metric semantics.
+
+Ops Agent runs in the Admin JVM. An available model helps with conversation, planning, and explanation; read-only tools query runtime facts and a proposal tool files pending weight changes. After human approval, the executor checks the revision and previous weight, submits, and reads back. A successful change can be compensated on request; uncertain outcomes use the original operationId. The model cannot directly call a write port. See [Ops Agent](./ops-agent.md) and the [Admin API](./admin-api.md).
+
+With a configured record-store path, local H2 persists conversations, investigation evidence, changes, and telemetry. The Nameserver registry remains in memory. Without a model, conversations report unavailability and alert investigations can use rule fallback.
 
 ## 3. Provider registration plane
 
@@ -279,14 +291,15 @@ HTTP Registration is therefore not strictly a “pull mode”: the provider acti
 pull path is Gateway reconciliation. Push is the low-latency notification path; query is the repair path for
 startup, reconnect, a missed or rejected push, and epoch/revision reconciliation.
 
-This is not a strong real-time consistency guarantee. Two current boundaries are explicit: Gateway protects the
-empty snapshot produced by the last instance and clears it at the next periodic reconciliation, while a failed
-initial subscription when Nameserver is unavailable may also recover only at that reconciliation. With the default
-`reconcileIntervalMs=30000`, either window can last roughly 30 seconds. On this machine's Compose run, stopping
-the last instance produced 502 immediately and `503 NO_UPSTREAM` after about 17 seconds.
+This is not a strong real-time consistency guarantee. Removing or expiring the last instance advances revision and
+pushes an empty list; Gateway clears the group when it accepts the newer snapshot. Empty-push protection rejects only
+empty packets that are not newer than the local cache. Missed pushes, disconnections, and failed initial subscriptions
+are repaired by periodic reconciliation (default `reconcileIntervalMs=30000`). The old 17-second measurement is not a
+fixed current removal delay.
 
-`group` is a query/subscription filter rather than part of the instance identity. Multi-group snapshot isolation is
-still being finalized; the recommended current mode is an empty group.
+`group` filters queries, subscriptions, and version routing without changing instance identity. Pushes and local
+caches are keyed by service+group, with no fallback to another group when a specific group is empty. It distinguishes versions or
+environments but supplies no tenant authentication; see [Service Registration](./service-registration.md#23-current-group-boundary).
 
 Relevant implementation:
 
@@ -420,7 +433,7 @@ Conventions:
 - `*-bootstrap` modules are process entry points.
 - `rover-admin` is an optional console that calls management APIs over HTTP; it does not compile against the
   Nameserver or Gateway core modules.
-- `rover-agent-core` is the Ops Agent domain and rules layer (domain objects, read-only ports, neutral snapshots); it
+- `rover-agent-core` is the Ops Agent domain and rules layer (domain objects, read-only snapshots, controlled-change ports); it
   depends on neither Spring, Jackson, nor Spring AI.
 - `rover-agent-runtime` carries the Spring AI and Spring AI Alibaba Graph orchestration; only `rover-admin` depends on
   it, and both currently run in the same JVM. See
@@ -428,7 +441,7 @@ Conventions:
 - The `rover-agent-runtime` execution layer depends only on the port `ChatModelGateway`
   (`com.rover.agent.runtime.llm.ChatModelGateway`, default implementation `NoopChatModelGateway`). The Admin side
   provides the OpenAI-compatible adapter `AdminChatModelGateway` (hot-swap, three states) plus `ModelConfigStore`,
-  `SecretCipher`, and `ModelPresets`. Spring AI dependencies appear only in the `rover-agent-runtime` and `rover-admin`
+  `SecretCipher`, `ModelVendor`, and `ModelPresets`. Spring AI dependencies appear only in the `rover-agent-runtime` and `rover-admin`
   modules.
 - Admin console authentication: `AdminSecurityConfiguration` provides the `SecurityFilterChain`; the login rate-limit
   filter `LoginAttemptGuardFilter` is inserted before `UsernamePasswordAuthenticationFilter`; login-state queries live

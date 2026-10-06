@@ -310,8 +310,8 @@ cmake --build build/rover-http
 ./deploy/scripts/demo-fault.sh
 ```
 
-本场参考：20 次 hello 为 10 / 10；`docker stop` / `kill` 其中一个都是立刻躲开；`docker pause` 约 35 秒躲开；
-停 Nameserver 约 2 秒内仍转；停最后一个实例立刻 502，约 17 秒后 503。
+历史 Compose 实测（2026-08-26）：20 次 hello 为 10 / 10；`docker stop` / `kill` 其中一个都是立刻躲开；`docker pause` 约 35 秒躲开；
+停 Nameserver 约 2 秒内仍转；停最后一个实例立刻 502，约 17 秒后 503。这不是当前固定延迟：新版已接受较新 revision 的空实例快照并清空缓存。
 `docker kill` 走断连清理，不是心跳超时。说明见 [`deploy/docker/README.md`](../deploy/docker/README.md)。
 
 合入维护分支前：

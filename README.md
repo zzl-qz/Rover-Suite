@@ -52,7 +52,7 @@ Open Admin at <http://127.0.0.1:9090>. See the [Docker Compose demo](deploy/dock
 
 - **Gateway + service discovery in one small stack:** Gateway routes through a local instance cache while Nameserver owns registration, health, and snapshot push.
 - **Mixed-language registration:** Java services can use the Starter; Node.js, Python, Go, PHP, and C++ can register through the HTTP+JSON API.
-- **Runtime visibility:** Admin shows routes, instances, recent events, sampled request traces, metrics, and hot-reloadable settings.
+- **Runtime visibility:** Admin combines a live dashboard with full metrics diagnostics: global P95/P99, route versions, upstream instances, and cumulative reject/retry counters, alongside sampled traces, registry events, and hot-reloadable settings.
 - **Extension points without a heavy platform:** Java SPI filters and load-balancers cover common customization without introducing a full service mesh.
 - **Ops agent (preview):** Rover Ops Agent runs read-only fault investigation over Gateway and Nameserver runtime data and returns a conclusion, evidence sources, and collection timestamps. It can also file one kind of operational change — a gray-release weight adjustment — as a pending change that only executes after human approval, then verifies the result by reading the route back and can compensate with a rollback; see [Rover Ops Agent](docs-public/ops-agent.md) for positioning and boundaries.
 
@@ -67,7 +67,13 @@ Rover-Suite is for small teams running multiple monoliths, side services, or mix
 </p>
 
 <p align="center">
-  <img src="docs-public/images/admin/01-dashboard-overview.png" alt="Rover-Admin dashboard overview" width="100%">
+  <img src="docs-public/images/admin/01-dashboard-overview.jpg" alt="Rover-Admin dashboard overview" width="100%">
+</p>
+
+Screenshots use real local processes and simulated HTTP traffic.
+
+<p align="center">
+  <img src="docs-public/images/admin/11-metrics-global.jpg" alt="Rover-Admin full metrics diagnostics" width="100%">
 </p>
 
 <div align="center">
@@ -80,7 +86,8 @@ Rover-Suite is for small teams running multiple monoliths, side services, or mix
 
 - Current version: `1.0.0-SNAPSHOT` single-node preview.
 - Nameserver is an in-memory soft-state registry; clients re-register after restart.
-- WebSocket/SSE, grouped discovery, cold-start recovery, and clustered high availability are not presented as implemented capabilities.
+- Group-aware discovery and weighted version routing are supported through `targets`; `group` is a routing filter, not a tenant security boundary.
+- Gateway does not proxy WebSocket/SSE or terminate client HTTPS. Discovery recovers through re-registration and query reconciliation; Nameserver HA and persistence-based recovery are not implemented.
 - Defaults favor local or trusted-network startup. Across a trust boundary, restrict bind addresses and configure protocol/admin tokens plus outer TLS/ACL controls.
 - SDK artifacts are not published to Maven Central yet; build from source until the first public SDK release.
 

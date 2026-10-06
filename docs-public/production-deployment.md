@@ -21,7 +21,7 @@ Single-node systemd units: [`deploy/systemd/README.md`](../deploy/systemd/README
 ## Minimum security configuration
 
 1. Use non-empty random protocol tokens for Gateway and Nameserver.
-2. Use separate management tokens for Gateway and Nameserver.
+2. Keep protocol and management tokens separate. Admin currently has one `admin-token`; when one Admin manages both Gateway and Nameserver, it must match both management tokens.
 3. Restrict management ports to the operations network; do not expose Admin publicly.
 4. Put HTTP/TCP traffic behind TLS termination, an ACL or a VPN. Tokens do not encrypt traffic. Gateway-to-upstream traffic is plain HTTP by default. Terminate caller HTTPS at the reverse proxy. If the upstream URL must be `https://`, set `rover.gateway.proxy.outbound` to `jdk` and restart; throughput then returns to the JDK-outbound band.
 5. Disable unused HTTP registration and CORS endpoints.
@@ -83,7 +83,8 @@ Disable the access-log filter with `rover.gateway.filters.accessLog: false`.
 
 - Run `./deploy/scripts/backup-overlays.sh` (or point it at your config dir).
 - Back up route and runtime overlays.
+- Configure `rover.admin.log-store-path` explicitly and retain that directory. Stop Admin before copying `<path>.mv.db`; retain model configuration and back up its master key separately. The overlay script does not cover the record store or keys.
 - Verify `_manage/health` / Admin API on the same versions.
 - Keep protocol and management tokens stable during a rolling upgrade.
-- Check `/api/overview`, route count, healthy instances and error rates after upgrading.
+- After signing in, check `/api/overview`, full metrics diagnostics, route count, healthy instances, and error rates; see [Admin API](./admin-api.md#authentication-session-and-csrf) for authentication.
 - Smoke: `./deploy/scripts/smoke-compose.sh` (requires Docker).

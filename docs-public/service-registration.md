@@ -94,7 +94,7 @@ Common options:
 | `service-name` | `spring.application.name` | Registered service name |
 | `instance-id` | resolved `host:port` | Unique instance key within a service |
 | `host`, `port` | auto-detected | Address advertised to Gateway |
-| `group`, `zone`, `metadata` | empty | Placement and custom metadata; keep `group` empty in the current version |
+| `group`, `zone`, `metadata` | empty | Placement and custom metadata; for grouped routing, `group` must match the route target |
 | `weight` | `100` | Load-balancing weight |
 | `ephemeral` | `true` | Remove after disconnect/expiry |
 | `token` | empty | Nameserver protocol token |

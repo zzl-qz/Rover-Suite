@@ -182,8 +182,9 @@ START → plan ──steps available──→ execute (runs read-only capabiliti
   during node execution are fine). Therefore the conclusion is produced directly by the `synthesise` node and the
   step-progress callback is held by node closures; neither is read back from the returned state.
 
-Checkpoint and interrupt are not enabled yet: read-only tasks are short and do not need recovery, so they are deferred
-until the Level C approval and long-task phase.
+The Graph framework's own checkpoint and interrupt integration is not enabled. Business-level safe resume points
+and explicit task recovery already exist; human approval uses separate REST endpoints and state CAS. Neither depends
+on framework interruption; see the recovery and controlled-change sections below.
 
 ## 6.1 Code layout and module boundaries
 

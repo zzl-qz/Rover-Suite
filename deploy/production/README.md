@@ -17,7 +17,7 @@ cp deploy/production/rover-gateway.example.yml config/rover-gateway.yml
 cp deploy/production/admin-application.example.yml /path/to/admin/config/application.yml
 ```
 
-2. 把所有 `REPLACE_*` 换成足够长的随机串；Gateway / Nameserver 的 **adminToken 建议不同**；
+2. 把所有 `REPLACE_*` 换成足够长的随机串；协议 token 与管理 token 分开。当前同一 Admin 同时管理两端时，管理 token 需与其 `admin-token` 一致；
    Gateway 连 Nameserver 的 `discovery.nameserver.token` 需要与 Nameserver `token` 一致。
 
 3. 把 `bindHost` / `manageBindHost` 改成内网 IP（示例里是 `10.0.10.x`）。
@@ -35,5 +35,5 @@ export ROVER_STRICT_SECURITY=true
 
 - 探活：`GET /_manage/health`（需管理 token）
 - systemd 示例：[`../systemd/README.md`](../systemd/README.md)
-- 备份：`../scripts/backup-overlays.sh`
+- 备份：`../scripts/backup-overlays.sh` 只包含 overlay；Admin 的 `log-store-path` 目录、模型配置和主密钥需另行备份，记录库复制前停 Admin。
 - 冒烟：`../scripts/smoke-compose.sh`

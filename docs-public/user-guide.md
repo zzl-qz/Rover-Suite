@@ -266,6 +266,11 @@ Open `http://127.0.0.1:9090`. `/api/live` polls about once per second **only whi
 `gateway.trace.sampleRate`: `0` records only slow requests (default); set it to `1` in Admin config to
 capture ordinary traffic without restart.
 
+Open **指标诊断** for global P95/P99, all routes/upstreams, and cumulative reject/retry counters. A route row's
+diagnosis action opens version and instance detail over 1/5 minutes. The global window follows Gateway configuration;
+the route window is chosen separately. Missing samples do not prove health, and version P95 is the maximum instance
+P95. See the [Admin guide](./admin-guide.md) for screenshots and metric semantics.
+
 If the Gateway runs on a non-default port (bundled default is often `80`), point Rover-Admin's Gateway
 base URL at that listener.
 
@@ -328,7 +333,7 @@ for strict removal consistency, group isolation, streaming protocols, or an inte
 | Java provider cannot authenticate | `rover.nameserver.token` in the application does not match Nameserver. |
 | Gateway cannot discover services | Check `rover.gateway.discovery.nameserver.address` and `.token`; these are Gateway keys, not Starter keys. |
 | Nameserver is back but Gateway still has no instance | A failed initial watch may wait until the next reconciliation; wait for `reconcileIntervalMs` or restart Gateway. |
-| Traffic briefly targets the last stopped instance | Gateway's empty-snapshot protection clears it at the next reconciliation, up to about 30 seconds by default. This machine's run: 502 immediately, 503 after about 17 seconds. |
+| Traffic briefly targets the last stopped instance | Check whether Gateway has received the group's new revision and empty snapshot. A newer empty push clears that group; missed pushes or disconnections are repaired by periodic reconciliation. |
 | HTTP Registrar receives `404 NOT_FOUND` | `clientApiEnabled` is false, the path is wrong, or the HTTP listener is disabled. Enable the Registration API and restart. |
 | HTTP Registrar receives `409 STALE_SESSION` | Another process registered the same `serviceName + instanceId`. Give replicas unique IDs and one owner per endpoint. |
 | Provider is visible but unreachable | The registered host/port is not reachable from Gateway. |
@@ -336,6 +341,8 @@ for strict removal consistency, group isolation, streaming protocols, or an inte
 | Startup or hot-reload says only http upstreams are supported | Default Netty outbound does not forward `https://`. Use `http://`, or set `proxy.outbound: jdk`. |
 | Confirm the current I/O implementation | Read `ioTransport=` in the startup log. In a Docker Linux container, `auto` is usually epoll. Host `java -jar` on macOS selects kqueue. |
 | A custom LB is missing from Admin | Normal. `gateway.loadbalance.strategy` is a startup/plugin-mounting setting. Put the built-in strategy, SPI `name()`, or implementation FQCN in `rover-gateway.yml` and restart Gateway; Admin no longer edits it. |
+
+The following is a historical comparison; its last-instance removal timing does not describe the current implementation.
 
 To replay discovery faults on local Compose, run `./deploy/scripts/demo-fault.sh`. This machine's sample:
 20 hellos split 10 / 10; `docker stop` and `docker kill` of one instance both avoided it immediately

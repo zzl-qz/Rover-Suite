@@ -331,10 +331,11 @@ Optional local Compose discovery check:
 ./deploy/scripts/demo-fault.sh
 ```
 
-This machine's sample: 20 hellos split 10 / 10; `docker stop` / `kill` of one instance both avoided it
+Historical Compose sample (2026-08-26): 20 hellos split 10 / 10; `docker stop` / `kill` of one instance both avoided it
 immediately; `docker pause` avoided it after about 35 seconds; after Nameserver was stopped, forwarding
 continued within about 2 seconds; after the last instance stopped, requests were 502 immediately and 503 after
-about 17 seconds. `docker kill` is disconnect cleanup, not the heartbeat-timeout path.
+about 17 seconds. This is not a fixed delay in the current version: a newer empty revision now clears cached instances.
+`docker kill` is disconnect cleanup, not the heartbeat-timeout path.
 See [`deploy/docker/README.md`](../deploy/docker/README.md).
 
 Before merging into a maintained branch:
