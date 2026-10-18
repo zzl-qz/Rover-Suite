@@ -77,6 +77,7 @@ their own history — it is not a cross-host audit source. What gets written and
 | `rover.agent.execution.queue-capacity` | `16` | Execution queue capacity (1–1000); a full queue rejects submissions with `429`. Never an unbounded queue | Restart |
 | `rover.agent.execution.task-capacity` | `200` | Task registration capacity (1–10000); finished tasks may be evicted by the retention policy, running tasks never are | Restart |
 | `rover.agent.context.recent-message-limit` | `8` | Number of recent messages carried into a follow-up | Restart |
+| `rover.agent.alerts.owner-user-id` | empty | Handler account for new alerts; empty uses the authenticated caller. Set an existing on-call account to route alerts there while `Incident.triggeredBy` retains the source. Env `ROVER_AGENT_ALERT_OWNER`; existing sessions are not reassigned, and team authorization is not implemented | Restart |
 | `rover.agent.planning.max-rounds` | `3` | Maximum planning rounds per dynamic investigation (>0); once reached, collection stops and the limit is recorded as a limitation | Restart |
 | `rover.agent.planning.max-tool-calls` | `10` | Maximum read-only capability calls per investigation (>0); after the limit no further call is made and skipped steps are reported honestly | Restart |
 | `rover.agent.planning.max-plan-steps` | `6` | Maximum steps in a single round's plan (>0); extra steps are truncated by plan validation, and any unregistered write capability is dropped | Restart |

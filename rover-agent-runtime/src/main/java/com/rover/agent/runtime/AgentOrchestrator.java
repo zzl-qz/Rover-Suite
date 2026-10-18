@@ -260,16 +260,25 @@ public final class AgentOrchestrator {
     }
 
     /**
-     * 接收告警并创建无用户归属的独立会话，异步执行只读调查。
+     * 内部兼容入口；认证接入使用携带来源主体的重载。
      * 事件来源为 ALERT；未指定窗口时使用数据源默认值。
      *
      * @return 已受理的调查任务视图（异步执行，可凭 taskId 轮询 / 订阅事件）
      */
     public TaskView ingestAlert(String path, String alertMessage, Long fromMillis, Long toMillis) {
+        return ingestAlert(null, path, alertMessage, fromMillis, toMillis);
+    }
+
+    /** 身份取后端认证上下文；告警独立开会话，处理人可从工作台查看和继续调查。 */
+    public TaskView ingestAlert(String sourceUserId, String path, String alertMessage,
+                                Long fromMillis, Long toMillis) {
+        if ((fromMillis == null) != (toMillis == null)) {
+            throw new IllegalArgumentException("fromMillis 与 toMillis 需同时提供");
+        }
         TimeRange range = (fromMillis != null && toMillis != null)
                 ? new TimeRange(fromMillis, toMillis)
                 : TimeRange.unspecified();
-        return investigations.submitAlert(path, alertMessage, range);
+        return investigations.submitAlert(user(sourceUserId), path, alertMessage, range);
     }
 
     /** 尽力识别问题里点到的对象：识别出来就挂到对应事件下（同对象续用、换对象另开），识别不出也不拦。 */
@@ -280,16 +289,16 @@ public final class AgentOrchestrator {
             resolution = resolveTarget(task.question(), context, options.target());
         } catch (Exception ex) {
             log.warn("目标解析失败，按无对象继续对话", ex);
-            bindCurrentIncident(task, context);
+            bindCurrentIncident(task, context, options.timeRange());
             return;
         }
         if (resolution.needsClarification()) {
-            bindCurrentIncident(task, context);
+            bindCurrentIncident(task, context, options.timeRange());
             return;
         }
         Incident incident = pickIncident(session, context, resolution.target(), options.timeRange());
         registry.attachTask(incident.incidentId(), task.taskId());
-        task.bind(incident.incidentId(), resolution.investigationPath(), resolution.target());
+        task.bind(incident.incidentId(), resolution.investigationPath(), resolution.target(), incident.timeRange());
         task.step(AgentStepType.TARGET_RESOLUTION, STEP_TARGET, StepStatus.COMPLETED,
                 "已识别对话对象：" + describe(resolution.target()));
     }
@@ -322,11 +331,13 @@ public final class AgentOrchestrator {
      *
      * 挂在同一事件下，会话的追问才连得上；而一句没点对象的问候不该把上一轮的事件重新拉起来。
      */
-    private void bindCurrentIncident(InvestigationTask task, AgentContext context) {
+    private void bindCurrentIncident(InvestigationTask task, AgentContext context, TimeRange requestedRange) {
+        TimeRange range = requestedRange.isUnspecified() && context != null ? context.timeRange() : requestedRange;
         if (context == null || !context.hasActiveIncident()) {
+            task.bind(null, "", ResourceTarget.unknown(), range);
             return;
         }
-        task.bind(context.activeIncidentId(), "", ResourceTarget.unknown());
+        task.bind(context.activeIncidentId(), "", ResourceTarget.unknown(), range);
     }
 
     /** 结论落成一条 Agent 回复：任务失败或没有结论时静默跳过，不伪造回复。 */

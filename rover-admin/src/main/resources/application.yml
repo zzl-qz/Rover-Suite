@@ -44,6 +44,9 @@ spring:
 # Admin 只调组件管理口，自己不持有真实配置
 rover:
   agent:
+    alerts:
+      # 留空时由认证来源账号处理；指定账号时交给该处理人，来源保存在 Incident.triggeredBy。
+      owner-user-id: ${ROVER_AGENT_ALERT_OWNER:}
     limits:
       # 每个任务共用：目标解析、重试、调查规划和工具循环都不重置预算。
       max-model-calls: 20

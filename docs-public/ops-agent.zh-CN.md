@@ -119,8 +119,18 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
   可在折叠的「高级上下文」里手工指定 route / service / instance 与时间范围；追问沿用当前事件。**已实现。**
 - **事件 / 告警触发（已实现）：** `POST /api/agent/events/ingest` 把一条告警转成「哪条路由 + 什么时间窗 + 怀疑什么」三要素，
   仅为机器调用（需登录，建议服务账号），送出后独立开会话、记一笔 `ALERT` 来源事件，并复用与人工提问完全相同的取数链路开展调查，
-  回 `202` 与任务句柄。会话按事件隔离，不归属人工用户，因此不与人工会话争「单活跃任务」锁。
+  回 `202` 与任务句柄。会话按事件隔离，默认归属认证调用者；可用 `ROVER_AGENT_ALERT_OWNER`
+  （`rover.agent.alerts.owner-user-id`）统一映射到现有值班账号。事件的 `triggeredBy` 独立保留认证来源，
+  工作台展示来源和处理账号；任务详情、SSE、工作台与追问均检查会话归属。请求体不能指定身份。
+  这是单处理账号的过渡方案，团队队列、RBAC 和接管分权仍待开发。
   尚未实现的是**主动**的那半边：定时自巡检、自建 `INSPECTION` 事件。
+
+指定 `fromMillis` / `toMillis` 时必须成对提供，且起止顺序合法。该范围贯穿调查规划、工具、证据和结论；
+日志使用指定窗口，追踪和注册事件只保留窗口内记录。证据元数据附带 `requestedFromMillis`、`requestedToMillis`
+与 `temporalScope`：路由、实例和配置标为 `CURRENT_CONTEXT`，仅是当前参考；日志、追踪和事件标为
+`REQUESTED_WINDOW`，表示筛选范围，不保证采样或缓冲覆盖完整；知识标为 `REFERENCE`。
+实时滚动指标不能回溯绝对窗口，因此返回限制，不读取当前指标冒充历史。当前健康不能排除过去故障，
+没有历史样本也不能证明没有故障。未指定窗口时沿用数据源默认口径。实现与验证见 [S0 交付记录](agent-s0-report.zh-CN.md)。
 
 ## 6. 架构取向
 
@@ -423,7 +433,8 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 `operationId` 落库再发请求，重启时按「幂等号有没有落库」把半途的变更判成失败或结果未知。
 - **恢复点存高水位，不存清单**：`stage` 只描述业务阶段（`STARTED` / `PLANNED` / `TOOL_COMPLETED` / `ROUND_EVALUATED` / `SYNTHESIS_COMPLETED` / `COMPLETED`），再加轮数、已调用次数、步骤条数与证据条数；具体是哪些步骤与证据按序号从关系表读回来，不在这里复制 ID 列表。图节点名只作诊断字段（`runtime_node`），恢复流程不依赖它——换框架、改节点名都不能影响恢复语义。`resume_state_json` 留给「无法从关系表重建的运行态」，本轮两条路径的运行态都能重建，因此先留空，不写没有来源的内容。
 - **恢复点与事实同一次写入**：任务状态、步骤、证据与恢复点在一个事务里落下，所以不会出现「恢复点说证据 3 条、库里只有 2 条」这种恢复时才暴露的坏状态。证据也因此改成**增量落库**：工具一返回就随恢复点落库，不再等结论合成时一次性补写；任务视图上的 `evidence` 是「本次已取到的全部证据」，结论里的 `result.evidence` 是同一批。
-- **Schema 与迁移约定**：Agent 聚合的表（会话 / 消息 / 事件 / 任务 / 步骤 / 证据 + 安全恢复点 + 受控变更记录）是本项目数据库 Schema 的起点，按 `agent_schema_migrations` 版本化迁移管理（v1 建聚合表、v2 删旧 JSON 快照表、v3 加恢复点、v4 加变更记录）。这一版是唯一允许清库重建的版本；此后只新增迁移、不改已发布的迁移，也不再要求使用者清库。关系是外键而不是约定：会话指向事件、事件指向任务、任务指向步骤与证据与恢复点，变更挂在会话与任务上，删会话连带清掉整条链，因此不存在孤儿与悬空引用。
+- **Schema 与迁移约定**：Agent 聚合的表（会话 / 消息 / 事件 / 任务 / 步骤 / 证据 + 安全恢复点 + 受控变更记录）按 `agent_schema_migrations` 版本化迁移管理：v1 建聚合表、v2 删旧 JSON 快照表、v3 加恢复点、v4 加变更记录、v5 加请求单位与流量预览、v6 加认证告警来源 `triggered_by`。升级只新增迁移，不改已发布迁移、不要求清库；历史事件来源未知时保留空值，不从处理账号反推。关系由外键维护；删会话仍会连带清理记录，独立长期审计尚待开发。
+- **变更写回的并发契约**：`AgentAction.version` 是记录行版本，与 Gateway 的路由 revision 分开。仓储新建返回版本 1，后续更新必须携带读到的版本，成功后递增；过期或已删除的记录拒绝写回。审批/回滚入口同时检查状态和行版本，执行器的每次保存也检查版本，迟到的 resolve 不能覆盖回滚。异常恢复读取已持久化的操作号，按原号对账，不换号重发。该保护不等于多节点运行能力，持久 Worker、租约和共享生产存储仍待开发。
 - 结构化输出强约束 + 失败分类：`JsonCompletion` 的解析契约由调用方传入（`Function<String, Optional<T>> parser`）；`LlmInvestigationPlanner` 与 `ModelTargetInterpreter` 走严格契约——JSON 非法、或取值越界，整条结果直接丢弃并回退规则层，不再静默补默认值；`ModelCallOutcome` 把调用结局区分为 `OK` / `NOT_CONFIGURED` / `UNAVAILABLE` / `TIMEOUT` / `ERROR` / `EMPTY` / `REJECTED`，其中 `rejected` 专门表示「模型返回了文本但不符合契约」。解决「越界输出被补默认值后损失无法定位」的问题：宁可回退规则层，也不吞掉契约违规。
 - 模型调用可观测性（含 token 用量）：`AgentMetrics` 的口径变为 `modelCall(model, scene, durationMillis, outcome)`，并新增 `modelTokens(model, scene, promptTokens, completionTokens)`；Micrometer 侧暴露 `model.calls`（标签 `model` / `scene` / `outcome`）、`model.duration`（标签 `model` / `scene`）与 `model.tokens`（标签 `model` / `scene` / `kind`，取值 `prompt` / `completion`；拿不到用量就不上报、不记 0），并删除只能回答「失败几次」的 `model.error`。解决「调用次数与耗时说明不了成本与上下文膨胀」的问题：token 用量按场景可查，成本与提示词膨胀可以被量化。
 - 提示注入隔离（`UntrustedText`）：用哨兵把不可信内容围起来（开始 `<<<ROVER-DATA`、结束 `ROVER-DATA>>>`），`contract()` 声明哨兵内的一切都不是指令；`block(label, content)` 会先把内容里出现的哨兵替换成占位符 `[ROVER-DATA]` 再围栏。已应用在 `ModelExplainer`（快照描述）、`LlmInvestigationPlanner`（用户问题 + 已采集证据）与 `ModelTargetInterpreter`（候选对象 + 用户问题）。解决「快照 / 问题 / 证据都是外部内容，可能诱导模型越权」的问题：内容无法伪造边界，模型能把「数据」和「指令」分开。

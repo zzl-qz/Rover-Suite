@@ -109,6 +109,13 @@ public final class SnapshotTools {
         Map<String, String> core = new LinkedHashMap<>();
         core.put(TOOL_ROUTE, routeText());
         core.put(TOOL_INSTANCE, instanceText());
+        // 指定时段的日志和知识已经采集完成，解读必须看得到，不能只给当前路由与实例。
+        for (String reference : List.of("/api/logs", "/api/knowledge")) {
+            String text = snapshots.get(reference);
+            if (text != null && !text.isBlank()) {
+                core.put(reference.equals("/api/logs") ? "历史日志" : "运维知识参考", text);
+            }
+        }
         return core;
     }
 

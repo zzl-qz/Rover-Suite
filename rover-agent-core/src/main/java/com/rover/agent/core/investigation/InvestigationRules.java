@@ -44,6 +44,9 @@ public final class InvestigationRules {
     private InvestigationRules() { }
 
     public static Findings evaluate(FindingsInput input) {
+        if (!input.timeRange().isUnspecified()) {
+            return evaluateSpecifiedRange(input);
+        }
         RouteSnapshot route = input.route();
         DiscoveryMode discovery = input.discoveryMode() == null ? DiscoveryMode.UNKNOWN : input.discoveryMode();
         List<InstanceSnapshot> instances = input.instances();
@@ -132,6 +135,34 @@ public final class InvestigationRules {
             summary = summary + inconclusiveClause;
         }
         return new Findings(List.copyOf(hypotheses), summary, confidence);
+    }
+
+    /** 当前路由与实例不能验证历史状态；指定时段只能使用时间匹配的请求证据。 */
+    private static Findings evaluateSpecifiedRange(FindingsInput input) {
+        List<Hypothesis> hypotheses = new ArrayList<>();
+        String currentOnly = "当前快照不覆盖指定调查时间范围，无法用于确认或排除该时段的假设";
+        hypotheses.add(hypothesis("H1", "该路径在指定时段未命中路由", Verdict.UNKNOWN, currentOnly,
+                input.routeRead() ? List.of(SOURCE_ROUTES) : List.of()));
+        hypotheses.add(hypothesis("H3", "目标服务在指定时段没有匹配实例", Verdict.UNKNOWN, currentOnly,
+                input.instances() == null ? List.of() : List.of(SOURCE_INSTANCES)));
+        hypotheses.add(hypothesis("H4", "匹配实例在指定时段均不健康", Verdict.UNKNOWN, currentOnly,
+                input.instances() == null ? List.of() : List.of(SOURCE_INSTANCES)));
+        TraceSnapshot traces = input.traces();
+        boolean observed503 = traces != null && traces.rows() != null && traces.rows().stream()
+                .anyMatch(row -> row != null && input.timeRange().contains(row.startMillis())
+                        && Texts.orEmpty(input.path()).equals(Texts.orEmpty(row.path())) && row.statusCode() == 503);
+        hypotheses.add(hypothesis("H5", "该路径在指定时段返回 503",
+                observed503 ? Verdict.CONFIRMED : Verdict.UNKNOWN,
+                observed503 ? "指定时间范围内采到该路径返回 503；无法仅凭状态码确定来源或根因"
+                        : "没有取得该时段的 503 样本；追踪有采样和缓冲限制，不能据此排除故障",
+                traces == null ? List.of() : List.of(SOURCE_TRACES)));
+        hypotheses.add(hypothesis("H6", "该路由上游实例在指定时段返回了 5xx", Verdict.UNKNOWN,
+                "当前实时滚动指标不能回溯该调查时间范围，需要对应的历史指标", List.of()));
+        String summary = "调查时间范围：" + input.timeRange().describe()
+                + "。当前路由与实例快照仅作参考，不能据此判断该时段是否发生故障。"
+                + (observed503 ? "该时段的抽样追踪记录到该路径返回 503，根因仍需其他证据验证。"
+                        : "现有时段证据不足以确认故障原因。");
+        return new Findings(List.copyOf(hypotheses), summary, observed503 ? Confidence.MEDIUM : Confidence.LOW);
     }
 
     /** H6：仅使用窗口内样本量达标的实例判定上游 5xx；无样本时无法验证。 */

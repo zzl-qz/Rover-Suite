@@ -10,4 +10,17 @@ import java.util.List;
 public record Incident(String incidentId, String sessionId, IncidentOrigin origin, String title,
                        IncidentStatus status, ResourceTarget target,
                        TimeRange timeRange, String summary, long createdAtMillis, long updatedAtMillis,
-                       List<String> taskIds) { }
+                       List<String> taskIds, String triggeredBy) {
+
+    public Incident {
+        triggeredBy = triggeredBy == null || triggeredBy.isBlank() ? null : triggeredBy.trim();
+    }
+
+    /** 历史事件的来源主体未知时保留空值，不从处理归属反推来源。 */
+    public Incident(String incidentId, String sessionId, IncidentOrigin origin, String title,
+                    IncidentStatus status, ResourceTarget target, TimeRange timeRange, String summary,
+                    long createdAtMillis, long updatedAtMillis, List<String> taskIds) {
+        this(incidentId, sessionId, origin, title, status, target, timeRange, summary, createdAtMillis,
+                updatedAtMillis, taskIds, null);
+    }
+}

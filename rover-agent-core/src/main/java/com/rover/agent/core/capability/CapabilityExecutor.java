@@ -7,6 +7,7 @@ import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.EvidenceType;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.TargetType;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
@@ -117,25 +118,37 @@ public final class CapabilityExecutor {
      */
     public CapabilityResult execute(AgentCapability capability, ResourceTarget target, String path, String taskId,
                                     RouteSnapshot route) {
+        return execute(capability, target, path, taskId, route, TimeRange.unspecified());
+    }
+
+    /** 指定时间范围贯穿工具调用；不支持绝对历史窗口的实时指标明确返回不可用。 */
+    public CapabilityResult execute(AgentCapability capability, ResourceTarget target, String path, String taskId,
+                                    RouteSnapshot route, TimeRange timeRange) {
+        TimeRange range = timeRange == null ? TimeRange.unspecified() : timeRange;
         CapabilityDescriptor descriptor = registry.descriptor(capability).orElse(null);
         if (descriptor == null || !descriptor.available()) {
             return CapabilityResult.unavailable(capability, descriptor);
         }
         ResourceTarget resolved = target == null ? ResourceTarget.unknown() : target;
         String lookup = lookupPath(resolved, path);
-        return switch (capability) {
+        CapabilityResult result = switch (capability) {
             case ROUTE_QUERY -> readRoute(capability, descriptor, lookup, taskId);
             case INSTANCE_QUERY -> readInstances(capability, descriptor, resolved, route, taskId);
-            case GATEWAY_METRICS_QUERY -> readMetrics(capability, descriptor, route, lookup, taskId);
-            case TRACE_QUERY -> readTraces(capability, descriptor, lookup, taskId);
+            case GATEWAY_METRICS_QUERY -> range.isUnspecified()
+                    ? readMetrics(capability, descriptor, route, lookup, taskId)
+                    : CapabilityResult.failed(capability, descriptor,
+                            "当前指标接口仅支持实时滚动窗口，不能回溯指定时间范围（" + range.describe()
+                                    + "）；请查询该时段的落盘日志或历史监控，不能用当前指标判断故障已恢复。");
+            case TRACE_QUERY -> readTraces(capability, descriptor, lookup, taskId, range);
             case CONFIG_READ -> readConfigs(capability, descriptor, taskId);
-            case EVENT_QUERY -> readEvents(capability, descriptor, taskId);
-            // 规划路径无法表达类型/时间范围，按「最近 24 小时、全部类型、按目标过滤」兜底；
-            // 精确的 type/hours 由对话工具的 queryLogs 直接提供。
-            case LOG_QUERY -> queryLogs(lookup, null, System.currentTimeMillis() - 24L * 3_600_000L, null, taskId);
+            case EVENT_QUERY -> readEvents(capability, descriptor, taskId, range);
+            case LOG_QUERY -> queryLogs(lookup, null,
+                    range.isUnspecified() ? System.currentTimeMillis() - 24L * 3_600_000L : range.fromMillis(),
+                    range.isUnspecified() ? null : range.toMillis(), taskId);
             case KNOWLEDGE_RETRIEVAL -> readKnowledge(capability, descriptor, lookup, taskId);
             default -> CapabilityResult.unavailable(capability, descriptor);
         };
+        return result.inTimeRange(range);
     }
 
     /** 取数路径：调用方给出的路径优先，其次用路由目标的取值。 */
@@ -341,7 +354,7 @@ public final class CapabilityExecutor {
 
     /** 读取注册中心事件，仅使用当前窗口内事件判定。 */
     private CapabilityResult readEvents(AgentCapability capability, CapabilityDescriptor descriptor,
-                                        String taskId) {
+                                        String taskId, TimeRange range) {
         List<RegistryEventSnapshot> snapshot;
         try {
             snapshot = events.events();
@@ -350,8 +363,11 @@ public final class CapabilityExecutor {
             return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.eventsUnavailable());
         }
         List<RegistryEventSnapshot> rows = snapshot == null ? List.of() : snapshot;
+        if (!range.isUnspecified()) {
+            rows = rows.stream().filter(row -> row != null && range.contains(row.timestampMillis())).toList();
+        }
         long observedAt = System.currentTimeMillis();
-        EvidenceNarration narration = EvidenceNarrator.events(rows, observedAt);
+        EvidenceNarration narration = EvidenceNarrator.events(rows, observedAt, range);
         return CapabilityResult.success(capability, descriptor,
                         List.of(Evidence.of(taskId, EvidenceType.EVENT, SOURCE_EVENTS, "注册中心事件",
                                 narration.detail(), "/api/events", metadata(narration, observedAt), observedAt)),
@@ -360,13 +376,18 @@ public final class CapabilityExecutor {
     }
 
     private CapabilityResult readTraces(AgentCapability capability, CapabilityDescriptor descriptor, String path,
-                                        String taskId) {
+                                        String taskId, TimeRange range) {
         if (path.isBlank()) {
             return CapabilityResult.failed(capability, descriptor, "缺少可调查的请求路径，无法读取追踪数据。");
         }
         try {
             TraceSnapshot snapshot = traces.byPath(path);
-            EvidenceNarration narration = EvidenceNarrator.traces(snapshot, path);
+            if (!range.isUnspecified() && snapshot.rows() != null) {
+                snapshot = new TraceSnapshot(snapshot.enabled(), snapshot.sampleRate(), snapshot.rows().stream()
+                        .filter(row -> row != null && range.contains(row.startMillis())).toList(),
+                        snapshot.observedAtMillis());
+            }
+            EvidenceNarration narration = EvidenceNarrator.traces(snapshot, path, range);
             long observedAt = System.currentTimeMillis();
             return CapabilityResult.success(capability, descriptor,
                             List.of(Evidence.of(taskId, EvidenceType.TRACE, SOURCE_TRACES, "路径追踪记录",

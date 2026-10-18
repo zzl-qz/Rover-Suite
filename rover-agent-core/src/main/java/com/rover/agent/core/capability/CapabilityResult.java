@@ -2,6 +2,7 @@ package com.rover.agent.core.capability;
 
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Evidence;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.snapshot.ConfigEntrySnapshot;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
@@ -12,6 +13,8 @@ import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /** 能力执行结果：一次只读能力调用的结构化产出，含证据文本与供规则使用的结构化快照。 */
 public record CapabilityResult(AgentCapability capability, AgentStepType stepType, String stepName,
@@ -115,6 +118,32 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
     public CapabilityResult withEvents(List<RegistryEventSnapshot> snapshot) {
         return copy(evidence, limitations, route, routeRead, discoveryMode, instances, traces, metric, routeUpstreams,
                 configs, snapshot);
+    }
+
+    /** 给指定时段的调查标注证据适用范围；当前快照不能冒充该时段的历史状态。 */
+    public CapabilityResult inTimeRange(TimeRange range) {
+        if (range == null || range.isUnspecified()) {
+            return this;
+        }
+        boolean currentContext = capability == AgentCapability.ROUTE_QUERY
+                || capability == AgentCapability.INSTANCE_QUERY || capability == AgentCapability.CONFIG_READ;
+        List<Evidence> scoped = new ArrayList<>();
+        for (Evidence item : evidence) {
+            Map<String, String> metadata = new LinkedHashMap<>(item.metadata());
+            metadata.put("requestedFromMillis", Long.toString(range.fromMillis()));
+            metadata.put("requestedToMillis", Long.toString(range.toMillis()));
+            metadata.put("temporalScope", currentContext ? "CURRENT_CONTEXT"
+                    : capability == AgentCapability.KNOWLEDGE_RETRIEVAL ? "REFERENCE" : "REQUESTED_WINDOW");
+            scoped.add(new Evidence(item.evidenceId(), item.taskId(), item.type(), item.source(), item.title(),
+                    currentContext ? "当前状态参考（不覆盖指定时段）：" + item.summary() : item.summary(),
+                    item.rawReference(), Map.copyOf(metadata), item.observedAtMillis()));
+        }
+        List<String> bounds = new ArrayList<>(limitations);
+        if (currentContext) {
+            bounds.add("当前快照仅作状态参考，不能用于确认或排除指定时间范围（" + range.describe() + "）的故障。");
+        }
+        return copy(scoped, bounds, route, routeRead, discoveryMode, instances, traces, metric,
+                routeUpstreams, configs, events);
     }
 
     /**

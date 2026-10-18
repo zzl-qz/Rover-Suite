@@ -879,6 +879,8 @@
                                     <div class="wide"><span>对象取值</span><b><code>{{ wbActiveIncident.target.value || '(未确定)' }}</code></b></div>
                                     <div><span>时间范围</span><b>{{ wbTimeRangeText(wbActiveIncident.timeRange) }}</b></div>
                                     <div><span>来源</span><b>{{ wbOriginLabel(wbActiveIncident.origin) }}</b></div>
+                                    <div v-if="wbActiveIncident.origin === 'ALERT'"><span>告警来源账号</span><b>{{ wbActiveIncident.triggeredBy || '历史记录未留存' }}</b></div>
+                                    <div v-if="wbActiveIncident.origin === 'ALERT'"><span>处理账号</span><b>{{ wbSession.userId || '未分配' }}</b></div>
                                     <div><span>调查次数</span><b>{{ (wbActiveIncident.taskIds || []).length }}</b></div>
                                     <div><span>最近更新</span><b>{{ fmtTime(wbActiveIncident.updatedAtMillis) }}</b></div>
                                 </div>

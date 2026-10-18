@@ -35,6 +35,7 @@ import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
@@ -321,13 +322,14 @@ public final class JdbcAgentStore implements AutoCloseable {
                 Object[] values = {incident.sessionId(), incident.origin().name(), incident.status().name(),
                         incident.title(), incident.summary(), target.type().name(), target.value(),
                         incident.timeRange().fromMillis(), incident.timeRange().toMillis(),
-                        incident.createdAtMillis(), System.currentTimeMillis(), incident.incidentId()};
+                        incident.createdAtMillis(), System.currentTimeMillis(), incident.triggeredBy(),
+                        incident.incidentId()};
                 upsert("UPDATE agent_incident SET session_id = ?, origin = ?, status = ?, title = ?, summary = ?, "
                                 + "target_type = ?, target_key = ?, time_from = ?, time_to = ?, created_at = ?, "
-                                + "updated_at = ?, version = version + 1 WHERE incident_id = ?",
+                                + "updated_at = ?, triggered_by = ?, version = version + 1 WHERE incident_id = ?",
                         "INSERT INTO agent_incident (session_id, origin, status, title, summary, target_type, "
-                                + "target_key, time_from, time_to, created_at, updated_at, version, incident_id) "
-                                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                                + "target_key, time_from, time_to, created_at, updated_at, triggered_by, version, incident_id) "
+                                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
                         values, values);
             }
         }
@@ -378,7 +380,8 @@ public final class JdbcAgentStore implements AutoCloseable {
         List<String> taskIds = query("SELECT task_id FROM agent_task WHERE incident_id = ? ORDER BY created_at, "
                 + "task_id", result -> result.getString(1), row.incidentId());
         return new Incident(row.incidentId(), row.sessionId(), row.origin(), row.title(), row.status(),
-                row.target(), row.timeRange(), row.summary(), row.createdAtMillis(), row.updatedAtMillis(), taskIds);
+                row.target(), row.timeRange(), row.summary(), row.createdAtMillis(), row.updatedAtMillis(), taskIds,
+                row.triggeredBy());
     }
 
     private static IncidentRow readIncidentRow(ResultSet rows) throws SQLException {
@@ -389,7 +392,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         return new IncidentRow(rows.getString("incident_id"), rows.getString("session_id"),
                 IncidentOrigin.valueOf(rows.getString("origin")), IncidentStatus.valueOf(rows.getString("status")),
                 rows.getString("title"), Texts.raw(rows.getString("summary")), readTarget(rows), timeRange,
-                rows.getLong("created_at"), rows.getLong("updated_at"));
+                rows.getLong("created_at"), rows.getLong("updated_at"), rows.getString("triggered_by"));
     }
 
     // ---------------------------------------------------------------- 任务
@@ -554,8 +557,11 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final class Actions implements AgentActionRepository {
 
         @Override
-        public void save(AgentAction action) {
-            writeAction(action, null);
+        public AgentAction save(AgentAction action) {
+            if (writeAction(action, null) == 0) {
+                throw new ActionUpdateConflictException(action.actionId());
+            }
+            return action.withVersion(Math.addExact(action.version(), 1L));
         }
 
         @Override
@@ -584,7 +590,12 @@ public final class JdbcAgentStore implements AutoCloseable {
                     return Optional.empty();
                 }
                 AgentAction moved = mutation.apply(current);
-                return writeAction(moved, expected) == 0 ? Optional.empty() : Optional.of(moved);
+                if (!actionId.equals(moved.actionId())) {
+                    throw new IllegalArgumentException("状态迁移不能改变变更 ID");
+                }
+                moved = moved.withVersion(current.version());
+                return writeAction(moved, expected) == 0 ? Optional.empty()
+                        : Optional.of(moved.withVersion(Math.addExact(current.version(), 1L)));
             }
         }
 
@@ -597,7 +608,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     }
 
     /**
-     * 写入一行变更记录：命中则更新，未命中则插入。
+     * 按行版本写入；更新失败不能退化为插入，避免复活已删除记录。
      *
      * @param expectedStatus 非空时作为更新的状态条件（CAS）；返回受影响行数，0 表示状态已被别人改过
      */
@@ -619,13 +630,17 @@ public final class JdbcAgentStore implements AutoCloseable {
                     + "apply_operation_id = ?, "
                     + "applied_revision = ?, rollback_operation_id = ?, requested_by = ?, approved_by = ?, "
                     + "approved_at = ?, preview_json = ?, impact = ?, error_message = ?, created_at = ?, "
-                    + "updated_at = ?, version = version + 1 WHERE action_id = ?";
+                    + "updated_at = ?, version = version + 1 WHERE action_id = ? AND version = ?";
+            Object[] updateValues = append(append(values, action.actionId()), action.version());
             if (expectedStatus != null) {
-                return run(update + " AND status = ?", append(append(values, action.actionId()),
-                        expectedStatus.name()));
+                return run(update + " AND status = ?", append(updateValues, expectedStatus.name()));
             }
-            if (run(update, append(values, action.actionId())) > 0) {
-                return 1;
+            if (action.version() > 0) {
+                return run(update, updateValues);
+            }
+            if (queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore::readActionRow,
+                    action.actionId()).isPresent()) {
+                return 0;
             }
             run("INSERT INTO agent_action (session_id, incident_id, task_id, action_type, status, route_id, "
                             + "business_prefix, service_name, target_group, before_weight, desired_weight, "
@@ -653,7 +668,8 @@ public final class JdbcAgentStore implements AutoCloseable {
                 rows.getString("rollback_operation_id"), rows.getString("requested_by"),
                 rows.getString("approved_by"), rows.getLong("approved_at"),
                 orEmpty(fromJson(rows.getString("preview_json"), STRINGS)), Texts.raw(rows.getString("impact")),
-                rows.getString("error_message"), rows.getLong("created_at"), rows.getLong("updated_at"));
+                rows.getString("error_message"), rows.getLong("created_at"), rows.getLong("updated_at"),
+                rows.getLong("version"));
     }
 
     /** 单位列：历史数据没有单位时存 NULL，读回来也是 null，不要退化成某个默认值。 */
@@ -822,7 +838,7 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     private record IncidentRow(String incidentId, String sessionId, IncidentOrigin origin, IncidentStatus status,
                                String title, String summary, ResourceTarget target, TimeRange timeRange,
-                               long createdAtMillis, long updatedAtMillis) { }
+                               long createdAtMillis, long updatedAtMillis, String triggeredBy) { }
 
     private record TaskRow(String taskId, String sessionId, String incidentId, TaskType taskType, TaskStatus status,
                            String question, String path, ResourceTarget target, AgentStepType currentStage,
@@ -1056,7 +1072,10 @@ public final class JdbcAgentStore implements AutoCloseable {
                                 "ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS before_traffic_percent DOUBLE",
                                 "ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS desired_traffic_percent DOUBLE"),
                         List.of(),
-                        List.of()));
+                        List.of()),
+                new Migration(6, "incident: retain authenticated trigger separately from handler",
+                        List.of("ALTER TABLE agent_incident ADD COLUMN IF NOT EXISTS triggered_by VARCHAR(128)"),
+                        List.of(), List.of()));
 
     private void migrate() throws SQLException {
         // applied_at 用毫秒时间戳：与业务表同一口径，也不依赖各驱动对 TIMESTAMP 的绑定细节。

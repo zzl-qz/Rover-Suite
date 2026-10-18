@@ -67,6 +67,7 @@
 | `rover.agent.execution.queue-capacity` | `16` | 执行队列容量（1~1000）；队列满时提交回 `429`，不使用无界队列 | 重启 |
 | `rover.agent.execution.task-capacity` | `200` | 任务登记容量（1~10000）；已结束的任务可被保留策略淘汰，执行中的任务不会被丢 | 重启 |
 | `rover.agent.context.recent-message-limit` | `8` | 追问时带上的最近消息条数 | 重启 |
+| `rover.agent.alerts.owner-user-id` | 空 | 新告警的处理账号；空时归属认证调用者。填已有值班账号可统一接管；事件 `triggeredBy` 仍保存来源。环境变量 `ROVER_AGENT_ALERT_OWNER`，仅影响新会话，团队授权尚未实现 | 重启 |
 | `rover.agent.planning.max-rounds` | `3` | 单次动态调查最多规划轮数（>0）；触顶后停止采集并如实记录判断边界 | 重启 |
 | `rover.agent.planning.max-tool-calls` | `10` | 单次调查最多只读能力调用次数（>0）；触顶后不再发起任何调用，未执行的步骤如实上报 | 重启 |
 | `rover.agent.planning.max-plan-steps` | `6` | 单轮计划最多步骤数（>0）；超出部分由计划校验截断，未登记的写能力一律被丢弃 | 重启 |

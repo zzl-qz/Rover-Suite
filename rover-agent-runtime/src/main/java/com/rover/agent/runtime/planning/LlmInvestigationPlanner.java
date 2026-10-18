@@ -111,6 +111,7 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
         StringBuilder prompt = new StringBuilder(UntrustedText.block("用户问题", request.question()))
                 .append("目标对象：").append(request.target().type()).append(" ").append(request.target().value())
                 .append("\n请求路径：").append(request.path().isBlank() ? "（未确定）" : request.path())
+                .append("\n调查时间范围：").append(request.timeRange().describe())
                 .append("\n可用只读能力（只能从这些名字里选）：");
         for (CapabilityDescriptor descriptor : registry.selectable()) {
             prompt.append("\n- ").append(descriptor.id()).append("（").append(descriptor.name()).append("）：")

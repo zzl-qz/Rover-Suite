@@ -24,6 +24,11 @@ import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.IncidentOrigin;
+import com.rover.agent.core.model.TimeRange;
+import com.rover.agent.core.planning.PlanValidator;
+import com.rover.agent.core.planning.PlanningLimits;
+import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
@@ -122,6 +127,47 @@ class AgentOrchestratorTest {
     }
 
     @Test
+    void authenticatedAlertCanBeReadObservedAndContinuedOnlyByItsHandler() throws Exception {
+        TaskView submitted = orchestrator.ingestAlert("alice", "/api/demo/tt", "5xx 告警", null, null);
+        TaskView done = await(submitted.taskId());
+
+        assertTrue(orchestrator.task(done.taskId(), "alice").isPresent());
+        assertTrue(orchestrator.task(done.taskId(), "bob").isEmpty());
+        assertTrue(orchestrator.workspace(done.sessionId(), "alice", 20).isPresent());
+        assertTrue(orchestrator.workspace(done.sessionId(), "bob", 20).isEmpty());
+        var incident = incidents.find(done.incidentId()).orElseThrow();
+        assertEquals(IncidentOrigin.ALERT, incident.origin());
+        assertEquals("alice", incident.triggeredBy());
+        assertEquals("alice", sessions.find(done.sessionId()).orElseThrow().userId());
+        List<TaskEvent> received = new CopyOnWriteArrayList<>();
+        TaskEventSubscription subscription = orchestrator.subscribeEvents(done.taskId(), "alice", received::add)
+                .orElseThrow();
+        assertTrue(orchestrator.subscribeEvents(done.taskId(), "bob", received::add).isEmpty());
+        subscription.cancel();
+        TaskView followUp = orchestrator.submit(done.sessionId(), "alice", "继续查这个告警",
+                AgentRequestOptions.none()).orElseThrow();
+        assertEquals(done.incidentId(), await(followUp.taskId()).incidentId());
+        assertEquals("alice", incidents.find(done.incidentId()).orElseThrow().triggeredBy());
+    }
+
+    @Test
+    void configuredHandlerDoesNotReplaceTheAuthenticatedAlertSource() throws Exception {
+        orchestrator = buildOrchestrator(routePort, "alice");
+        TaskView submitted = orchestrator.ingestAlert("alerts-service", "/api/demo/tt", "告警", null, null);
+        TaskView done = await(submitted.taskId());
+
+        assertEquals("alerts-service", incidents.find(done.incidentId()).orElseThrow().triggeredBy());
+        assertEquals("alice", sessions.find(done.sessionId()).orElseThrow().userId());
+        assertTrue(orchestrator.task(done.taskId(), "alice").isPresent());
+        assertTrue(orchestrator.task(done.taskId(), "alerts-service").isEmpty());
+        assertTrue(orchestrator.task(done.taskId(), "bob").isEmpty());
+        assertThrows(IllegalArgumentException.class,
+                () -> orchestrator.ingestAlert("alerts-service", "/api/demo/tt", "告警", 200L, 100L));
+        assertThrows(IllegalArgumentException.class,
+                () -> orchestrator.ingestAlert("alerts-service", "/api/demo/tt", "告警", 100L, null));
+    }
+
+    @Test
     void followUpQuestionReusesActiveIncidentAndTarget() throws Exception {
         Session session = orchestrator.startSession("admin");
 
@@ -171,6 +217,17 @@ class AgentOrchestratorTest {
         assertEquals(task.taskId(), conversation.get(0).relatedTaskId());
         assertEquals(MessageRole.AGENT, conversation.get(1).role());
         assertEquals(task.taskId(), conversation.get(1).relatedTaskId());
+    }
+
+    @Test
+    void requestedWindowSurvivesEvenWhenTheTargetNeedsClarification() throws Exception {
+        Session session = orchestrator.startSession("admin");
+        TimeRange range = new TimeRange(100L, 200L);
+        TaskView submitted = orchestrator.submit(session.sessionId(), "admin", "帮我看看最近有没有问题",
+                new AgentRequestOptions(ResourceTarget.unknown(), range)).orElseThrow();
+
+        assertEquals(TaskStatus.COMPLETED, await(submitted.taskId()).status());
+        assertEquals(range, tasks.find(submitted.taskId()).timeRange());
     }
 
     @Test
@@ -314,6 +371,10 @@ class AgentOrchestratorTest {
 
     /** 按给定路由端口装配完整编排链（会话 → 目标 → 事件 → 对话主路径）。 */
     private AgentOrchestrator buildOrchestrator(RouteReadPort routes) {
+        return buildOrchestrator(routes, null);
+    }
+
+    private AgentOrchestrator buildOrchestrator(RouteReadPort routes, String alertOwner) {
         MetricReadPort metricPort = windowSeconds -> {
             throw new SnapshotUnavailableException("测试桩未提供指标");
         };
@@ -325,13 +386,14 @@ class AgentOrchestratorTest {
         EventReadPort eventPort = () -> List.of();
         LogQueryPort logPort = r -> List.of();
         KnowledgeReadPort knowledgePort = (q, limit) -> List.of();
-        InvestigationService investigations = new InvestigationService(routes, instancePort, metricPort,
-                tracePort, configPort, eventPort, logPort, knowledgePort, registry, tasks,
-                new ModelExplainer(new NoopChatModelGateway()));
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instancePort, 8);
         CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort,
                 configPort, eventPort, logPort, knowledgePort, CapabilityRegistry.standard());
+        PlanningLimits limits = PlanningLimits.defaults();
+        InvestigationService investigations = new InvestigationService(registry, tasks,
+                new ModelExplainer(new NoopChatModelGateway()), new RuleBasedPlanner(CapabilityRegistry.standard()),
+                new PlanValidator(CapabilityRegistry.standard(), limits), executor, limits, OpsJournal.none(), alertOwner);
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
                 ScriptedConversationModel.service(executor, tools -> "已按问题作答。"), OpsJournal.none());

@@ -6,6 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.AgentAction;
@@ -30,6 +34,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -51,13 +61,14 @@ class AgentActionServiceTest {
 
     private FakeRouteControl gateway;
     private InMemoryAgentActionRepository repository;
+    private InMemoryAgentSessionRepository sessions;
     private AgentActionService service;
 
     @BeforeEach
     void setUp() {
         gateway = new FakeRouteControl();
         repository = new InMemoryAgentActionRepository(50);
-        InMemoryAgentSessionRepository sessions = new InMemoryAgentSessionRepository(10);
+        sessions = new InMemoryAgentSessionRepository(10);
         sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of()));
         service = new AgentActionService(repository, sessions, gateway,
                 new RouteWeightActionExecutor(gateway, repository));
@@ -201,6 +212,123 @@ class AgentActionServiceTest {
     }
 
     // ---------------------------------------------------------------- 6. 回读不一致
+
+    @Test
+    void delayedResolveCannotOverwriteCompletedRollback() throws Exception {
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(propose(20).actionId(), OWNER);
+        gateway.timeoutWithoutApply = false;
+        gateway.applyWeight("v2", 20);
+        gateway.operations.put(uncertain.applyOperationId(), RouteOperationStatus.APPLIED);
+
+        FakeRouteControl observedGateway = spy(gateway);
+        CountDownLatch queryEntered = new CountDownLatch(1);
+        CountDownLatch releaseQuery = new CountDownLatch(1);
+        AtomicInteger queries = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (queries.getAndIncrement() == 0) {
+                queryEntered.countDown();
+                assertTrue(releaseQuery.await(5, TimeUnit.SECONDS));
+            }
+            return invocation.callRealMethod();
+        }).when(observedGateway).operation(anyString());
+        AgentActionService concurrent = new AgentActionService(repository, sessions, observedGateway,
+                new RouteWeightActionExecutor(observedGateway, repository));
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            var delayed = worker.submit(() -> concurrent.resolve(uncertain.actionId(), OWNER));
+            assertTrue(queryEntered.await(5, TimeUnit.SECONDS), "慢回查必须已经读到旧快照");
+            AgentAction resolved = concurrent.resolve(uncertain.actionId(), OWNER);
+            AgentAction rolledBack = concurrent.rollback(resolved.actionId(), OWNER);
+            assertEquals(ActionStatus.ROLLED_BACK, rolledBack.status());
+            releaseQuery.countDown();
+
+            AgentAction lateResult = delayed.get(5, TimeUnit.SECONDS);
+            AgentAction stored = repository.find(uncertain.actionId()).orElseThrow();
+            assertEquals(ActionStatus.ROLLED_BACK, lateResult.status());
+            assertEquals(rolledBack, stored, "迟到回查不能覆盖回滚状态或回滚操作号");
+            assertNotNull(stored.rollbackOperationId());
+            assertEquals(2, observedGateway.writes, "一条执行与一条补偿，不因回查产生额外写入");
+        } finally {
+            releaseQuery.countDown();
+            worker.shutdownNow();
+            assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void persistenceFailureAfterSubmissionPreservesOperationForReconciliation() {
+        InMemoryAgentActionRepository interrupted = spy(repository);
+        AtomicBoolean failedOnce = new AtomicBoolean();
+        doAnswer(invocation -> {
+            AgentAction candidate = invocation.getArgument(0);
+            if (candidate.status() == ActionStatus.VERIFYING && failedOnce.compareAndSet(false, true)) {
+                throw new IllegalStateException("模拟：网关提交后，本地验证状态落库失败一次");
+            }
+            return invocation.callRealMethod();
+        }).when(interrupted).save(any(AgentAction.class));
+        AgentActionService resilient = new AgentActionService(interrupted, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, interrupted));
+
+        AgentAction uncertain = resilient.approve(propose(20).actionId(), OWNER);
+
+        assertTrue(failedOnce.get());
+        assertEquals(ActionStatus.UNCERTAIN, uncertain.status());
+        assertNotNull(uncertain.applyOperationId(), "异常兜底不能用提交前快照抹掉已持久化的操作号");
+        assertEquals(gateway.lastOperationId, uncertain.applyOperationId());
+        AgentAction resolved = resilient.resolve(uncertain.actionId(), OWNER);
+        assertEquals(ActionStatus.SUCCESS, resolved.status());
+        assertEquals(1, gateway.writes, "恢复只能按原号对账，不能重新提交");
+    }
+
+    @Test
+    void rollbackPersistenceFailurePreservesBothOperationIds() {
+        AgentAction applied = service.approve(propose(20).actionId(), OWNER);
+        InMemoryAgentActionRepository interrupted = spy(repository);
+        AtomicBoolean failedOnce = new AtomicBoolean();
+        doAnswer(invocation -> {
+            AgentAction candidate = invocation.getArgument(0);
+            if (candidate.status() == ActionStatus.ROLLING_BACK && candidate.rollbackOperationId() != null
+                    && candidate.appliedRevision() > applied.appliedRevision()
+                    && failedOnce.compareAndSet(false, true)) {
+                throw new IllegalStateException("模拟：补偿已提交，本地验证状态落库失败一次");
+            }
+            return invocation.callRealMethod();
+        }).when(interrupted).save(any(AgentAction.class));
+        AgentActionService resilient = new AgentActionService(interrupted, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, interrupted));
+
+        AgentAction uncertain = resilient.rollback(applied.actionId(), OWNER);
+
+        assertTrue(failedOnce.get());
+        assertEquals(ActionStatus.UNCERTAIN, uncertain.status());
+        assertEquals(applied.applyOperationId(), uncertain.applyOperationId());
+        assertEquals(gateway.lastOperationId, uncertain.rollbackOperationId());
+        assertEquals(ActionStatus.ROLLED_BACK, resilient.resolve(applied.actionId(), OWNER).status());
+        assertEquals(2, gateway.writes, "补偿结果确认也不能重新提交");
+    }
+
+    @Test
+    void lateResolveExceptionCannotDemoteANewerRollback() {
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(propose(20).actionId(), OWNER);
+        RouteWeightActionExecutor delayed = spy(new RouteWeightActionExecutor(gateway, repository));
+        doAnswer(invocation -> {
+            AgentAction resolved = repository.transition(uncertain.actionId(), ActionStatus.UNCERTAIN,
+                    current -> new ActionDraft(current).move(ActionStatus.SUCCESS, null).toAction(2L)).orElseThrow();
+            repository.transition(resolved.actionId(), ActionStatus.SUCCESS,
+                    current -> new ActionDraft(current).rollbackOperation("newer-rollback")
+                            .move(ActionStatus.ROLLING_BACK, null).toAction(3L)).orElseThrow();
+            throw new IllegalStateException("旧回查发生意外异常");
+        }).when(delayed).resolve(any(AgentAction.class));
+        AgentActionService concurrent = new AgentActionService(repository, sessions, gateway, delayed);
+
+        AgentAction latest = concurrent.resolve(uncertain.actionId(), OWNER);
+
+        assertEquals(ActionStatus.ROLLING_BACK, latest.status());
+        assertEquals("newer-rollback", latest.rollbackOperationId());
+        assertEquals(latest, repository.find(uncertain.actionId()).orElseThrow());
+    }
 
     @Test
     void readBackMismatchFailsInsteadOfClaimingSuccess() {

@@ -64,11 +64,17 @@ public final class IncidentRegistry {
 
     /** 在会话下开启一个带指定时间范围的事件；语义同 {@link #openIncident(String, IncidentOrigin, ResourceTarget)}。 */
     public Incident openIncident(String sessionId, IncidentOrigin origin, ResourceTarget target, TimeRange timeRange) {
+        return openIncident(sessionId, origin, target, timeRange, null);
+    }
+
+    /** 来源主体与会话处理归属分别保存；triggeredBy 只能由认证上下文提供。 */
+    public Incident openIncident(String sessionId, IncidentOrigin origin, ResourceTarget target, TimeRange timeRange,
+                                 String triggeredBy) {
         long now = System.currentTimeMillis();
         Incident incident = new Incident(UUID.randomUUID().toString(), sessionId, origin, target.value(),
                 IncidentStatus.OPEN, target,
                 timeRange == null ? TimeRange.unspecified() : timeRange, "",
-                now, now, List.of());
+                now, now, List.of(), triggeredBy);
         if (retention == null) {
             incidents.save(incident);
         } else {
@@ -87,7 +93,7 @@ public final class IncidentRegistry {
         Incident updated = new Incident(incident.incidentId(), incident.sessionId(), incident.origin(),
                 incident.title(), incident.status(), incident.target(),
                 timeRange == null ? TimeRange.unspecified() : timeRange, incident.summary(),
-                incident.createdAtMillis(), System.currentTimeMillis(), incident.taskIds());
+                incident.createdAtMillis(), System.currentTimeMillis(), incident.taskIds(), incident.triggeredBy());
         incidents.save(updated);
         return updated;
     }
@@ -98,7 +104,7 @@ public final class IncidentRegistry {
                 incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
                 IncidentStatus.INVESTIGATING, incident.target(), incident.timeRange(),
                 incident.summary(), incident.createdAtMillis(), System.currentTimeMillis(),
-                SessionLinks.append(incident.taskIds(), taskId))));
+                SessionLinks.append(incident.taskIds(), taskId), incident.triggeredBy())));
     }
 
     /**
@@ -112,7 +118,7 @@ public final class IncidentRegistry {
                 incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
                 IncidentStatus.RESOLVED, incident.target(), incident.timeRange(),
                 summary == null ? "" : summary, incident.createdAtMillis(), System.currentTimeMillis(),
-                incident.taskIds())));
+                incident.taskIds(), incident.triggeredBy())));
     }
 
     public Optional<Incident> incident(String incidentId) {

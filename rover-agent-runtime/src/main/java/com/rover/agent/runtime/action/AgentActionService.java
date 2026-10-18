@@ -11,6 +11,7 @@ import com.rover.agent.core.port.RouteControlRoute;
 import com.rover.agent.core.port.RouteControlState;
 import com.rover.agent.core.port.RouteControlTarget;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.util.Texts;
 import java.util.List;
@@ -134,7 +135,7 @@ public final class AgentActionService {
                 previewOf(matched, target, desiredWeight), impactOf(target, desiredWeight), null,
                 now, now);
         try {
-            actions.save(action);
+            action = actions.save(action);
         } catch (RuntimeException ex) {
             log.warn("登记待审批变更失败: session={} route={}", sessionId, wantedRoute, ex);
             return ActionProposal.rejected("变更记录暂时无法登记：" + failureText(ex));
@@ -292,7 +293,7 @@ public final class AgentActionService {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
                     "这条变更当前是「" + action.status().label() + "」，不需要确认结果");
         }
-        // 不加 CAS：确认本身就是一次幂等回查，重复点击最多多读一次网关的操作记录，不会造成第二次写入。
+        // 回查可并行读取；执行器的每次写回均检查行版本，迟到结果不能覆盖执行或回滚的新状态。
         return execute(action);
     }
 
@@ -308,16 +309,34 @@ public final class AgentActionService {
                 case ROLLING_BACK -> executor.rollback(action);
                 default -> executor.resolve(action);
             };
+        } catch (ActionUpdateConflictException ex) {
+            return latest(action.actionId());
         } catch (RuntimeException ex) {
             // 记录未预期的执行异常，避免状态停留在执行中。
             log.error("执行变更 {} 时出现未预期的异常", action.actionId(), ex);
             long now = System.currentTimeMillis();
-            AgentAction failed = new ActionDraft(action).appliedRevision(null)
+            AgentAction current = latest(action.actionId());
+            // 旧执行/回查的异常不得影响已经开始的补偿阶段。
+            boolean rollbackAdvanced = action.status() != ActionStatus.ROLLING_BACK
+                    && (current.status() == ActionStatus.ROLLING_BACK
+                    || !Objects.equals(action.rollbackOperationId(), current.rollbackOperationId()));
+            if (current.status().settled() || rollbackAdvanced) {
+                return current;
+            }
+            AgentAction failed = new ActionDraft(current)
                     .move(ActionStatus.UNCERTAIN, "执行过程中出现未预期的异常，结果未知：" + failureText(ex))
                     .toAction(now);
-            actions.save(failed);
-            return failed;
+            try {
+                return actions.save(failed);
+            } catch (ActionUpdateConflictException conflict) {
+                return latest(action.actionId());
+            }
         }
+    }
+
+    private AgentAction latest(String actionId) {
+        return actions.find(actionId).orElseThrow(() -> new ActionRequestException(
+                ActionRequestException.Code.NOT_FOUND, "变更记录已删除，已停止写回"));
     }
 
     // ---------------------------------------------------------------- 归属

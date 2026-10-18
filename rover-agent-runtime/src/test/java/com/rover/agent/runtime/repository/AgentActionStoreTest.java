@@ -2,6 +2,7 @@ package com.rover.agent.runtime.repository;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.ActionStatus;
@@ -10,6 +11,8 @@ import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.WeightRequestUnit;
+import com.rover.agent.core.repository.ActionUpdateConflictException;
+import com.rover.agent.core.repository.AgentActionRepository;
 import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -40,7 +43,7 @@ class AgentActionStoreTest {
 
         try (JdbcAgentStore second = new JdbcAgentStore(path)) {
             AgentAction reloaded = second.actions().find("a1").orElseThrow();
-            assertEquals(action, reloaded, "提议依据、幂等号与预览都要能读回来");
+            assertEquals(action.withVersion(1L), reloaded, "提议依据、幂等号与预览都要能读回来");
             assertEquals(18, reloaded.appliedRevision());
             assertEquals(List.of("MODIFIED /api/order：order-service@v2 权重 → 20"), reloaded.preview());
             assertEquals("order-service@v2", reloaded.targetLabel());
@@ -69,6 +72,46 @@ class AgentActionStoreTest {
             assertEquals(ActionStatus.EXECUTING, store.actions().find("a1").orElseThrow().status());
             assertTrue(store.actions().transition("missing", ActionStatus.PENDING_APPROVAL,
                     current -> current).isEmpty());
+        }
+    }
+
+    @Test
+    void everyStoreRejectsStaleWritesIncludingSameStateAbaAndDeletedRecords() throws Exception {
+        try (JdbcAgentStore store = new JdbcAgentStore(tempPath("rover-action-version"))) {
+            store.sessions().save(session("s1"));
+            for (AgentActionRepository repository : List.of(new InMemoryAgentActionRepository(10), store.actions())) {
+                AgentAction first = repository.save(pendingAction("versioned", "s1",
+                        ActionStatus.PENDING_APPROVAL, null, null));
+                assertEquals(1L, first.version());
+                AgentAction executing = repository.transition(first.actionId(), ActionStatus.PENDING_APPROVAL,
+                        current -> pendingAction("versioned", "s1", ActionStatus.EXECUTING, "op-1", null))
+                        .orElseThrow();
+                assertEquals(2L, executing.version());
+                AgentAction back = repository.save(pendingAction("versioned", "s1",
+                        ActionStatus.PENDING_APPROVAL, null, null).withVersion(executing.version()));
+                assertEquals(first.withVersion(3L), back, "状态和值回到原样，也不能重用旧行版本");
+                assertThrows(ActionUpdateConflictException.class, () -> repository.save(first));
+                assertThrows(ActionUpdateConflictException.class, () -> repository.save(first.withVersion(0L)));
+                assertEquals(back, repository.find(first.actionId()).orElseThrow());
+                repository.removeBySession("s1");
+                assertThrows(ActionUpdateConflictException.class, () -> repository.save(back), "不能复活已删除记录");
+                assertTrue(repository.find(first.actionId()).isEmpty());
+            }
+        }
+    }
+
+    @Test
+    void separateDatabaseConnectionsCannotOverwriteEachOthersActionUpdates() throws Exception {
+        String path = tempPath("rover-action-connections");
+        try (JdbcAgentStore first = new JdbcAgentStore(path); JdbcAgentStore second = new JdbcAgentStore(path)) {
+            first.sessions().save(session("s1"));
+            AgentAction pending = first.actions().save(pendingAction("a1", "s1",
+                    ActionStatus.PENDING_APPROVAL, null, null));
+            AgentAction claimed = second.actions().transition("a1", ActionStatus.PENDING_APPROVAL,
+                    current -> pendingAction("a1", "s1", ActionStatus.EXECUTING, "op-1", null)).orElseThrow();
+
+            assertThrows(ActionUpdateConflictException.class, () -> first.actions().save(pending));
+            assertEquals(claimed, first.actions().find("a1").orElseThrow());
         }
     }
 

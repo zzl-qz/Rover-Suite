@@ -200,12 +200,17 @@ incident, and runs the investigation over exactly the same read path a human que
 | `message` | no | Alert text (symptoms and suspicion) |
 | `fromMillis` / `toMillis` | no | Observation window (epoch millis); they must come as a pair, supplying only one returns `400` |
 
-- Response is `202` plus a task view (`sessionId`, `taskId`, `status`); the caller polls task detail or subscribes to
-  SSE with that `taskId`, exactly as for a human question.
-- Sign-in is required (a dedicated service account is recommended) and the session it creates is **owned by no human
-  user**, so it never competes with human sessions for the "one active task" lock and can be aggregated separately in
-  the incident view. Session transcripts, incidents, and the investigation record live in the record store, so they
-  stay queryable after a restart.
+- Response is `202` plus a task view (`sessionId`, `taskId`, `status`). Sign-in is required; identity comes from
+  authentication, never from payload fields.
+- Each alert gets an independent session owned by the caller by default. Set `ROVER_AGENT_ALERT_OWNER`
+  (`rover.agent.alerts.owner-user-id`) to route new alerts to an existing handler account. `Incident.triggeredBy`
+  independently retains the source; the workbench displays both. Only the handler can read task detail, subscribe
+  to SSE, open the workspace and continue the conversation. When mapped to another handler, the source can still
+  submit alerts but gets `404` when reading those resources. Team queues and RBAC remain planned. Historical unknown
+  sources stay null; old unowned sessions are not automatically reassigned.
+- Explicit windows reach log queries, trace/event filtering and verdicts. Current route/instance/config snapshots
+  are context only, and rolling metrics cannot answer that historical window. Missing samples do not prove absence
+  of a fault. Evidence metadata records requested bounds and `temporalScope`; see [Ops Agent](ops-agent.md).
 - The agent never pulls from the monitoring source on its own: proactive inspection (periodic self-inspection raising
   `INSPECTION` incidents) is not implemented, so pushing remains the monitoring system's job.
 

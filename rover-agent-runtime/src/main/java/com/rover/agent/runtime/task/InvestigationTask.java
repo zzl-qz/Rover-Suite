@@ -19,6 +19,7 @@ import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.runtime.graph.InvestigationReporter;
@@ -61,6 +62,7 @@ public final class InvestigationTask implements InvestigationReporter {
     private ResourceTarget target = ResourceTarget.unknown();
     private TaskType taskType = TaskType.INVESTIGATION;
     private InvestigationPlan plan = InvestigationPlan.empty();
+    private TimeRange timeRange = TimeRange.unspecified();
     private long completedAtMillis;
     private InvestigationReport report;
     private String error;
@@ -152,10 +154,20 @@ public final class InvestigationTask implements InvestigationReporter {
      * 由执行线程在解析出对象后调用；在此之前快照里的这些字段保持空值。
      */
     public synchronized void bind(String incidentId, String path, ResourceTarget target) {
+        bind(incidentId, path, target, timeRange);
+    }
+
+    /** 时间范围与目标一同绑定，工具和结论必须使用同一范围。 */
+    public synchronized void bind(String incidentId, String path, ResourceTarget target, TimeRange timeRange) {
         this.incidentId = incidentId;
         this.path = path == null ? "" : path;
         this.target = target == null ? ResourceTarget.unknown() : target;
+        this.timeRange = timeRange == null ? TimeRange.unspecified() : timeRange;
         persist();
+    }
+
+    public synchronized TimeRange timeRange() {
+        return timeRange;
     }
 
     /** 标记人工对话执行形态，并发布全量快照通知订阅者。 */

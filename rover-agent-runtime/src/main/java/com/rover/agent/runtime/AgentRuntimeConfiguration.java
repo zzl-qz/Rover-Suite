@@ -275,10 +275,12 @@ public class AgentRuntimeConfiguration {
                                                           PlanValidator agentPlanValidator,
                                                           CapabilityExecutor agentCapabilityExecutor,
                                                           PlanningLimits agentPlanningLimits,
-                                                          OpsJournal opsJournal) {
+                                                          OpsJournal opsJournal,
+                                                          @Value("${rover.agent.alerts.owner-user-id:}")
+                                                          String alertOwnerUserId) {
         return new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
                 agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits,
-                opsJournal);
+                opsJournal, alertOwnerUserId);
     }
 
     /**

@@ -34,6 +34,7 @@ import java.util.List;
  * @param errorMessage        失败或不确定的原因说明；成功时为空
  * @param createdAtMillis     创建时刻
  * @param updatedAtMillis     最近一次状态变化时刻
+ * @param version             存储行版本；新记录为 0，每次成功写入递增
  */
 public record AgentAction(String actionId, String sessionId, String incidentId, String taskId,
                           ActionType type, ActionStatus status,
@@ -45,12 +46,15 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
                           String applyOperationId, Integer appliedRevision, String rollbackOperationId,
                           String requestedBy, String approvedBy, long approvedAtMillis,
                           List<String> preview, String impact, String errorMessage,
-                          long createdAtMillis, long updatedAtMillis) {
+                          long createdAtMillis, long updatedAtMillis, long version) {
 
     /** 权重上限，与 Gateway 的 RouteTarget.MAX_WEIGHT 保持一致。 */
     public static final int MAX_WEIGHT = 10_000;
 
     public AgentAction {
+        if (version < 0) {
+            throw new IllegalArgumentException("变更记录版本不能为负数");
+        }
         incidentId = blankToNull(incidentId);
         taskId = blankToNull(taskId);
         applyOperationId = blankToNull(applyOperationId);
@@ -60,6 +64,32 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
         preview = preview == null ? List.of() : List.copyOf(preview);
         impact = impact == null ? "" : impact;
         errorMessage = blankToNull(errorMessage);
+    }
+
+    /** 新建变更的兼容入口；已持久化记录的迁移必须保留其行版本。 */
+    public AgentAction(String actionId, String sessionId, String incidentId, String taskId,
+                       ActionType type, ActionStatus status,
+                       String routeId, String businessPrefix, String serviceName, String group,
+                       int beforeWeight, int desiredWeight, int requestedValue, WeightRequestUnit requestedUnit,
+                       double beforeTrafficPercent, double desiredTrafficPercent, int expectedRevision,
+                       String applyOperationId, Integer appliedRevision, String rollbackOperationId,
+                       String requestedBy, String approvedBy, long approvedAtMillis,
+                       List<String> preview, String impact, String errorMessage,
+                       long createdAtMillis, long updatedAtMillis) {
+        this(actionId, sessionId, incidentId, taskId, type, status, routeId, businessPrefix, serviceName, group,
+                beforeWeight, desiredWeight, requestedValue, requestedUnit, beforeTrafficPercent,
+                desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision, rollbackOperationId,
+                requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage, createdAtMillis,
+                updatedAtMillis, 0L);
+    }
+
+    /** 仅供仓储在成功条件写入后赋予新版本。 */
+    public AgentAction withVersion(long nextVersion) {
+        return new AgentAction(actionId, sessionId, incidentId, taskId, type, status, routeId, businessPrefix,
+                serviceName, group, beforeWeight, desiredWeight, requestedValue, requestedUnit,
+                beforeTrafficPercent, desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision,
+                rollbackOperationId, requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage,
+                createdAtMillis, updatedAtMillis, nextVersion);
     }
 
     /** 目标标签：{@code service@group}，与网关的集群键同一口径。 */

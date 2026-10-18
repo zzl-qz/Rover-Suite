@@ -33,6 +33,7 @@ import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.model.Verdict;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.planning.PlannedStep;
+import com.rover.agent.runtime.task.IncidentRegistry;
 import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -227,9 +228,9 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(5, store.schemaVersion(),
+            assertEquals(6, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
-                            + "v5 保存请求数值与单位（审批卡要能回答「批的到底是权重还是百分比」）");
+                            + "v5 保存请求数值与单位，v6 独立保存告警来源主体");
         }
 
         // 模拟"迁移记录丢了但表还在"：MySQL 的 DDL 不能回滚，重跑必须照样通过。
@@ -240,13 +241,55 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-            assertEquals(5, store.schemaVersion());
+            assertEquals(6, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
 
     private static String tempPath(String prefix) throws Exception {
         return Files.createTempDirectory(prefix).resolve("rover").toString();
+    }
+
+    @Test
+    void authenticatedAlertSourceSurvivesUpdatesAndRestartSeparatelyFromItsHandler() throws Exception {
+        String path = tempPath("rover-alert-source");
+        String incidentId;
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.sessions().save(session("s1"));
+            IncidentRegistry registry = new IncidentRegistry(first.sessions(), first.incidents());
+            Incident alert = registry.openIncident("s1", IncidentOrigin.ALERT, ResourceTarget.route("/api/order"),
+                    new TimeRange(100, 200), "alerts-service");
+            incidentId = alert.incidentId();
+            registry.updateTimeRange(incidentId, new TimeRange(120, 180));
+            registry.attachTask(incidentId, "not-persisted-task");
+            registry.summarise(incidentId, "该时段证据不足");
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            Incident alert = reopened.incidents().find(incidentId).orElseThrow();
+            assertEquals("alerts-service", alert.triggeredBy());
+            assertEquals(new TimeRange(120, 180), alert.timeRange());
+            assertEquals("alice", reopened.sessions().find(alert.sessionId()).orElseThrow().userId());
+            assertEquals("该时段证据不足", alert.summary());
+        }
+    }
+
+    @Test
+    void schemaFiveUpgradeLeavesUnknownHistoricalSourcesUnset() throws Exception {
+        String path = tempPath("rover-alert-upgrade");
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            openSession(first, session("s1"), incident("i1", "s1"));
+        }
+        try (Connection connection = DriverManager.getConnection(
+                "jdbc:h2:file:" + path + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE", "sa", "");
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ALTER TABLE agent_incident DROP COLUMN triggered_by");
+            statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version = 6");
+        }
+        try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
+            assertEquals(6, upgraded.schemaVersion());
+            assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
+            assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
+        }
     }
 
     /**

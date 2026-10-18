@@ -44,11 +44,16 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         if (hasPath) {
             add(steps, AgentCapability.ROUTE_QUERY, REASON_ROUTE, target, true);
             add(steps, AgentCapability.INSTANCE_QUERY, REASON_INSTANCE, target, true);
-            add(steps, AgentCapability.GATEWAY_METRICS_QUERY, REASON_METRIC, target, false);
+            if (context.timeRange().isUnspecified()) {
+                add(steps, AgentCapability.GATEWAY_METRICS_QUERY, REASON_METRIC, target, false);
+            }
             add(steps, AgentCapability.TRACE_QUERY, REASON_TRACE, target, true);
         } else {
             // 没有请求路径时不规划路由与追踪：这两类能力都以路径为取数口径，强行执行只会产出噪声。
             add(steps, AgentCapability.INSTANCE_QUERY, REASON_INSTANCE, target, true);
+        }
+        if (!context.timeRange().isUnspecified()) {
+            add(steps, AgentCapability.LOG_QUERY, "按指定调查时间范围查询落盘证据", target, true);
         }
         addQuestionDrivenSteps(steps, context, target);
         return new InvestigationPlan(goal(context, target, hasPath), hypotheses(hasPath), steps);
@@ -86,6 +91,9 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         PlanningRequest context = request == null
                 ? new PlanningRequest("", ResourceTarget.unknown(), "", List.of(), List.of()) : request;
         Set<AgentCapability> required = new LinkedHashSet<>();
+        if (!context.timeRange().isUnspecified()) {
+            required.add(AgentCapability.LOG_QUERY);
+        }
         if (!context.path().isBlank()) {
             required.add(AgentCapability.ROUTE_QUERY);
             required.add(AgentCapability.INSTANCE_QUERY);

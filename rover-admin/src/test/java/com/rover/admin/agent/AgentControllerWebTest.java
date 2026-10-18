@@ -353,13 +353,34 @@ class AgentControllerWebTest {
     void ingestAlertCreatesInvestigation() throws Exception {
         TaskView alert = new TaskView("t3", "s1", "inc-3", TaskStatus.PENDING, null,
                 "/api/demo/tt", ResourceTarget.route("/api/demo/tt"), "告警自动调查：5xx", 1, 0, List.of(), null, null, null);
-        when(agent.ingestAlert(eq("/api/demo/tt"), any(), any(), any())).thenReturn(alert);
+        when(agent.ingestAlert(eq("alice"), eq("/api/demo/tt"), any(), any(), any())).thenReturn(alert);
 
         mockMvc.perform(post("/api/agent/events/ingest").with(user("alice")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"path\":\"/api/demo/tt\",\"message\":\"5xx 告警\"}"))
+                        .content("{\"path\":\"/api/demo/tt\",\"message\":\"5xx 告警\","
+                                + "\"userId\":\"admin\",\"triggeredBy\":\"admin\",\"ownerUserId\":\"admin\"}"))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.taskId").value("t3"));
+        verify(agent).ingestAlert(eq("alice"), eq("/api/demo/tt"), eq("5xx 告警"), any(), any());
+    }
+
+    @Test
+    void anonymousAlertCannotCreateAnUnownedInvestigation() throws Exception {
+        mockMvc.perform(post("/api/agent/events/ingest").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"path\":\"/api/demo/tt\"}"))
+                .andExpect(status().isUnauthorized());
+        verify(agent, never()).ingestAlert(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void partialAlertWindowIsRejectedBeforeSubmission() throws Exception {
+        mockMvc.perform(post("/api/agent/events/ingest").with(user("alice")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"path\":\"/api/demo/tt\",\"fromMillis\":100}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+        verify(agent, never()).ingestAlert(any(), any(), any(), any(), any());
     }
 
     /** 事件接入缺少 path：400，让接入方立即知道请求不合法，而不是发起一次空调查。 */

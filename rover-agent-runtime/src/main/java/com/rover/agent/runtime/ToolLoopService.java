@@ -147,6 +147,10 @@ public final class ToolLoopService {
             return;
         }
         OpsTools tools = new OpsTools(executor, task, actions);
+        if (!task.timeRange().isUnspecified()) {
+            contextSummary = contextSummary + "\n本次调查时间范围：" + task.timeRange().describe()
+                    + "；当前快照只能作参考，不能用当前状态确认或排除该时段的故障。";
+        }
         try {
             task.step(AgentStepType.ANSWER, STEP_ANSWER, StepStatus.RUNNING, ANSWER_RUNNING);
             String answer = model.converse(SYSTEM_PROMPT,

@@ -59,7 +59,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         String operationId = UUID.randomUUID().toString();
         AgentAction submitting = new ActionDraft(action).preview(changes).applyOperation(operationId)
                 .move(ActionStatus.EXECUTING, null).toAction(now());
-        actions.save(submitting);
+        submitting = actions.save(submitting);
 
         RouteChangeResult result;
         try {
@@ -103,7 +103,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         String operationId = UUID.randomUUID().toString();
         AgentAction submitting = new ActionDraft(action).rollbackOperation(operationId)
                 .move(ActionStatus.ROLLING_BACK, null).toAction(now());
-        actions.save(submitting);
+        submitting = actions.save(submitting);
 
         RouteChangeResult result;
         try {
@@ -207,7 +207,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
                                      ActionStatus verifying, ActionStatus success) {
         AgentAction submitted = new ActionDraft(action).appliedRevision(appliedRevision)
                 .move(verifying, null).toAction(now());
-        actions.save(submitted);
+        submitted = actions.save(submitted);
 
         RouteControlState state;
         try {
@@ -291,8 +291,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
 
     private AgentAction settle(AgentAction action, ActionStatus status, String error) {
         AgentAction settled = new ActionDraft(action).move(status, error).toAction(now());
-        actions.save(settled);
-        return settled;
+        return actions.save(settled);
     }
 
     private static String routeLabel(AgentAction action) {

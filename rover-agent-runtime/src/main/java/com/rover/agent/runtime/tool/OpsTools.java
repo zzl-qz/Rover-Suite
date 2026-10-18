@@ -186,7 +186,13 @@ public final class OpsTools {
         String entity = Texts.orEmpty(target);
         task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.RUNNING,
                 entity.isBlank() ? "正在查询历史日志" : "正在查询 " + entity + " 的历史日志");
-        CapabilityResult result = executor.queryLogs(entity, types, from, null, task.taskId());
+        Long to = null;
+        if (!task.timeRange().isUnspecified()) {
+            from = task.timeRange().fromMillis();
+            to = task.timeRange().toMillis();
+        }
+        CapabilityResult result = executor.queryLogs(entity, types, from, to, task.taskId())
+                .inTimeRange(task.timeRange());
         task.reportCapabilityExecuted(AgentCapability.LOG_QUERY);
         evidence.addAll(result.evidence());
         limitations.addAll(result.limitations());
@@ -317,7 +323,7 @@ public final class OpsTools {
         }
         String path = task.path() == null || task.path().isBlank() ? investigatedPath : task.path();
         return InvestigationRules.evaluate(new FindingsInput(path, route, routeRead, discovery,
-                instances, traces, routeUpstreams));
+                instances, traces, routeUpstreams, task.timeRange()));
     }
 
     /** 模型按路径查过的那条路径。目标解析没认出来时，用它作为资源笔记的键。 */
@@ -336,7 +342,8 @@ public final class OpsTools {
             return BUDGET_EXHAUSTED;
         }
         task.step(stepType, stepName, StepStatus.RUNNING, runningText);
-        CapabilityResult result = executor.execute(capability, target, path == null ? "" : path, task.taskId());
+        CapabilityResult result = executor.execute(capability, target, path == null ? "" : path, task.taskId(),
+                null, task.timeRange());
         task.reportCapabilityExecuted(capability);
         evidence.addAll(result.evidence());
         limitations.addAll(result.limitations());

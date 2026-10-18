@@ -68,6 +68,7 @@ public final class InvestigationService {
     private final CapabilityExecutor executor;
     private final PlanningLimits limits;
     private final OpsJournal journal;
+    private final String alertOwnerUserId;
 
     /** 默认装配规则规划器、标准能力注册表和规划上限。 */
     public InvestigationService(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
@@ -94,6 +95,14 @@ public final class InvestigationService {
     public InvestigationService(IncidentRegistry incidents, InvestigationTaskRegistry tasks,
                                 ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
                                 CapabilityExecutor executor, PlanningLimits limits, OpsJournal journal) {
+        this(incidents, tasks, explainer, planner, validator, executor, limits, journal, null);
+    }
+
+    /** 告警处理人由服务端配置；未配置时归属认证来源主体，事件仍独立保存来源。 */
+    public InvestigationService(IncidentRegistry incidents, InvestigationTaskRegistry tasks,
+                                ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
+                                CapabilityExecutor executor, PlanningLimits limits, OpsJournal journal,
+                                String alertOwnerUserId) {
         this.incidents = incidents;
         this.tasks = tasks;
         this.explainer = explainer;
@@ -102,28 +111,34 @@ public final class InvestigationService {
         this.executor = executor;
         this.limits = limits == null ? PlanningLimits.defaults() : limits;
         this.journal = journal == null ? OpsJournal.none() : journal;
+        this.alertOwnerUserId = identity(alertOwnerUserId);
     }
 
     /**
-     * 接收 ALERT 事件，创建无用户归属的独立会话并开始自动调查。
+     * 内部无认证调用的兼容入口；HTTP 接入必须携带认证来源主体。
      * 未指定观测窗口时使用默认值。
      */
     public TaskView submitAlert(String path, String alertMessage, TimeRange timeRange) {
-        String question = "告警自动调查："
-                + (alertMessage == null || alertMessage.isBlank() ? "请根据下方路径与窗口排查失败原因" : alertMessage);
-        return submit(path, question, IncidentOrigin.ALERT, timeRange);
+        return submitAlert(null, path, alertMessage, timeRange);
     }
 
-    private TaskView submit(String path, String question, IncidentOrigin origin, TimeRange timeRange) {
+    public TaskView submitAlert(String sourceUserId, String path, String alertMessage, TimeRange timeRange) {
+        String triggeredBy = identity(sourceUserId);
+        String question = "告警自动调查："
+                + (alertMessage == null || alertMessage.isBlank() ? "请根据下方路径与窗口排查失败原因" : alertMessage);
+        return submit(path, question, IncidentOrigin.ALERT, timeRange, triggeredBy);
+    }
+
+    private TaskView submit(String path, String question, IncidentOrigin origin, TimeRange timeRange,
+                            String triggeredBy) {
         String target = validatePath(path);
         String asked = validateQuestion(question);
-        Session session = incidents.openSession();
-        Incident incident = timeRange == null
-                ? incidents.openIncident(session.sessionId(), origin, ResourceTarget.route(target))
-                : incidents.openIncident(session.sessionId(), origin, ResourceTarget.route(target), timeRange);
+        Session session = incidents.openSession(alertOwnerUserId == null ? triggeredBy : alertOwnerUserId);
+        Incident incident = incidents.openIncident(session.sessionId(), origin, ResourceTarget.route(target),
+                timeRange, triggeredBy);
         try {
             InvestigationTask task = register(session.sessionId(), asked);
-            task.bind(incident.incidentId(), target, ResourceTarget.route(target));
+            task.bind(incident.incidentId(), target, ResourceTarget.route(target), incident.timeRange());
             incidents.attachTask(incident.incidentId(), task.taskId());
             tasks.execute(() -> run(task));
             return task.view();
@@ -173,7 +188,7 @@ public final class InvestigationService {
             DynamicInvestigationGraph graph =
                     new DynamicInvestigationGraph(planner, validator, executor, limits, task);
             InvestigationOutcome outcome = graph.investigate(task.taskId(), task.path(), task.question(),
-                    task.target());
+                    task.target(), task.timeRange());
             if (task.cancelled()) {
                 return;
             }
@@ -249,7 +264,9 @@ public final class InvestigationService {
         }
         try {
             task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.RUNNING, AI_RUNNING);
-            ModelExplainer.Explanation explanation = explainer.explainStreaming(task.path(), task.question(),
+            String question = task.timeRange().isUnspecified() ? task.question()
+                    : task.question() + "\n指定调查时间范围：" + task.timeRange().describe();
+            ModelExplainer.Explanation explanation = explainer.explainStreaming(task.path(), question,
                     outcome.evidence(), outcome.findings().hypotheses(), task::appendAnalysis, task::appendThinking);
             // 步骤里区分「运行时预读」与「模型另调」：解释的依据可追溯到具体快照，而不是一句「已生成解释」。
             task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.COMPLETED, completedDetail(explanation));
@@ -277,6 +294,14 @@ public final class InvestigationService {
         limitations.add(limitation);
         return new InvestigationReport(report.summary(), report.confidence(), report.evidence(),
                 List.copyOf(limitations), report.hypotheses(), null);
+    }
+
+    private static String identity(String value) {
+        String normalized = value == null || value.isBlank() ? null : value.trim();
+        if (normalized != null && normalized.length() > 128) {
+            throw new IllegalArgumentException("告警来源或处理账号不能超过 128 字");
+        }
+        return normalized;
     }
 
     private static String validatePath(String path) {

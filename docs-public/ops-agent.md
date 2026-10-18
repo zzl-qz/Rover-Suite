@@ -145,9 +145,21 @@ abandoning the whole reply.
 - **Alert / event initiated: implemented.** `POST /api/agent/events/ingest` turns one alert into three things — which
   route, which window, what is suspected — and needs login (machine-to-machine entry point, ideally a service account).
   It opens its own session, records an `ALERT`-sourced incident, reuses exactly the same read path as a human question,
-  and returns `202` with a task handle. Sessions are isolated per event and owned by no human user, so they never compete
-  with human sessions for the "one active task" lock. What is still missing is the **proactive** half: periodic
+  and returns `202` with a task handle. Each event gets a separate session, owned by the authenticated caller by default.
+  Set `ROVER_AGENT_ALERT_OWNER` (`rover.agent.alerts.owner-user-id`) to route new alerts to an existing on-call account.
+  `Incident.triggeredBy` independently retains the authenticated source; the workbench shows both source and handler.
+  Task reads, SSE, workspace access and follow-up questions enforce session ownership. Payload fields cannot choose identity.
+  This is a single-handler transition; team queues and role-based handover remain planned.
+  What is still missing is the **proactive** half: periodic
   self-inspection that raises its own `INSPECTION` incidents.
+
+An explicit `fromMillis` / `toMillis` pair must be ordered and travels through planning, tools, evidence and verdicts.
+Logs use that window; trace rows and registry events are filtered to it. Evidence carries the requested bounds and
+`temporalScope`: `CURRENT_CONTEXT` for current route/instance/config snapshots, `REQUESTED_WINDOW` for filtered
+logs/traces/events, and `REFERENCE` for knowledge. A requested window does not imply complete sample or buffer coverage.
+Rolling metrics cannot answer absolute historical windows and return a limitation instead of current values.
+Current health cannot refute a past failure, and absent samples do not prove absence of a fault. Omitting the window
+keeps the data-source defaults. See the [S0 delivery record (Chinese)](agent-s0-report.zh-CN.md).
 
 ## 6. Architecture choices
 
@@ -584,11 +596,15 @@ catalogue described in §7.
 - **Schema and its migration rule**: the agent tables (session / message / incident / task / step / evidence + safe
   resume points + controlled change records) are the project's database schema baseline, managed through
   `agent_schema_migrations` (v1 creates the aggregate, v2 drops the legacy JSON snapshot tables, v3 adds resume points,
-  v4 adds change records). This is the only release allowed to
-  rebuild the schema; from here on, migrations are only ever added, never edited, and nobody is asked to wipe the
-  database again. The references are foreign keys rather than conventions: session → incident → task → steps /
-  evidence / checkpoints, with changes hanging off both session and task, so deleting a session removes the whole chain
-  and orphans cannot exist.
+  v4 adds change records, v5 stores request units and traffic previews, v6 retains the authenticated alert source).
+  Upgrade migrations are append-only and do not require wiping the database. Unknown historical sources remain null;
+  they are never inferred from the handler. Foreign keys maintain relationships. Session deletion still removes its
+  records; independent long-term audit retention remains planned.
+- **Conditional action writes**: `AgentAction.version` is a row version, separate from the gateway routing revision.
+  Inserts return version 1; every update must match the version that was read and returns the incremented version.
+  Stale or deleted records reject writes. Approval and rollback check both status and version, and executor saves
+  also check the version, so a late resolve cannot overwrite a rollback. Unexpected failures retain persisted operation
+  IDs for reconciliation without resubmission. Durable workers, leases and shared production storage remain planned.
 - Strict structured output plus failure classification: `JsonCompletion`'s parsing contract is now supplied by the
   caller (`Function<String, Optional<T>> parser`), and `LlmInvestigationPlanner` / `ModelTargetInterpreter` follow a
   strict contract — invalid JSON, or a value out of range, discards the whole result and falls back to the rule layer,

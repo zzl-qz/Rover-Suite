@@ -148,10 +148,14 @@ public class AgentController {
 
     /**
      * 接收告警事件，创建独立会话并异步调查，返回 202 任务视图。
-     * 接口需要登录；告警会话不归属人工用户。
+     * 接口需要登录；来源取认证主体，处理归属由服务端映射，不接受载荷指定账号。
      */
     @PostMapping("/events/ingest")
     public ResponseEntity<?> ingestEvent(@RequestBody IngestRequest request, Authentication authentication) {
+        String sourceUserId = user(authentication);
+        if (sourceUserId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
         if (request == null || request.path() == null || request.path().isBlank()) {
             return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", "缺少 path（要排查的路由前缀）", null));
         }
@@ -160,7 +164,8 @@ public class AgentController {
                     .body(commandError("BAD_REQUEST", "fromMillis 与 toMillis 需同时提供", null));
         }
         try {
-            TaskView task = agent.ingestAlert(request.path(), request.message(), request.fromMillis(), request.toMillis());
+            TaskView task = agent.ingestAlert(sourceUserId, request.path(), request.message(),
+                    request.fromMillis(), request.toMillis());
             return ResponseEntity.status(HttpStatus.ACCEPTED).body(task);
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", ex.getMessage(), null));

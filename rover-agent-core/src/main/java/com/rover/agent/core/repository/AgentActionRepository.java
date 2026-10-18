@@ -9,8 +9,12 @@ import java.util.function.UnaryOperator;
 /** 变更记录存储契约；transition 必须原子完成状态比较与写入。 */
 public interface AgentActionRepository {
 
-    /** 新建或整体覆盖一条变更记录。 */
-    void save(AgentAction action);
+    /**
+     * 新建（version=0）或按行版本条件更新；返回递增版本后的持久化记录。
+     *
+     * @throws ActionUpdateConflictException 记录已被更新、删除或新建 ID 冲突
+     */
+    AgentAction save(AgentAction action);
 
     /** 按 ID 取一条变更记录。 */
     Optional<AgentAction> find(String actionId);

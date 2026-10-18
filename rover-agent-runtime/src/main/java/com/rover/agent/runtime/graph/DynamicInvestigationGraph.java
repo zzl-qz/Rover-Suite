@@ -20,6 +20,7 @@ import com.rover.agent.core.model.CheckpointStage;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.StepStatus;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.planning.InvestigationPlanner;
 import com.rover.agent.core.planning.PlanProgress;
@@ -106,6 +107,7 @@ public final class DynamicInvestigationGraph {
     private List<RouteUpstreamSnapshot> routeUpstreams;
     private Findings findings;
     private String clarification;
+    private TimeRange timeRange = TimeRange.unspecified();
 
     public DynamicInvestigationGraph(InvestigationPlanner planner, PlanValidator validator,
                                      CapabilityExecutor executor, PlanningLimits limits,
@@ -127,6 +129,12 @@ public final class DynamicInvestigationGraph {
      * @param target   本次请求的目标对象
      */
     public InvestigationOutcome investigate(String taskId, String path, String question, ResourceTarget target) {
+        return investigate(taskId, path, question, target, TimeRange.unspecified());
+    }
+
+    public InvestigationOutcome investigate(String taskId, String path, String question, ResourceTarget target,
+                                             TimeRange timeRange) {
+        this.timeRange = timeRange == null ? TimeRange.unspecified() : timeRange;
         this.taskId = taskId == null ? "" : taskId;
         this.path = path == null ? "" : path.trim();
         this.question = question == null ? "" : question.trim();
@@ -259,7 +267,7 @@ public final class DynamicInvestigationGraph {
             if (reporter != null) {
                 reporter.step(stepType(capability), stepName(capability), StepStatus.RUNNING, runningText(capability));
             }
-            CapabilityResult result = executor.execute(capability, step.target(), path, taskId, route);
+            CapabilityResult result = executor.execute(capability, step.target(), path, taskId, route, timeRange);
             if (result.executed()) {
                 toolCalls++;
             }
@@ -330,7 +338,8 @@ public final class DynamicInvestigationGraph {
             reporter.step(AgentStepType.DIAGNOSIS, STEP_SYNTHESIS, StepStatus.RUNNING,
                     "正在按已采集的证据逐条判定候选故障原因");
         }
-        FindingsInput input = new FindingsInput(path, route, routeRead, discovery, instances, traces, routeUpstreams);
+        FindingsInput input = new FindingsInput(path, route, routeRead, discovery, instances, traces, routeUpstreams,
+                timeRange);
         Findings result = InvestigationRules.evaluate(input);
         if (reporter != null) {
             reporter.step(AgentStepType.DIAGNOSIS, STEP_SYNTHESIS, StepStatus.COMPLETED,
@@ -386,7 +395,7 @@ public final class DynamicInvestigationGraph {
     }
 
     private PlanningRequest planningRequest() {
-        return new PlanningRequest(question, target, path, List.copyOf(evidence), List.copyOf(limitations));
+        return new PlanningRequest(question, target, path, List.copyOf(evidence), List.copyOf(limitations), timeRange);
     }
 
     private static String describePlan(int round, InvestigationPlan plan) {
