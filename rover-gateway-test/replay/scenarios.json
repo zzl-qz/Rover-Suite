@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "routeId": "replay-orders",
+  "path": "/api/replay/order",
+  "seed": 20261018,
+  "samplesPerPhase": 120,
+  "concurrency": 4,
+  "repetitions": 2,
+  "scenarios": [
+    {
+      "id": "bad-version",
+      "fault": {"status": 503, "delayMillis": 0},
+      "expectedFailureStatus": 503,
+      "confirmedHypothesis": "H5"
+    },
+    {
+      "id": "upstream-timeout",
+      "fault": {"status": 200, "delayMillis": 1000},
+      "expectedFailureStatus": 504,
+      "confirmedHypothesis": null
+    }
+  ]
+}

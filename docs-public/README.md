@@ -55,6 +55,7 @@ The system is easiest to understand as three cooperating surfaces: the Gateway r
 | Open and understand Admin / 使用 Admin 控制台 | [Admin User Guide](./admin-guide.md) | [Admin 使用手册](./admin-guide.zh-CN.md) |
 | Understand the Ops Agent positioning / 了解运维 Agent 定位 | [Rover Ops Agent](./ops-agent.md) | [Rover Ops Agent](./ops-agent.zh-CN.md) |
 | Review the S0 delivery and remaining production gaps / 查看 S0 交付与生产差距 | [S0 delivery record (Chinese)](./agent-s0-report.zh-CN.md) | [S0 交付记录](./agent-s0-report.zh-CN.md) |
+| Replay real version faults and alerts / 回放真实双版本故障与告警 | [Agent fault replay (Chinese)](./agent-fault-replay.zh-CN.md) | [Agent 故障回放](./agent-fault-replay.zh-CN.md) |
 | Call Admin APIs directly / 直接调用 Admin API | [Admin API](./admin-api.md) | [Admin API](./admin-api.zh-CN.md) |
 | Register Java or non-Java services / 接入 Java 或非 Java 服务 | [Service Registration](./service-registration.md) | [服务注册指南](./service-registration.zh-CN.md) |
 | Check every YAML/Admin key / 查询全部配置项 | [Configuration Reference](./configuration-reference.md) | [配置项参考](./configuration-reference.zh-CN.md) |
