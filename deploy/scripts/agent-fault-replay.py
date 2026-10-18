@@ -202,7 +202,7 @@ class Replay:
         # JDK Unix-domain socket paths have a short OS limit even on Windows.
         socket_dir = ROOT / ".tmp/nio"
         socket_dir.mkdir(parents=True, exist_ok=True)
-        args = [self.args.java, "-XX:ActiveProcessorCount=2", "-Xms32m", "-Xmx384m",
+        args = [self.args.java, "-XX:ActiveProcessorCount=2", "-Xms32m", f"-Xmx{getattr(self.args, 'heap_mb', 384)}m",
                 f"-Djava.io.tmpdir={tmp}", f"-Djdk.net.unixdomain.tmpdir={socket_dir}", "-jar",
                 str(ROOT / JARS["backend" if name in ("v1", "v2") else name])]
         if name == "admin":
@@ -446,6 +446,71 @@ class Replay:
         require(self.report["repeatable"], "At least two repetitions must produce matching per-user outcomes")
         self.report["faultReplayPassed"] = True
         self.receipts()
+        if getattr(self.args, "require_single_admin_foundation", False):
+            self.single_admin_foundation()
+
+    def single_admin_foundation(self):
+        """Exercise actual HTTP filters, durable events and Admin restart in this owned fixture."""
+        self.event("checking single Admin identity, permissions, restart, event replay and backup")
+        base = self.urls["admin"]
+        checks = {}
+        assets = self.admin.request(base + "/api/agent/assets")[1]
+        checks["resourceInventory"] = bool(assets["identityComplete"] and assets["resources"])
+        user_name, password = "fixture-operator", "fixture-" + uuid.uuid4().hex
+        self.admin.request(base + "/api/agent/security/users", {
+            "username": user_name, "password": password, "roles": ["OPERATOR"], "enabled": True}, self.csrf)
+        operator = Http(cookies=True)
+        auth = operator.request(base + "/api/auth/status")[1]
+        operator.request(base + "/login", urllib.parse.urlencode({"username": user_name, "password": password,
+            auth["csrfParameterName"]: auth["csrfToken"]}).encode(), {"Content-Type": "application/x-www-form-urlencoded"})
+        auth = operator.request(base + "/api/auth/status")[1]
+        require(auth["authenticated"], "Fixture operator login failed")
+        operator_csrf = {auth["csrfHeaderName"]: auth["csrfToken"]}
+        checks["operatorCannotApprove"] = operator.request(base + "/api/agent/actions/fake/approve", {}, operator_csrf, allowed=(403,))[0] == 403
+        checks["operatorCannotBypassAgent"] = operator.request(base + "/api/configs", {}, operator_csrf, allowed=(403,))[0] == 403
+        issued = self.admin.request(base + "/api/agent/security/connectors", {"name": "fixture-monitor"}, self.csrf)[1]
+        bearer = {"Authorization": "Bearer " + issued["token"]}
+        machine = Http()
+        checks["machineCannotRead"] = machine.request(base + "/api/agent/security/me", headers=bearer, allowed=(403,))[0] == 403
+        task = machine.request(base + "/api/agent/events/ingest", {"path": self.fixture["path"], "message": "fixture machine alert"}, bearer, allowed=(202,))[1]
+        deadline = time.monotonic() + 45
+        while task["status"] in ("PENDING", "RUNNING") and time.monotonic() < deadline:
+            time.sleep(.2)
+            task = self.admin.request(base + "/api/agent/tasks/" + task["taskId"])[1]
+        require(task["status"] == "COMPLETED", "Fixture machine alert did not complete")
+        workspace = self.admin.request(base + "/api/agent/sessions/" + task["sessionId"] + "/workspace")[1]
+        checks["machineSourceSeparateFromHandler"] = (workspace["session"]["userId"] == "admin"
+            and workspace["activeIncident"]["triggeredBy"] == "connector:fixture-monitor")
+        checks["privateSessionIsolated"] = operator.request(base + "/api/agent/tasks/" + task["taskId"], allowed=(404,))[0] == 404
+        self.admin.request(base + "/api/agent/security/users", {"username": user_name, "roles": ["OPERATOR"], "enabled": False}, self.csrf)
+        checks["liveUserRevocation"] = operator.request(base + "/api/agent/security/me", allowed=(403,))[0] == 403
+        self.admin.request(base + "/api/agent/security/connectors/" + issued["id"] + "/revoke", {}, self.csrf)
+        self.admin.request(base + "/api/agent/operations/write-stop", {"stopped": True}, self.csrf)
+        checks["writeStopBlocksRawWrites"] = self.admin.request(base + "/api/configs", {}, self.csrf, allowed=(403,))[0] == 403
+        self.stop("admin")
+        self.admin = Http(cookies=True)
+        self.start("admin")
+        self.wait("admin", lambda: self.admin.request(base + "/api/auth/status"))
+        self.login()
+        state = self.admin.request(base + "/api/agent/operations")[1]
+        checks["writeStopSurvivesAdminRestart"] = bool(state["healthy"] and state["writesStopped"])
+        checks["tokenRevocationSurvivesAdminRestart"] = machine.request(base + "/api/agent/events/ingest",
+            {"path": self.fixture["path"]}, bearer, allowed=(401,))[0] == 401
+        stream = self.admin.request(base + "/api/agent/tasks/" + task["taskId"] + "/events", headers={"Last-Event-ID": "0"}, timeout=15)[1]
+        checks["durableEventsAfterAdminRestart"] = "id:" in stream and "TASK_COMPLETED" in stream
+        backup = self.admin.request(base + "/api/agent/operations/backups", {}, self.csrf, timeout=30)[1]
+        backup_path = Path(backup["path"]).resolve()
+        checks["consistentBackupCreated"] = backup_path.is_relative_to(self.output.resolve()) and backup_path.is_file() and backup_path.stat().st_size > 0
+        audit = self.admin.request(base + "/api/agent/operations/audit")[1]
+        kinds = {row["kind"] for row in audit}
+        checks["securityAuditPersisted"] = {"ACCOUNT_CHANGED", "CONNECTOR_ISSUED", "CONNECTOR_REVOKED", "WRITE_STOP_CHANGED"} <= kinds
+        self.admin.request(base + "/api/agent/operations/write-stop", {"stopped": False}, self.csrf)
+        evidence = {"checks": checks, "inventory": assets, "taskId": task["taskId"], "sessionId": task["sessionId"],
+                    "backupId": backup["backupId"], "auditKinds": sorted(kinds)}
+        save(self.output / "single-admin-probe.json", evidence)
+        self.report["singleAdminChecks"] = checks
+        self.report["singleAdminGatePassed"] = all(checks.values())
+        require(all(checks.values()), "At least one single Admin foundation check failed")
 
     def close(self):
         errors = []
@@ -483,10 +548,13 @@ def main():
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/agent-fault-replay" / (time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]))
     parser.add_argument("--base-port", type=int, default=19080, help="Six consecutive localhost ports")
     parser.add_argument("--startup-timeout", type=int, default=90)
+    parser.add_argument("--heap-mb", type=int, default=384, help="Heap cap per fixture JVM (128..512)")
     parser.add_argument("--require-durable-receipts", action="store_true", help="Fail if the S1-05 receipt production gate is not met")
+    parser.add_argument("--require-single-admin-foundation", action="store_true", help="Also verify identity, roles, machine ingress, Admin restart, SSE and backup over real HTTP")
     args = parser.parse_args()
     parser.error("Java 17+ must be on PATH or supplied with --java") if not args.java else None
     require(1024 <= args.base_port <= 65530 and 1 <= args.startup_timeout <= 300, "Invalid port/timeout")
+    require(128 <= args.heap_mb <= 512, "Invalid fixture heap cap")
     fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
     validate_fixture(fixture)
     replay = Replay(args, fixture)

@@ -4,6 +4,8 @@ import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.port.RouteChangePreview;
+import com.rover.agent.core.port.AgentAccess;
+import com.rover.agent.core.port.AgentAccess.Permission;
 import com.rover.agent.core.port.RouteChangeResult;
 import com.rover.agent.core.port.RouteControlException;
 import com.rover.agent.core.port.RouteControlPort;
@@ -28,10 +30,16 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
 
     private final RouteControlPort control;
     private final AgentActionRepository actions;
+    private final AgentAccess access;
 
     public RouteWeightActionExecutor(RouteControlPort control, AgentActionRepository actions) {
+        this(control, actions, AgentAccess.local());
+    }
+
+    public RouteWeightActionExecutor(RouteControlPort control, AgentActionRepository actions, AgentAccess access) {
         this.control = control;
         this.actions = actions;
+        this.access = access;
     }
 
     @Override
@@ -41,6 +49,13 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
 
     @Override
     public AgentAction execute(AgentAction action) {
+        return execute(action, action.approvedBy());
+    }
+
+    @Override public AgentAction execute(AgentAction action, String actor) {
+        if (!access.writeAllowed(actor)) {
+            return settle(action, ActionStatus.PRECONDITION_FAILED, "审批账号已被撤权，未提交写请求");
+        }
         Precondition precondition = check(action);
         if (!precondition.passed()) {
             log.warn("变更 {} 预检未通过：{}", action.actionId(), precondition.message());
@@ -61,10 +76,14 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
                 .move(ActionStatus.EXECUTING, null).toAction(now());
         submitting = actions.save(submitting);
 
+        if (!access.writeAllowed(actor)) {
+            return settle(submitting, ActionStatus.PRECONDITION_FAILED, "提交前审批权限已失效，未提交写请求");
+        }
+
         RouteChangeResult result;
         try {
             result = control.adjustTargetWeight(action.routeId(), action.serviceName(), action.group(),
-                    action.desiredWeight(), action.expectedRevision(), operationId);
+                    action.desiredWeight(), action.expectedRevision(), operationId, action.resourceRef());
         } catch (RouteControlException ex) {
             return recoverOrFail(submitting, ex, false);
         } catch (RuntimeException ex) {
@@ -78,6 +97,13 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
 
     @Override
     public AgentAction rollback(AgentAction action) {
+        return rollback(action, action.approvedBy());
+    }
+
+    @Override public AgentAction rollback(AgentAction action, String actor) {
+        if (!access.writeAllowed(actor)) {
+            return backToSuccess(action, "回滚账号已被撤权，未提交写请求");
+        }
         RouteControlState state;
         try {
             state = control.state();
@@ -105,11 +131,15 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
                 .move(ActionStatus.ROLLING_BACK, null).toAction(now());
         submitting = actions.save(submitting);
 
+        if (!access.writeAllowed(actor)) {
+            return backToSuccess(submitting, "提交前回滚权限已失效，未提交写请求");
+        }
+
         RouteChangeResult result;
         try {
             // 用「刚刚读到的版本」而不是提议时的版本：回滚面对的是当前世界，不是当初那张卡。
             result = control.adjustTargetWeight(action.routeId(), action.serviceName(), action.group(),
-                    action.beforeWeight(), state.revision(), operationId);
+                    action.beforeWeight(), state.revision(), operationId, action.resourceRef());
         } catch (RouteControlException ex) {
             return recoverOrFail(submitting, ex, true);
         } catch (RuntimeException ex) {
@@ -151,6 +181,8 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
             case REJECTED, FAILED -> rollbackPhase
                     ? backToSuccess(action, "回查确认：回滚没有生效（" + detail + "），当前权重仍是变更后的值")
                     : settle(action, ActionStatus.FAILED, "回查确认：变更没有生效（" + detail + "）");
+            case EXPIRED -> settle(action, ActionStatus.UNCERTAIN,
+                    "操作回执已过期，不能确认是否已生效；保留原操作号并人工对账，禁止重新执行");
             default -> settle(action, ActionStatus.UNCERTAIN,
                     "回查没有这条操作的记录（" + detail + "）：无法确认是否已生效，请人工核对当前权重后再决定是否回滚");
         };
@@ -182,10 +214,16 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
     }
 
     /** 在给定路由表里找到这条变更指向的路由与版本目标。 */
-    private static Located locate(RouteControlState state, AgentAction action) {
+    private Located locate(RouteControlState state, AgentAction action) {
         RouteControlRoute route = RouteLocator.route(state, action.routeId(), action.businessPrefix());
         if (route == null) {
             return Located.missing("找不到路由 " + routeLabel(action) + "：它可能已被删除或改名");
+        }
+        if (control.requiresResourceIdentity() && action.resourceRef() == null) {
+            return Located.missing("历史计划没有资源 UID，必须重新提案并批准");
+        }
+        if (action.resourceRef() != null && !action.resourceRef().equals(route.resourceRef())) {
+            return Located.missing("资源范围、管理目标或 UID/代次已改变，旧计划禁止执行与补偿");
         }
         if (route.targets().isEmpty()) {
             return Located.missing(route.staticUpstream()

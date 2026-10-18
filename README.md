@@ -58,6 +58,10 @@ Open Admin at <http://127.0.0.1:9090>. See the [Docker Compose demo](deploy/dock
 
 ## What It Solves
 
+Gateway route changes now commit routes and operation receipts together, survive restart, and reject reused operation IDs with different parameters. See [receipt retention and recovery boundaries](docs-public/gateway-operation-receipts.zh-CN.md); the Agent remains a single-node preview.
+
+Resource identity, live authorization, machine ingress, durable H2 jobs/budgets, audit/event replay, write stops and backups are documented in the [single Admin foundation guide (Chinese)](docs-public/agent-single-admin-foundation.zh-CN.md).
+
 Rover-Suite is for small teams running multiple monoliths, side services, or mixed-language apps that outgrow hardcoded upstream addresses. Instead of editing Nginx or every frontend whenever a backend moves, providers register with Nameserver and Gateway routes to healthy instances.
 
 ## Screenshots

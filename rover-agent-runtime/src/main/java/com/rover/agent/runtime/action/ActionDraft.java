@@ -82,6 +82,6 @@ final class ActionDraft {
                 origin.expectedRevision(),
                 applyOperationId, appliedRevision, rollbackOperationId, origin.requestedBy(), approvedBy,
                 approvedAtMillis, preview, origin.impact(), errorMessage, origin.createdAtMillis(), atMillis,
-                origin.version());
+                origin.version(), origin.resourceRef());
     }
 }

@@ -31,11 +31,15 @@ public class RouteValidator {
         }
         List<RouteConfig> normalized = new ArrayList<>(routes.size());
         Set<String> prefixes = new HashSet<>();
+        Set<String> ids = new HashSet<>();
         for (RouteConfig route : routes) {
             if (route == null) {
                 continue;
             }
             RouteConfig copy = copyRoute(route);
+            if (copy.getId() != null && !ids.add(copy.getId())) {
+                throw new IllegalArgumentException("路由 id 重复: " + copy.getId());
+            }
             validateRoute(copy, prefixes);
             normalized.add(copy);
         }
@@ -174,6 +178,8 @@ public class RouteValidator {
     public static RouteConfig copyRoute(RouteConfig route) {
         RouteConfig copy = new RouteConfig();
         copy.setId(trimToNull(route.getId()));
+        copy.setResourceUid(route.getResourceUid());
+        copy.setGeneration(route.getGeneration());
         copy.setBusinessPrefix(RouteConfig.normalizePrefix(route.getBusinessPrefix()));
         copy.setTargetUrl(trimToNull(route.getTargetUrl()));
         copy.setStickyHeader(trimToNull(route.getStickyHeader()));

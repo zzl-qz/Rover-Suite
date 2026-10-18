@@ -2,6 +2,10 @@ package com.rover.admin.agent.adapter;
 
 import com.rover.admin.client.ManageApiCallException;
 import com.rover.admin.service.AdminConfigService;
+import com.rover.admin.config.AdminProperties;
+import com.rover.agent.core.model.ResourceRef;
+import com.rover.agent.core.model.ResourceScope;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.rover.agent.core.port.RouteChangePreview;
 import com.rover.agent.core.port.RouteChangeResult;
 import com.rover.agent.core.port.RouteControlException;
@@ -27,9 +31,32 @@ public class AdminRouteControlAdapter implements RouteControlPort {
     private static final String FIELD_TARGETS = "targets";
 
     private final AdminConfigService admin;
+    private final ResourceScope scope;
+    private final String controlTargetId;
 
     public AdminRouteControlAdapter(AdminConfigService admin) {
+        this(admin, new AdminProperties());
+    }
+
+    @Autowired
+    public AdminRouteControlAdapter(AdminConfigService admin, AdminProperties properties) {
         this.admin = admin;
+        this.scope = new ResourceScope(properties.getAgentOrganizationId(), properties.getAgentTeamId(),
+                properties.getAgentEnvironmentId());
+        this.controlTargetId = properties.getGatewayControlTargetId() == null
+                || properties.getGatewayControlTargetId().isBlank()
+                ? "gateway-" + digest(properties.getGatewayUrl()) : properties.getGatewayControlTargetId().trim();
+    }
+
+    @Override public boolean requiresResourceIdentity() { return true; }
+    @Override public ResourceScope resourceScope() { return scope; }
+    @Override public String resourceNamespace() { return digest(JsonCodec.toJson(List.of(scope, controlTargetId))); }
+
+    private static String digest(String input) {
+        try {
+            return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException ex) { throw new IllegalStateException(ex); }
     }
 
     @Override
@@ -74,6 +101,15 @@ public class AdminRouteControlAdapter implements RouteControlPort {
     @Override
     public RouteChangeResult adjustTargetWeight(String routeId, String serviceName, String group, int weight,
                                                 int expectedRevision, String operationId) {
+        return adjustTargetWeight(routeId, serviceName, group, weight, expectedRevision, operationId, null);
+    }
+
+    @Override
+    public RouteChangeResult adjustTargetWeight(String routeId, String serviceName, String group, int weight,
+                                                int expectedRevision, String operationId, ResourceRef resource) {
+        if (resource != null && (!scope.equals(resource.scope()) || !controlTargetId.equals(resource.controlTargetId()))) {
+            throw new RouteControlException(RouteControlException.Kind.REJECTED, "目标组织/团队/环境或管理端已改变，旧计划不得执行");
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put(ManageApiPaths.PARAM_ROUTE_ID, routeId);
         body.put("serviceName", serviceName);
@@ -81,6 +117,10 @@ public class AdminRouteControlAdapter implements RouteControlPort {
         body.put("weight", weight);
         body.put(ManageApiPaths.PARAM_REVISION, expectedRevision);
         body.put(ManageApiPaths.PARAM_OPERATION_ID, operationId);
+        if (resource != null) {
+            body.put("expectedResourceUid", resource.resourceUid());
+            body.put("expectedGeneration", resource.generation());
+        }
         try {
             Map<String, Object> result = admin.adjustTargetWeight(body);
             return new RouteChangeResult(AdminValues.text(result.get("status")),
@@ -115,7 +155,7 @@ public class AdminRouteControlAdapter implements RouteControlPort {
         }
     }
 
-    private static RouteControlRoute toRoute(Map<?, ?> row) {
+    private RouteControlRoute toRoute(Map<?, ?> row) {
         List<RouteControlTarget> targets = new ArrayList<>();
         for (Object item : listOf(row.get(FIELD_TARGETS))) {
             if (item instanceof Map<?, ?> target) {
@@ -123,8 +163,13 @@ public class AdminRouteControlAdapter implements RouteControlPort {
                         AdminValues.text(target.get("group")), AdminValues.intValue(target.get("weight"))));
             }
         }
-        return new RouteControlRoute(AdminValues.text(row.get("id")), AdminValues.text(row.get("businessPrefix")),
-                AdminValues.text(row.get("targetUrl")), targets);
+        String routeId = AdminValues.text(row.get("id"));
+        String prefix = AdminValues.text(row.get("businessPrefix"));
+        String uid = AdminValues.text(row.get("resourceUid"));
+        long generation = row.get("generation") instanceof Number number ? number.longValue() : 0;
+        ResourceRef resource = uid.isBlank() || generation <= 0 ? null
+                : new ResourceRef(scope, controlTargetId, "GATEWAY_ROUTE", routeId.isBlank() ? prefix : routeId, uid, generation);
+        return new RouteControlRoute(routeId, prefix, AdminValues.text(row.get("targetUrl")), targets, resource);
     }
 
     /** 路由行的可变副本：预览要拼候选整表，不能直接改管理口返回的对象。 */
@@ -200,7 +245,7 @@ public class AdminRouteControlAdapter implements RouteControlPort {
         return lines;
     }
 
-    /** 映射管理口异常：409 为版本冲突，其他 4xx 为请求拒绝，5xx 为执行失败，0 为响应未知。 */
+    /** 5xx 不能证明事务未提交；与响应丢失一样用原操作号对账。 */
     private static RouteControlException translate(String action, RuntimeException ex) {
         if (ex instanceof RouteControlException control) {
             return control;
@@ -211,7 +256,7 @@ public class AdminRouteControlAdapter implements RouteControlPort {
                 case 0 -> new RouteControlException(RouteControlException.Kind.UNAVAILABLE, message, ex);
                 case 409 -> new RouteControlException(RouteControlException.Kind.CONFLICT, message);
                 default -> manage.statusCode() >= 500
-                        ? new RouteControlException(RouteControlException.Kind.FAILED, message, ex)
+                        ? new RouteControlException(RouteControlException.Kind.UNAVAILABLE, message, ex)
                         : new RouteControlException(RouteControlException.Kind.REJECTED, message, ex);
             };
         }

@@ -155,7 +155,7 @@
 换台重试默认关闭，和熔断分开。打开后只在「连接失败、请求还没发出去、旁边还有另一台」时再打一枪。上游 5xx、请求超时、已经写出响应头、POST body 已经流走，都不换台。最多换 1 次。客户端业务重试仍然要自己做。换台次数在 `/_manage/metrics` 的 `resources.retries.connect` 和 Prometheus `rover_gateway_retries_total{reason="connect"}`。
 
 `rover.gateway.adminEnabled: false` 适合不部署 Rover-Admin、只把 YAML 当作配置事实来源的环境。它会跳过
-`config/routes.overlay.json` 和 `config/gateway-runtime.overlay.json`，并使 `/_manage/**` 返回 `404`；不会影响 Gateway
+路由事务库、旧 `config/routes.overlay.json` 和 `config/gateway-runtime.overlay.json`，并使 `/_manage/**` 返回 `404`；不会影响 Gateway
 连接 Nameserver、订阅服务或转发业务请求。已有 overlay 文件不会被删除，重新设为 `true` 后仍会继续生效。
 
 Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（在途闸门满，默认 `max(64, CPU×8)`，可用
@@ -210,7 +210,7 @@ routes:
 
 默认 `outbound=netty` 时上游必须是 `http://`。写入 `https://` 会在启动或热更新时被拒绝，避免配置通过、
 请求才失败；若上游确实是 HTTPS，先把 `proxy.outbound` 设为 `jdk` 再重启。Admin 保存的路由会写入
-`config/routes.overlay.json`（文件同时带 `revision` 与 `appliedOperationId`），并整体替换启动 YAML 中的
+`config/routes.overlay.json.state.mv.db`（与操作回执同事务；配套见证文件检查代次/高水位），并整体替换启动 YAML 中的
 路由列表。Nacos 整机示例见 `deploy/docker/config/rover-gateway-nacos.yml`。
 
 ## Gateway 运行时配置
@@ -255,7 +255,7 @@ Gateway 进程内独立计数，不是分布式全局配额。
 `adminEnabled: true` 时，启动顺序为 **YAML 基线 → Gateway overlay**。如果曾在 Admin 保存过配置，overlay 中同名值会
 在下次启动时覆盖 YAML；Admin 不会因“仅打开页面”而写入该文件。当前 overlay 是全量快照，所以一次保存可能同时保留其他
 键当时的旧值。修改 YAML 后未生效时，优先检查 `config/gateway-runtime.overlay.json`；路由问题则检查
-`config/routes.overlay.json`（它会整体替代 YAML 路由）。
+`config/routes.overlay.json.state.mv.db`（尚无事务库时才读取旧 JSON；见[备份与恢复](gateway-operation-receipts.zh-CN.md)）。
 
 `gateway.loadbalance.strategy` 不通过 Admin 修改，也不会写入 `config/gateway-runtime.overlay.json`。自定义 LoadBalancer 请在
 `rover-gateway.yml` 中配置 SPI `name()` / 实现类全名并重启 Gateway，避免 Admin 覆盖插件装配策略。

@@ -84,10 +84,18 @@ public final class CapabilityExecutor {
     private final LogQueryPort logs;
     private final KnowledgeReadPort knowledge;
     private final CapabilityRegistry registry;
+    private final java.util.function.Consumer<String> authorize;
 
     public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                               TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
                               LogQueryPort logs, KnowledgeReadPort knowledge, CapabilityRegistry registry) {
+        this(routes, instances, metrics, traces, configs, events, logs, knowledge, registry, taskId -> { });
+    }
+
+    public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
+                              TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
+                              LogQueryPort logs, KnowledgeReadPort knowledge, CapabilityRegistry registry,
+                              java.util.function.Consumer<String> authorize) {
         this.routes = routes;
         this.instances = instances;
         this.metrics = metrics;
@@ -97,6 +105,7 @@ public final class CapabilityExecutor {
         this.logs = logs;
         this.knowledge = knowledge;
         this.registry = registry == null ? CapabilityRegistry.standard() : registry;
+        this.authorize = authorize;
     }
 
     /**
@@ -124,6 +133,7 @@ public final class CapabilityExecutor {
     /** 指定时间范围贯穿工具调用；不支持绝对历史窗口的实时指标明确返回不可用。 */
     public CapabilityResult execute(AgentCapability capability, ResourceTarget target, String path, String taskId,
                                     RouteSnapshot route, TimeRange timeRange) {
+        if (capability != AgentCapability.LOG_QUERY) { authorize.accept(taskId); }
         TimeRange range = timeRange == null ? TimeRange.unspecified() : timeRange;
         CapabilityDescriptor descriptor = registry.descriptor(capability).orElse(null);
         if (descriptor == null || !descriptor.available()) {
@@ -412,6 +422,7 @@ public final class CapabilityExecutor {
      */
     public CapabilityResult queryLogs(String target, List<String> types, Long fromMillis, Long toMillis,
                                       String taskId) {
+        authorize.accept(taskId);
         CapabilityDescriptor descriptor = registry.descriptor(AgentCapability.LOG_QUERY).orElse(null);
         if (descriptor == null || !descriptor.available()) {
             return CapabilityResult.unavailable(AgentCapability.LOG_QUERY, descriptor);

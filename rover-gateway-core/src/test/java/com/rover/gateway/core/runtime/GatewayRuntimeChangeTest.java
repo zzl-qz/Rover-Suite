@@ -1,9 +1,9 @@
 package com.rover.gateway.core.runtime;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -71,7 +71,7 @@ class GatewayRuntimeChangeTest {
         runtime.applyRoutes(0, "op-1", List.of(versionedRoute("r1", "/api/a", 100)));
 
         // expectedRevision 已过期，但同一 operationId 应短路成幂等重放，不再走冲突判断
-        RouteChangeResult replayed = runtime.applyRoutes(0, "op-1", List.of(versionedRoute("r2", "/api/b", 100)));
+        RouteChangeResult replayed = runtime.applyRoutes(0, "op-1", List.of(versionedRoute("r1", "/api/a", 100)));
 
         assertEquals("REPLAYED", replayed.status(), "重复提交同一 operationId 必须返回 REPLAYED");
         assertEquals(1, replayed.revision(), "重放应返回原版本号");
@@ -85,7 +85,7 @@ class GatewayRuntimeChangeTest {
         Path overlayPath = tempDir.resolve("reject.json");
         GatewayRuntime runtime = runtime(new RouteOverlayStore(overlayPath), List.of());
         runtime.applyRoutes(0, "op-ok", List.of(versionedRoute("r1", "/api/a", 100)));
-        byte[] before = Files.readAllBytes(overlayPath);
+        List<RouteConfig> before = new RouteOverlayStore(overlayPath).loadOrNull().routes();
 
         // 两个 target 不同 serviceName：走到校验阶段必须被拒
         RouteConfig invalid = new RouteConfig();
@@ -98,7 +98,7 @@ class GatewayRuntimeChangeTest {
         assertEquals(1, runtime.getRevision(), "校验失败不得推进版本号");
         assertEquals("/api/a", runtime.getRouteMatcher().listRoutes().get(0).getBusinessPrefix(),
                 "校验失败不得改动生效路由");
-        assertArrayEquals(before, Files.readAllBytes(overlayPath), "校验失败不得改写 overlay 文件");
+        assertEquals(before, new RouteOverlayStore(overlayPath).loadOrNull().routes(), "校验失败不得改变持久路由");
 
         GatewayRuntime.OperationRecord record = runtime.operationOf("op-bad");
         assertNotNull(record, "被拒的操作也应留痕，供调用方确认");
@@ -201,7 +201,7 @@ class GatewayRuntimeChangeTest {
     }
 
     @Test
-    void failedDiskWriteLeavesTraceAndCanBeRetriedAfterRecovery() throws IOException {
+    void failedStorageWithoutDurableReceiptRemainsUnknownAndCanBeRetriedAfterRecovery() throws IOException {
         // 把 store 的父目录先造成一个普通文件，写 blocked/routes.json 时创建目录必然失败
         Path blocked = tempDir.resolve("blocked-retry");
         Files.writeString(blocked, "not a directory");
@@ -211,12 +211,9 @@ class GatewayRuntimeChangeTest {
         assertThrows(IllegalStateException.class,
                 () -> runtime.applyRoutes(0, "op-retry", List.of(versionedRoute("r2", "/api/b", 100))));
 
-        // 留痕：丢了响应之后，调用方靠这条记录才能判断「提交过、但没写进去」
+        // 存储不可写时不能用易失内存 FAILED 冒充持久事实；丢失响应仍必须对账。
         GatewayRuntime.OperationRecord record = runtime.operationOf("op-retry");
-        assertNotNull(record, "落盘失败也必须留痕，否则调用方只能看到 UNKNOWN");
-        assertEquals(GatewayRuntime.OperationStatus.FAILED, record.status(), "落盘失败的终态应是 FAILED");
-        assertEquals(0, record.revision(), "本操作没有产生新版本，记录里的版本应是当前版本");
-        assertNotNull(record.message(), "应带上失败原因，便于判断是磁盘问题还是别的问题");
+        assertNull(record, "无法持久化的失败只能报告 UNKNOWN，不能谎称确定未执行");
 
         // 关键：FAILED 不能被当成幂等重放，否则磁盘恢复后同一 operationId 再也重试不了
         Files.delete(blocked);

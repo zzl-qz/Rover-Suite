@@ -170,7 +170,7 @@ The process-local circuit breaker is also off by default. When enabled it counts
 
 Connect-fail retry is a separate switch, also off by default. When enabled, Gateway tries one other instance only if the request was never sent. Upstream 5xx, request timeout, a response already started, or a body already flushed to the first instance are not retried. Clients still retry business failures themselves. Counts are in `/_manage/metrics` `resources.retries.connect` and Prometheus `rover_gateway_retries_total{reason="connect"}`.
 
-Use `rover.gateway.adminEnabled: false` when Rover-Admin is not deployed and YAML must be the sole configuration source. Gateway then skips `config/routes.overlay.json` and `config/gateway-runtime.overlay.json`, and `/_manage/**` returns `404`. This does not affect Nameserver discovery or business proxying. Existing overlay files are retained and take effect again if the flag is re-enabled.
+Use `rover.gateway.adminEnabled: false` when Rover-Admin is not deployed and YAML must be the sole configuration source. Gateway then skips its route transaction store, legacy route JSON and runtime overlay, and `/_manage/**` returns `404`. This does not affect Nameserver discovery or business proxying. Existing state files are retained and take effect again if the flag is re-enabled.
 
 A 503 response includes `X-Rover-Reject-Reason`: `INFLIGHT_LIMIT` (in-flight gate full; default `max(64, CPU×8)`, override with YAML `server.maxInflight` or `-Drover.gateway.maxInflight`), `NO_UPSTREAM` (no usable upstream), or `CIRCUIT_OPEN` (every candidate is open). Logs print `inflight=used/max`. Counts are in `/_manage/metrics` `resources.rejects` and Prometheus `rover_gateway_rejects_total`. This work runs only on the reject path.
 
@@ -232,8 +232,8 @@ algorithm and the management flow.
 Default `outbound=netty` accepts `http://` only. Startup and hot-reload reject
 `https://` so a config cannot pass and then fail on the first request. If the
 upstream is really HTTPS, set `proxy.outbound` to `jdk` and restart.
-Admin-saved routes are written to `config/routes.overlay.json` — which also
-carries `revision` and `appliedOperationId` — and replace the YAML route list as
+Admin-saved routes and operation receipts share a transaction in `config/routes.overlay.json.state.mv.db`,
+with a generation/high-water witness, and replace the YAML route list as
 a whole.
 
 ## Gateway runtime configuration
@@ -283,7 +283,7 @@ type, plugin directories, or CORS requires a Gateway restart.
 
 ### Configuration precedence
 
-With `adminEnabled: true`, startup precedence is **YAML baseline → Gateway overlay**. An Admin save makes the matching overlay value win after every restart; merely opening Admin does not write the file. The current overlay is a full snapshot, so one save can retain stale values for other keys. If a YAML change appears ignored, inspect `config/gateway-runtime.overlay.json`; for routes inspect `config/routes.overlay.json`, which replaces the complete YAML route list.
+With `adminEnabled: true`, startup precedence is **YAML baseline → persistent managed state**. An Admin save makes managed state win after restart; merely opening Admin does not write it. Runtime config overlays are full snapshots and may preserve older values for other keys. Inspect `config/gateway-runtime.overlay.json` for runtime settings, and `config/routes.overlay.json.state.mv.db` for routes. Legacy route JSON is only a migration input; see [receipt recovery rules](gateway-operation-receipts.zh-CN.md).
 
 `gateway.loadbalance.strategy` is not edited from Admin and is not written to
 `config/gateway-runtime.overlay.json`. Configure a custom LoadBalancer with an

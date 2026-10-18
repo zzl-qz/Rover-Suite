@@ -17,13 +17,13 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * Author: Daylight
  * Created: 2026-08-10 16:55:00
- * Description: 路由热更新本地持久化：Admin 改路由后落盘，重启优先读 overlay
+ * Description: 路由存储入口：优先读取事务状态；旧 JSON 仅用于兼容迁移。
  *
  * 文件带版本元信息（{@code revision} / {@code appliedOperationId}），于是「重启后我报的版本」
  * 与「重启前确认过的版本」是同一个值——调用方超时重试、Agent 判断是否已生效都以此为准。
  *
- * 写盘走「同目录临时文件 + 原子改名」：半截文件不会被读到，进程在写盘中途挂掉时
- * 磁盘上要么是旧版本、要么是新版本，不存在中间态。
+ * 新路由变更通过 {@link RouteOperationStore} 同事务提交路由和回执。
+ * {@link #save} 保留旧 JSON 格式写入能力用于迁移/兼容，不是运行时变更的提交路径。
  */
 @Slf4j
 public class RouteOverlayStore {
@@ -42,6 +42,7 @@ public class RouteOverlayStore {
 
     /** overlay 文件路径。 */
     private final Path path;
+    private final RouteOperationStore operations;
 
     /** 使用默认路径构造。 */
     public RouteOverlayStore() {
@@ -52,8 +53,15 @@ public class RouteOverlayStore {
      * @param path overlay 文件路径
      */
     public RouteOverlayStore(Path path) {
-        this.path = path;
+        this(path, java.time.Clock.systemUTC());
     }
+
+    public RouteOverlayStore(Path path, java.time.Clock clock) {
+        this.path = path;
+        this.operations = new RouteOperationStore(path, clock);
+    }
+
+    public RouteOperationStore operations() { return operations; }
 
     /** @return overlay 文件路径 */
     public Path getPath() {
@@ -88,6 +96,9 @@ public class RouteOverlayStore {
      * 一份完整、可解释的配置。
      */
     public AppliedState loadOrNull() {
+        if (operations.exists()) {
+            return operations.load();
+        }
         if (!exists()) {
             return null;
         }
@@ -181,6 +192,18 @@ public class RouteOverlayStore {
         row.put(RouteField.STICKY_HEADER.jsonName(), nullToEmpty(route.getStickyHeader()));
         row.put(RouteField.STRIP_PREFIX.jsonName(), nullToEmpty(route.getStripPrefix()));
         return row;
+    }
+
+    /** 身份只在读取中暴露；原始 toRows 保留 v1 请求摘要的兼容序列化。 */
+    public static List<Map<String, Object>> toResourceRows(List<RouteConfig> routes) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (RouteConfig route : routes) {
+            Map<String, Object> row = toRow(route);
+            row.put("resourceUid", route.getResourceUid());
+            row.put("generation", route.getGeneration());
+            rows.add(row);
+        }
+        return rows;
     }
 
     /** 把字段表列表转成 RouteConfig 列表。 */

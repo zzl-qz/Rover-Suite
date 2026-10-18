@@ -32,6 +32,11 @@ public class AgentActionController {
         this.actions = actions;
     }
 
+    @GetMapping("/pending")
+    public List<AgentAction> pending(Authentication authentication) {
+        return actions.pendingApprovals(user(authentication));
+    }
+
     /** 按会话查询变更记录，按创建时间倒序。 */
     @GetMapping("/sessions/{sessionId}")
     public ResponseEntity<List<AgentAction>> bySession(@PathVariable String sessionId,

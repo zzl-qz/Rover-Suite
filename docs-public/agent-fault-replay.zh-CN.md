@@ -20,6 +20,15 @@ Linux 同样在根目录执行 Maven 和 Python；`argLine` 中的临时目录�
 
 运行器默认使用 `127.0.0.1:19080～19085`：Nameserver TCP/HTTP、Gateway、v1、v2、Admin。可通过 `--base-port 19180` 使用另一个连续六端口段。端口占用直接失败，不会停止已有服务，也不自动连接已有环境。
 
+S1 单 Admin 运行基础可追加真实 HTTP 验收：
+
+```powershell
+python deploy/scripts/agent-fault-replay.py --heap-mb 256 `
+  --require-durable-receipts --require-single-admin-foundation
+```
+
+新增检查覆盖资源清单、角色分权、机器告警、实时撤权、停写、Admin 重启后令牌/停写持久性、SSE 重放、安全审计和一致性备份，共 13 项；结果写入 `single-admin-probe.json` 与 `result.json.singleAdminChecks`。该运行会额外重启本次创建的 Admin，仍只清理自己的进程。`--heap-mb` 控制每个测试 JVM 的堆上限，范围 128～512 MB；内存紧张时与 Maven 顺序运行。这些检查不代替真实进程强制终止、预算恢复和 ZIP 实际恢复的 Java 测试，也不构成整体生产准入。
+
 每次运行创建新的 `artifacts/agent-fault-replay/<时间-随机ID>/`。用 `--output artifacts/agent-fault-replay/my-run` 指定新的目录也可以；已有目录拒绝复用，以防旧 overlay、账号或结果混入。启动、失败、Ctrl+C 都清理本次持有的子进程；保留证据文件，便于排障。强制杀死运行器本身无法保证执行 finally，手动清理前需核对进程身份与日志，不能仅凭端口或旧 PID 杀进程。
 
 ## 2. 固定故障与请求集合
@@ -51,7 +60,7 @@ Linux 同样在根目录执行 Maven 和 Python；`argLine` 中的临时目录�
 - 重启本次启动的 Gateway，核对路由/revision 恢复，再分别查询第一笔和最新一笔回执。
 - 再执行 205 次调权，查询旧操作与最新操作，检查是否存在回执淘汰。
 
-回放是否成功、回执是否达到生产门禁是两个独立结果。当前 Gateway 的回执只在内存里保留 200 条，重启恢复的是路由和最新操作号，完整回执持久化与参数绑定属于 S1-05。本检查会保存可重现的失败样例，不能将 UNKNOWN 当作“没有执行”。
+回放是否成功、四项基础回执检查是否通过是两个独立结果。S0 基线的回执仅在内存保留 200 条，本检查保存了其可重现失败样例；S1-05 已增加[事务回执与参数绑定](gateway-operation-receipts.zh-CN.md)，使用严格模式重新验收。下方“实际交付验证”保留 S0 当时结果，不能将 UNKNOWN 当作“没有执行”，也不能把四项基础检查等同整体生产准入。
 
 ```powershell
 # 作为未来 S1-05 的严格门禁；发现回执不满足条件时返回退出码 2。

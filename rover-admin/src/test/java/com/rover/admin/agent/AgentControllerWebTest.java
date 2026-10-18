@@ -60,6 +60,7 @@ import org.springframework.test.web.servlet.MvcResult;
  * 这里只验证 Web 层不越权：不信任前端提交的用户名，也不替编排层做业务判断。
  */
 @SpringBootTest
+@org.springframework.test.context.TestPropertySource(properties="rover.admin.log-store-path=./target/test-data/AgentControllerWebTest/rover")
 @AutoConfigureMockMvc
 class AgentControllerWebTest {
 
@@ -81,6 +82,14 @@ class AgentControllerWebTest {
 
     @MockitoBean
     private AgentOrchestrator agent;
+
+    @Autowired private com.rover.admin.security.AdminUserStore users;
+    @Autowired private com.rover.agent.core.port.RouteControlPort control;
+
+    @org.junit.jupiter.api.BeforeEach
+    void accountExistsInLivePolicy() {
+        users.saveAccount("alice", "test-account-password", java.util.Set.of("ADMIN"), control.resourceNamespace(), true);
+    }
 
     @Test
     void createsSessionForAuthenticatedUser() throws Exception {

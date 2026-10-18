@@ -15,6 +15,11 @@ public class RouteConfig {
     /** 路由唯一标识，管理口删除时可按 id 匹配 */
     private String id;
 
+    /** Gateway 生成并持久化，管理 API 的写入载荷不能自行指定。 */
+    private String resourceUid;
+
+    private long generation;
+
     /** 网关入口前缀，如 /api/user，请求路径以此开头即命中 */
     private String businessPrefix;
 

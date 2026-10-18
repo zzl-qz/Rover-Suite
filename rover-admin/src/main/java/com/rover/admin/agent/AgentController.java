@@ -47,10 +47,22 @@ public class AgentController {
 
     private final AgentOrchestrator agent;
     private final AgentMetrics metrics;
+    private final com.rover.agent.core.port.AgentAccess access;
 
     public AgentController(AgentOrchestrator agent, AgentMetrics metrics) {
+        this(agent, metrics, com.rover.agent.core.port.AgentAccess.local());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentController(AgentOrchestrator agent, AgentMetrics metrics,
+                           org.springframework.beans.factory.ObjectProvider<com.rover.agent.core.port.AgentAccess> access) {
+        this(agent, metrics, access.getIfAvailable(com.rover.agent.core.port.AgentAccess::local));
+    }
+
+    private AgentController(AgentOrchestrator agent, AgentMetrics metrics, com.rover.agent.core.port.AgentAccess access) {
         this.agent = agent;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
+        this.access = access;
     }
 
     /** 新建会话。 */
@@ -182,16 +194,19 @@ public class AgentController {
      * 任务不存在、不可观察或无权访问时返回 404。
      */
     @GetMapping(path = "/tasks/{taskId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<SseEmitter> taskEvents(@PathVariable String taskId, Authentication authentication) {
+    public ResponseEntity<SseEmitter> taskEvents(@PathVariable String taskId, Authentication authentication,
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Last-Event-ID", required = false) Long after) {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
-        TaskEventSseSubscriber subscriber = new TaskEventSseSubscriber(emitter, metrics);
+        TaskEventSseSubscriber subscriber = new TaskEventSseSubscriber(emitter, metrics,
+                () -> access.require(user(authentication), com.rover.agent.core.port.AgentAccess.Permission.READ));
         emitter.onCompletion(subscriber::cancel);
         emitter.onError(error -> subscriber.cancel());
         emitter.onTimeout(() -> {
             subscriber.cancel();
             emitter.complete();
         });
-        TaskEventSubscription subscription = agent.subscribeEvents(taskId, user(authentication), subscriber)
+        TaskEventSubscription subscription = (after == null ? agent.subscribeEvents(taskId, user(authentication), subscriber)
+                : agent.subscribeEvents(taskId, user(authentication), after, subscriber))
                 .orElse(null);
         if (subscription == null) {
             return ResponseEntity.notFound().build();
@@ -214,15 +229,17 @@ public class AgentController {
 
         private final SseEmitter emitter;
         private final AgentMetrics metrics;
+        private final Runnable authorize;
         private final AtomicBoolean finished = new AtomicBoolean();
 
         /** 连接数指标的记账标志：只对「确实建立过的连接」加减，断开与收尾都不会把计数减成负数。 */
         private final AtomicBoolean counted = new AtomicBoolean();
         private volatile TaskEventSubscription subscription = TaskEventSubscription.NONE;
 
-        private TaskEventSseSubscriber(SseEmitter emitter, AgentMetrics metrics) {
+        private TaskEventSseSubscriber(SseEmitter emitter, AgentMetrics metrics, Runnable authorize) {
             this.emitter = emitter;
             this.metrics = metrics;
+            this.authorize = authorize;
         }
 
         /** 订阅句柄在订阅成功之后才拿到；若期间连接已经结束，就地退订，避免留下无人消费的订阅。 */
@@ -267,7 +284,8 @@ public class AgentController {
 
         private void write(TaskEvent event) {
             try {
-                emitter.send(SseEmitter.event().name(event.type().name())
+                authorize.run();
+                emitter.send(SseEmitter.event().id(Long.toString(event.eventId())).name(event.type().name())
                         .data(event, MediaType.APPLICATION_JSON));
             } catch (Exception ex) {
                 finished.set(true);

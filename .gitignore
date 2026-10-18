@@ -30,6 +30,7 @@ nohup.out
 # 这些是本机运行数据，含历史日志/证据，不应进入版本库
 rover-logs/
 *.mv.db
+*.admin-agent.lock
 *.trace.db
 
 # ===== 敏感信息 / 凭据 =====

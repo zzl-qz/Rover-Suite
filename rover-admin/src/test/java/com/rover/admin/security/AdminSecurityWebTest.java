@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 /** 未登录进不了控制台；默认账号口令都是 admin。 */
 @SpringBootTest
+@org.springframework.test.context.TestPropertySource(properties="rover.admin.log-store-path=./target/test-data/AdminSecurityWebTest/rover")
 @AutoConfigureMockMvc
 class AdminSecurityWebTest {
 

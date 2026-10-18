@@ -77,6 +77,36 @@ class AgentActionServiceTest {
     // ---------------------------------------------------------------- 1. 正常执行
 
     @Test
+    void anotherAuthorizedApproverCanApproveWithoutSharingPrivateChats() {
+        com.rover.agent.core.port.AgentAccess access = principal -> "reviewer".equals(principal)
+                ? Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ, com.rover.agent.core.port.AgentAccess.Permission.APPROVE)
+                : Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ, com.rover.agent.core.port.AgentAccess.Permission.PROPOSE);
+        service = new AgentActionService(repository, sessions, gateway, new RouteWeightActionExecutor(gateway, repository, access), access);
+        AgentAction pending = propose(20);
+        assertThrows(com.rover.agent.core.port.AgentAccess.Denied.class, () -> service.approve(pending.actionId(), OWNER));
+        assertEquals(1, service.pendingApprovals("reviewer").size());
+        AgentAction applied = service.approve(pending.actionId(), "reviewer");
+        assertEquals(ActionStatus.SUCCESS, applied.status());
+        assertEquals("reviewer", applied.approvedBy());
+    }
+
+    @Test
+    void permissionRevokedDuringPreviewPreventsTheActualWrite() {
+        AtomicBoolean allowed = new AtomicBoolean(true);
+        com.rover.agent.core.port.AgentAccess access = principal -> allowed.get()
+                ? Set.of(com.rover.agent.core.port.AgentAccess.Permission.values()) : Set.of();
+        RouteControlPort guarded = spy(gateway);
+        service = new AgentActionService(repository, sessions, guarded, new RouteWeightActionExecutor(guarded, repository, access), access);
+        AgentAction pending = propose(20);
+        doAnswer(invocation -> { allowed.set(false); return invocation.callRealMethod(); })
+                .when(guarded).preview(anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt());
+        AgentAction stopped = service.approve(pending.actionId(), OWNER);
+        assertEquals(ActionStatus.PRECONDITION_FAILED, stopped.status());
+        org.mockito.Mockito.verify(guarded, org.mockito.Mockito.never()).adjustTargetWeight(anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(), anyString(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
     void proposeThenApproveThenVerify() {
         AgentAction pending = propose(20);
 
@@ -209,6 +239,18 @@ class AgentActionServiceTest {
         assertEquals(ActionStatus.SUCCESS, resolved.status());
         assertEquals(1, gateway.writes, "确认结果不是重新执行");
         assertEquals(20, gateway.weightOf("v2"));
+    }
+
+    @Test
+    void expiredReceiptKeepsOriginalOperationAndNeverRetries() {
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(propose(20).actionId(), OWNER);
+        gateway.operations.put(uncertain.applyOperationId(), RouteOperationStatus.EXPIRED);
+        AgentAction resolved = service.resolve(uncertain.actionId(), OWNER);
+        assertEquals(ActionStatus.UNCERTAIN, resolved.status());
+        assertEquals(uncertain.applyOperationId(), resolved.applyOperationId());
+        assertTrue(resolved.errorMessage().contains("过期"));
+        assertEquals(1, gateway.writes);
     }
 
     // ---------------------------------------------------------------- 6. 回读不一致
@@ -530,6 +572,30 @@ class AgentActionServiceTest {
         assertEquals(0, gateway.writes);
     }
 
+    @Test
+    void recreatedResourceCannotUseOldApprovalEvenWhenNameAndRevisionLookUnchanged() {
+        var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "prod");
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-one", 1);
+        AgentAction pending = propose(20);
+        assertEquals(gateway.resourceRef, pending.resourceRef());
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-two", 1);
+        AgentAction refused = service.approve(pending.actionId(), OWNER);
+        assertEquals(ActionStatus.PRECONDITION_FAILED, refused.status());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test
+    void compensationCannotModifyRecreatedResource() {
+        var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "prod");
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-one", 1);
+        AgentAction applied = service.approve(propose(20).actionId(), OWNER);
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-two", 1);
+        AgentAction refused = service.rollback(applied.actionId(), OWNER);
+        assertFalse(refused.status() == ActionStatus.ROLLED_BACK);
+        assertEquals(1, gateway.writes);
+        assertTrue(refused.errorMessage().contains("UID"));
+    }
+
     // ---------------------------------------------------------------- 工具与假网关
 
     private AgentAction propose(int weight) {
@@ -559,6 +625,7 @@ class AgentActionServiceTest {
     private static final class FakeRouteControl implements RouteControlPort {
 
         private int revision = PROPOSED_REVISION;
+        private com.rover.agent.core.model.ResourceRef resourceRef;
         private final Map<String, Integer> weights = new HashMap<>(Map.of("v1", 95, "v2", 5));
         private final Set<String> removed = new HashSet<>();
         private final Map<String, RouteOperationStatus> operations = new HashMap<>();
@@ -583,7 +650,7 @@ class AgentActionServiceTest {
                 throw new SnapshotUnavailableException("假网关：读不到路由");
             }
             return new RouteControlState(revision, "", List.of(new RouteControlRoute("order-api", "/api/order", "",
-                    targets())));
+                    targets(), resourceRef)));
         }
 
         @Override

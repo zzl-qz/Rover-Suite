@@ -20,9 +20,31 @@ public final class OpsJournal {
     private static final Pattern PATH = Pattern.compile("/[A-Za-z0-9._~/-]+");
 
     private final JdbcAgentStore logStore;
+    private final String namespace;
+    private final java.util.function.Function<String,String> identifier;
 
     private OpsJournal(JdbcAgentStore logStore) {
+        this(logStore, "");
+    }
+
+    private OpsJournal(JdbcAgentStore logStore, String namespace) {
+        this(logStore, namespace, java.util.function.Function.identity());
+    }
+
+    private OpsJournal(JdbcAgentStore logStore, String namespace, java.util.function.Function<String,String> identifier) {
         this.logStore = logStore;
+        this.namespace = namespace == null ? "" : namespace;
+        this.identifier = identifier;
+    }
+
+    public OpsJournal scoped(String namespace) { return new OpsJournal(logStore, namespace); }
+    public OpsJournal identified(java.util.function.Function<String,String> identifier) { return new OpsJournal(logStore, namespace, identifier); }
+    public String identity(String resourceKey) {
+        if (resourceKey == null || resourceKey.isBlank()) { return null; }
+        try {
+            String identity = identifier.apply(resourceKey);
+            return identity == null ? null : (namespace.isBlank() ? "" : namespace + ":") + identity;
+        } catch (RuntimeException unavailable) { return null; }
     }
 
     public static OpsJournal none() {
@@ -64,18 +86,26 @@ public final class OpsJournal {
         if (resourceKey == null || resourceKey.isBlank()) {
             return "";
         }
-        return logStore.findNote(resourceKey).map(ResourceNotes::prompt).orElse("");
+        String identity = identity(resourceKey);
+        return identity == null ? "" : logStore.findNote(identity).map(ResourceNotes::prompt).orElse("");
     }
 
     /** 有已确认根因才更新该资源的笔记。调查快照由任务仓储自己保存。 */
     public void record(TaskView task) {
-        if (logStore == null) {
+        record(task, task == null ? null : identity(ResourceNotes.resourceKey(task.target())));
+    }
+
+    public void record(TaskView task, String expectedIdentity) {
+        if (logStore == null || expectedIdentity == null) {
             return;
         }
         try {
             ResourceNote note = ResourceNotes.capture(task, System.currentTimeMillis());
             if (note != null) {
-                logStore.saveNote(note);
+                String identity = identity(note.resourceKey());
+                if (identity == null || (expectedIdentity != null && !expectedIdentity.equals(identity))) { return; }
+                logStore.saveNote(new ResourceNote(identity, note.symptom(), note.rootCause(),
+                        note.usefulSteps(), note.pitfalls(), note.sourceSessionId(), note.sourceTaskId(), note.updatedAtMillis()));
             }
         } catch (RuntimeException ex) {
             log.warn("写入资源笔记失败", ex);

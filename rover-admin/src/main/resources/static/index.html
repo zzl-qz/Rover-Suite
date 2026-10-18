@@ -929,6 +929,10 @@
                                         {{ wbActionProgress(action).mark }} {{ wbActionProgress(action).text }}
                                     </div>
                                     <div class="muted wb-action-facts">
+                                        <template v-if="action.resourceRef">
+                                            {{ action.resourceRef.scope.organizationId }} / {{ action.resourceRef.scope.teamId }} / {{ action.resourceRef.scope.environmentId }}
+                                            · {{ action.resourceRef.controlTargetId }} · UID {{ action.resourceRef.resourceUid }} / {{ action.resourceRef.generation }}<br>
+                                        </template>
                                         按「{{ wbActionRequestText(action) }}」提出 · 路由表版本 {{ action.expectedRevision }}<template v-if="action.appliedRevision != null"> → {{ action.appliedRevision }}</template>
                                     </div>
                                     <div v-if="wbActionPreviewNote(action)" class="muted wb-action-facts">{{ wbActionPreviewNote(action) }}</div>

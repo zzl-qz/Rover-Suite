@@ -10,6 +10,7 @@ import com.rover.agent.core.planning.PlanValidator;
 import com.rover.agent.core.planning.PlanningLimits;
 import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
+import com.rover.agent.core.port.AgentAccess;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.KnowledgeReadPort;
@@ -67,8 +68,10 @@ public class AgentRuntimeConfiguration {
 
     /** Agent 存储：没配记录库路径时用内存，单测不用落盘。 */
     @Bean(destroyMethod = "close")
-    public AgentStore agentStore(@Value("${rover.admin.log-store-path:}") String logStorePath) {
+    public AgentStore agentStore(@Value("${rover.admin.log-store-path:}") String logStorePath,
+                                 @Value("${rover.agent.production-mode:false}") boolean productionMode) {
         if (logStorePath == null || logStorePath.isBlank()) {
+            if (productionMode) { throw new IllegalStateException("生产模式必须配置持久 H2，禁止回退内存"); }
             return AgentStore.memory(SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY, TASK_CAPACITY,
                     ACTION_CAPACITY);
         }
@@ -107,8 +110,14 @@ public class AgentRuntimeConfiguration {
     }
 
     @Bean
-    public OpsJournal opsJournal(AgentStore agentStore) {
-        return agentStore.journal();
+    public OpsJournal opsJournal(AgentStore agentStore, RouteControlPort routeControlPort) {
+        var journal = agentStore.journal().scoped(routeControlPort.resourceNamespace());
+        if (!routeControlPort.requiresResourceIdentity()) { return journal; }
+        return journal.identified(key -> routeControlPort.state().routes().stream()
+                .filter(route -> route.resourceRef() != null && (key.equals(route.routeId())
+                        || key.equals(route.businessPrefix()) || key.startsWith(route.businessPrefix() + "/")))
+                .max(java.util.Comparator.comparingInt(route -> route.businessPrefix().length()))
+                .map(route -> route.resourceRef().resourceUid() + ":" + route.resourceRef().generation()).orElse(null));
     }
 
     /**
@@ -145,8 +154,10 @@ public class AgentRuntimeConfiguration {
     @Bean
     public IncidentRegistry agentIncidentRegistry(AgentSessionRepository agentSessionRepository,
                                                   IncidentRepository agentIncidentRepository,
-                                                  WorkspaceRetention agentWorkspaceRetention) {
-        return new IncidentRegistry(agentSessionRepository, agentIncidentRepository, agentWorkspaceRetention);
+                                                  WorkspaceRetention agentWorkspaceRetention,
+                                                  RouteControlPort routeControlPort) {
+        return new IncidentRegistry(agentSessionRepository, agentIncidentRepository, agentWorkspaceRetention,
+                routeControlPort.resourceScope(), routeControlPort.resourceNamespace());
     }
 
     @Bean
@@ -169,11 +180,13 @@ public class AgentRuntimeConfiguration {
                                                        int queueCapacity,
                                                        @Value("${rover.agent.execution.task-capacity:200}")
                                                        int taskCapacity,
-                                                       AgentMetrics agentMetrics, AgentRunLimits agentRunLimits) {
+                                                       AgentMetrics agentMetrics, AgentRunLimits agentRunLimits, AgentStore store) {
         // 参数越界时在装配阶段直接失败：配置错误必须早暴露，而不是运行期以「任务莫名被拒」出现。
         AgentExecutionSettings settings = new AgentExecutionSettings(workerThreads, queueCapacity, taskCapacity);
-        return new InvestigationTaskRegistry(agentTaskRepository, settings, new TaskEventBus(), agentMetrics,
+        var registry = new InvestigationTaskRegistry(agentTaskRepository, settings, new TaskEventBus(), agentMetrics,
                 agentCheckpointRepository, agentRunLimits);
+        if (store.persistent()) { registry.persistence(store.durable()); }
+        return registry;
     }
 
     @Bean
@@ -220,9 +233,24 @@ public class AgentRuntimeConfiguration {
                                                      MetricReadPort metricReadPort, TraceReadPort traceReadPort,
                                                      ConfigReadPort configReadPort, EventReadPort eventReadPort,
                                                      LogQueryPort logQueryPort, KnowledgeReadPort knowledgeReadPort,
-                                                     CapabilityRegistry agentCapabilityRegistry) {
+                                                     CapabilityRegistry agentCapabilityRegistry,
+                                                     AgentTaskRepository tasks, AgentSessionRepository sessions,
+                                                     RouteControlPort control, ObjectProvider<AgentAccess> access,
+                                                     InvestigationTaskRegistry running) {
         return new CapabilityExecutor(routeReadPort, instanceReadPort, metricReadPort, traceReadPort,
-                configReadPort, eventReadPort, logQueryPort, knowledgeReadPort, agentCapabilityRegistry);
+                configReadPort, eventReadPort, logQueryPort, knowledgeReadPort, agentCapabilityRegistry, taskId -> {
+                    AgentAccess policy = access.getIfAvailable(AgentAccess::local);
+                    if (!policy.managed()) { return; }
+                    var task = tasks.find(taskId).orElseThrow(() -> new AgentAccess.Denied("任务已不存在"));
+                    var session = sessions.find(task.sessionId()).orElseThrow(() -> new AgentAccess.Denied("会话已不存在"));
+                    if (!java.util.Objects.equals(control.resourceScope(), session.scope())
+                            || !control.resourceNamespace().equals(session.targetNamespace())) {
+                        throw new AgentAccess.Denied("任务的资源范围已失效");
+                    }
+                    policy.require(session.userId(), AgentAccess.Permission.READ);
+                    var execution = running.find(taskId);
+                    if (execution != null) { execution.budget().reserveTool(); }
+                });
     }
 
     /**
@@ -277,10 +305,12 @@ public class AgentRuntimeConfiguration {
                                                           PlanningLimits agentPlanningLimits,
                                                           OpsJournal opsJournal,
                                                           @Value("${rover.agent.alerts.owner-user-id:}")
-                                                          String alertOwnerUserId) {
-        return new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
+                                                          String alertOwnerUserId, ObjectProvider<AgentAccess> access) {
+        var service = new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
                 agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits,
                 opsJournal, alertOwnerUserId);
+        service.access(access.getIfAvailable(AgentAccess::local));
+        return service;
     }
 
     /**
@@ -305,8 +335,9 @@ public class AgentRuntimeConfiguration {
     /** 装配依赖路由控制端口和变更仓储的权重执行器。 */
     @Bean
     public ActionExecutor agentActionExecutor(RouteControlPort routeControlPort,
-                                             AgentActionRepository agentActionRepository) {
-        return new RouteWeightActionExecutor(routeControlPort, agentActionRepository);
+                                             AgentActionRepository agentActionRepository,
+                                             ObjectProvider<AgentAccess> access) {
+        return new RouteWeightActionExecutor(routeControlPort, agentActionRepository, access.getIfAvailable(AgentAccess::local));
     }
 
     /** 装配受控变更服务；模型仅可调用 propose，人工接口负责审批和后续操作。 */
@@ -314,9 +345,9 @@ public class AgentRuntimeConfiguration {
     public AgentActionService agentActionService(AgentActionRepository agentActionRepository,
                                                  AgentSessionRepository agentSessionRepository,
                                                  RouteControlPort routeControlPort,
-                                                 ActionExecutor agentActionExecutor) {
+                                                 ActionExecutor agentActionExecutor, ObjectProvider<AgentAccess> access) {
         return new AgentActionService(agentActionRepository, agentSessionRepository, routeControlPort,
-                agentActionExecutor);
+                agentActionExecutor, access.getIfAvailable(AgentAccess::local));
     }
 
     /** Agent 应用入口：目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */
@@ -331,9 +362,11 @@ public class AgentRuntimeConfiguration {
                                                InvestigationService agentInvestigationService,
                                                WorkspaceRetention agentWorkspaceRetention,
                                                ToolLoopService agentToolLoopService,
-                                               OpsJournal opsJournal) {
-        return new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
+                                               OpsJournal opsJournal, ObjectProvider<AgentAccess> access) {
+        var orchestrator = new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
                 agentTaskRepository, agentIncidentRegistry, agentContextManager, agentTargetResolver,
                 agentInvestigationService, agentWorkspaceRetention, agentToolLoopService, opsJournal);
+        orchestrator.access(access.getIfAvailable(AgentAccess::local));
+        return orchestrator;
     }
 }

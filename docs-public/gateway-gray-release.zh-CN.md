@@ -119,36 +119,34 @@ upper = SCALE × 累计权重 / 总权重                              // 第 k 
 ### 应用协议（写优先 + 预构建）
 
 ```
-1. operationId 已 APPLIED → 直接返回既有结果（幂等，不再生效）
+1. operationId 已存在 → 核对参数摘要和有效期，同参返回原结果，异参/过期拒绝
 2. expectedRevision != 当前 revision → 记 CONFLICT，抛 409（details 带 currentRevision）
 3. 校验候选路由 → 失败记 REJECTED，抛 400
 4. 预构建可运行态（新 RouteMatcher、新 filters）
-5. 先落盘（含 nextRevision / operationId）
+5. 在同一持久事务提交路由和 APPLIED 回执（含参数摘要）
 6. 再原子替换内存引用
-7. 更新 revision、记录 APPLIED
+7. 更新运行态 revision；APPLIED 回执已随路由提交
 ```
 
-所有「可能失败的步骤」都在落盘**之前**；落盘之后只剩不会失败的原子引用替换。于是「写盘成功但内存没换」
-这个窗口被**结构性消除**，而不是靠 try/catch 兜。反过来，若先改内存再落盘，落盘失败就会出现「内存新、磁盘旧」，
-重启后行为倒退。
+候选运行态在提交前构建，持久状态提交后再发布。若进程在提交后、发布前崩溃，重启从事务库恢复；
+若提交结果未知，使用原操作号对账，不能假定内存与磁盘已同时切换。
 
 ### 落盘
 
-路由落盘到 `config/routes.overlay.json`，格式为
-`{revision, appliedOperationId, appliedAtMillis, routes:[...]}`，用「同目录 `.tmp` + 原子移动」写入。
-启动时读回 `revision` / `appliedOperationId` 对齐内存版本号，因此重启后报出的版本就是重启前确认过的版本。
+路由和回执同事务写入 `config/routes.overlay.json.state.mv.db`，配套见证文件检查代次和高水位。
+旧 `config/routes.overlay.json` 仅用于首次迁移；事务库存在后不回退旧 JSON/YAML。
+备份、30 天回执期限与故障恢复边界见[持久操作回执](gateway-operation-receipts.zh-CN.md)。
 
 ### 冲突、幂等、回滚与确认
 
 - `revision` 过期返回 HTTP **409**，响应体带 `currentRevision`；调用方刷新后重试。Admin 路由页已按此自动刷新并提示。
-- 重复提交一个已 `APPLIED` 的 `operationId` 会返回既有结果，不再生效一次。
+- 已 `APPLIED` 的 `operationId` 在有效期内同参重放返回原结果；动作、参数或期望 revision 不同返回 409。
 - 回滚带 `toRevision`，走**同一条**变更协议，产生一个新 revision。因此「回滚不会覆盖别人的新修改」由乐观锁
   天然保证。内存只保留最近 `5` 次已应用快照，窗口外的目标用 `400` 明确拒绝。
 - `GET /_manage/routes/operations/{operationId}` 回答「我超时的这次写到底执行了没有」：状态
-  `APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` / `UNKNOWN`，并回带 `currentRevision`。
-- `FAILED` 表示**提交过但落盘失败**（变更没有生效）；它与 `REJECTED` 的区别是「写不进去」vs「校验没过」，
-  两者都该被重试或修请求，而不是被当成「从未提交」。`UNKNOWN` 表示**没有记录**——可能从未提交，也可能已被
-  有界的操作表（最近 `200` 条）淘汰；它**不等于**没有执行。
+  `APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` / `EXPIRED` / `UNKNOWN`，并回带 `currentRevision`、摘要和到期时间。
+- 不再按最近 200 条淘汰回执。`UNKNOWN` 或 `EXPIRED` 都不能证明未执行。存储失败若无法写入可信回执，
+  不会伪造 `FAILED`；HTTP 5xx 同样需要原号对账。拒绝操作的原 ID 不允许改参数或刷新 revision 后复用。
 - Gateway 接受**发起方生成**的 `operationId`。Admin 的新增/更新、调权重和回滚会透传该 ID，
   这些 POST 写请求超时/网络失败后，前端通过 `GET /api/routes/operations/{operationId}` 回查，给出「已生效 /
   未生效（版本冲突）/ 未生效（校验失败）/ 未生效（落盘失败）/ 网关没有这条记录」的结论。

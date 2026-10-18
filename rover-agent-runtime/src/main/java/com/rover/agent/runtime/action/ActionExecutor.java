@@ -15,9 +15,11 @@ public interface ActionExecutor {
 
     /** 执行变更：预检 → 预览 → 幂等提交 → 回读验证。 */
     AgentAction execute(AgentAction action);
+    default AgentAction execute(AgentAction action, String actor) { return execute(action); }
 
     /** 补偿回滚：用同一个窄原语把权重改回变更前的值，并再次回读确认。 */
     AgentAction rollback(AgentAction action);
+    default AgentAction rollback(AgentAction action, String actor) { return rollback(action); }
 
     /** 结果确认：用原 operationId 回查一次「到底生效了没有」，并接着做验证。 */
     AgentAction resolve(AgentAction action);

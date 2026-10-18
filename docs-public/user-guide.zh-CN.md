@@ -40,8 +40,9 @@ YAML 加载后，已支持的运行时配置可能被以下文件覆盖：
 - `config/nameserver-runtime.overlay.json`
 - `config/gateway-runtime.overlay.json`
 - `config/routes.overlay.json`
+- `config/routes.overlay.json.state.mv.db` 与配套 `routes.overlay.json.state.fence.json`（新路由事务存储）
 
-`routes.overlay.json` 一旦存在，会整体替代 YAML 路由列表。YAML 路由修改不生效时，请优先检查此文件。
+路由事务库优先于旧 JSON 和 YAML，旧 JSON 仅在尚无事务库时用于迁移。不要删除文件来重置回执；见[持久回执与恢复](gateway-operation-receipts.zh-CN.md)。
 监听端口、绑定地址、token、发现类型、HTTP Registration API 开关、插件目录与 CORS 都属于启动配置，修改后需重启。
 
 若不部署 Admin，Gateway 可配置 `rover.gateway.adminEnabled: false`：Gateway 会跳过自己的 runtime/route overlay，
@@ -286,7 +287,7 @@ Rover-Suite 当前面向小团队的单机或可信网络部署，不是面向�
 | HTTP Registrar 收到 `404 NOT_FOUND` | `clientApiEnabled` 未开启、路径错误或 HTTP 监听器未启动。开启 Registration API 后需重启。 |
 | HTTP Registrar 收到 `409 STALE_SESSION` | 另一个进程注册了相同 `serviceName + instanceId`。每副本应使用唯一 ID，每端点只有一个 owner。 |
 | 实例可见但不可达 | 注册的 host/port 对 Gateway 不可达。 |
-| YAML 路由被忽略 | `config/routes.overlay.json` 正在整体覆盖 YAML 路由。 |
+| YAML 路由被忽略 | 路由事务库（或未迁移的旧 JSON）正在整体覆盖 YAML 路由。 |
 | 启动或热更新提示只支持 http 上游 | 默认 Netty 出站不转发 `https://`。改成 `http://`，或设 `proxy.outbound: jdk`。 |
 | 想确认当前 I/O 实现 | 看启动日志里的 `ioTransport=`。Docker Linux 容器里 `auto` 一般为 epoll；在 macOS 上直接运行进程才是 kqueue。 |
 | 自定义 LB 在 Admin 看不到 | 正常。`gateway.loadbalance.strategy` 是启动/插件装配配置，请在 `rover-gateway.yml` 中填写内置策略、SPI `name()` 或实现类全名并重启 Gateway；Admin 不再提供修改入口，避免覆盖自定义插件。 |

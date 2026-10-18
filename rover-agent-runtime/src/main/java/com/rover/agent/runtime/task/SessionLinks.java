@@ -18,7 +18,7 @@ final class SessionLinks {
     /** 把事件挂到会话上，并把当前事件指针指向它。 */
     static Session withIncident(Session session, String incidentId) {
         return new Session(session.sessionId(), session.userId(), session.title(), incidentId, session.status(),
-                session.createdAtMillis(), System.currentTimeMillis(), append(session.incidentIds(), incidentId));
+                session.createdAtMillis(), System.currentTimeMillis(), append(session.incidentIds(), incidentId)).withScope(session.scope(), session.targetNamespace());
     }
 
     /** 从会话上摘除事件；被摘除的正好是当前事件时，当前事件指针回到空。 */
@@ -26,7 +26,7 @@ final class SessionLinks {
         List<String> remaining = session.incidentIds().stream().filter(id -> !id.equals(incidentId)).toList();
         String active = incidentId.equals(session.activeIncidentId()) ? null : session.activeIncidentId();
         return new Session(session.sessionId(), session.userId(), session.title(), active, session.status(),
-                session.createdAtMillis(), session.lastActiveAtMillis(), remaining);
+                session.createdAtMillis(), session.lastActiveAtMillis(), remaining).withScope(session.scope(), session.targetNamespace());
     }
 
     static List<String> append(List<String> values, String item) {

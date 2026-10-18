@@ -58,6 +58,10 @@ Admin 地址：<http://127.0.0.1:9090>。停止、验收脚本和生产安全提
 
 ## 解决什么问题
 
+Gateway 路由变更已支持路由与回执同事务提交、重启回查及同操作号异参拒绝。期限与恢复边界见[持久操作回执](docs-public/gateway-operation-receipts.zh-CN.md)；Agent 整体仍是单机预览版。
+
+单 Admin 的资源 UID、实时角色授权、机器告警令牌、H2 Job/预算恢复、审计与 SSE 重放、停写和备份见[运行基础与验收入口](docs-public/agent-single-admin-foundation.zh-CN.md)。
+
 Rover-Suite 面向多单体、旁路服务和混合语言服务逐渐变多的小团队。服务地址变化时，业务服务注册到 Nameserver，Gateway 只路由到健康实例，不再到处改 Nginx 或前端配置。
 
 ## 截图

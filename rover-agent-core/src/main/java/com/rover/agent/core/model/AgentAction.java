@@ -46,7 +46,7 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
                           String applyOperationId, Integer appliedRevision, String rollbackOperationId,
                           String requestedBy, String approvedBy, long approvedAtMillis,
                           List<String> preview, String impact, String errorMessage,
-                          long createdAtMillis, long updatedAtMillis, long version) {
+                          long createdAtMillis, long updatedAtMillis, long version, ResourceRef resourceRef) {
 
     /** 权重上限，与 Gateway 的 RouteTarget.MAX_WEIGHT 保持一致。 */
     public static final int MAX_WEIGHT = 10_000;
@@ -83,13 +83,37 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
                 updatedAtMillis, 0L);
     }
 
+    public AgentAction(String actionId, String sessionId, String incidentId, String taskId,
+                       ActionType type, ActionStatus status,
+                       String routeId, String businessPrefix, String serviceName, String group,
+                       int beforeWeight, int desiredWeight, int requestedValue, WeightRequestUnit requestedUnit,
+                       double beforeTrafficPercent, double desiredTrafficPercent, int expectedRevision,
+                       String applyOperationId, Integer appliedRevision, String rollbackOperationId,
+                       String requestedBy, String approvedBy, long approvedAtMillis,
+                       List<String> preview, String impact, String errorMessage,
+                       long createdAtMillis, long updatedAtMillis, long version) {
+        this(actionId, sessionId, incidentId, taskId, type, status, routeId, businessPrefix, serviceName, group,
+                beforeWeight, desiredWeight, requestedValue, requestedUnit, beforeTrafficPercent,
+                desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision, rollbackOperationId,
+                requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage, createdAtMillis,
+                updatedAtMillis, version, null);
+    }
+
     /** 仅供仓储在成功条件写入后赋予新版本。 */
     public AgentAction withVersion(long nextVersion) {
         return new AgentAction(actionId, sessionId, incidentId, taskId, type, status, routeId, businessPrefix,
                 serviceName, group, beforeWeight, desiredWeight, requestedValue, requestedUnit,
                 beforeTrafficPercent, desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision,
                 rollbackOperationId, requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage,
-                createdAtMillis, updatedAtMillis, nextVersion);
+                createdAtMillis, updatedAtMillis, nextVersion, resourceRef);
+    }
+
+    public AgentAction withResourceRef(ResourceRef ref) {
+        return new AgentAction(actionId, sessionId, incidentId, taskId, type, status, routeId, businessPrefix,
+                serviceName, group, beforeWeight, desiredWeight, requestedValue, requestedUnit,
+                beforeTrafficPercent, desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision,
+                rollbackOperationId, requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage,
+                createdAtMillis, updatedAtMillis, version, ref);
     }
 
     /** 目标标签：{@code service@group}，与网关的集群键同一口径。 */

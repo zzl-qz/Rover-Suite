@@ -66,7 +66,7 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
                 .subscribeOn(Schedulers.boundedElastic())
                 .doOnNext(response -> round.collect(response.chatResponse()))
                 .takeUntilOther(budget.stopSignal())
-                .doOnSuccess(response -> budget.check())
+                .doOnSuccess(response -> { budget.check(); budget.modelCallCompleted(); })
                 .block(budget.remaining());
     }
 
@@ -77,7 +77,7 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
             return chain.nextStream(round.request)
                     .doOnNext(response -> round.collect(response.chatResponse()))
                     .takeUntilOther(budget.stopSignal())
-                    .doOnComplete(budget::check);
+                    .doOnComplete(() -> { budget.check(); budget.modelCallCompleted(); });
         });
     }
 

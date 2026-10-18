@@ -90,6 +90,33 @@ class GatewayManageWeightTest {
                 "权重置 0 是「停推」原语：分不到流量，但不是没有可接流实例");
     }
 
+    @Test
+    void replayBindsOriginalWeightIntentAndReturnsOriginalResultAfterDeletion() {
+        GatewayRuntime runtime = runtime(List.of(grayRoute(95, 5)));
+        assertEquals(HttpResponseStatus.OK, weight(runtime, 0, "weight", 20).status());
+        assertEquals(HttpResponseStatus.CONFLICT, weight(runtime, 0, "weight", 30).status());
+        runtime.removeRoute(1, "manual-delete", "demo-api");
+        Response replay = weight(runtime, 0, "weight", 20);
+        assertEquals(HttpResponseStatus.OK, replay.status());
+        assertEquals("REPLAYED", replay.body().get("status"));
+        assertEquals(1, ((Number) replay.body().get("revision")).intValue());
+        assertEquals(2, runtime.getRevision());
+        assertEquals(0, runtime.getRouteMatcher().listRoutes().size());
+    }
+
+    @Test
+    void invalidNumbersCannotTurnIntoStopTrafficRequests() {
+        GatewayRuntime runtime = runtime(List.of(grayRoute(95, 5)));
+        for (String value : List.of("null", "\"invalid\"", "0.5", "4294967296")) {
+            Response response = post(ManageApiPaths.ROUTES_TARGET_WEIGHT,
+                    "{\"routeId\":\"demo-api\",\"serviceName\":\"demo\",\"group\":\"v2\",\"revision\":0,"
+                            + "\"operationId\":\"invalid\",\"weight\":" + value + "}", runtime);
+            assertEquals(HttpResponseStatus.BAD_REQUEST, response.status());
+            assertEquals(5, weightOf(runtime, "v2"));
+            assertEquals(0, runtime.getRevision());
+        }
+    }
+
     /** 一条 v1/v2 灰度路由，targets 顺序即区间顺序。 */
     private static RouteConfig grayRoute(int v1Weight, int v2Weight) {
         RouteConfig route = new RouteConfig();

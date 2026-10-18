@@ -80,12 +80,21 @@ public final class AgentOrchestrator {
         this.toolLoop = toolLoop;
         this.journal = journal == null ? OpsJournal.none() : journal;
         this.dialogue = new DialogueCards(sessions, messages, tasks);
+        investigations.handler("DIALOGUE", (task, payload) -> {
+            try {
+                resolveAndRun(task, new com.fasterxml.jackson.databind.ObjectMapper()
+                        .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false).readValue(payload, AgentRequestOptions.class));
+            } catch (com.fasterxml.jackson.core.JsonProcessingException ex) { throw new IllegalArgumentException("对话 Job 输入损坏", ex); }
+        });
     }
 
     /** 新建会话；会话归属由后端认证上下文决定。 */
     public Session startSession(String userId) {
         return startSession(userId, null);
     }
+
+    private com.rover.agent.core.port.AgentAccess access = com.rover.agent.core.port.AgentAccess.local();
+    public void access(com.rover.agent.core.port.AgentAccess access) { this.access = access; }
 
     /**
      * 新建会话，并可选指定标题（页面「新建会话」时可填）。
@@ -99,12 +108,12 @@ public final class AgentOrchestrator {
         }
         String capped = named.length() > MAX_TITLE_LENGTH ? named.substring(0, MAX_TITLE_LENGTH) : named;
         return save(new Session(session.sessionId(), session.userId(), capped, session.activeIncidentId(),
-                session.status(), session.createdAtMillis(), session.lastActiveAtMillis(), session.incidentIds()));
+                session.status(), session.createdAtMillis(), session.lastActiveAtMillis(), session.incidentIds()).withScope(session.scope(), session.targetNamespace()));
     }
 
     /** 当前用户的会话列表；不属于该用户的会话不可见。 */
     public List<Session> sessions(String userId) {
-        return sessions.findByUserId(user(userId));
+        return sessions.findByUserId(user(userId)).stream().filter(registry::accepts).toList();
     }
 
     /** 按 ID 取会话；不存在或不属于该用户时返回空。 */
@@ -146,8 +155,17 @@ public final class AgentOrchestrator {
      */
     public Optional<TaskEventSubscription> subscribeEvents(String taskId, String userId,
                                                            TaskEventSubscriber subscriber) {
-        if (task(taskId, userId).isEmpty()) {
+        return subscribeEvents(taskId, userId, -1, subscriber);
+    }
+
+    public Optional<TaskEventSubscription> subscribeEvents(String taskId, String userId, long afterEventId,
+                                                           TaskEventSubscriber subscriber) {
+        var view = task(taskId, userId);
+        if (view.isEmpty()) {
             return Optional.empty();
+        }
+        if (tasks.durableEvents()) {
+            return Optional.of(com.rover.agent.runtime.task.DurableTaskEvents.subscribe(tasks, view.get(), afterEventId, subscriber));
         }
         return investigations.subscribeEvents(taskId, subscriber);
     }
@@ -175,7 +193,7 @@ public final class AgentOrchestrator {
         withTitle(owned.get(), asked);
         touch(sessionId);
         try {
-            investigations.execute(() -> resolveAndRun(task, request));
+            investigations.enqueue(task, "DIALOGUE", request, () -> resolveAndRun(task, request));
         } catch (RejectedExecutionException ex) {
             // 队列满：回滚登记。用户消息已经落库，它是「用户说过这句话」的真实记录，保留不动。
             investigations.discard(task.taskId());
@@ -197,6 +215,8 @@ public final class AgentOrchestrator {
                 task.fail("会话不存在");
                 return;
             }
+            if (!registry.accepts(session)) { throw new com.rover.agent.core.port.AgentAccess.Denied("任务资源范围已失效"); }
+            access.require(session.userId(), com.rover.agent.core.port.AgentAccess.Permission.INVESTIGATE);
             String forcedSession = options == null ? null : options.recallSessionId();
             DialogueCards.Outcome earlier = dialogue.recall(session, task.question(), task.taskId(),
                     forcedSession, System.currentTimeMillis());
@@ -227,9 +247,10 @@ public final class AgentOrchestrator {
             if (!recalled.isBlank()) {
                 background = background.isBlank() ? recalled : background + "\n" + recalled;
             }
+            String journalBinding = journal.identity(subjectKey(task));
             toolLoop.run(task, background);
             if (!task.cancelled()) {
-                journal.record(task.view());
+                journal.record(task.view(), journalBinding);
             }
             appendReply(task);
             appendConclusion(task);
@@ -431,7 +452,7 @@ public final class AgentOrchestrator {
         }
         String title = asked.length() > MAX_TITLE_LENGTH ? asked.substring(0, MAX_TITLE_LENGTH) : asked;
         return save(new Session(session.sessionId(), session.userId(), title, session.activeIncidentId(),
-                session.status(), session.createdAtMillis(), session.lastActiveAtMillis(), session.incidentIds()));
+                session.status(), session.createdAtMillis(), session.lastActiveAtMillis(), session.incidentIds()).withScope(session.scope(), session.targetNamespace()));
     }
 
     /**
@@ -447,7 +468,7 @@ public final class AgentOrchestrator {
         }
         Session updated = new Session(current.sessionId(), current.userId(), current.title(),
                 current.activeIncidentId(), current.status(), current.createdAtMillis(),
-                System.currentTimeMillis(), current.incidentIds());
+                System.currentTimeMillis(), current.incidentIds()).withScope(current.scope(), current.targetNamespace());
         sessions.save(updated);
         return updated;
     }
@@ -458,8 +479,8 @@ public final class AgentOrchestrator {
     }
 
     /** 会话归属：未启用登录时双方都为空，视为同一（无鉴权）主体。 */
-    private static boolean ownedBy(Session session, String userId) {
-        return Objects.equals(session.userId(), user(userId));
+    private boolean ownedBy(Session session, String userId) {
+        return registry.accepts(session) && Objects.equals(session.userId(), user(userId));
     }
 
     private static String user(String userId) {

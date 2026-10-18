@@ -145,8 +145,10 @@ public final class DynamicInvestigationGraph {
             input.put(STATE_TASK_ID, this.taskId);
             input.put(STATE_PATH, this.path);
             input.put(STATE_QUESTION, this.question);
-            input.put(STATE_ROUNDS, 0);
-            input.put(STATE_TOOL_CALLS, 0);
+            rounds = reporter.resumeRounds();
+            toolCalls = reporter.resumeToolCalls();
+            input.put(STATE_ROUNDS, rounds);
+            input.put(STATE_TOOL_CALLS, toolCalls);
             input.put(STATE_HAS_PLAN, false);
             input.put(STATE_VERDICT, "");
             state = graph.invoke(input).orElseThrow(() -> new IllegalStateException("调查图未返回状态"));

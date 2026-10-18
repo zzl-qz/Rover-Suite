@@ -10,6 +10,8 @@ architecture choices for this module follow this document.
 > **Documentation convention:** public docs describe only behavior that exists in the released code. Every section below
 > is marked *Implemented* or *Planned*. Planned items are not current capability.
 
+The single Admin foundation now includes resource identity/scope, live roles, dedicated machine ingress, durable H2 jobs and budgets, audit/outbox, SSE replay, write stops and backups. See the [current operating and acceptance guide (Chinese)](agent-single-admin-foundation.zh-CN.md). Shared PostgreSQL, distributed workers and HA remain deferred to S7.
+
 ## 1. What it is, and what it is not
 
 When an engineer starts troubleshooting, or when monitoring raises an alert, the agent collects gateway route,
@@ -101,7 +103,7 @@ routes, changing rate limits, or triggering a rollback.
 **Status: in progress (the first action is complete end to end — see §7 "Controlled change loop").** The only executable
 action today is `ADJUST_ROUTE_TARGET_WEIGHT`: the model only files a pending change, and after human approval
 `RouteWeightActionExecutor` performs precondition check → optimistic-lock commit → read-back verification, with
-compensating rollback through the same narrow primitive. Policy, RBAC, and risk grading remain planned — this version
+compensating rollback through the same narrow primitive. Live scoped roles and approval checks are implemented; risk grading and approval policy remain planned. This version
 lowers risk by opening one action, exposing the write path to the executor only, and requiring human approval, rather
 than pretending the governance layer is complete.
 
@@ -149,7 +151,7 @@ abandoning the whole reply.
   Set `ROVER_AGENT_ALERT_OWNER` (`rover.agent.alerts.owner-user-id`) to route new alerts to an existing on-call account.
   `Incident.triggeredBy` independently retains the authenticated source; the workbench shows both source and handler.
   Task reads, SSE, workspace access and follow-up questions enforce session ownership. Payload fields cannot choose identity.
-  This is a single-handler transition; team queues and role-based handover remain planned.
+  The configured handler remains a single account; scoped roles and separate approvers are implemented. Team incident queues and reassignment remain planned.
   What is still missing is the **proactive** half: periodic
   self-inspection that raises its own `INSPECTION` incidents.
 
@@ -224,7 +226,7 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph: plan / execute / evaluate / clarify / synthesise nodes, looping conditional edges, conclusion synthesis |
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner: rule-based baseline plus model candidates, out-of-scope steps dropped by PlanValidator |
 | | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces only; capacity limits mean something for the in-memory implementations) |
-| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`: the relational implementation of session / message / incident / task / step / evidence / safe resume points / controlled change records (eight `agent_*` tables, versioned migrations, one transaction per snapshot, foreign keys so no orphans, and startup recovery that turns half-finished changes into failed or uncertain), assembled by `AgentStore`; plus thread-safe in-memory implementations used when no record store path is configured |
+| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`: the relational implementation of session / message / incident / task / step / evidence / safe resume points / controlled change records (versioned migrations, durable jobs/budgets, independent audit, transactional event outbox, consistent H2 backups, and operation-ID reconciliation for interrupted writes), assembled by `AgentStore`; plus thread-safe in-memory implementations used when no record store path is configured |
 | | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 9 read-only tools plus 1 proposal tool (data entry point and the single suggestion entry point of the conversation path) |
 | | `com.rover.agent.runtime.action` | `AgentActionService` (propose / approve / reject / rollback / resolve, state transitions claimed by CAS) plus `RouteWeightActionExecutor` (the only code that writes to the gateway) and `ActionDraft` / `RouteLocator` |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`: the built-in operations knowledge base, default `KnowledgeReadPort` implementation |
@@ -569,17 +571,15 @@ catalogue described in §7.
 - Every question lands under a Session and its task is best-effort attached to an Incident (same target reuses the
   incident, a clearly different target opens a new one, chit-chat creates none). Sessions, messages, incidents, tasks,
   steps, and evidence all go to the record store and **remain queryable after a restart**, so a historical session can
-  be reopened as-is. Tasks still PENDING / RUNNING at startup are marked `INTERRUPTED` by the store — not failed: the
-  collected steps and evidence are kept and `error` names the latest safe resume point. That difference is the whole
-  point: interrupted means it can be picked up again, failed does not.
+  be reopened as-is. Persisted read jobs resume input, original budgets, event sequence and prior facts after a single Admin restart, with fresh reads where needed. Legacy active tasks without a job payload remain `INTERRUPTED` for review.
+
 - **A safe resume point (`agent_checkpoint`) is a business-level contract, not a framework state snapshot**: it means
   "up to here everything is settled and it is safe to continue from this point", and there are exactly six of them —
   task started, plan settled, every tool returned, round evaluated, synthesis done, task completed. The per-tool point
   is the important one: **tool calls are where the agent actually produces new facts**, so checkpointing only per
   planning round would re-run facts a crashed round had already collected. A crash in the middle of a tool call does
   not advance the point; recovery repeats that one read-only call (harmless while everything is read-only).
-  Write actions therefore never rely on resume points: the proposal tool does not advance one (redoing it would leave a
-  second pending card), and both commit and compensation persist their `operationId` before sending the request, so a
+  Write actions therefore never rely on resume points: the proposal tool does not advance one (the same intent within one durable job reuses its pending card), and both commit and compensation persist their `operationId` before sending the request, so a
   restart can classify a half-finished change as failed or uncertain by whether the key reached the database.
 - **A resume point stores the high-water mark, not a list**: `stage` names the business stage (`STARTED` / `PLANNED` /
   `TOOL_COMPLETED` / `ROUND_EVALUATED` / `SYNTHESIS_COMPLETED` / `COMPLETED`) plus round number, completed call count,
@@ -596,15 +596,15 @@ catalogue described in §7.
 - **Schema and its migration rule**: the agent tables (session / message / incident / task / step / evidence + safe
   resume points + controlled change records) are the project's database schema baseline, managed through
   `agent_schema_migrations` (v1 creates the aggregate, v2 drops the legacy JSON snapshot tables, v3 adds resume points,
-  v4 adds change records, v5 stores request units and traffic previews, v6 retains the authenticated alert source).
+  v4 adds change records, v5 stores request units and traffic previews, v6 retains the authenticated alert source, v7 adds resource/session scope, v8 adds audit/outbox, and v9 adds durable jobs/budgets).
   Upgrade migrations are append-only and do not require wiping the database. Unknown historical sources remain null;
   they are never inferred from the handler. Foreign keys maintain relationships. Session deletion still removes its
-  records; independent long-term audit retention remains planned.
+  workspace records; independent execution audit is retained. External immutable archiving and long-term retention policy remain planned.
 - **Conditional action writes**: `AgentAction.version` is a row version, separate from the gateway routing revision.
   Inserts return version 1; every update must match the version that was read and returns the incremented version.
   Stale or deleted records reject writes. Approval and rollback check both status and version, and executor saves
   also check the version, so a late resolve cannot overwrite a rollback. Unexpected failures retain persisted operation
-  IDs for reconciliation without resubmission. Durable workers, leases and shared production storage remain planned.
+  IDs for reconciliation without resubmission. Single-process durable read jobs are implemented; distributed workers, leases and shared production storage remain deferred.
 - Strict structured output plus failure classification: `JsonCompletion`'s parsing contract is now supplied by the
   caller (`Function<String, Optional<T>> parser`), and `LlmInvestigationPlanner` / `ModelTargetInterpreter` follow a
   strict contract — invalid JSON, or a value out of range, discards the whole result and falls back to the rule layer,
@@ -631,14 +631,8 @@ catalogue described in §7.
 
 **Planned (not implemented):**
 
-- The next storage step: today it is a single local H2 file (Lite); the same SQL with a different connection source is
-  what a MySQL Standard profile needs. Redis caching and cross-host audit are not implemented.
-- Resuming from a resume point: alert investigations (`INVESTIGATION`) have well-defined stage state and a settled
-  capability set, so they can genuinely resume — read the latest checkpoint, rebuild the task from the persisted
-  steps / evidence / executed capabilities, and continue from the next safe stage without repeating finished tool
-  calls. Human conversations (`CONVERSATION`) still only go as far as "mark interrupted, keep the facts, allow a
-  retry" — this version does not reach into Spring AI's conversation loop looking for a recovery cursor; a retry hands
-  the facts already collected back to the model.
+- Shared production storage is deferred to S7: the current supported boundary is one Agent Admin and one local H2 store. PostgreSQL, distributed claiming, worker role splits and HA need separate implementation and certification.
+- Finer graph-node/model-message cursor recovery remains planned. Current durable read jobs preserve budgets and evidence before taking fresh readings; they do not promise to skip every completed read, and never replay an external write as part of read-job recovery.
 - Proactive inspection: periodic self-inspection that raises its own `INSPECTION` incidents. `POST
   /api/agent/events/ingest` already lets an external alert drive an automatic investigation; what is missing is the
   agent going out to look on a schedule.

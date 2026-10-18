@@ -25,15 +25,28 @@ public interface RouteControlPort {
     RouteChangePreview preview(String routeId, String serviceName, String group, int weight);
 
     /**
-     * 调整单个目标的权重；operationId 必须在提交前落库，重放返回 REPLAYED。
+     * 调整单个目标的权重；operationId 必须在提交前落库，同 ID 同参重放返回原始 REPLAYED。
+     * revision、动作类型或任意参数变化必须使用新计划/新操作号；不能把原操作号当重试计数器。
      *
      * @throws RouteControlException 冲突 / 被拒 / 落盘失败 / 没有响应（{@link RouteControlException#outcomeUnknown()}）
      */
     RouteChangeResult adjustTargetWeight(String routeId, String serviceName, String group, int weight,
                                          int expectedRevision, String operationId);
 
+    default boolean requiresResourceIdentity() { return false; }
+
+    default com.rover.agent.core.model.ResourceScope resourceScope() { return null; }
+
+    default String resourceNamespace() { return ""; }
+
+    default RouteChangeResult adjustTargetWeight(String routeId, String serviceName, String group, int weight,
+                                                 int expectedRevision, String operationId,
+                                                 com.rover.agent.core.model.ResourceRef expectedResource) {
+        return adjustTargetWeight(routeId, serviceName, group, weight, expectedRevision, operationId);
+    }
+
     /**
-     * 按原 operationId 确认写操作结果；超时后须先回查再决定是否重试。
+     * 按原 operationId 确认写操作结果；UNKNOWN/EXPIRED 均不能证明未执行，禁止换号补做。
      *
      * @throws RouteControlException {@link RouteControlException.Kind#UNAVAILABLE}：连回查都拿不到结果
      */

@@ -19,7 +19,41 @@ public final class AgentRunBudget {
     private long deadline;
     private int modelCalls;
     private long tokens;
+    private long deadlineAtMillis;
+    private int pendingOutput;
+    private int toolCalls;
+    private java.util.function.Consumer<State> stateSink = state -> { };
+    private Runnable attemptGuard = () -> { };
+    public synchronized void validateWith(Runnable guard) { attemptGuard = guard; }
     private volatile String stopReason;
+
+    public record State(int modelCalls, long tokens, int pendingOutput, int toolCalls, long deadlineAtMillis,
+                        int maxModelCalls, int maxOutputTokens, long maxTotalTokens, long timeoutMillis, int maxRepeatedToolResults) { }
+
+    public synchronized State snapshot() {
+        return new State(modelCalls, tokens, pendingOutput, toolCalls, deadlineAtMillis, limits.maxModelCalls(),
+                limits.maxOutputTokens(), limits.maxTotalTokens(), limits.taskTimeout().toMillis(), limits.maxRepeatedToolResults());
+    }
+
+    public synchronized void persistTo(java.util.function.Consumer<State> sink) { this.stateSink = sink; }
+
+    public synchronized void restore(State state) {
+        modelCalls = state.modelCalls();
+        // 中断调用的输出无法精确计费，按已预留上限计入，不能借重启获得新额度。
+        tokens = state.tokens() + state.pendingOutput(); toolCalls = state.toolCalls();
+        deadlineAtMillis = state.deadlineAtMillis();
+        if (deadlineAtMillis > 0) {
+            deadline = System.nanoTime() + Math.max(0, deadlineAtMillis - System.currentTimeMillis()) * 1_000_000L;
+        }
+    }
+
+    public synchronized void reserveTool() {
+        check();
+        if (toolCalls >= 30) { throw stop("任务累计只读工具调用已达上限（30 次），不会因重启重置"); }
+        toolCalls++; stateSink.accept(snapshot());
+    }
+
+    public synchronized void modelCallCompleted() { pendingOutput = 0; stateSink.accept(snapshot()); }
 
     public AgentRunBudget(AgentRunLimits limits) {
         this.limits = limits;
@@ -47,6 +81,8 @@ public final class AgentRunBudget {
     public synchronized void start() {
         if (deadline == 0) {
             deadline = System.nanoTime() + limits.taskTimeout().toNanos();
+            deadlineAtMillis = System.currentTimeMillis() + limits.taskTimeout().toMillis();
+            stateSink.accept(snapshot());
         }
     }
 
@@ -56,6 +92,7 @@ public final class AgentRunBudget {
     }
 
     public synchronized void check() {
+        attemptGuard.run();
         start();
         if (stopReason != null) {
             throw new LimitExceeded(stopReason);
@@ -68,6 +105,7 @@ public final class AgentRunBudget {
     /** 调用前计入输入估算，并按剩余总预算收紧本轮输出上限。 */
     public synchronized int beginModelCall(long inputTokens, Integer requestedOutput) {
         check();
+        if (pendingOutput > 0) { tokens += pendingOutput; pendingOutput = 0; }
         if (modelCalls >= limits.maxModelCalls()) {
             throw stop("模型调用次数已达上限（" + limits.maxModelCalls() + " 次），任务已停止");
         }
@@ -79,13 +117,17 @@ public final class AgentRunBudget {
         tokens += inputTokens;
         int output = requestedOutput == null || requestedOutput <= 0
                 ? limits.maxOutputTokens() : Math.min(requestedOutput, limits.maxOutputTokens());
-        return (int) Math.min(output, available);
+        pendingOutput = (int) Math.min(output, available);
+        stateSink.accept(snapshot());
+        return pendingOutput;
     }
 
     /** 流式用量按增量结算；服务端没有 usage 时使用本地 tokenizer 估算。 */
     public synchronized void consume(long additionalTokens) {
         check();
         tokens += Math.max(0, additionalTokens);
+        pendingOutput = (int) Math.max(0, pendingOutput - Math.max(0, additionalTokens));
+        stateSink.accept(snapshot());
         if (tokens > limits.maxTotalTokens()) {
             throw stop("累计 token 预算已达上限（" + limits.maxTotalTokens() + "），任务已停止");
         }

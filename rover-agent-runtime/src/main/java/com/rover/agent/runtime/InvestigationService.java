@@ -112,6 +112,14 @@ public final class InvestigationService {
         this.limits = limits == null ? PlanningLimits.defaults() : limits;
         this.journal = journal == null ? OpsJournal.none() : journal;
         this.alertOwnerUserId = identity(alertOwnerUserId);
+        tasks.handler("ALERT", (task, payload) -> {
+            try {
+                TimeRange range = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false).readValue(payload, TimeRange.class);
+                task.bind(task.incidentId(), task.path(), task.target(), range);
+                run(task);
+            } catch (com.fasterxml.jackson.core.JsonProcessingException ex) { throw new IllegalArgumentException("告警 Job 输入损坏", ex); }
+        });
     }
 
     /**
@@ -133,6 +141,8 @@ public final class InvestigationService {
                             String triggeredBy) {
         String target = validatePath(path);
         String asked = validateQuestion(question);
+        access.require(alertOwnerUserId == null ? triggeredBy : alertOwnerUserId,
+                com.rover.agent.core.port.AgentAccess.Permission.INVESTIGATE);
         Session session = incidents.openSession(alertOwnerUserId == null ? triggeredBy : alertOwnerUserId);
         Incident incident = incidents.openIncident(session.sessionId(), origin, ResourceTarget.route(target),
                 timeRange, triggeredBy);
@@ -140,7 +150,7 @@ public final class InvestigationService {
             InvestigationTask task = register(session.sessionId(), asked);
             task.bind(incident.incidentId(), target, ResourceTarget.route(target), incident.timeRange());
             incidents.attachTask(incident.incidentId(), task.taskId());
-            tasks.execute(() -> run(task));
+            tasks.enqueue(task, "ALERT", incident.timeRange(), () -> run(task));
             return task.view();
         } catch (RejectedExecutionException ex) {
             rollback(incident, session);
@@ -158,10 +168,19 @@ public final class InvestigationService {
         return tasks.register(sessionId, question);
     }
 
+    private com.rover.agent.core.port.AgentAccess access = com.rover.agent.core.port.AgentAccess.local();
+    public void access(com.rover.agent.core.port.AgentAccess access) { this.access = access; }
+
     /** 提交执行；队列满时抛 {@link RejectedExecutionException}，调用方应回滚登记并回 429。 */
     public void execute(Runnable runnable) {
         tasks.execute(runnable);
     }
+
+    public void enqueue(InvestigationTask task, String kind, Object payload, Runnable fallback) {
+        tasks.enqueue(task, kind, payload, fallback);
+    }
+
+    public void handler(String kind, java.util.function.BiConsumer<InvestigationTask,String> handler) { tasks.handler(kind, handler); }
 
     /** 提交执行失败时回滚登记，避免留下永远 PENDING 的任务。 */
     public void discard(String taskId) {
@@ -181,12 +200,22 @@ public final class InvestigationService {
         task.start();
         task.markRunning();
         try {
+            if (access.managed()) {
+                Session owner = incidents.session(task.sessionId()).orElseThrow(() -> new IllegalStateException("任务会话已删除"));
+                if (!incidents.accepts(owner)) { throw new com.rover.agent.core.port.AgentAccess.Denied("任务资源范围已失效"); }
+                access.require(owner.userId(), com.rover.agent.core.port.AgentAccess.Permission.INVESTIGATE);
+            }
+            if (task.resumeRounds() >= limits.maxRounds() || task.resumeToolCalls() >= limits.maxToolCalls()) {
+                task.fail("恢复点已用尽规划或工具预算，保留现有证据，请人工复核");
+                return;
+            }
             // 执行前若已被取消（例如排队期间被取消），直接退出，不再发起任何取数。
             if (task.cancelled()) {
                 return;
             }
             DynamicInvestigationGraph graph =
                     new DynamicInvestigationGraph(planner, validator, executor, limits, task);
+            String journalBinding = journal.identity(task.path());
             InvestigationOutcome outcome = graph.investigate(task.taskId(), task.path(), task.question(),
                     task.target(), task.timeRange());
             if (task.cancelled()) {
@@ -208,7 +237,7 @@ public final class InvestigationService {
             task.complete(report);
             // 结论回写到事件：事件因此成为「一个问题的多次调查」的聚合点，追问时能继承最新结论。
             incidents.summarise(task.incidentId(), report.summary());
-            journal.record(task.view());
+            journal.record(task.view(), journalBinding);
         } catch (Exception ex) {
             if (task.cancelled()) {
                 // 取消过程中断：结论已被标记 CANCELLED，不要覆盖成失败。

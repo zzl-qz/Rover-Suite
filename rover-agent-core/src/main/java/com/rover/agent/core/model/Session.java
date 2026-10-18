@@ -18,4 +18,15 @@ import java.util.List;
  * @param incidentIds        会话内的事件
  */
 public record Session(String sessionId, String userId, String title, String activeIncidentId, SessionStatus status,
-                      long createdAtMillis, long lastActiveAtMillis, List<String> incidentIds) { }
+                      long createdAtMillis, long lastActiveAtMillis, List<String> incidentIds,
+                      ResourceScope scope, String targetNamespace) {
+    public Session(String sessionId, String userId, String title, String activeIncidentId, SessionStatus status,
+                   long createdAtMillis, long lastActiveAtMillis, List<String> incidentIds) {
+        this(sessionId, userId, title, activeIncidentId, status, createdAtMillis, lastActiveAtMillis, incidentIds, null, "");
+    }
+
+    public Session withScope(ResourceScope resourceScope, String namespace) {
+        return new Session(sessionId, userId, title, activeIncidentId, status, createdAtMillis,
+                lastActiveAtMillis, incidentIds, resourceScope, namespace == null ? "" : namespace);
+    }
+}

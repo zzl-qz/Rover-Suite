@@ -26,6 +26,8 @@ public final class IncidentRegistry {
     private final AgentSessionRepository sessions;
     private final IncidentRepository incidents;
     private final WorkspaceRetention retention;
+    private final com.rover.agent.core.model.ResourceScope scope;
+    private final String targetNamespace;
 
     /** 当前阶段的内存实现；接入持久化后由组合根注入具体实现。 */
     public IncidentRegistry() {
@@ -38,9 +40,21 @@ public final class IncidentRegistry {
 
     public IncidentRegistry(AgentSessionRepository sessions, IncidentRepository incidents,
                             WorkspaceRetention retention) {
+        this(sessions, incidents, retention, null, "");
+    }
+
+    public IncidentRegistry(AgentSessionRepository sessions, IncidentRepository incidents,
+                            WorkspaceRetention retention, com.rover.agent.core.model.ResourceScope scope,
+                            String targetNamespace) {
         this.sessions = sessions;
         this.incidents = incidents;
         this.retention = retention;
+        this.scope = scope;
+        this.targetNamespace = targetNamespace;
+    }
+
+    public boolean accepts(Session session) {
+        return scope == null || (scope.equals(session.scope()) && targetNamespace.equals(session.targetNamespace()));
     }
 
     /** 开启一个没有归属用户的会话；仅供尚未接入认证上下文的调用方使用。 */
@@ -52,7 +66,7 @@ public final class IncidentRegistry {
     public Session openSession(String userId) {
         long now = System.currentTimeMillis();
         Session session = new Session(UUID.randomUUID().toString(), userId, null, null, SessionStatus.ACTIVE,
-                now, now, List.of());
+                now, now, List.of()).withScope(scope, targetNamespace);
         admit(session);
         return session;
     }

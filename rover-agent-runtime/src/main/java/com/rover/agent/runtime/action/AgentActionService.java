@@ -6,6 +6,8 @@ import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.WeightRequestUnit;
 import com.rover.agent.core.port.RouteChangePreview;
+import com.rover.agent.core.port.AgentAccess;
+import com.rover.agent.core.port.AgentAccess.Permission;
 import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.core.port.RouteControlRoute;
 import com.rover.agent.core.port.RouteControlState;
@@ -34,13 +36,20 @@ public final class AgentActionService {
     private final AgentSessionRepository sessions;
     private final RouteControlPort control;
     private final ActionExecutor executor;
+    private final AgentAccess access;
 
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutor executor) {
+        this(actions, sessions, control, executor, AgentAccess.local());
+    }
+
+    public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
+                              RouteControlPort control, ActionExecutor executor, AgentAccess access) {
         this.actions = actions;
         this.sessions = sessions;
         this.control = control;
         this.executor = executor;
+        this.access = access;
     }
 
     // ---------------------------------------------------------------- 提议
@@ -89,6 +98,10 @@ public final class AgentActionService {
         if (session == null) {
             return ActionProposal.rejected("找不到这个会话，无法登记变更");
         }
+        if (!inScope(session)) {
+            return ActionProposal.rejected("会话的组织/团队/环境或管理目标已改变，请在当前资产范围新建会话");
+        }
+        access.require(session.userId(), Permission.PROPOSE);
         RouteControlState state;
         try {
             state = control.state();
@@ -117,9 +130,23 @@ public final class AgentActionService {
             return ActionProposal.clarificationRequired(resolved.message());
         }
         int desiredWeight = resolved.weight();
+        if (control.requiresResourceIdentity() && matched.resourceRef() == null) {
+            return ActionProposal.rejected("Gateway 未返回可信资源 UID，不能生成可执行变更；请先升级并核对资产身份");
+        }
         if (target.weight() == desiredWeight) {
             return ActionProposal.rejected("「" + target.label() + "」当前权重已经是 " + desiredWeight
                     + "，不需要变更");
+        }
+
+        // 同一只读 Job 重启续跑时可再次到达 propose；返回已登记的相同意图，不复制审批卡。
+        if (taskId != null) {
+            AgentAction existing = actions.bySession(sessionId).stream().filter(candidate -> taskId.equals(candidate.taskId())
+                    && Objects.equals(candidate.resourceRef(), matched.resourceRef()) && candidate.routeId().equals(matched.routeId())
+                    && candidate.group().equals(target.group()) && candidate.serviceName().equals(target.serviceName())
+                    && candidate.requestedValue() == requestedValue && candidate.requestedUnit() == unit
+                    && candidate.desiredWeight() == desiredWeight && candidate.expectedRevision() == state.revision())
+                    .findFirst().orElse(null);
+            if (existing != null) { return ActionProposal.created(existing); }
         }
 
         long now = System.currentTimeMillis();
@@ -133,7 +160,7 @@ public final class AgentActionService {
                 null, null, null,
                 session.userId(), null, 0L,
                 previewOf(matched, target, desiredWeight), impactOf(target, desiredWeight), null,
-                now, now);
+                now, now).withResourceRef(matched.resourceRef());
         try {
             action = actions.save(action);
         } catch (RuntimeException ex) {
@@ -227,18 +254,28 @@ public final class AgentActionService {
 
     /** 某个会话的变更记录（新的在前）；会话不存在或不属于当前用户时为空。 */
     public Optional<List<AgentAction>> bySession(String sessionId, String userId) {
+        access.require(userId, Permission.READ);
         return session(sessionId, userId).map(owned -> actions.bySession(sessionId));
     }
 
     /** 按 ID 取一条变更记录；不存在或不属于当前用户时为空。 */
     public Optional<AgentAction> find(String actionId, String userId) {
+        access.require(userId, Permission.READ);
         return actions.find(actionId).filter(action -> ownedBy(action, userId));
+    }
+
+    public List<AgentAction> pendingApprovals(String userId) {
+        access.require(userId, Permission.APPROVE);
+        return sessions.listAll().stream().filter(this::inScope)
+                .flatMap(session -> actions.bySession(session.sessionId()).stream())
+                .filter(action -> action.status().awaitingApproval() && ownedBy(action, userId)).toList();
     }
 
     // ---------------------------------------------------------------- 人工动作
 
     /** 通过 CAS 批准并立即执行，仅成功迁移状态的请求可提交。 */
     public AgentAction approve(String actionId, String userId) {
+        access.require(userId, Permission.APPROVE);
         AgentAction pending = require(actionId, userId);
         if (!pending.status().awaitingApproval()) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
@@ -252,11 +289,12 @@ public final class AgentActionService {
                 .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.CONFLICT,
                         "这条变更已经被处理过了，不会重复执行"));
         log.info("变更 {} 已批准，开始执行：{}（批准人 {}）", actionId, claimed.describe(), approver);
-        return execute(claimed);
+        return execute(claimed, userId);
     }
 
     /** 拒绝：不执行，也不会执行。 */
     public AgentAction reject(String actionId, String userId) {
+        access.require(userId, Permission.APPROVE);
         AgentAction pending = require(actionId, userId);
         if (!pending.status().awaitingApproval()) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
@@ -272,6 +310,7 @@ public final class AgentActionService {
 
     /** 回滚：把这次改过的那个版本的权重补偿回变更前的值。 */
     public AgentAction rollback(String actionId, String userId) {
+        access.require(userId, Permission.APPROVE);
         AgentAction applied = require(actionId, userId);
         if (!applied.status().reversible()) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
@@ -283,7 +322,7 @@ public final class AgentActionService {
                 .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.CONFLICT,
                         "这条变更已经被处理过了，不会重复回滚"));
         log.info("变更 {} 开始补偿回滚：{}", actionId, claimed.describe());
-        return execute(claimed);
+        return execute(claimed, userId);
     }
 
     /** 结果确认：对「结果未知」的变更，用原 operationId 再查一次到底生效了没有。 */
@@ -294,19 +333,19 @@ public final class AgentActionService {
                     "这条变更当前是「" + action.status().label() + "」，不需要确认结果");
         }
         // 回查可并行读取；执行器的每次写回均检查行版本，迟到结果不能覆盖执行或回滚的新状态。
-        return execute(action);
+        return execute(action, userId);
     }
 
     /** 按变更类型选择执行器，不支持的类型直接拒绝。 */
-    private AgentAction execute(AgentAction action) {
+    private AgentAction execute(AgentAction action, String actor) {
         if (action.type() != executor.type()) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
                     "没有可以执行「" + action.type().label() + "」的执行器");
         }
         try {
             return switch (action.status()) {
-                case EXECUTING -> executor.execute(action);
-                case ROLLING_BACK -> executor.rollback(action);
+                case EXECUTING -> executor.execute(action, actor);
+                case ROLLING_BACK -> executor.rollback(action, actor);
                 default -> executor.resolve(action);
             };
         } catch (ActionUpdateConflictException ex) {
@@ -347,12 +386,23 @@ public final class AgentActionService {
     }
 
     private Optional<Session> session(String sessionId, String userId) {
-        return sessions.find(sessionId).filter(found -> Objects.equals(found.userId(), normalize(userId)));
+        return sessions.find(sessionId).filter(this::inScope).filter(found -> Objects.equals(found.userId(), normalize(userId))
+                || teamApprover(userId));
     }
 
     /** 变更的归属就是提议会话的归属；未启用登录时双方都为空，视为同一主体。 */
-    private static boolean ownedBy(AgentAction action, String userId) {
-        return Objects.equals(action.requestedBy(), normalize(userId));
+    private boolean ownedBy(AgentAction action, String userId) {
+        return (Objects.equals(action.requestedBy(), normalize(userId)) || teamApprover(userId))
+                && sessions.find(action.sessionId()).filter(this::inScope).isPresent();
+    }
+
+    private boolean teamApprover(String userId) {
+        return access.managed() && access.permissions(userId).contains(Permission.APPROVE);
+    }
+
+    private boolean inScope(Session session) {
+        return control.resourceScope() == null || (control.resourceScope().equals(session.scope())
+                && control.resourceNamespace().equals(session.targetNamespace()));
     }
 
     private static String normalize(String userId) {

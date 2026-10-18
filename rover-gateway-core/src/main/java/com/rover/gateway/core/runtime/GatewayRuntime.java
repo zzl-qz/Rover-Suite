@@ -27,13 +27,18 @@ import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteDiff;
 import com.rover.gateway.core.route.RouteMatcher;
 import com.rover.gateway.core.route.RouteOverlayStore;
+import com.rover.gateway.core.route.RouteOperationStore;
+import com.rover.common.json.JsonCodec;
 import com.rover.gateway.core.route.RouteTarget;
 import com.rover.gateway.core.route.RouteValidator;
 import io.netty.handler.codec.http.HttpResponseStatus;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.LinkedHashMap;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Semaphore;
@@ -114,9 +119,6 @@ public class GatewayRuntime {
     /** 最近若干次已应用快照的条数上限，超出后最旧的被丢弃。 */
     public static final int MAX_APPLIED_HISTORY = 5;
 
-    /** 操作记录条数上限，超出后按插入顺序淘汰最旧的。 */
-    public static final int MAX_OPERATIONS = 200;
-
     /** 已确认版本号，与落盘 overlay 上的 revision 一致；只在 synchronized 内改。 */
     private int revision;
 
@@ -126,15 +128,6 @@ public class GatewayRuntime {
     /** 最近已应用快照，供回滚；重启后清空（当前版本仍在，只是更早的快照没了）。 */
     @Getter(AccessLevel.NONE)
     private final Deque<VersionedRoutes> history = new ArrayDeque<>();
-
-    /** 操作记录：幂等重放与「请求超时后确认是否执行」都靠它。 */
-    @Getter(AccessLevel.NONE)
-    private final Map<String, OperationRecord> operations = new LinkedHashMap<>() {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, OperationRecord> eldest) {
-            return size() > MAX_OPERATIONS;
-        }
-    };
 
     /**
      * 在途请求准入闸门（有界并发）：超过上限时快速返回 503，避免内存/上游连接被无限堆积。
@@ -213,6 +206,7 @@ public class GatewayRuntime {
         this.loadBalanceStrategy.set(LoadBalancer.ROUND_ROBIN);
         List<RouteConfig> initialRoutes = routeValidator.normalizeAndValidate(
                 routes == null ? List.of() : routes);
+        assignIdentities(initialRoutes, List.of(), true);
         this.routeMatcherRef.set(new RouteMatcher(initialRoutes));
         StaticUpstreamCluster.rebuild(initialRoutes);
         // 指标按版本归因：注入配置声明的版本目标，供「声明版本 vs 观测版本」核对
@@ -220,6 +214,10 @@ public class GatewayRuntime {
         // 0 号版本先入历史，回滚到「当前版本」于是也有据可依
         history.addLast(new VersionedRoutes(0, initialRoutes));
         rebuildFilters();
+    }
+
+    public synchronized void initializeManagedState() {
+        routeOverlayStore.operations().initialize(currentState());
     }
 
     /** 当前路由匹配器快照。 */
@@ -405,8 +403,12 @@ public class GatewayRuntime {
         CONFLICT,
         /** 校验不通过，运行态与磁盘都没动。得改请求本身。 */
         REJECTED,
-        /** 校验通过但落盘失败，运行态与磁盘都没动。修好磁盘后用同一 operationId 重试即可。 */
-        FAILED
+        /** 经可信回执确认未生效的失败；存储不可用本身不允许伪造此状态。 */
+        FAILED,
+        /** 完整回执已过保留期；操作号和摘要仍永久保留，禁止再次执行。 */
+        EXPIRED,
+        /** 旧 overlay 不含可证明的完整回执。 */
+        UNKNOWN
     }
 
     /**
@@ -419,7 +421,7 @@ public class GatewayRuntime {
      * @param atMillis    记录时刻
      */
     public record OperationRecord(String operationId, OperationStatus status, int revision, String message,
-                                  long atMillis) { }
+                                  long atMillis, String requestHash, long expiresAtMillis) { }
 
     /**
      * 一次变更的结果。
@@ -438,7 +440,13 @@ public class GatewayRuntime {
 
     /** @return 操作记录；未知操作返回 null */
     public synchronized OperationRecord operationOf(String operationId) {
-        return operationId == null ? null : operations.get(operationId);
+        RouteOperationStore.Receipt receipt = operationId == null ? null : routeOverlayStore.operations().find(operationId);
+        if (receipt == null) { return null; }
+        boolean expired = receipt.expired(routeOverlayStore.operations().now());
+        return new OperationRecord(receipt.operationId(), expired ? OperationStatus.EXPIRED
+                : OperationStatus.valueOf(receipt.status()), receipt.revision(), expired
+                ? "回执已过期；不能据此断言未执行，操作号禁止复用" : receipt.message(),
+                receipt.atMillis(), receipt.requestHash(), receipt.expiresAtMillis());
     }
 
     /**
@@ -476,8 +484,8 @@ public class GatewayRuntime {
     /**
      * 整表替换路由：幂等重放 → 乐观锁 → 校验 → 预构建 → 先落盘 → 原子替换 → 记账。
      *
-     * 顺序是刻意的：所有「可能失败的步骤」都在落盘之前，落盘之后只剩不会失败的原子引用替换，
-     * 于是「写盘成功但内存没换」这个窗口被结构性消除，而不是靠 try/catch 兜。
+     * 候选运行态先构建，配置与回执同事务提交后发布。提交后进程崩溃由持久状态恢复；
+     * 提交响应未知必须按原操作号对账，不能推断「未执行」。
      *
      * @param expectedRevision 调用方以为的当前版本；与真实值不符直接冲突
      * @param operationId      幂等 ID；重复提交同一个 ID 会返回上次结果而不再次生效
@@ -487,7 +495,8 @@ public class GatewayRuntime {
      */
     public synchronized RouteChangeResult applyRoutes(int expectedRevision, String operationId,
                                                      List<RouteConfig> routes) {
-        return change(expectedRevision, operationId, routes, "路由已热更新并落盘");
+        String hash = requestHash("REPLACE_ROUTES", expectedRevision, RouteOverlayStore.toRows(routes));
+        return change(expectedRevision, operationId, hash, routes, "路由已热更新并落盘");
     }
 
     /**
@@ -502,28 +511,30 @@ public class GatewayRuntime {
      * @throws ManageApiException 版本冲突、目标版本不在窗口内
      */
     public synchronized RouteChangeResult rollback(int expectedRevision, String operationId, int toRevision) {
-        RouteChangeResult replayed = replayOf(operationId);
+        String hash = requestHash("ROLLBACK", expectedRevision, toRevision);
+        RouteChangeResult replayed = replayOf(operationId, hash);
         if (replayed != null) {
             return replayed;
         }
         List<RouteConfig> snapshot = routesAt(toRevision);
         if (snapshot == null) {
+            recordRejection(operationId, hash, OperationStatus.REJECTED, "回滚目标版本不在历史窗口内: " + toRevision);
             throw new ManageApiException(HttpResponseStatus.BAD_REQUEST,
                     "回滚目标版本不在最近 " + MAX_APPLIED_HISTORY + " 次已应用快照内: " + toRevision, Map.of());
         }
-        return change(expectedRevision, operationId, snapshot, "已回滚到版本 " + toRevision);
+        return change(expectedRevision, operationId, hash, snapshot, "已回滚到版本 " + toRevision);
     }
 
     /** 统一变更协议。 */
-    private RouteChangeResult change(int expectedRevision, String operationId, List<RouteConfig> routes,
+    private RouteChangeResult change(int expectedRevision, String operationId, String requestHash, List<RouteConfig> routes,
                                      String message) {
-        RouteChangeResult replayed = replayOf(operationId);
+        RouteChangeResult replayed = replayOf(operationId, requestHash);
         if (replayed != null) {
             return replayed;
         }
         if (expectedRevision != revision) {
             String conflict = "版本冲突：期望 " + expectedRevision + "，当前 " + revision;
-            recordOperation(operationId, OperationStatus.CONFLICT, revision, conflict);
+            recordRejection(operationId, requestHash, OperationStatus.CONFLICT, conflict);
             throw new ManageApiException(HttpResponseStatus.CONFLICT, conflict,
                     Map.of("currentRevision", revision));
         }
@@ -532,28 +543,22 @@ public class GatewayRuntime {
         try {
             normalized = routeValidator.normalizeAndValidate(routes);
         } catch (IllegalArgumentException ex) {
-            recordOperation(operationId, OperationStatus.REJECTED, revision, ex.getMessage());
+            recordRejection(operationId, requestHash, OperationStatus.REJECTED, ex.getMessage());
             throw ex;
         }
 
         // 预构建：可运行态在这里一次做完，落盘之后不再有会失败的构建
+        assignIdentities(normalized, getRouteMatcher().listRoutes(), false);
         RouteMatcher nextMatcher = new RouteMatcher(normalized);
         List<Filter> nextFilters = assembleFilters(nextMatcher);
 
         int nextRevision = revision + 1;
-        // 先落盘：失败则抛异常，运行态与磁盘都还是旧版本，两者一致
-        try {
-            routeOverlayStore.save(nextRevision, operationId, System.currentTimeMillis(), normalized);
-        } catch (RuntimeException ex) {
-            // 落盘失败也必须留痕。这是四种终态里唯一「状态没变、但最需要事后可查」的一种：
-            // 不留痕的话，调用方丢了响应再来查只会看到 UNKNOWN，无法区分
-            // 「提交过但没写进去」和「压根没提交」，也就无从判断该不该重试。
-            // 记的是当前版本（本操作没有产生新版本），与 CONFLICT 的口径一致。
-            recordOperation(operationId, OperationStatus.FAILED, revision, ex.getMessage());
-            throw ex;
-        }
+        long now = routeOverlayStore.operations().now();
+        routeOverlayStore.operations().commit(currentState(),
+                new RouteOverlayStore.AppliedState(nextRevision, operationId, now, normalized),
+                receipt(operationId, requestHash, OperationStatus.APPLIED, nextRevision, message, now, normalized));
 
-        // 落盘成功，下面只有不会失败的赋值
+        // 提交后的发布窗口若崩溃，重启以事务库恢复；回执查询不能依赖这些内存赋值。
         StaticUpstreamCluster.rebuild(normalized);
         routeMatcherRef.set(nextMatcher);
         configManager.replacePluginConfigs(configurablePlugins(nextFilters));
@@ -563,7 +568,6 @@ public class GatewayRuntime {
         revision = nextRevision;
         appliedOperationId = operationId == null ? "" : operationId;
         pushHistory(new VersionedRoutes(nextRevision, normalized));
-        recordOperation(operationId, OperationStatus.APPLIED, nextRevision, message);
         log.info("路由已热更新, count={}, revision={}, operationId={}, overlay={}",
                 normalized.size(), nextRevision, appliedOperationId, routeOverlayStore.getPath().toAbsolutePath());
         return new RouteChangeResult("APPLIED", nextRevision, appliedOperationId, message, normalized);
@@ -572,7 +576,8 @@ public class GatewayRuntime {
     /** 新增或按 businessPrefix/id 替换单条路由，整表走同一条变更协议。 */
     public synchronized RouteChangeResult addOrReplaceRoute(int expectedRevision, String operationId,
                                                            RouteConfig route) {
-        RouteChangeResult replayed = replayOf(operationId);
+        String hash = requestHash("UPSERT_ROUTE", expectedRevision, RouteOverlayStore.toRow(route));
+        RouteChangeResult replayed = replayOf(operationId, hash);
         if (replayed != null) {
             return replayed;
         }
@@ -583,12 +588,13 @@ public class GatewayRuntime {
             current.removeIf(item -> route.getId().equals(item.getId()));
         }
         current.add(route);
-        return change(expectedRevision, operationId, current, "路由已新增/更新并热生效");
+        return change(expectedRevision, operationId, hash, current, "路由已新增/更新并热生效");
     }
 
     /** 按 id 或 businessPrefix 删除路由，整表走同一条变更协议。 */
     public synchronized RouteChangeResult removeRoute(int expectedRevision, String operationId, String idOrPrefix) {
-        RouteChangeResult replayed = replayOf(operationId);
+        String hash = requestHash("DELETE_ROUTE", expectedRevision, idOrPrefix == null ? "" : idOrPrefix);
+        RouteChangeResult replayed = replayOf(operationId, hash);
         if (replayed != null) {
             return replayed;
         }
@@ -599,36 +605,138 @@ public class GatewayRuntime {
         boolean removed = current.removeIf(item ->
                 idOrPrefix.equals(item.getId()) || idOrPrefix.equals(item.getBusinessPrefix()));
         if (!removed) {
+            recordRejection(operationId, hash, OperationStatus.REJECTED, "未找到路由: " + idOrPrefix);
             throw new IllegalArgumentException("未找到路由: " + idOrPrefix);
         }
-        return change(expectedRevision, operationId, current, "路由已删除并热生效");
+        return change(expectedRevision, operationId, hash, current, "路由已删除并热生效");
     }
 
-    /** 已 APPLIED 的操作直接返回既有结果，不再生效一次。 */
-    private RouteChangeResult replayOf(String operationId) {
-        if (operationId == null || operationId.isBlank()) {
+    /** 回执查询先于当前资源定位：后续删除/改名不能破坏原操作的重放。 */
+    private RouteChangeResult replayOf(String operationId, String requestHash) {
+        if (operationId == null || operationId.isBlank() || operationId.length() > 200) {
+            throw new IllegalArgumentException("operationId 必须为 1~200 字符");
+        }
+        RouteOperationStore.Receipt record = routeOverlayStore.operations().find(operationId);
+        if (record == null) {
+            if (operationId.equals(appliedOperationId)) {
+                throw new ManageApiException(HttpResponseStatus.CONFLICT,
+                        "旧 overlay 只有最新操作号，没有参数摘要；不能证明重试安全，请人工对账",
+                        Map.of("code", "LEGACY_OPERATION_UNKNOWN", "currentRevision", revision));
+            }
             return null;
         }
-        OperationRecord record = operations.get(operationId);
-        if (record == null || record.status() != OperationStatus.APPLIED) {
-            return null;
+        if (!record.requestHash().equals(requestHash)) {
+            throw new ManageApiException(HttpResponseStatus.CONFLICT, "同一 operationId 的请求参数不一致",
+                    Map.of("code", "OPERATION_PARAMETER_MISMATCH", "currentRevision", revision));
+        }
+        if (record.expired(routeOverlayStore.operations().now())) {
+            throw new ManageApiException(HttpResponseStatus.CONFLICT, "操作回执已过期，禁止再次执行；请人工对账",
+                    Map.of("code", "OPERATION_EXPIRED", "currentRevision", revision));
+        }
+        if (!"APPLIED".equals(record.status())) {
+            throw new ManageApiException("CONFLICT".equals(record.status()) ? HttpResponseStatus.CONFLICT
+                    : HttpResponseStatus.BAD_REQUEST, record.message(), Map.of("currentRevision", revision,
+                    "operationStatus", record.status(), "requestHash", record.requestHash()));
         }
         return new RouteChangeResult("REPLAYED", record.revision(), record.operationId(),
-                "该操作已执行过，返回既有结果", getRouteMatcher().listRoutes());
+                "该操作已执行过，返回原始结果；当前状态请重新读取路由", record.routes());
     }
 
-    private void recordOperation(String operationId, OperationStatus status, int recordRevision, String message) {
-        if (operationId == null || operationId.isBlank()) {
-            return;
+    private static String requestHash(String type, int expectedRevision, Object parameters) {
+        if (expectedRevision < 0) { throw new IllegalArgumentException("revision 不能为负数"); }
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(
+                    JsonCodec.toJson(List.of("route-operation-v1", type, expectedRevision, parameters))
+                            .getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException(ex);
         }
-        operations.put(operationId,
-                new OperationRecord(operationId, status, recordRevision, message, System.currentTimeMillis()));
+    }
+
+    private RouteOverlayStore.AppliedState currentState() {
+        return new RouteOverlayStore.AppliedState(revision, appliedOperationId, 0, getRouteMatcher().listRoutes());
+    }
+
+    private RouteOperationStore.Receipt receipt(String operationId, String hash, OperationStatus status,
+                                               int resultRevision, String message, long now, List<RouteConfig> routes) {
+        return new RouteOperationStore.Receipt(operationId, hash, status.name(), resultRevision, message,
+                now, Math.addExact(now, RouteOperationStore.RECEIPT_RETENTION_MILLIS), routes);
+    }
+
+    private void recordRejection(String operationId, String hash, OperationStatus status, String message) {
+        long now = routeOverlayStore.operations().now();
+        routeOverlayStore.operations().commit(currentState(), currentState(),
+                receipt(operationId, hash, status, revision, message, now, List.of()));
+    }
+
+    /** 单目标调权在同一把锁内定位和提交，摘要绑定输入意图，不绑定后来变化的整张路由表。 */
+    public synchronized RouteChangeResult adjustTargetWeight(int expectedRevision, String operationId,
+                                                            String routeKey, String serviceName, String group, int weight) {
+        return adjustTargetWeight(expectedRevision, operationId, routeKey, serviceName, group, weight, "", 0);
+    }
+
+    public synchronized RouteChangeResult adjustTargetWeight(int expectedRevision, String operationId,
+                                                            String routeKey, String serviceName, String group, int weight,
+                                                            String expectedResourceUid, long expectedGeneration) {
+        boolean bound = expectedResourceUid != null && !expectedResourceUid.isBlank();
+        String hash = bound ? requestHash("TARGET_WEIGHT_BOUND", expectedRevision,
+                List.of(routeKey, serviceName, group, weight, expectedResourceUid, expectedGeneration))
+                : requestHash("TARGET_WEIGHT", expectedRevision, List.of(routeKey, serviceName, group, weight));
+        RouteChangeResult replayed = replayOf(operationId, hash);
+        if (replayed != null) { return replayed; }
+        if (routeKey.isBlank() || serviceName.isBlank() || weight < 0 || weight > RouteTarget.MAX_WEIGHT) {
+            throw new IllegalArgumentException("routeId、serviceName 必填，weight 必须在合法范围内");
+        }
+        List<RouteConfig> current = new ArrayList<>(getRouteMatcher().listRoutes());
+        boolean matched = false;
+        for (int i = 0; i < current.size(); i++) {
+            RouteConfig route = current.get(i);
+            if (!routeKey.equals(route.getId()) && !routeKey.equals(route.getBusinessPrefix())) { continue; }
+            if (bound && (!expectedResourceUid.equals(route.getResourceUid()) || expectedGeneration != route.getGeneration())) {
+                String message = "资源 UID/代次已改变，禁止旧计划修改同名新资源";
+                recordRejection(operationId, hash, OperationStatus.CONFLICT, message);
+                throw new ManageApiException(HttpResponseStatus.CONFLICT, message,
+                        Map.of("code", "RESOURCE_IDENTITY_MISMATCH", "currentRevision", revision));
+            }
+            List<RouteTarget> targets = new ArrayList<>();
+            for (RouteTarget target : route.getTargets()) {
+                if (serviceName.equals(target.serviceName()) && group.equals(target.group() == null ? "" : target.group())) {
+                    targets.add(new RouteTarget(serviceName, target.group(), weight));
+                    matched = true;
+                } else { targets.add(target); }
+            }
+            RouteConfig copy = RouteValidator.copyRoute(route);
+            copy.setTargets(targets);
+            current.set(i, copy);
+        }
+        if (!matched) {
+            String message = "未找到版本目标: " + routeKey + "/" + serviceName + "/" + group;
+            recordRejection(operationId, hash, OperationStatus.REJECTED, message);
+            throw new IllegalArgumentException(message);
+        }
+        return change(expectedRevision, operationId, hash, current, "目标权重已更新并落盘");
     }
 
     private void pushHistory(VersionedRoutes snapshot) {
         history.addLast(snapshot);
         while (history.size() > MAX_APPLIED_HISTORY) {
             history.removeFirst();
+        }
+    }
+
+    /** 同 ID 编辑保留当前身份；删除后重建生成新 UID，禁止客户端复用历史 UID。 */
+    private static void assignIdentities(List<RouteConfig> routes, List<RouteConfig> current, boolean restoring) {
+        for (RouteConfig route : routes) {
+            RouteConfig previous = current.stream().filter(existing ->
+                    existing.getId() != null ? existing.getId().equals(route.getId())
+                            : existing.getBusinessPrefix().equals(route.getBusinessPrefix())).findFirst().orElse(null);
+            if (previous != null) {
+                route.setResourceUid(previous.getResourceUid());
+                route.setGeneration(previous.getGeneration());
+            } else if (!restoring || route.getResourceUid() == null || route.getResourceUid().isBlank()) {
+                route.setResourceUid(java.util.UUID.randomUUID().toString());
+                route.setGeneration(1);
+            }
         }
     }
 
