@@ -1,6 +1,7 @@
 package com.rover.agent.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -274,22 +275,23 @@ class InvestigationServiceTest {
         // Spring AI 2.x：工具调用循环在真实 ChatModel 内部执行，mock 无法触发。
         // 模型一个工具都不读也必须能产出解释：路由与实例快照由运行时预读后写进提示词。
         when(model.stream(any(Prompt.class))).thenReturn(Flux.just(
-                response("AI 解释（依据运行时预读快照）")));
+                response("{\"factIds\":[\"F1\"]}")));
 
         TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
-        assertEquals("AI 解释（依据运行时预读快照）", task.result().aiAnalysis());
+        assertTrue(task.result().aiAnalysis().contains("evidenceId="));
+        assertTrue(task.result().aiAnalysis().contains("根因尚未确认"));
         assertTrue(task.steps().stream().anyMatch(step -> "AI 解读".equals(step.name())
                 && "COMPLETED".equals(step.status().name())
-                && step.outputSummary().contains("运行时预读快照：路由快照、实例快照")));
+                && step.outputSummary().contains("运行时预读快照：结构化证据目录")));
         // 提示词里确实带着预读快照文本：解释有据可依，不靠模型自觉调用工具。
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
         verify(model).stream(prompts.capture());
         String userText = prompts.getValue().getUserMessage().getText();
-        assertTrue(userText.contains("运行时已读取的只读快照："));
+        assertTrue(userText.contains("事实目录"));
         // 快照作为不可信数据被围栏标出，避免其中的文本被当成指令（提示注入隔离）。
-        assertTrue(userText.contains("快照 路由快照"));
+        assertTrue(userText.contains("F1 [evidenceId="));
         assertTrue(userText.contains("ROVER-DATA"));
     }
 
@@ -307,12 +309,12 @@ class InvestigationServiceTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         useModel(new ModelExplainer(TestGateway.of(model), new MicrometerAgentMetrics(registry)));
         when(model.stream(any(Prompt.class))).thenReturn(Flux.just(
-                response("先看路由"),
-                responseWithUsage("，再看实例", 1200, 64)));
+                response("{\"factIds\":["),
+                responseWithUsage("\"F1\"]}", 1200, 64)));
 
         TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
-        assertEquals("先看路由，再看实例", task.result().aiAnalysis());
+        assertTrue(task.result().aiAnalysis().contains("根因尚未确认"));
         assertEquals(1.0, registry.get("rover.agent.model.calls")
                 .tag("outcome", "ok").tag("scene", "解读").counter().count());
         assertEquals(1200.0, registry.get("rover.agent.model.tokens")
@@ -332,8 +334,7 @@ class InvestigationServiceTest {
         when(model.stream(any(Prompt.class))).thenAnswer(invocation -> {
             // 等订阅者挂上再出增量：否则连上太晚只会走"补发整段"，测不到增量路径
             subscribed.await();
-            readAllTools(invocation.getArgument(0));
-            return Flux.just(response("先看路由"), response("，再看实例"));
+            return Flux.just(response("{\"factIds\":["), response("\"F1\"]}"));
         });
 
         TaskView submitted = diagnose("/api/hello", "为什么失败？");
@@ -343,14 +344,14 @@ class InvestigationServiceTest {
         TaskView task = await(submitted.taskId());
 
         // 增量拼接结果与落库文本逐字一致，且订阅者一定收到终态通知。
-        assertEquals("先看路由，再看实例", task.result().aiAnalysis());
+        assertTrue(task.result().aiAnalysis().contains("根因尚未确认"));
         subscriber.awaitTerminal();
-        assertEquals(List.of("snapshot:", "delta:先看路由", "delta:，再看实例", "end:COMPLETED"),
+        assertEquals(List.of("snapshot:", "delta:" + task.result().aiAnalysis(), "end:COMPLETED"),
                 subscriber.notes());
         // 步骤说明如实记录证据来源：预读快照与模型另调的工具各自可追溯。
         assertTrue(task.steps().stream().anyMatch(step -> "AI 解读".equals(step.name())
-                && step.outputSummary() != null && step.outputSummary().contains("运行时预读快照：路由快照、实例快照")
-                && step.outputSummary().contains("模型另调工具：")));
+                && step.outputSummary() != null && step.outputSummary().contains("运行时预读快照：结构化证据目录")
+                && !step.outputSummary().contains("模型另调工具：")));
     }
 
     @Test
@@ -365,6 +366,24 @@ class InvestigationServiceTest {
         assertTrue(investigations.subscribeEvents(task.taskId(), subscriber).isPresent());
         subscriber.awaitTerminal();
         assertEquals(List.of("snapshot:", "end:COMPLETED"), subscriber.notes());
+    }
+
+    @Test
+    void rejectsInventedFactsWithoutPublishingTheModelText() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
+        when(instances.instances()).thenReturn(List.of());
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(model.stream(any(Prompt.class))).thenReturn(Flux.just(response("{\"factIds\":[\"F999\"],\"analysis\":\"根因已确认，v2错误率100%，已回滚\"}")));
+        useModel(new ModelExplainer(TestGateway.of(model)));
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
+        assertNull(task.result().aiAnalysis());
+        assertTrue(task.steps().stream().anyMatch(step -> step.name().equals("AI 解读") && step.status().name().equals("FAILED")));
+        assertFalse(task.result().summary().contains("已回滚"));
+        RecordingSubscriber subscriber = new RecordingSubscriber();
+        investigations.subscribeEvents(task.taskId(), subscriber);
+        subscriber.awaitTerminal();
+        assertEquals(List.of("snapshot:", "end:COMPLETED"), subscriber.notes(), "拒绝的自由文本不能先进入 SSE 或持久快照");
     }
 
     /**

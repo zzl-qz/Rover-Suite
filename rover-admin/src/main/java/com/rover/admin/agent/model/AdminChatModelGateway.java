@@ -167,18 +167,17 @@ public class AdminChatModelGateway implements ChatModelGateway {
         if (settings.fastConfigured()) {
             return fastScene(timeoutSeconds);
         }
-        ChatClient current = chatClient();
+        chatClient(); // 保持未就绪时的失败语义。
         int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
-        if (timeoutSeconds <= 0 || timeoutSeconds >= configured) {
-            return current;
-        }
+        int effectiveTimeout = timeoutSeconds <= 0 ? configured : Math.min(timeoutSeconds, configured);
         Map<Integer, ChatClient> cache = sceneClients;
-        ChatClient cached = cache.get(timeoutSeconds);
+        ChatClient cached = cache.get(effectiveTimeout);
         if (cached != null) {
             return cached;
         }
-        ChatClient scene = transientClient(settings, timeoutSeconds);
-        cache.put(timeoutSeconds, scene);
+        // 短调用的语义包含“关闭思考”；超时相等也不能复用允许思考的主客户端。
+        ChatClient scene = transientClient(settings, effectiveTimeout);
+        cache.put(effectiveTimeout, scene);
         return scene;
     }
 
@@ -250,8 +249,10 @@ public class AdminChatModelGateway implements ChatModelGateway {
     public ChatClient transientClient(ModelSettings settings, int timeoutSeconds) {
         // 场景客户端服务的是「廉价调用」（见 ChatModelGateway#chatClient(int)），因此不开深度思考：
         // 那些调用上限只有 10 秒，让模型先想一遍既拖慢等待，也更容易撞上超时后回退规则。
+        int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
+        int effective = timeoutSeconds <= 0 ? configured : Math.min(configured, ModelSettings.clampTimeout(timeoutSeconds));
         return build(new ModelSettings(settings.enabled(), settings.baseUrl(), settings.apiKey(), settings.model(),
-                ModelSettings.clampTimeout(timeoutSeconds), settings.source(), settings.keyState()), false);
+                effective, settings.source(), settings.keyState()), false);
     }
 
     /** 构建客户端；构建不成功必须抛异常，由 {@link #apply(ModelSettings)} 决定是否保留上一个可用客户端。 */

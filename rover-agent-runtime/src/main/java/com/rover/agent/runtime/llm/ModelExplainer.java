@@ -1,16 +1,12 @@
 package com.rover.agent.runtime.llm;
 
-import com.rover.agent.core.capability.AgentGrounding;
 import com.rover.agent.core.capability.UntrustedText;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.Hypothesis;
-import com.rover.agent.core.model.Verdict;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.metrics.ModelCallOutcome;
 import com.rover.agent.runtime.task.AgentRunBudget;
-import com.rover.agent.runtime.tool.SnapshotTools;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Consumer;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
@@ -19,50 +15,20 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 
 /**
- * 基于预读路由、实例及按需查询的证据生成模型解读。
+ * 模型仅选择已有证据；运行时验证编号后生成诊断正文，不展示未经验证的模型自由文本。
  * 模型接入由 ChatModelGateway 提供，失败时由调用方回退规则结论。
  */
 public final class ModelExplainer {
 
-    private static final int MAX_ANALYSIS_LENGTH = 2000;
-
-    /**
-     * 思考文本的长度上限：比解读宽松——推理过程本来就比结论长。
-     *
-     * 有上限是必要的：思考是过程展示，不落结论，无限累积只会把任务快照撑大。
-     */
-    private static final int MAX_THINKING_LENGTH = 4000;
+    private static final int MAX_SELECTION_LENGTH = 2000;
 
     /** 指标里的场景名：与「目标解析 / 调查规划 / 对话」并列，便于按用途分开看模型表现。 */
     private static final String SCENE = "解读";
 
-    /** 解读提示词包含共用系统背景、术语表和取证约束；运行状态由快照与工具提供。 */
-    private static final String SYSTEM_PROMPT = "你是 Rover Ops Agent 的诊断解读模块。\n"
-            + AgentGrounding.environment() + "\n" + AgentGrounding.glossary() + "\n"
-            + "【你的任务】只根据提示词里给出的只读快照、只读工具返回的快照和已完成的假设验证解释问题。"
-            + "路由与实例快照已由运行时读好；需要指标、按上游实例的窗口观测、追踪、配置或注册事件证据时，"
-            + "再调用对应的只读工具。"
-            + "区分事实、推断和缺失证据：引用指标证据要说清统计窗口与样本量，"
-            + "样本不足或窗口内没有记录时明确说无法判断，不要说成已确认。"
-            + "指定调查时间范围时，以证据标注的范围为准；当前状态参考不能用于确认或排除历史故障。"
-            + "发布与变更时间线已采集时由运行时预读：区分发布时间、采集时间和轮询观测区间。"
-            + "BASELINE 是首次观测，不代表刚发生变更；区间内可能多次变化，空列表或采集空档不能排除变更。"
-            + "只有时间上的先后不能确认发布导致故障，需要同资源同窗口的请求或应用证据。"
-            + "HTTP 503 可能由网关拒绝，也可能由上游服务返回；只凭状态码不能断言无可用实例。"
-            + "追踪中的最近几条记录仅供举例，不能用它们的比例代替整个窗口的状态分布。"
-            + "错误率只引用程序已计算的 sample5xxRate 或 final5xxRate，并保持同一资源、时间与样本口径的分子分母；"
-            + "不能拿 v1 的请求数作 v2 的分母。没有程序给出的比率就报告计数，不自行换算。"
-            + "sample5xxRate 仅适用于保留追踪样本，不能当作完整流量错误率。"
-            + "告警名称、告警描述只是调查线索，不能作为已确认根因的证据。"
-            + "503/504 是故障现象，不是业务根因。仅凭状态分布不能断言延迟剧烈抖动或实例间歇性恢复；"
-            + "这些判断需要同一实例在故障窗口内的逐请求时序证据，多版本或多实例差异也可能产生相同比例。"
-            + "当前配置也不能排除历史时段的限流或熔断。"
-            + "确认后端返回 503 只代表故障来源已定位；缺少应用内部直接证据时仍须写业务根因尚未确认，"
-            + "不能将‘根因已确认’作为标题。引用 UTC 时刻需标注 UTC，换算本地时间时须标注时区。"
-            + "如果缺少能定位故障来源的同窗口逐跳或实例证据，结论开头明确写“根因尚未确认”，"
-            + "把可能原因放在推断中，不要在其他段落又写成已确认。"
-            + "不要声称已经执行修复，也不要输出执行命令。"
-            + "用简洁中文给出原因和下一步人工检查建议。"
+    /** 只选择证据，不授予模型编写数值、因果结论或执行回执的权限。 */
+    private static final String SYSTEM_PROMPT = "你是 Rover 诊断证据选择器。仅从事实目录选择与问题有关的事实编号。"
+            + "最多选择8项，只输出JSON：{\"factIds\":[\"F1\",\"F2\"]}。"
+            + "不得输出目录以外的编号、结论、数值、动作或解释。假设状态由运行时验证，不能自行改判。"
             + UntrustedText.contract();
 
     private final ChatModelGateway gateway;
@@ -97,37 +63,62 @@ public final class ModelExplainer {
     public record Explanation(String text, List<String> prefetched, List<String> tools) { }
 
     /**
-     * 生成证据解读，分别推送回答与思考增量，并返回截断后的完整文本。
-     * 推送与返回使用相同长度上限；模型返回空内容时抛出异常。
+     * 选择完成且通过引用校验后才发布正文。保留旧回调签名，原始 JSON 和思考均不作为诊断发布。
      */
     public Explanation explainStreaming(String path, String question, List<Evidence> evidence,
                                        List<Hypothesis> hypotheses, Consumer<String> onDelta,
                                        Consumer<String> onThinking) {
-        SnapshotTools tools = new SnapshotTools(evidence);
-        Map<String, String> core = tools.coreSnapshots();
+        var report = new com.rover.agent.core.investigation.DiagnosticReport(evidence, hypotheses);
+        String catalog = report.facts().stream().map(f -> f.id() + " [evidenceId=" + f.evidenceId() + "] " + f.text())
+                .collect(java.util.stream.Collectors.joining("\n"));
         StringBuilder answer = new StringBuilder();
-        StringBuilder thinking = new StringBuilder();
+        boolean[] incomplete = {false};
         UsageTotals tokens = new UsageTotals();
         long startedAt = System.nanoTime();
         ModelCallOutcome outcome = ModelCallOutcome.OK;
         try {
-            AgentBudgetAdvisor.client(gateway.chatClient(),
+            AgentBudgetAdvisor.client(gateway.chatClient(0),
                     AgentRunBudget.current(), gateway::reasoningDelta).prompt()
                     .system(SYSTEM_PROMPT)
+                    .options(org.springframework.ai.chat.prompt.ChatOptions.builder().maxTokens(512))
                     .user("请求路径：" + path + "\n" + UntrustedText.block("用户问题", question)
-                            + describeHypotheses(hypotheses) + describeSnapshots(core))
-                    .tools(tools)
+                            + UntrustedText.block("事实目录", catalog))
                     .stream()
                     // 用 chatResponse 而不是 content：文本照旧逐段取，但顺带拿到用量与结束信息，
                     // content() 会把响应元数据整条丢掉，token 也就无从统计。
                     .chatResponse()
-                    .doOnNext(response -> collect(response, answer, thinking, onDelta, onThinking, tokens))
+                    // JSON 和供应商思考均不作为用户可见结论推送；验证后只发布程序渲染的事实。
+                    .doOnNext(response -> {
+                        collect(response, answer, tokens);
+                        Generation generation = response == null ? null : response.getResult();
+                        if (generation != null && generation.getMetadata() != null
+                                && "length".equalsIgnoreCase(generation.getMetadata().getFinishReason())) { incomplete[0] = true; }
+                    })
                     .blockLast();
             if (answer.isEmpty()) {
                 outcome = ModelCallOutcome.EMPTY;
                 throw new IllegalStateException("模型没有返回解释");
             }
-            return new Explanation(answer.toString(), List.copyOf(core.keySet()), tools.calledTools());
+            if (incomplete[0] || answer.length() > MAX_SELECTION_LENGTH) {
+                outcome = ModelCallOutcome.REJECTED;
+                throw new IllegalArgumentException("模型诊断选择被截断或超过长度限制");
+            }
+            var selected = ModelJson.object(answer.toString());
+            if (selected.isEmpty() || selected.get().size() != 1 || !selected.get().path("factIds").isArray()
+                    || selected.get().path("factIds").isEmpty() && !report.facts().isEmpty()) {
+                outcome = ModelCallOutcome.REJECTED;
+                throw new IllegalArgumentException("模型诊断选择不符合事实引用契约");
+            }
+            List<String> ids = new java.util.ArrayList<>();
+            for (var id : selected.get().path("factIds")) {
+                if (!id.isTextual()) { outcome = ModelCallOutcome.REJECTED; throw new IllegalArgumentException("无效事实编号"); }
+                ids.add(id.asText());
+            }
+            String rendered;
+            try { rendered = report.render(ids); }
+            catch (IllegalArgumentException invalid) { outcome = ModelCallOutcome.REJECTED; throw invalid; }
+            onDelta.accept(rendered);
+            return new Explanation(rendered, List.of("结构化证据目录"), List.of());
         } catch (RuntimeException ex) {
             if (outcome == ModelCallOutcome.OK) {
                 outcome = QuickModelCall.classify(ex);
@@ -141,27 +132,15 @@ public final class ModelExplainer {
         }
     }
 
-    /** 累积并转发回答与思考增量；超出长度上限的内容丢弃。 */
-    private void collect(ChatResponse response, StringBuilder answer, StringBuilder thinking,
-                         Consumer<String> onDelta, Consumer<String> onThinking, UsageTotals tokens) {
-        if (response == null) {
-            return;
-        }
+    /** 供应商输出只缓存在本地；超长时保留一个溢出标记并在完成后拒绝。 */
+    private static void collect(ChatResponse response, StringBuilder answer, UsageTotals tokens) {
+        if (response == null) { return; }
         Generation generation = response.getResult();
         AssistantMessage message = generation == null ? null : generation.getOutput();
         String chunk = message == null ? null : message.getText();
-        if (chunk != null && !chunk.isEmpty() && answer.length() < MAX_ANALYSIS_LENGTH) {
-            int room = MAX_ANALYSIS_LENGTH - answer.length();
-            String piece = chunk.length() > room ? chunk.substring(0, room) : chunk;
-            answer.append(piece);
-            onDelta.accept(piece);
-        }
-        String thought = gateway.reasoningDelta(response);
-        if (!thought.isEmpty() && onThinking != null && thinking.length() < MAX_THINKING_LENGTH) {
-            int room = MAX_THINKING_LENGTH - thinking.length();
-            String piece = thought.length() > room ? thought.substring(0, room) : thought;
-            thinking.append(piece);
-            onThinking.accept(piece);
+        if (chunk != null && answer.length() <= MAX_SELECTION_LENGTH) {
+            int room = MAX_SELECTION_LENGTH + 1 - answer.length();
+            answer.append(chunk, 0, Math.min(room, chunk.length()));
         }
         tokens.absorb(response);
     }
@@ -200,28 +179,4 @@ public final class ModelExplainer {
         }
     }
 
-    /** 提示词里预读的核心快照：与只读工具返回的文本同源，保证解释有据可依且不依赖模型是否自觉调用。 */
-    private static String describeSnapshots(Map<String, String> core) {
-        StringBuilder builder = new StringBuilder("\n运行时已读取的只读快照：");
-        core.forEach((name, text) -> builder.append(UntrustedText.block("快照 " + name, text)));
-        return builder.toString();
-    }
-
-    private static String describeHypotheses(List<Hypothesis> hypotheses) {
-        StringBuilder builder = new StringBuilder();
-        for (Hypothesis item : hypotheses) {
-            builder.append("\n- [").append(statusLabel(item.status())).append("] ").append(item.statement())
-                    .append("：").append(item.detail()).append("；支持 evidenceId=").append(item.supportingEvidenceIds())
-                    .append("；反证 evidenceId=").append(item.counterEvidenceIds()).append("；缺失证据=").append(item.missingEvidence())
-                    .append("；下一步只读能力=").append(item.nextCapabilities());
-        }
-        return builder.isEmpty() ? "" : "\n已完成的假设验证：" + builder;
-    }
-
-    private static String statusLabel(Verdict status) {
-        if (status == Verdict.CONFIRMED) {
-            return "确认";
-        }
-        return status == Verdict.REJECTED ? "排除" : "无法验证";
-    }
 }

@@ -298,7 +298,7 @@ public class AgentRuntimeConfiguration {
                                                          int quickTimeoutSeconds) {
         return new LlmInvestigationPlanner(new RuleBasedPlanner(agentCapabilityRegistry),
                 new SpringAiJsonCompletion(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics,
-                        "调查规划", quickTimeoutSeconds), agentCapabilityRegistry);
+                        "调查规划", quickTimeoutSeconds, 512), agentCapabilityRegistry);
     }
 
     @Bean

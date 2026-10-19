@@ -156,7 +156,7 @@ public final class ToolLoopService {
             task.step(AgentStepType.ANSWER, STEP_ANSWER, StepStatus.RUNNING, ANSWER_RUNNING);
             String answer = model.converse(SYSTEM_PROMPT,
                     userMessage(task.question(), contextSummary, styleInstruction), tools,
-                    task::appendAnalysis, task::appendThinking);
+                    ignored -> { }, ignored -> { });
             if (task.cancelled()) {
                 // 模型回答过程中被取消：不产出结论，CANCELLED 状态已由取消方发布。
                 return;
@@ -179,12 +179,15 @@ public final class ToolLoopService {
             if (judged != null) {
                 task.step(AgentStepType.DIAGNOSIS, "假设判定", StepStatus.COMPLETED,
                         InvestigationRules.describeVerdicts(judged.hypotheses()));
+                answer = new com.rover.agent.core.investigation.DiagnosticReport(tools.evidence(), judged.hypotheses()).renderDefault();
             }
+            if (!tools.actionMessage().isBlank()) { answer = tools.actionMessage() + "\n\n" + (judged == null ? "" : answer); }
+            // 调查正文只发布程序验证后的事实；没有诊断取证的普通回答沿用模型内容。
+            task.appendAnalysis(answer);
             // 结论已成型：这条路径没有规划轮数，取数次数就是它的进度；恢复点记下来，
             // 「已经答到哪一步」在库里是确定的，而不是重启后只剩一句失败。
             task.checkpoint(CheckpointStage.SYNTHESIS_COMPLETED, 0, tools.callCount(), null);
-            // 回答正文仍是模型的话。假设由同一批工具快照按规则判定，只有「确认」才会写成资源笔记。
-            task.complete(new InvestigationReport(answer, Confidence.MEDIUM, tools.evidence(),
+            task.complete(new InvestigationReport(answer, judged == null ? Confidence.MEDIUM : judged.confidence(), tools.evidence(),
                     tools.limitations(), judged == null ? List.of() : judged.hypotheses(), null));
         } catch (Exception ex) {
             if (task.cancelled()) {

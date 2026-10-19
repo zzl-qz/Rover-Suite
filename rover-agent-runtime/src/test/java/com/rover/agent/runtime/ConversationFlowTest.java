@@ -92,6 +92,18 @@ class ConversationFlowTest {
         assertTrue(task.result().summary().contains("Rover Ops Agent"));
     }
 
+    @Test
+    void groundedDiagnosticReplacesUnsupportedModelClaimsBeforePublishing() throws Exception {
+        AgentOrchestrator agent = build(tools -> {
+            tools.getRoute("/api/demo/tt"); tools.listInstances("demo-service");
+            return "根因已确认，v2错误率100%，已经回滚并恢复";
+        });
+        TaskView task = submitAndAwait(agent,agent.startSession("admin"),"排查 /api/demo/tt 为什么失败");
+        assertTrue(task.result().summary().contains("根因尚未确认"));
+        assertTrue(task.result().summary().contains("evidenceId="));
+        assertFalse(task.result().summary().contains("已经回滚并恢复"));
+    }
+
     /** 工具是真取数：调用要落到只读能力上，取回的事实要随结论落库，结论才可复核。 */
     @Test
     void toolCallReachesRealDataAndLandsAsEvidence() throws Exception {

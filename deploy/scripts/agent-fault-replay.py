@@ -110,6 +110,49 @@ def validate_hypothesis_contract(task):
             "boundedAttempts": counts, "stopReason": progress["stopReason"]}
 
 
+def validate_grounded_report(task):
+    """Compare the published report with captured rows, including the healthy comparison group.
+
+    This checks Rover's constrained report contract, not general model reasoning quality.
+    """
+    result = task["result"]
+    report = result.get("aiAnalysis") or ""
+    evidence = result["evidence"]
+    ids = {item["evidenceId"] for item in evidence}
+    refs = re.findall(r"\[evidenceId=([^\]]+)\]", report)
+    require(refs and set(refs) <= ids, "Published report has missing or invented evidence references")
+    require(report.startswith("根因尚未确认。") and "不代表完整流量或版本整体健康" in report
+            and "尚未执行修复或验证业务恢复" in report, "Published report lost its diagnostic boundaries")
+    checked = 0
+    for item in evidence:
+        facts = item.get("envelope", {}).get("facts", {})
+        for population in facts.get("samplePopulations", []):
+            keys = ("routeId", "resourceUid", "generation", "serviceName", "group", "hostPort")
+            rows = [r for r in facts.get("rows", []) if all(r.get(k) == population.get(k) for k in keys)]
+            require(rows, "Published population has no matching captured rows")
+            failures = sum(500 <= row["statusCode"] < 600 for row in rows)
+            prefix = ("- 保留的追踪样本：路由=" + population["routeId"] + "，服务=" + population["serviceName"]
+                      + "，版本=" + population["group"] + "，实例=" + population["hostPort"] + "，")
+            lines = [line for line in report.splitlines() if line.startswith(prefix)
+                     and line.endswith("[evidenceId=" + item["evidenceId"] + "]")]
+            require(len(lines) == 1, "Published report omitted or duplicated a comparison population")
+            line = lines[0]
+            match = re.search(r"请求=(\d+)，5xx=(\d+)，sample5xxRate=([0-9.eE+\-]+)", line)
+            require(match and int(match[1]) == len(rows) and int(match[2]) == failures
+                    and math.isclose(float(match[3]), failures / len(rows)), "Published sample arithmetic differs from captured rows")
+            for field, label in (("responseOrigin", "响应来源"), ("failurePhase", "故障阶段样本")):
+                counts = {value: sum(row.get(field) == value for row in rows) for value in {row.get(field) for row in rows}}
+                section = re.search(label + r"=\{([^}]*)\}", line)
+                require(section, "Published report omitted response origin or failure phase")
+                actual = dict(part.strip().rsplit("=", 1) for part in section[1].split(",") if part.strip())
+                require(actual == {str(k): str(v) for k, v in counts.items()}, "Published origin/phase differs from captured rows")
+            checked += 1
+    require(checked >= 2, "Grounded replay requires both observed version populations")
+    return {"capturedPopulationsChecked": checked, "publishedReferencesValid": True,
+            "sampleArithmeticMatchesRows": True, "originsAndPhasesMatchRows": True,
+            "constrainedReportOnly": True}
+
+
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -612,6 +655,8 @@ class Replay:
             model_evidence.update(validate_live_analysis(task))
             save(directory / "live-model.json", model_evidence)
             require(model_evidence["calls"].get("解读:ok", 0) > 0, "No successful actual model explanation was measured")
+            if getattr(self.args, "require_grounded_report", False):
+                save(directory / "grounded-report.json", validate_grounded_report(task))
         require(task["status"] == "COMPLETED", "Alert investigation did not complete")
         require(workspace["session"]["userId"] == "admin" and workspace["activeIncident"]["triggeredBy"] == "admin",
                 "Alert source or handler was lost")
@@ -790,6 +835,8 @@ class Replay:
             self.report["changeTimelineGatePassed"] = True
         if getattr(self.args, "require_evidence_contract", False):
             self.report["evidenceContractGatePassed"] = True
+        if getattr(self.args, "require_grounded_report", False):
+            self.report["groundedReportGatePassed"] = True
         if self.live_model:
             self.live_conversation()
             counts = self.model_metrics(self.output, "final")
@@ -921,6 +968,7 @@ def main():
     parser.add_argument("--require-evidence-contract", action="store_true", help="Verify S2 captured identity, response origin, evidence quality and native historical windows")
     parser.add_argument("--require-change-timeline", action="store_true", help="Verify release-only ingress, idempotent release evidence, pre-incident association and actual observed route mitigation")
     parser.add_argument("--require-hypothesis-contract", action="store_true", help="Verify hypothesis evidence references, unknown gaps, persisted progress and bounded attempts")
+    parser.add_argument("--require-grounded-report", action="store_true", help="Compare constrained live-model reports with captured per-version sample rows")
     parser.add_argument("--model-config", type=Path, help="Opt in to actual paid model calls using this existing encrypted Rover model config")
     parser.add_argument("--model-master-key-file", type=Path, help="Existing master-key file; defaults to master.key next to --model-config")
     args = parser.parse_args()
@@ -928,6 +976,7 @@ def main():
     require(1024 <= args.base_port <= 65530 and 1 <= args.startup_timeout <= 300, "Invalid port/timeout")
     require(128 <= args.heap_mb <= 512, "Invalid fixture heap cap")
     require(not args.model_master_key_file or args.model_config, "--model-master-key-file requires --model-config")
+    require(not args.require_grounded_report or args.model_config, "--require-grounded-report requires --model-config")
     fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
     validate_fixture(fixture)
     replay = Replay(args, fixture)

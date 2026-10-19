@@ -16,6 +16,29 @@ SPEC.loader.exec_module(replay)
 
 
 class ReplayTest(unittest.TestCase):
+    def test_grounded_report_checks_published_numbers_and_comparison_group_against_rows(self):
+        populations, rows, lines = [], [], []
+        for group, status in (("v1", 200), ("v2", 503)):
+            identity = dict(routeId="r", resourceUid="uid", generation=1, serviceName="svc", group=group, hostPort=group + ":80")
+            populations.append(identity)
+            rows.append(dict(identity, statusCode=status, responseOrigin="UPSTREAM", failurePhase="NONE"))
+            failures = int(status == 503)
+            lines.append(f"- 保留的追踪样本：路由=r，服务=svc，版本={group}，实例={group}:80，请求=1，5xx={failures}，"
+                         f"sample5xxRate={failures}，响应来源={{UPSTREAM=1}}，故障阶段样本={{NONE=1}} [evidenceId=e]")
+        report = ("根因尚未确认。\n" + "\n".join(lines)
+                  + "\n不代表完整流量或版本整体健康；尚未执行修复或验证业务恢复")
+        task = {"result": {"aiAnalysis": report, "evidence": [{"evidenceId": "e", "envelope": {
+            "facts": {"rows": rows, "samplePopulations": populations}}}]}}
+        self.assertEqual(2, replay.validate_grounded_report(task)["capturedPopulationsChecked"])
+        for broken in (report.replace("请求=1", "请求=2", 1), report.replace("sample5xxRate=1", "sample5xxRate=0"),
+                       report.replace(lines[0], ""), report.replace("[evidenceId=e]", "[evidenceId=invented]"),
+                       report.replace("{UPSTREAM=1}", "{GATEWAY=1}"), report.replace("{NONE=1}", "{CONNECT=1}")):
+            with self.subTest(broken=broken):
+                wrong = copy.deepcopy(task)
+                wrong["result"]["aiAnalysis"] = broken
+                with self.assertRaises(RuntimeError):
+                    replay.validate_grounded_report(wrong)
+
     def test_change_timeline_requires_pre_incident_release_and_honest_query_scope(self):
         event = {"eventId": "e", "sourceId": "release:ci", "sourceEventId": "ci-1", "occurredAtMillis": 900,
                  "scope": {"environmentId": "test"}, "controlTargetId": "gateway", "subject": {"group": "v2"},

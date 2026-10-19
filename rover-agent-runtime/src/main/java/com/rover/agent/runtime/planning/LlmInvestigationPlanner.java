@@ -31,7 +31,8 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
     private static final String SYSTEM_PROMPT = "你是 Rover 运维 Agent 的调查规划模块。"
             + "根据用户问题、可用只读能力与已采集证据，给出下一步要做的只读查询。"
             + "只能从给出的能力名里选择，不要编造能力、不要输出命令、URL、SQL 或任何写操作。"
-            + "只输出一个 JSON 对象，不要输出解释文字，也不要用代码块包裹。"
+            + "只输出JSON，最多1个新候选、3个步骤。步骤只写能力名，不写理由。"
+            + "没有证据时candidates为空；有证据时只提出已有假设之外的新方向，不能重复列出已知假设。"
             + UntrustedText.contract();
 
     private static final int MAX_EVIDENCE_LINES = 8;
@@ -77,6 +78,13 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
      */
     private InvestigationPlan merge(JsonNode node, PlanningRequest request, InvestigationPlan base) {
         List<PlannedStep> steps = new ArrayList<>();
+        for (String name : ModelJson.strings(node, "steps")) {
+            AgentCapability capability = capability(name);
+            if (capability != null && registry.selectable(capability) && !contains(steps, capability)) {
+                steps.add(PlannedStep.optional(capability, "模型选择：" + capability, PlanValidator.requestTarget(request)));
+            }
+        }
+        // 兼容已保存的旧对象格式；新请求只需输出能力名，减少生成耗时。
         for (JsonNode item : ModelJson.objects(node, "steps")) {
             AgentCapability capability = capability(ModelJson.text(item, "capability"));
             if (capability == null || !registry.selectable(capability) || contains(steps, capability)) {
@@ -135,12 +143,11 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
                 .append("目标对象：").append(request.target().type()).append(" ").append(request.target().value())
                 .append("\n请求路径：").append(request.path().isBlank() ? "（未确定）" : request.path())
                 .append("\n调查时间范围：").append(request.timeRange().describe())
-                .append("\n可用只读能力（只能从这些名字里选）：");
+                .append("\n可用只读能力：");
         for (CapabilityDescriptor descriptor : registry.selectable()) {
-            prompt.append("\n- ").append(descriptor.id()).append("（").append(descriptor.name()).append("）：")
-                    .append(descriptor.description()).append("；适用目标：")
-                    .append(descriptor.supportedTargetTypes().isEmpty() ? "全局"
-                            : String.join("/", descriptor.supportedTargetTypes().stream().map(Enum::name).toList()));
+            if (descriptor.supports(PlanValidator.requestTarget(request).type())) {
+                prompt.append("\n").append(descriptor.id()).append(":").append(descriptor.name());
+            }
         }
         if (request.evidence().isEmpty()) {
             prompt.append("\n已采集证据：暂无（这是第一轮规划）");
@@ -154,7 +161,8 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
                     break;
                 }
                 evidenceLines.append("- ").append(evidence.evidenceId()).append(" [").append(evidence.type()).append("] ")
-                        .append(cut(evidence.modelText())).append('\n');
+                        .append(evidence.envelope().qualityStatus()).append(" 样本=").append(evidence.envelope().sampleCount())
+                        .append(" ").append(cut(evidence.summary())).append('\n');
             }
             prompt.append("\n已采集证据：\n").append(UntrustedText.block("已采集证据", evidenceLines.toString()));
         }
@@ -163,12 +171,10 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
         }
         for (Hypothesis hypothesis : request.assessments()) {
             prompt.append(UntrustedText.block("假设 " + hypothesis.id(), hypothesis.statement() + " 状态=" + hypothesis.status()
-                    + " 支持证据=" + hypothesis.supportingEvidenceIds() + " 反证=" + hypothesis.counterEvidenceIds()
-                    + " 缺口=" + hypothesis.missingEvidence() + " 下一步=" + hypothesis.nextCapabilities()));
+                    + " 缺口=" + cut(String.join("；", hypothesis.missingEvidence())) + " 下一步=" + hypothesis.nextCapabilities()));
         }
         prompt.append("\n不要把工具执行过当成验证成功；新方向只列为候选，状态由运行时判断。")
-                .append("\n输出 JSON：{\"goal\":\"本次要回答的问题\",\"candidates\":[{\"statement\":\"候选原因\",\"missingEvidence\":[\"尚缺证据\"],\"nextCapabilities\":[\"能力名\"]}],")
-                .append("\"steps\":[{\"capability\":\"能力名\",\"reason\":\"选择依据\"}]}");
+                .append("\n默认只输出{\"steps\":[\"能力名\"],\"candidates\":[]}。确有新方向时，candidates最多1项，字段为statement、missingEvidence、nextCapabilities。");
         return prompt.toString();
     }
 

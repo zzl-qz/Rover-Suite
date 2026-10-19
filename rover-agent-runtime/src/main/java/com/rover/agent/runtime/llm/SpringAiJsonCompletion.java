@@ -20,15 +20,22 @@ public final class SpringAiJsonCompletion implements JsonCompletion {
     private final AgentMetrics metrics;
     private final String scene;
     private final int timeoutSeconds;
+    private final Integer maxOutputTokens;
 
     /**
      * @param timeoutSeconds 场景超时上限（秒）；0 表示用模型配置里的超时
      */
     public SpringAiJsonCompletion(ChatModelGateway gateway, AgentMetrics metrics, String scene, int timeoutSeconds) {
+        this(gateway, metrics, scene, timeoutSeconds, null);
+    }
+
+    public SpringAiJsonCompletion(ChatModelGateway gateway, AgentMetrics metrics, String scene, int timeoutSeconds,
+                                   Integer maxOutputTokens) {
         this.gateway = gateway == null ? new NoopChatModelGateway() : gateway;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
         this.scene = scene == null || scene.isBlank() ? "结构化输出" : scene.trim();
         this.timeoutSeconds = Math.max(0, timeoutSeconds);
+        this.maxOutputTokens = maxOutputTokens;
     }
 
     @Override
@@ -48,7 +55,13 @@ public final class SpringAiJsonCompletion implements JsonCompletion {
         ModelCallOutcome outcome = ModelCallOutcome.OK;
         try {
             String content = QuickModelCall.content(gateway, timeoutSeconds, scene,
-                    client -> client.prompt().system(systemPrompt).user(userPrompt).call().content());
+                    client -> {
+                        var request = client.prompt().system(systemPrompt).user(userPrompt);
+                        if (maxOutputTokens != null) {
+                            request.options(org.springframework.ai.chat.prompt.ChatOptions.builder().maxTokens(maxOutputTokens));
+                        }
+                        return request.call().content();
+                    });
             if (content == null || content.isBlank()) {
                 outcome = ModelCallOutcome.EMPTY;
                 log.warn("Agent 模型返回空内容（{}），退回规则结果", scene);

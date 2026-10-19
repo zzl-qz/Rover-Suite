@@ -71,6 +71,10 @@ public final class OpsTools {
     private record ReadAttempt(int count, boolean retryable, String text) { }
     private record LogKey(String type, String target, Integer hours, com.rover.agent.core.model.TimeRange range) { }
     private final java.util.Map<Object, ReadAttempt> reads = new java.util.HashMap<>();
+    private String actionMessage = "";
+
+    /** 动作工具的确定性结果，不把模型对动作状态的转述当执行回执。 */
+    public String actionMessage() { return actionMessage; }
 
     public OpsTools(CapabilityExecutor executor, InvestigationTask task) {
         this(executor, task, null);
@@ -264,7 +268,8 @@ public final class OpsTools {
             return BUDGET_EXHAUSTED;
         }
         if (actions == null) {
-            return "当前运行方式没有接入变更提议能力，只能提供只读诊断。";
+            actionMessage = "当前运行方式没有接入变更提议能力，只能提供只读诊断；未创建或执行变更。";
+            return actionMessage;
         }
         WeightRequestUnit unit = WeightRequestUnit.parse(requestedUnit);
         task.step(AgentStepType.ACTION_PROPOSAL, STEP_ACTION, StepStatus.RUNNING,
@@ -274,18 +279,21 @@ public final class OpsTools {
         if (proposal.clarificationRequired()) {
             task.step(AgentStepType.ACTION_PROPOSAL, STEP_ACTION, StepStatus.FAILED,
                     "语义不明确，需要向用户澄清：" + proposal.reason());
-            return renderClarification(proposal.reason());
+            actionMessage = renderClarification(proposal.reason());
+            return actionMessage;
         }
         if (!proposal.created()) {
             task.step(AgentStepType.ACTION_PROPOSAL, STEP_ACTION, StepStatus.FAILED,
                     "没有生成变更计划：" + proposal.reason());
-            return "没有生成变更计划：" + proposal.reason();
+            actionMessage = "没有生成变更计划：" + proposal.reason();
+            return actionMessage;
         }
         AgentAction action = proposal.action();
         task.step(AgentStepType.ACTION_PROPOSAL, STEP_ACTION, StepStatus.COMPLETED,
                 "已生成待审批变更：" + action.describe() + "（预计流量占比 " + action.trafficPercentText()
                         + "，基于 revision " + action.expectedRevision() + "）");
-        return render(action);
+        actionMessage = render(action);
+        return actionMessage;
     }
 
     /** 语义不明确时的返回：不生成计划，把「该问什么」原样交给模型转述给用户。 */

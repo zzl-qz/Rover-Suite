@@ -12,6 +12,23 @@ import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 class StructuredPlanningTest {
+    @Test void plannerKeepsTheFactWhenTheEvidenceHeaderAloneExceedsTheOldCutoff() {
+        Evidence e = Evidence.of("t",EvidenceType.TRACE,"gateway","trace","REAL_FACT_MARKER v2 58/58 sampled 503","/api/traces",System.currentTimeMillis());
+        e = e.withEnvelope(new EvidenceEnvelope(1,"gateway.traces","TRACE","q","v1",new TimeRange(1,10),null,new TimeRange(1,10),
+                System.currentTimeMillis(),null,"BERNOULLI_PLUS_SLOW_WITH_CAPACITY_OVERWRITE",120,EvidenceQuality.PARTIAL,null,List.of(),
+                java.util.Map.of(),List.of(),null,null,"v1"));
+        assertTrue(e.modelText().indexOf("REAL_FACT_MARKER") > 160, "旧代码在截断事实之前已被头信息占满");
+        JsonCompletion capture = new JsonCompletion() {
+            public <T> Optional<T> complete(String system,String user,Function<String,Optional<T>> parser) {
+                assertTrue(user.contains("REAL_FACT_MARKER"));
+                assertTrue(user.contains("PARTIAL"));
+                assertTrue(system.contains("最多1个新候选、3个步骤"));
+                return parser.apply("{\"steps\":[]}");
+            }
+        };
+        var planner = new LlmInvestigationPlanner(null,capture,CapabilityRegistry.standard());
+        planner.plan(new PlanningRequest("排查",ResourceTarget.route("/orders"),"/orders",List.of(e),List.of()));
+    }
     @Test void modelCannotPromoteCandidatesForgeCitationsOrExpandTheTarget() {
         CapabilityRegistry registry = CapabilityRegistry.standard();
         JsonCompletion model = new JsonCompletion() {
@@ -45,5 +62,19 @@ class StructuredPlanningTest {
         var progress = PlanProgress.of(1,3,Set.of(AgentCapability.ROUTE_QUERY,AgentCapability.INSTANCE_QUERY,AgentCapability.TRACE_QUERY),0);
         assertTrue(planner.evaluate(request, progress).shouldContinue());
         assertTrue(planner.plan(request).capabilities().contains(AgentCapability.LOG_QUERY));
+    }
+
+    @Test void compactCapabilityNamesStillPassTheSameWhitelistAndTargetChecks() {
+        var registry = CapabilityRegistry.standard();
+        JsonCompletion model = new JsonCompletion() {
+            public <T> Optional<T> complete(String system,String user,Function<String,Optional<T>> parser) {
+                return parser.apply("{\"steps\":[\"LOG_QUERY\",\"SHELL_EXEC\",\"LOG_QUERY\"],\"candidates\":[]}");
+            }
+        };
+        var request = new PlanningRequest("排查",ResourceTarget.route("/orders"),"/orders",List.of(),List.of());
+        var plan = new PlanValidator(registry,PlanningLimits.defaults()).validate(new LlmInvestigationPlanner(null,model,registry).plan(request),request,Set.of());
+        assertEquals(1,plan.steps().stream().filter(s -> s.capability()==AgentCapability.LOG_QUERY).count());
+        assertTrue(plan.steps().stream().allMatch(s -> s.target().equals(request.target())));
+        assertTrue(plan.capabilities().contains(AgentCapability.ROUTE_QUERY));
     }
 }

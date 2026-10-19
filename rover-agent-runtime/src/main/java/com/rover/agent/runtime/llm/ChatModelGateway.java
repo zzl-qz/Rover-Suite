@@ -17,7 +17,7 @@ public interface ChatModelGateway {
 
     /**
      * 获取按场景收紧超时且禁用思考的客户端；timeoutSeconds<=0 时使用默认超时。
-     * 请求上限不小于配置值时复用客户端，未配置或构建失败时抛 IllegalStateException。
+     * 上限不会放宽配置超时；无论上限是否相等，场景客户端均保持禁用思考。
      */
     ChatClient chatClient(int timeoutSeconds);
 
