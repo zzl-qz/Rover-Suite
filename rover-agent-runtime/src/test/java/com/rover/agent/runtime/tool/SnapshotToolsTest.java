@@ -31,11 +31,11 @@ class SnapshotToolsTest {
         SnapshotTools tools = new SnapshotTools(EVIDENCE);
 
         for (int i = 0; i < 2; i++) {
-            assertEquals("路由快照", tools.routeSnapshot());
-            assertEquals("实例快照", tools.instanceSnapshot());
-            assertEquals("追踪快照", tools.traceSnapshot());
-            assertEquals("配置快照", tools.configSnapshot());
-            assertEquals("事件快照", tools.eventSnapshot());
+            assertTrue(tools.routeSnapshot().contains("quality=PARTIAL"));
+            assertTrue(tools.instanceSnapshot().contains("实例快照"));
+            assertTrue(tools.traceSnapshot().contains("追踪快照"));
+            assertTrue(tools.configSnapshot().contains("配置快照"));
+            assertTrue(tools.eventSnapshot().contains("事件快照"));
             assertEquals("实时指标不可用", tools.metricsSnapshot());
         }
     }
@@ -59,8 +59,8 @@ class SnapshotToolsTest {
         Map<String, String> core = tools.coreSnapshots();
 
         assertEquals(List.of("路由快照", "实例快照"), List.copyOf(core.keySet()));
-        assertEquals("路由快照", core.get("路由快照"));
-        assertEquals("实例快照", core.get("实例快照"));
+        assertEquals(EVIDENCE.get(0).modelText(), core.get("路由快照"));
+        assertEquals(EVIDENCE.get(1).modelText(), core.get("实例快照"));
         // 预读发生在运行时：不能混进「模型实际调用过的工具」，否则步骤说明会失真。
         assertTrue(tools.calledTools().isEmpty());
         // 核心快照缺失时给占位文本，而不是让整段解读失败。
@@ -78,8 +78,8 @@ class SnapshotToolsTest {
 
         SnapshotTools tools = new SnapshotTools(duplicated);
 
-        assertEquals("路由快照", tools.routeSnapshot());
-        assertEquals("路由快照", tools.coreSnapshots().get("路由快照"));
+        assertTrue(tools.routeSnapshot().contains("quality=PARTIAL"));
+        assertEquals(duplicated.get(0).modelText(), tools.coreSnapshots().get("路由快照"));
     }
 
     @Test
@@ -104,5 +104,18 @@ class SnapshotToolsTest {
         assertEquals("按上游实例的指标不可用", tools.upstreamSnapshot());
         assertEquals("配置快照不可用", tools.configSnapshot());
         assertEquals("注册事件不可用", tools.eventSnapshot());
+    }
+
+    @Test
+    void computedFailurePopulationsArePrefetchedWithoutDependingOnModelToolChoice() {
+        var observation = new com.rover.agent.core.model.EvidenceEnvelope(1, "gateway.traces", "TRACE", "/traces", "v1",
+                null, null, null, 100, null, "SAMPLE", 58, com.rover.agent.core.model.EvidenceQuality.PARTIAL,
+                null, List.of(), Map.of("samplePopulations", List.of(Map.of("group", "v2", "sample5xxRate", 1.0))),
+                List.of("样本不是完整流量"), null, null, "v1");
+        var evidence = Evidence.of("t", EvidenceType.TRACE, "gateway", "trace", "v2 样本 58/58，sample5xxRate=1.0", "/traces", 100)
+                .withEnvelope(observation);
+        var tools = new SnapshotTools(List.of(evidence));
+        assertTrue(tools.coreSnapshots().get("已采集故障观测").contains("sample5xxRate=1.0"));
+        assertTrue(tools.calledTools().isEmpty());
     }
 }

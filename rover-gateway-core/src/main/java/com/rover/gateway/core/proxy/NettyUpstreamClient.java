@@ -64,6 +64,7 @@ import lombok.extern.slf4j.Slf4j;
 final class NettyUpstreamClient {
 
     static final AttributeKey<Exchange> EXCHANGE = AttributeKey.valueOf("rover.netty.exchange");
+    private static final AttributeKey<Integer> RESPONSE_STATUS = AttributeKey.valueOf("rover.proxy.responseStatus");
     private static final AttributeKey<Boolean> RESPONSE_STARTED =
             AttributeKey.valueOf("rover.proxy.responseStarted");
     private final int connectTimeoutMillis;
@@ -439,8 +440,8 @@ final class NettyUpstreamClient {
         cancelTimeout(exchange);
         clearStarted(exchange.clientCtx);
         release(exchange, !keepAlive);
-        finish(exchange.result, new HttpProxyClient.ProxyResult(
-                statusCode, elapsedMillis(exchange.startNanos), false, false));
+        finish(exchange.result, HttpProxyClient.ProxyResult.upstream(
+                statusCode, elapsedMillis(exchange.startNanos)));
     }
 
     /** 清理连接上的交换状态，并归还或关闭上游连接。 */
@@ -466,7 +467,7 @@ final class NettyUpstreamClient {
     /** 入站拆了：超限 413，半截不送按 499。不算上游挂了。 */
     private static HttpProxyClient.ProxyResult abortedResult(InboundBodyPipe body, long startNanos) {
         int code = body != null && body.overflowed() ? 413 : 499;
-        return new HttpProxyClient.ProxyResult(code, elapsedMillis(startNanos), false, false);
+        return new HttpProxyClient.ProxyResult(code, elapsedMillis(startNanos), false, false, "GATEWAY", "REQUEST_BODY", code == 413);
     }
 
     /** 在请求已经结束后取消尚未触发的超时任务。 */
@@ -486,11 +487,12 @@ final class NettyUpstreamClient {
             boolean writeClientError) {
         Throwable cause = unwrap(err);
         String safeTarget = HttpProxyClient.redactTargetUrl(targetUrl);
+        Integer startedStatus = ctx.channel().attr(RESPONSE_STATUS).get();
         if (clearStarted(ctx)) {
             if (ctx.channel().isActive()) {
                 ctx.close();
             }
-            return classify(cause, startNanos);
+            return classify(cause, startNanos).partialResponse(startedStatus);
         }
         if (!writeClientError) {
             return classify(cause, startNanos);
@@ -498,27 +500,27 @@ final class NettyUpstreamClient {
         if (cause instanceof TimeoutException) {
             log.warn("Proxy request timeout, targetUrl={}", safeTarget);
             writeProxyError(ctx, HttpResponseStatus.GATEWAY_TIMEOUT, "后端请求超时");
-            return new HttpProxyClient.ProxyResult(
-                    HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true);
+            return HttpProxyClient.ProxyResult.gateway(
+                    HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof HttpProxyClient.ResponseTooLargeException) {
             log.warn("Proxy response too large, targetUrl={}", safeTarget);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应体超过网关上限");
-            return new HttpProxyClient.ProxyResult(
-                    HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), false, false);
+            return HttpProxyClient.ProxyResult.gateway(
+                    HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), false, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof ConnectException
                 || cause instanceof IllegalArgumentException
                 || isConnectTimeout(cause)) {
             log.warn("Proxy target connection error, targetUrl={}", safeTarget, cause);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端连接失败");
-            return new HttpProxyClient.ProxyResult(
-                    HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+            return HttpProxyClient.ProxyResult.gateway(
+                    HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
         log.warn("Proxy request IO error, targetUrl={}", safeTarget, cause);
         writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应异常");
-        return new HttpProxyClient.ProxyResult(
-                HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+        return HttpProxyClient.ProxyResult.gateway(
+                HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
     }
 
     /** 判断异常是否属于连接阶段超时。 */
@@ -529,15 +531,15 @@ final class NettyUpstreamClient {
     /** 将异常归类为供指标和熔断器使用的代理结果。 */
     private static HttpProxyClient.ProxyResult classify(Throwable cause, long startNanos) {
         if (cause instanceof TimeoutException) {
-            return new HttpProxyClient.ProxyResult(
-                    HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true);
+            return HttpProxyClient.ProxyResult.gateway(
+                    HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof ConnectException || isConnectTimeout(cause) || cause instanceof IllegalArgumentException) {
-            return new HttpProxyClient.ProxyResult(
-                    HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+            return HttpProxyClient.ProxyResult.gateway(
+                    HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
-        return new HttpProxyClient.ProxyResult(
-                HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+        return HttpProxyClient.ProxyResult.gateway(
+                HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
     }
 
     /** 剥掉连接和 Future 包装异常，保留真正的失败原因。 */
@@ -578,6 +580,7 @@ final class NettyUpstreamClient {
         if (contentLength != null) {
             response.headers().set(HttpHeaderNames.CONTENT_LENGTH, contentLength);
         }
+        ctx.channel().attr(RESPONSE_STATUS).set(upstream.status().code());
         ctx.channel().attr(RESPONSE_STARTED).set(Boolean.TRUE);
         // 头先入队，等 body / LastHttpContent 再 flush，小包少一次 syscall。
         writeOn(ctx, response, false);
@@ -605,6 +608,7 @@ final class NettyUpstreamClient {
 
     /** 取走并清除“响应头已写入”标记。 */
     private static boolean clearStarted(ChannelHandlerContext ctx) {
+        ctx.channel().attr(RESPONSE_STATUS).set(null);
         Boolean started = ctx.channel().attr(RESPONSE_STARTED).getAndSet(null);
         return Boolean.TRUE.equals(started);
     }
@@ -646,6 +650,10 @@ final class NettyUpstreamClient {
                 return;
             }
             try {
+                if (msg instanceof io.netty.handler.codec.http.HttpObject object && object.decoderResult().isFailure()) {
+                    fail(exchange, new java.io.IOException("upstream HTTP decode failed", object.decoderResult().cause()));
+                    return;
+                }
                 if (msg instanceof HttpResponse response) {
                     exchange.statusCode = response.status().code();
                     exchange.keepAlive = HttpUtil.isKeepAlive(response);
@@ -691,7 +699,7 @@ final class NettyUpstreamClient {
         public void channelInactive(ChannelHandlerContext ctx) {
             Exchange exchange = ctx.channel().attr(EXCHANGE).get();
             if (exchange != null && !exchange.done.get()) {
-                fail(exchange, new ConnectException("upstream connection closed"));
+                fail(exchange, new java.io.IOException("upstream connection closed during response"));
             }
         }
     }

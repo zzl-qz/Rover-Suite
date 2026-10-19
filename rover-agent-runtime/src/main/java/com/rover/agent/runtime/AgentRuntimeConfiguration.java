@@ -32,6 +32,7 @@ import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.knowledge.InMemoryKnowledgeStore;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ConversationModel;
+import com.rover.agent.runtime.llm.SpringAiConversationModel;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.llm.ModelTargetInterpreter;
 import com.rover.agent.runtime.llm.NoopChatModelGateway;
@@ -250,6 +251,22 @@ public class AgentRuntimeConfiguration {
                     policy.require(session.userId(), AgentAccess.Permission.READ);
                     var execution = running.find(taskId);
                     if (execution != null) { execution.budget().reserveTool(); }
+                }, taskId -> {
+                    var task = tasks.find(taskId).orElse(null);
+                    var session = task == null ? null : sessions.find(task.sessionId()).orElse(null);
+                    var execution = running.find(taskId);
+                    java.util.Map<String, String> budget = java.util.Map.of();
+                    if (execution != null) {
+                        var state = execution.budget().snapshot();
+                        budget = java.util.Map.of("modelCalls", Integer.toString(state.modelCalls()),
+                                "toolCalls", Integer.toString(state.toolCalls()), "tokens", Long.toString(state.tokens()),
+                                "deadlineAtMillis", Long.toString(state.deadlineAtMillis()));
+                    }
+                    return new com.rover.agent.core.model.InvestigationContext(taskId,
+                            task == null ? null : task.incidentId(), session == null ? control.resourceScope() : session.scope(),
+                            control.controlTargetId(), control.resourceNamespace(), task == null ? null : task.target(),
+                            execution == null ? null : execution.timeRange(), budget,
+                            access.getIfAvailable(AgentAccess::local).managed() ? "LIVE_RBAC_V1" : "LOCAL_V1");
                 });
     }
 
@@ -322,13 +339,14 @@ public class AgentRuntimeConfiguration {
     public ToolLoopService agentToolLoopService(CapabilityExecutor agentCapabilityExecutor,
                                                ObjectProvider<ChatModelGateway> chatModelGateways,
                                                ObjectProvider<ConversationModel> conversationModels,
-                                               AgentActionService agentActionService) {
+                                               AgentActionService agentActionService,
+                                               AgentMetrics agentMetrics) {
         // 模型侧留一个可替换的入口：端到端测试用它注入脚本，从而在不依赖真实模型的前提下
         // 验证「工具真的取数、证据真的落库」这条链路——这是单测替代不了的部分。
         // 变更提议入口同样注入：模型能走到的最远处就是「登记一条待审批变更」，执行在 ActionExecutor 里。
-        return new ToolLoopService(agentCapabilityExecutor,
-                chatModelGateways.getIfAvailable(NoopChatModelGateway::new),
-                conversationModels.getIfAvailable(),
+        ChatModelGateway gateway = chatModelGateways.getIfAvailable(NoopChatModelGateway::new);
+        return new ToolLoopService(agentCapabilityExecutor, gateway,
+                conversationModels.getIfAvailable(() -> new SpringAiConversationModel(gateway, agentMetrics)),
                 agentActionService);
     }
 

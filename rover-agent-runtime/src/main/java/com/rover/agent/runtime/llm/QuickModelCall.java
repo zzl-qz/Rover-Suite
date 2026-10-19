@@ -3,6 +3,7 @@ package com.rover.agent.runtime.llm;
 import com.rover.agent.runtime.metrics.ModelCallOutcome;
 import com.rover.agent.runtime.task.AgentRunBudget;
 import java.io.InterruptedIOException;
+import java.net.http.HttpTimeoutException;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,10 +47,10 @@ final class QuickModelCall {
         return timedOut(failure) ? ModelCallOutcome.TIMEOUT : ModelCallOutcome.ERROR;
     }
 
-    /** 沿异常链找超时：okhttp 的超时最终是 InterruptedIOException("timeout")，SocketTimeoutException 是其子类。 */
+    /** 沿异常链识别 SDK/Socket 超时和 JDK HTTP 超时；后者不继承 InterruptedIOException。 */
     private static boolean timedOut(Throwable failure) {
         for (Throwable current = failure; current != null; current = current.getCause()) {
-            if (current instanceof InterruptedIOException) {
+            if (current instanceof InterruptedIOException || current instanceof HttpTimeoutException) {
                 return true;
             }
         }

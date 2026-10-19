@@ -85,6 +85,7 @@ public final class CapabilityExecutor {
     private final KnowledgeReadPort knowledge;
     private final CapabilityRegistry registry;
     private final java.util.function.Consumer<String> authorize;
+    private final java.util.function.Function<String, com.rover.agent.core.model.InvestigationContext> contexts;
 
     public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                               TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
@@ -96,6 +97,15 @@ public final class CapabilityExecutor {
                               TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
                               LogQueryPort logs, KnowledgeReadPort knowledge, CapabilityRegistry registry,
                               java.util.function.Consumer<String> authorize) {
+        this(routes, instances, metrics, traces, configs, events, logs, knowledge, registry, authorize,
+                com.rover.agent.core.model.InvestigationContext::legacy);
+    }
+
+    public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
+                              TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
+                              LogQueryPort logs, KnowledgeReadPort knowledge, CapabilityRegistry registry,
+                              java.util.function.Consumer<String> authorize,
+                              java.util.function.Function<String, com.rover.agent.core.model.InvestigationContext> contexts) {
         this.routes = routes;
         this.instances = instances;
         this.metrics = metrics;
@@ -106,6 +116,7 @@ public final class CapabilityExecutor {
         this.knowledge = knowledge;
         this.registry = registry == null ? CapabilityRegistry.standard() : registry;
         this.authorize = authorize;
+        this.contexts = contexts;
     }
 
     /**
@@ -146,9 +157,7 @@ public final class CapabilityExecutor {
             case INSTANCE_QUERY -> readInstances(capability, descriptor, resolved, route, taskId);
             case GATEWAY_METRICS_QUERY -> range.isUnspecified()
                     ? readMetrics(capability, descriptor, route, lookup, taskId)
-                    : CapabilityResult.failed(capability, descriptor,
-                            "当前指标接口仅支持实时滚动窗口，不能回溯指定时间范围（" + range.describe()
-                                    + "）；请查询该时段的落盘日志或历史监控，不能用当前指标判断故障已恢复。");
+                    : readHistoricalWindow(capability, descriptor, route, lookup, taskId, range);
             case TRACE_QUERY -> readTraces(capability, descriptor, lookup, taskId, range);
             case CONFIG_READ -> readConfigs(capability, descriptor, taskId);
             case EVENT_QUERY -> readEvents(capability, descriptor, taskId, range);
@@ -158,7 +167,7 @@ public final class CapabilityExecutor {
             case KNOWLEDGE_RETRIEVAL -> readKnowledge(capability, descriptor, lookup, taskId);
             default -> CapabilityResult.unavailable(capability, descriptor);
         };
-        return result.inTimeRange(range);
+        return enrich(result.inTimeRange(range), contexts.apply(taskId).query(resolved, range), taskId);
     }
 
     /** 取数路径：调用方给出的路径优先，其次用路由目标的取值。 */
@@ -243,22 +252,25 @@ public final class CapabilityExecutor {
         long observedAt = System.currentTimeMillis();
         List<Evidence> evidence = new ArrayList<>();
         List<String> limitations = new ArrayList<>();
-        GatewayMetricSnapshot metric;
+        GatewayMetricSnapshot metric = null;
         try {
             metric = metrics.gatewayWindow(METRIC_WINDOW_SECONDS);
         } catch (Exception ex) {
             log.warn("Agent 读取指标失败", ex);
-            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.metricsUnavailable());
+            limitations.add(EvidenceNarrator.metricsUnavailable());
         }
-        EvidenceNarration narration = EvidenceNarrator.metrics(metric);
-        evidence.add(Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "最近一分钟流量",
-                narration.detail(), "/api/live?range=" + METRIC_WINDOW_SECONDS,
-                metadata(narration, observedAt), observedAt));
-        limitations.addAll(narration.limitations());
+        if (metric != null) {
+            EvidenceNarration narration = EvidenceNarrator.metrics(metric);
+            evidence.add(Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "最近一分钟流量",
+                    narration.detail(), "/api/live?range=" + METRIC_WINDOW_SECONDS,
+                    metadata(narration, observedAt), observedAt));
+            limitations.addAll(narration.limitations());
+        }
 
         String routeId = resolveRouteId(route, lookup, limitations);
         List<RouteUpstreamSnapshot> upstreams = List.of();
         if (!routeId.isBlank()) {
+            readFinalWindow(routeId, taskId, evidence, limitations, TimeRange.unspecified());
             upstreams = readRouteUpstreams(routeId, taskId, observedAt, evidence, limitations);
         }
         return CapabilityResult.success(capability, descriptor, evidence, limitations)
@@ -282,6 +294,132 @@ public final class CapabilityExecutor {
             limitations.add(EvidenceNarrator.routeUnavailable());
             return "";
         }
+    }
+
+    private CapabilityResult readHistoricalWindow(AgentCapability capability, CapabilityDescriptor descriptor,
+                                                   RouteSnapshot route, String lookup, String taskId, TimeRange range) {
+        List<Evidence> evidence = new ArrayList<>();
+        List<String> limitations = new ArrayList<>();
+        String routeId = resolveRouteId(route, lookup, limitations);
+        if (routeId.isBlank()) { return CapabilityResult.failed(capability, descriptor, "缺少明确路由标识，不能回溯最终响应窗口。"); }
+        readFinalWindow(routeId, taskId, evidence, limitations, range);
+        limitations.add("路由标识通过当前路径配置定位；请求时身份以窗口维度与追踪中的 UID 为准，不能据当前配置重建历史路由映射。");
+        return CapabilityResult.success(capability, descriptor, evidence, limitations);
+    }
+
+    private void readFinalWindow(String routeId, String taskId, List<Evidence> evidence, List<String> limitations, TimeRange range) {
+        long at = System.currentTimeMillis();
+        String query = "/api/metrics/routes?routeId=" + urlEncode(routeId) + (range.isUnspecified()
+                ? "&range=" + METRIC_WINDOW_SECONDS : "&fromMillis=" + range.fromMillis() + "&toMillis=" + range.toMillis());
+        try {
+            var window = range.isUnspecified() ? metrics.routeWindow(routeId, METRIC_WINDOW_SECONDS) : metrics.routeWindow(routeId, range);
+            List<String> bounds = new ArrayList<>(window.limitations());
+            bounds.add("按请求完成时间计数；转发尝试独立计数。HTTP 错误是现象，后端业务内部原因仍需日志证据。");
+            String summary = EvidenceNarrator.routeWindow(window);
+            var envelope = new com.rover.agent.core.model.EvidenceEnvelope(1, "gateway.final-responses", "METRIC",
+                    query, "final-window-v1", window.requestedRange(), window.coverageRange(), window.coverageRange(),
+                    window.observedAtMillis(), null, window.samplingMode(), window.finalRequests(), window.qualityStatus(),
+                    null, List.of(), window.facts(), bounds, null, null, "gateway-observation-v1");
+            evidence.add(Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "路由最终响应窗口", summary, query,
+                    Map.of(KEY_ROUTE_ID, routeId, KEY_SAMPLE_SIZE, Long.toString(window.finalRequests()),
+                            KEY_WINDOW_SECONDS, Integer.toString(range.isUnspecified() ? METRIC_WINDOW_SECONDS : range.windowSeconds()), KEY_OBSERVED_AT,
+                            Long.toString(window.observedAtMillis())), at).withEnvelope(envelope));
+            limitations.addAll(bounds);
+        } catch (Exception ex) {
+            String bound = "该路由的原生最终响应窗口不可用，不能回溯指定时间范围；不能用当前指标、累计拒绝数或抽样追踪替代完整请求计数。";
+            limitations.add(bound);
+            evidence.add(Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "路由最终响应窗口不可用", bound,
+                    query, Map.of(KEY_ROUTE_ID, routeId), at).withEnvelope(new com.rover.agent.core.model.EvidenceEnvelope(
+                            1, "gateway.final-responses", "METRIC", query, "final-window-v1", null, null, null,
+                            at, null, "UNKNOWN", 0, com.rover.agent.core.model.EvidenceQuality.UNAVAILABLE,
+                            null, List.of(), Map.of(), List.of(bound), null, null, "gateway-observation-v1")));
+        }
+    }
+
+    private static com.rover.agent.core.model.EvidenceEnvelope traceEnvelope(TraceSnapshot snapshot, String path,
+                                                                           TimeRange requested, EvidenceNarration narration) {
+        long at = snapshot.observedAtMillis();
+        TimeRange range = requested.isUnspecified() ? new TimeRange(Math.max(1, at - 300_000), at) : requested;
+        List<Map<String, Object>> rows = new ArrayList<>();
+        long first = Long.MAX_VALUE, last = 0;
+        for (var row : snapshot.rows() == null ? List.<com.rover.agent.core.snapshot.TraceRow>of() : snapshot.rows()) {
+            if (!path.equals(row.path()) || !range.contains(row.startMillis())) { continue; }
+            Map<String, Object> fact = new LinkedHashMap<>();
+            fact.put("traceId", row.traceId()); fact.put("statusCode", row.statusCode());
+            fact.put("startMillis", row.startMillis());
+            var o = row.observation();
+            if (o != null) {
+                fact.put("routeId", o.routeId()); fact.put("resourceUid", o.resourceUid());
+                fact.put("generation", o.generation()); fact.put("serviceName", o.serviceName());
+                fact.put("group", o.group()); fact.put("hostPort", o.hostPort());
+                fact.put("responseOrigin", o.responseOrigin()); fact.put("failurePhase", o.failurePhase());
+                fact.put("rejectReason", o.rejectReason()); fact.put("responseComplete", o.responseComplete());
+                fact.put("attempts", o.attempts().stream().map(a -> {
+                    Map<String, Object> attempt = new LinkedHashMap<>();
+                    attempt.put("hostPort", a.hostPort()); attempt.put("serviceName", a.serviceName());
+                    attempt.put("group", a.group()); attempt.put("statusCode", a.statusCode());
+                    attempt.put("responseOrigin", a.responseOrigin()); attempt.put("failurePhase", a.failurePhase());
+                    attempt.put("responseComplete", a.responseComplete()); attempt.put("costMillis", a.costMillis());
+                    return attempt;
+                }).toList());
+            }
+            rows.add(fact); first = Math.min(first, row.startMillis()); last = Math.max(last, row.startMillis());
+        }
+        var quality = !snapshot.enabled() && rows.isEmpty() ? com.rover.agent.core.model.EvidenceQuality.UNAVAILABLE
+                : range.toMillis() > at || range.toMillis() < snapshot.collectionStartedAtMillis()
+                        ? com.rover.agent.core.model.EvidenceQuality.OUT_OF_RANGE
+                        : com.rover.agent.core.model.EvidenceQuality.PARTIAL;
+        // 抽样/慢请求优先/环形覆盖均不能证明完整区间；没有 trace 也不能标作完整 EMPTY。
+        return new com.rover.agent.core.model.EvidenceEnvelope(1, "gateway.traces", "TRACE", "/api/traces?path="
+                + urlEncode(path), "trace-observation-v1", range,
+                rows.isEmpty() ? null : new TimeRange(first, last), null, at, null, snapshot.samplingMode(), rows.size(),
+                quality, null, List.of(), Map.of("rows", rows, "samplePopulations",
+                        com.rover.agent.core.snapshot.TraceWindowStatistics.populations(snapshot, path, requested), "sampleRate", snapshot.sampleRate(),
+                        "overwritten", snapshot.overwritten(), "collectionStartedAtMillis", snapshot.collectionStartedAtMillis()),
+                narration.limitations(), null, null, "gateway-observation-v1");
+    }
+
+    private CapabilityResult enrich(CapabilityResult result, com.rover.agent.core.model.InvestigationContext context,
+                                     String taskId) {
+        List<Evidence> enriched = new ArrayList<>();
+        for (Evidence item : result.evidence()) {
+            List<com.rover.agent.core.model.ResourceRef> refs = new ArrayList<>();
+            if (item.type() == EvidenceType.ROUTE && result.route() != null) {
+                var route = result.route();
+                addRef(refs, context, route.routeId(), route.resourceUid(), route.generation());
+            }
+            Object dimensions = item.envelope().facts().get("dimensions");
+            if (dimensions instanceof List<?> rows) {
+                for (Object raw : rows) {
+                    if (raw instanceof Map<?, ?> row) {
+                        addRef(refs, context, item.metadata().get(KEY_ROUTE_ID), (String) row.get("resourceUid"),
+                                row.get("generation") instanceof Number n ? n.longValue() : 0);
+                    }
+                }
+            }
+            if (item.type() == EvidenceType.TRACE && result.traces() != null) {
+                for (var row : result.traces().rows() == null ? List.<com.rover.agent.core.snapshot.TraceRow>of() : result.traces().rows()) {
+                    var o = row.observation();
+                    TimeRange range = item.envelope().requestedRange();
+                    if (o != null && range.contains(row.startMillis())) {
+                        addRef(refs, context, o.routeId(), o.resourceUid(), o.generation());
+                    }
+                }
+            }
+            enriched.add(item.withEnvelope(item.envelope().inContext(context, refs)));
+        }
+        return new CapabilityResult(result.capability(), result.stepType(), result.stepName(), result.executed(),
+                enriched, result.limitations(), result.route(), result.routeRead(), result.discoveryMode(), result.instances(),
+                result.traces(), result.metric(), result.routeUpstreams(), result.configs(), result.events());
+    }
+
+    private static void addRef(List<com.rover.agent.core.model.ResourceRef> refs,
+                               com.rover.agent.core.model.InvestigationContext context, String id, String uid, long generation) {
+        if (context.scope() == null || context.controlTargetId() == null || context.controlTargetId().isBlank()
+                || id == null || id.isBlank() || uid == null || uid.isBlank() || generation <= 0) { return; }
+        var ref = new com.rover.agent.core.model.ResourceRef(context.scope(), context.controlTargetId(), "GATEWAY_ROUTE",
+                id, uid, generation);
+        if (!refs.contains(ref)) { refs.add(ref); }
     }
 
     /**
@@ -393,9 +531,8 @@ public final class CapabilityExecutor {
         try {
             TraceSnapshot snapshot = traces.byPath(path);
             if (!range.isUnspecified() && snapshot.rows() != null) {
-                snapshot = new TraceSnapshot(snapshot.enabled(), snapshot.sampleRate(), snapshot.rows().stream()
-                        .filter(row -> row != null && range.contains(row.startMillis())).toList(),
-                        snapshot.observedAtMillis());
+                snapshot = snapshot.filtered(snapshot.rows().stream()
+                        .filter(row -> row != null && range.contains(row.startMillis())).toList());
             }
             EvidenceNarration narration = EvidenceNarrator.traces(snapshot, path, range);
             long observedAt = System.currentTimeMillis();
@@ -403,7 +540,8 @@ public final class CapabilityExecutor {
                             List.of(Evidence.of(taskId, EvidenceType.TRACE, SOURCE_TRACES, "路径追踪记录",
                                     narration.detail(),
                                     "/api/traces?path=" + urlEncode(path),
-                                    metadata(narration, observedAt), observedAt)),
+                                    metadata(narration, observedAt), observedAt)
+                                    .withEnvelope(traceEnvelope(snapshot, path, range, narration))),
                             narration.limitations())
                     .withTraces(snapshot);
         } catch (Exception ex) {
@@ -423,6 +561,13 @@ public final class CapabilityExecutor {
     public CapabilityResult queryLogs(String target, List<String> types, Long fromMillis, Long toMillis,
                                       String taskId) {
         authorize.accept(taskId);
+        TimeRange range = fromMillis != null && toMillis != null ? new TimeRange(fromMillis, toMillis) : TimeRange.unspecified();
+        return enrich(readLogs(target, types, fromMillis, toMillis, taskId).inTimeRange(range),
+                contexts.apply(taskId).query(target != null && target.startsWith("/")
+                        ? ResourceTarget.route(target) : ResourceTarget.unknown(), range), taskId);
+    }
+
+    private CapabilityResult readLogs(String target, List<String> types, Long fromMillis, Long toMillis, String taskId) {
         CapabilityDescriptor descriptor = registry.descriptor(AgentCapability.LOG_QUERY).orElse(null);
         if (descriptor == null || !descriptor.available()) {
             return CapabilityResult.unavailable(AgentCapability.LOG_QUERY, descriptor);

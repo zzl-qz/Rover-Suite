@@ -15,6 +15,16 @@ import org.junit.jupiter.api.Test;
 /** 「路由 × 上游实例」窗口观测与自洽自检的单元测试。 */
 class MetricsRegistryTest {
 
+    @Test
+    void reenabledMetricsStartsNewCoverageInsteadOfHidingDisabledGap() {
+        MetricsSettings settings = new MetricsSettings();
+        MetricsRegistry registry = new MetricsRegistry(settings);
+        var previous = registry.finalResponses();
+        settings.setEnabled(false); settings.setEnabled(true);
+        assertFalse(previous == registry.finalResponses());
+        assertEquals("PARTIAL", registry.finalResponses().snapshot("orders", 60, System.currentTimeMillis()).get("qualityStatus"));
+    }
+
     private static MetricsRegistry enabledRegistry() {
         return new MetricsRegistry(new MetricsSettings());
     }

@@ -86,7 +86,7 @@ public final class InvestigationRules {
                 String group = Texts.orEmpty(route.group());
                 List<InstanceSnapshot> matching = instances.stream()
                         .filter(item -> service.equals(Texts.orEmpty(item.serviceName())))
-                        .filter(item -> group.isBlank() || group.equals(Texts.orEmpty(item.group())))
+                        .filter(item -> RouteSnapshot.matchesGroup(group, item.group()))
                         .toList();
                 long healthy = matching.stream().filter(InstanceSnapshot::healthy).count();
                 if (matching.isEmpty()) {

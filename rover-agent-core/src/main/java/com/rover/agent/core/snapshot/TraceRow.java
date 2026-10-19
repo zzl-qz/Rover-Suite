@@ -8,4 +8,8 @@ package com.rover.agent.core.snapshot;
  * @param statusCode 响应状态码
  * @param startMillis 请求开始时刻
  */
-public record TraceRow(String traceId, String path, int statusCode, long startMillis) { }
+public record TraceRow(String traceId, String path, int statusCode, long startMillis, TraceObservation observation) {
+    public TraceRow(String traceId, String path, int statusCode, long startMillis) {
+        this(traceId, path, statusCode, startMillis, null);
+    }
+}

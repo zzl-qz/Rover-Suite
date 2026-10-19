@@ -9,15 +9,18 @@ import argparse
 import concurrent.futures
 import hashlib
 import http.cookiejar
+import http.server
 import json
 import math
 import os
 from pathlib import Path
 import random
+import re
 import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import urllib.error
@@ -38,6 +41,48 @@ JARS = {
 def require(condition, message):
     if not condition:
         raise RuntimeError(message)
+
+
+def validate_evidence_contract(evidence, expected_status, route_id, v2_host_port):
+    require(all(item.get("envelope", {}).get("schemaVersion") == 1 for item in evidence),
+            "An evidence item lost its versioned envelope")
+    traces = [item for item in evidence if item["type"] == "TRACE"]
+    expected_origin = "UPSTREAM" if expected_status == 503 else "GATEWAY"
+    expected_phase = "NONE" if expected_status == 503 else "UPSTREAM_TIMEOUT"
+    observed = []
+    calculated = []
+    for item in traces:
+        envelope = item["envelope"]
+        require(envelope["qualityStatus"] == "PARTIAL", "Sampled traces falsely claim complete coverage")
+        context = envelope.get("context") or {}
+        require(context.get("scope") and context.get("controlTargetId") and context.get("taskId") == item["taskId"],
+                "Trace lost its server-owned investigation context")
+        for population in envelope.get("facts", {}).get("samplePopulations", []):
+            if population.get("group") == "v2" and population.get("hostPort") == v2_host_port:
+                require(population["sampleRequests"] > 0 and population["sample5xx"] == population["sampleRequests"]
+                        and population["sample5xxRate"] == 1, "Program-computed v2 sample denominator is wrong")
+                calculated.append(population)
+        for row in envelope.get("facts", {}).get("rows", []):
+            if row["statusCode"] != expected_status:
+                continue
+            require(row.get("routeId") == route_id and row.get("group") == "v2"
+                    and row.get("hostPort") == v2_host_port, "Fault was attributed to the wrong resource")
+            require(row.get("responseOrigin") == expected_origin and row.get("failurePhase") == expected_phase,
+                    "HTTP status was mistaken for response origin or failure phase")
+            require(row.get("resourceUid") and row.get("generation", 0) > 0, "Captured route identity is missing")
+            require(any(ref["resourceUid"] == row["resourceUid"] and ref["generation"] == row["generation"]
+                        and ref["scope"] == context["scope"] for ref in envelope.get("resourceRefs", [])),
+                    "Captured identity was not bound to the trusted scope")
+            require(len(row.get("attempts", [])) == 1, "Fixture retry is disabled; attempt accounting differs")
+            observed.append(row)
+    require(observed, "No captured v2 failure fact reached the agent")
+    require(calculated, "Program-computed sample populations did not reach the agent")
+    current = [item for item in evidence if item["type"] in ("ROUTE", "INSTANCE", "CONFIG")]
+    require(all(item["envelope"]["qualityStatus"] == "OUT_OF_RANGE" for item in current),
+            "Current state was used as historical coverage")
+    return {"capturedFailureSamples": len(observed), "responseOrigin": expected_origin, "failurePhase": expected_phase,
+            "resourceIdentityAndScope": True, "currentStateIsHistoricalProof": False,
+            "v2SampleRateComputedByProgram": True}
 
 
 def save(path, value):
@@ -119,6 +164,19 @@ def validate_fixture(fixture):
                 "Scenario truth must match the supported fault")
 
 
+def validate_live_analysis(task):
+    """A successful rule fallback must never count as a successful live-model test."""
+    report = task.get("result") or {}
+    steps = [step for step in task.get("steps", []) if step.get("type") == "AI_EXPLANATION"]
+    require(task.get("status") == "COMPLETED" and bool((report.get("aiAnalysis") or "").strip())
+            and any(step.get("status") == "COMPLETED" for step in steps)
+            and not any(step.get("status") == "FAILED" for step in steps),
+            "Live model did not finish its explanation; rule fallback is not a live-model pass")
+    return {"analysis": report["aiAnalysis"], "steps": steps,
+            "evidenceCount": len(report.get("evidence", [])),
+            "executedCapabilities": task.get("executedCapabilities", [])}
+
+
 class Replay:
     def __init__(self, args, fixture):
         self.args, self.fixture = args, fixture
@@ -127,6 +185,7 @@ class Replay:
         self.output.mkdir(parents=True, exist_ok=False)
         self.processes, self.logs = {}, []
         self.generation = {}
+        self.live_model = getattr(args, "model_config", None) is not None
         self.http, self.admin = Http(), Http(cookies=True)
         self.token = uuid.uuid4().hex
         self.headers = {"X-Rover-Admin-Token": self.token}
@@ -137,7 +196,10 @@ class Replay:
         self.keys = [f"user-{rng.getrandbits(128):032x}" for _ in range(fixture["samplesPerPhase"])]
         self.report = {"schemaVersion": 1, "stage": "S0-06", "faultReplayPassed": False,
                        "receiptProductionGatePassed": False, "cases": [], "processes": [],
-                       "modelMode": "none", "mitigationActor": "test-harness", "error": None}
+                       "modelMode": "live" if self.live_model else "none",
+                       "mitigationActor": "test-harness", "error": None}
+        if self.live_model:
+            self.report["liveModelGatePassed"] = False
 
     def event(self, message):
         print(time.strftime("%H:%M:%S") + " " + message, flush=True)
@@ -189,6 +251,14 @@ class Replay:
                            "token": self.token, "heartbeat-interval-ms": 1000},
                            "demo": {"replay": {"enabled": True, "token": self.token}}}}
             save(self.component_dir(version) / "config/application.yml", backend)
+        if self.live_model:
+            config = self.args.model_config.resolve()
+            key = (self.args.model_master_key_file or config.with_name("master.key")).resolve()
+            require(config.is_file() and key.is_file(), "Live model needs an existing encrypted config and master-key file")
+            private = self.component_dir("admin") / "config"
+            private.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(config, private / "model.properties")
+            shutil.copyfile(key, private / "master.key")
 
     def start(self, name):
         directory = self.component_dir(name)
@@ -215,6 +285,10 @@ class Replay:
                      f"--rover.admin.model.master-key-file={directory / 'config/master.key'}",
                      "--rover.admin.model.master-key=", "--rover.agent.alerts.owner-user-id=admin",
                      "--rover.admin.log-collect-interval-seconds=5", "--spring.ai.model.chat=none"]
+            if self.live_model:
+                # ModelConfigStore reads the explicit encrypted FILE config; none disables auto-configuration only.
+                args += ["--management.metrics.export.prometheus.enabled=true",
+                         "--management.endpoints.web.exposure.include=health,info,prometheus"]
         # Avoid inheriting real model credentials, remote config or Java agents into fixtures.
         env = {key: value for key, value in os.environ.items() if not key.upper().startswith(
             ("ROVER_", "SPRING_", "OPENAI_", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"))}
@@ -293,21 +367,138 @@ class Replay:
         require(auth["authenticated"] and auth["username"] == "admin", "Fixture login failed")
         self.csrf = {auth["csrfHeaderName"]: auth["csrfToken"]}
 
-    def alert(self, directory, case, window):
-        url = self.urls["admin"]
-        payload = {"path": self.fixture["path"], "message": "回放告警：" + case["id"],
-                   "fromMillis": window["fromMillis"], "toMillis": window["toMillis"]}
-        save(directory / "alert-input.json", payload)
-        _, task, _ = self.admin.request(url + "/api/agent/events/ingest", payload, self.csrf, allowed=(202,))
-        deadline = time.monotonic() + 60
+    def verify_model(self):
+        base = self.urls["admin"]
+        current = self.admin.request(base + "/api/model/config")[1]
+        public = {key: current.get(key) for key in ("enabled", "model", "baseUrl", "timeoutSeconds",
+                  "configured", "available", "applied", "apiKeyReadable", "masterKeyState", "fastModel")}
+        save(self.output / "live-model-config.json", public)
+        require(all(current.get(key) for key in ("enabled", "configured", "available", "applied", "apiKeyReadable")),
+                "Live model config is disabled, unreadable or unavailable")
+        self.event("verifying actual model connection: " + str(current["model"]))
+        result = self.admin.request(base + "/api/model/verify", {}, self.csrf, timeout=120)[1]
+        save(self.output / "live-model-connection.json", result)
+        require(result.get("ok") is True, "Actual model connection failed: " + str(result.get("errorCode")))
+        self.report["liveModel"] = public
+        self.event("actual model connection verified")
+
+    def model_metrics(self, directory, label):
+        scrape = self.admin.request(self.urls["admin"] + "/actuator/prometheus")[1]
+        require(isinstance(scrape, str), "Prometheus model evidence is unavailable")
+        lines = [line for line in scrape.splitlines() if line.startswith("rover_agent_")]
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / (label + "-agent-metrics.prom")).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        counts = {}
+        for line in lines:
+            match = re.fullmatch(r'rover_agent_model_calls_total\{([^}]+)\}\s+([0-9.eE+\-]+)', line)
+            if match:
+                labels = dict(re.findall(r'(\w+)="([^"]*)"', match[1]))
+                key = labels.get("scene", "") + ":" + labels.get("outcome", "")
+                counts[key] = counts.get(key, 0) + float(match[2])
+        return counts
+
+    def wait_task(self, task, seconds, label):
+        deadline, next_progress = time.monotonic() + seconds, time.monotonic() + 15
         while time.monotonic() < deadline:
-            task = self.admin.request(url + "/api/agent/tasks/" + task["taskId"])[1]
+            task = self.admin.request(self.urls["admin"] + "/api/agent/tasks/" + task["taskId"])[1]
             if task["status"] not in ("PENDING", "RUNNING"):
                 break
+            if time.monotonic() >= next_progress:
+                self.event(f"{label}: {task['status']}/{task.get('currentStage')}")
+                next_progress = time.monotonic() + 15
             time.sleep(.2)
+        return task
+
+    def live_conversation(self):
+        directory = self.output / "conversation"
+        before = self.model_metrics(directory, "before")
+        revision = self.manage("/routes")["revision"]
+        session = self.admin.request(self.urls["admin"] + "/api/agent/sessions",
+                                    {"title": "live model read-only investigation"}, self.csrf)[1]
+        question = {"message": "请使用只读工具检查 /api/replay/order 的路由、v1/v2 实例健康情况和错误率。"
+                               "请引用实际证据，缺少窗口数据时说明无法确认，不要修改任何配置。",
+                    "path": self.fixture["path"]}
+        save(directory / "input.json", question)
+        task = self.admin.request(self.urls["admin"] + "/api/agent/sessions/" + session["sessionId"] + "/messages",
+                                  question, self.csrf, allowed=(202,))[1]
+        task = self.wait_task(task, 240, "live model tool conversation")
+        save(directory / "task.json", task)
+        workspace = self.admin.request(self.urls["admin"] + "/api/agent/sessions/" + session["sessionId"] + "/workspace")[1]
+        save(directory / "workspace.json", workspace)
+        after = self.model_metrics(directory, "after")
+        calls = {key: value - before.get(key, 0) for key, value in after.items()}
+        evidence = (task.get("result") or {}).get("evidence", [])
+        checks = {"completed": task["status"] == "COMPLETED", "actualModelCall": calls.get("对话:ok", 0) > 0,
+                  "toolEvidence": bool(evidence), "routeUnchanged": revision == self.manage("/routes")["revision"],
+                  "answerNonempty": bool((task.get("result") or {}).get("summary", "").strip())}
+        save(directory / "checks.json", {"checks": checks, "calls": calls})
+        self.report["conversationChecks"] = checks
+        require(all(checks.values()), "Live model tool conversation failed")
+
+    def model_failure_probe(self):
+        """Fail a local provider after the real-model cases; never forward real credentials to it."""
+        self.event("checking provider failure: preserve evidence and disclose rule fallback")
+        directory = self.output / "model-failure"
+        revision = self.manage("/routes")["revision"]
+
+        class Unavailable(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":{"message":"fixture provider unavailable","type":"server_error"}}')
+
+            def log_message(self, *args):
+                pass
+
+        with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Unavailable) as server:
+            worker = threading.Thread(target=server.serve_forever, daemon=True)
+            worker.start()
+            try:
+                body = {"enabled": True, "vendor": "custom", "baseUrl": f"http://127.0.0.1:{server.server_port}",
+                        "model": "fixture-unavailable", "apiKey": "fixture-not-a-provider-secret",
+                        "timeoutSeconds": 3, "fastBaseUrl": "", "fastModel": ""}
+                self.admin.request(self.urls["admin"] + "/api/model/config", body, self.csrf)
+                task = self.admin.request(self.urls["admin"] + "/api/agent/events/ingest",
+                    {"path": self.fixture["path"], "message": "检查模型供应商不可用时的调查收尾"},
+                    self.csrf, allowed=(202,))[1]
+                task = self.wait_task(task, 60, "provider failure")
+                save(directory / "task.json", task)
+                self.model_metrics(directory, "after")
+                report = task.get("result") or {}
+                checks = {"completed": task["status"] == "COMPLETED", "evidencePreserved": bool(report.get("evidence")),
+                          "noInventedAnalysis": not report.get("aiAnalysis"),
+                          "failureDisclosed": any(step.get("type") == "AI_EXPLANATION" and step.get("status") == "FAILED"
+                                                  for step in task.get("steps", [])),
+                          "routeUnchanged": revision == self.manage("/routes")["revision"]}
+                save(directory / "checks.json", checks)
+                self.report["modelFailureChecks"] = checks
+                require(all(checks.values()), "Provider failure did not preserve evidence or disclose fallback")
+            finally:
+                server.shutdown()
+                worker.join(timeout=5)
+
+    def alert(self, directory, case, window):
+        url = self.urls["admin"]
+        message = "监控检测到请求失败，请按指定时间窗口核查原因，区分已知事实与待验证假设。" if self.live_model else "回放告警：" + case["id"]
+        payload = {"path": self.fixture["path"], "message": message,
+                   "fromMillis": window["fromMillis"], "toMillis": window["toMillis"]}
+        save(directory / "alert-input.json", payload)
+        before = self.model_metrics(directory, "before") if self.live_model else {}
+        _, task, _ = self.admin.request(url + "/api/agent/events/ingest", payload, self.csrf, allowed=(202,))
+        save(directory / "accepted-task.json", task)
+        task = self.wait_task(task, 240 if self.live_model else 60, "investigation " + case["id"])
         save(directory / "task.json", task)
         workspace = self.admin.request(url + "/api/agent/sessions/" + task["sessionId"] + "/workspace")[1]
         save(directory / "workspace.json", workspace)
+        if self.live_model:
+            after = self.model_metrics(directory, "after")
+            model_evidence = {"calls": {key: value - before.get(key, 0) for key, value in after.items()}}
+            save(directory / "live-model.json", model_evidence)
+            model_evidence.update(validate_live_analysis(task))
+            save(directory / "live-model.json", model_evidence)
+            require(model_evidence["calls"].get("解读:ok", 0) > 0, "No successful actual model explanation was measured")
         require(task["status"] == "COMPLETED", "Alert investigation did not complete")
         require(workspace["session"]["userId"] == "admin" and workspace["activeIncident"]["triggeredBy"] == "admin",
                 "Alert source or handler was lost")
@@ -318,11 +509,32 @@ class Replay:
                     "Observed in-window 503 was not confirmed")
         evidence = task["result"]["evidence"]
         require(bool(evidence), "No investigation evidence")
+        require(any(item["type"] == "INSTANCE" and "健康 2 个" in item["summary"] for item in evidence),
+                "Fixture has two healthy registered versions, but instance evidence does not describe them")
         require(all(item["metadata"].get("requestedFromMillis") == str(window["fromMillis"])
                     and item["metadata"].get("requestedToMillis") == str(window["toMillis"]) for item in evidence),
                 "Evidence window differs from replay window")
         require(any(item["type"] == "TRACE" and item["metadata"].get("temporalScope") == "REQUESTED_WINDOW"
                     and int(item["metadata"].get("sampleSize", 0)) > 0 for item in evidence), "No real trace samples reached the agent")
+        if getattr(self.args, "require_evidence_contract", False):
+            checks = validate_evidence_contract(evidence, case["expectedFailureStatus"], self.fixture["routeId"],
+                                                "127.0.0.1:" + str(self.args.base_port + 4))
+            native = self.manage("/metrics/routes?" + urllib.parse.urlencode({"routeId": self.fixture["routeId"],
+                                  "fromMillis": window["fromMillis"], "toMillis": window["toMillis"]}))
+            fact = native.get("routeWindow", {})
+            require(fact.get("schemaVersion") == 1 and fact.get("samplingMode") == "ALL_FINAL_REQUESTS",
+                    "Gateway did not expose its native final-response window")
+            require(fact.get("qualityStatus") in ("AVAILABLE", "PARTIAL", "EMPTY", "OUT_OF_RANGE"),
+                    "Native window quality is unknown")
+            require(0 <= fact["final5xx"] <= fact["finalRequests"] <= window["requests"],
+                    "Native historical window mixed requests outside the requested interval")
+            if fact["qualityStatus"] == "OUT_OF_RANGE":
+                require(fact["coverageFromMillis"] is None and fact["final5xxRate"] is None,
+                        "Missing history was presented as a healthy rate")
+            else:
+                require(window["fromMillis"] <= fact["coverageFromMillis"] <= fact["coverageToMillis"] <= window["toMillis"],
+                        "Native coverage differs from the incident interval")
+            save(directory / "evidence-contract.json", {"checks": checks, "nativeWindow": native})
         return {"taskId": task["taskId"], "sessionId": task["sessionId"], "status": task["status"]}
 
     def weight(self, value, operation_id=None, revision=None, allowed=(200,)):
@@ -435,6 +647,8 @@ class Replay:
         self.start("admin")
         self.wait("admin", lambda: self.admin.request(self.urls["admin"] + "/api/auth/status"))
         self.login()
+        if self.live_model:
+            self.verify_model()
         # Discovery has to reach the gateway, not just the registry.
         self.wait("gateway", lambda: self.http.request(self.urls["gateway"] + self.fixture["path"], headers={"X-Replay-Key": self.keys[0]}))
         for case in self.fixture["scenarios"]:
@@ -445,7 +659,18 @@ class Replay:
             for case in self.fixture["scenarios"])
         require(self.report["repeatable"], "At least two repetitions must produce matching per-user outcomes")
         self.report["faultReplayPassed"] = True
+        if getattr(self.args, "require_evidence_contract", False):
+            self.report["evidenceContractGatePassed"] = True
+        if self.live_model:
+            self.live_conversation()
+            counts = self.model_metrics(self.output, "final")
+            self.report["modelCalls"] = counts
+            # Planner success and explanation success are separate: neither can be hidden by fallback.
+            self.report["liveModelGatePassed"] = counts.get("调查规划:ok", 0) > 0 and counts.get("解读:ok", 0) >= len(self.report["cases"])
+            require(self.report["liveModelGatePassed"], "Live model planning/explanation gate failed")
         self.receipts()
+        if self.live_model:
+            self.model_failure_probe()
         if getattr(self.args, "require_single_admin_foundation", False):
             self.single_admin_foundation()
 
@@ -521,23 +746,36 @@ class Replay:
                 errors.append(f"{name}: {type(error).__name__}")
         for log in self.logs:
             log.close()
+        if self.live_model:
+            # Delete only the two copies created in this fresh owned fixture; never touch the source credentials.
+            for filename in ("model.properties", "master.key"):
+                try:
+                    (self.component_dir("admin") / "config" / filename).unlink(missing_ok=True)
+                except OSError as error:
+                    errors.append("credential-copy: " + type(error).__name__)
         self.report["cleanupPassed"] = not errors and all(p.poll() is not None for p in self.processes.values())
         self.report["cleanupErrors"] = errors
         save(self.output / "result.json", self.report)
         lines = ["# Agent fault replay", "", f"Fault replay: {self.report['faultReplayPassed']}",
                  f"Cleanup: {self.report['cleanupPassed']}",
                  f"Receipt production gate: {self.report['receiptProductionGatePassed']}", "",
-                 "Mitigation actor: test-harness; model mode: none.", "",
+                 f"Mitigation actor: test-harness; model mode: {self.report['modelMode']}.", "",
                  "| Scenario | Run | Baseline errors | Fault errors | Mitigated errors | Passed |",
                  "| --- | --- | --- | --- | --- | --- |"]
         for row in self.report["cases"]:
             counts = [str(row.get(phase, {}).get("failures", "incomplete")) for phase in ("baseline", "fault", "mitigated")]
             lines.append(f"| {row['scenario']} | {row['repetition']} | {' | '.join(counts)} | {row['passed']} |")
         lines += ["", "Receipt checks: " + json.dumps(self.report.get("receiptProductionChecks", {})),
+                  "Evidence contract gate: " + str(self.report.get("evidenceContractGatePassed", "not run")),
                   "", "Error: " + str(self.report["error"]), "",
                   "Raw evidence: cases/*/*-requests.jsonl, task.json, workspace.json, receipt-probe.json.",
                   "Metrics are rolling snapshots; phase error rates use actual client request outcomes.",
-                  "This run does not certify capacity, LLM quality, automatic remediation or production readiness."]
+                  "This run does not certify capacity, general LLM quality, automatic remediation or production readiness."]
+        if self.live_model:
+            lines += ["", "Live model gate: " + str(self.report.get("liveModelGatePassed")),
+                      "Model calls: " + json.dumps(self.report.get("modelCalls", {}), ensure_ascii=False),
+                      "Live evidence: live-model-connection.json, cases/*/live-model.json, *-agent-metrics.prom.",
+                      "Model explanations require human evidence review; repair/reset operations belong to the test harness."]
         (self.output / "SUMMARY.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -551,10 +789,14 @@ def main():
     parser.add_argument("--heap-mb", type=int, default=384, help="Heap cap per fixture JVM (128..512)")
     parser.add_argument("--require-durable-receipts", action="store_true", help="Fail if the S1-05 receipt production gate is not met")
     parser.add_argument("--require-single-admin-foundation", action="store_true", help="Also verify identity, roles, machine ingress, Admin restart, SSE and backup over real HTTP")
+    parser.add_argument("--require-evidence-contract", action="store_true", help="Verify S2 captured identity, response origin, evidence quality and native historical windows")
+    parser.add_argument("--model-config", type=Path, help="Opt in to actual paid model calls using this existing encrypted Rover model config")
+    parser.add_argument("--model-master-key-file", type=Path, help="Existing master-key file; defaults to master.key next to --model-config")
     args = parser.parse_args()
     parser.error("Java 17+ must be on PATH or supplied with --java") if not args.java else None
     require(1024 <= args.base_port <= 65530 and 1 <= args.startup_timeout <= 300, "Invalid port/timeout")
     require(128 <= args.heap_mb <= 512, "Invalid fixture heap cap")
+    require(not args.model_master_key_file or args.model_config, "--model-master-key-file requires --model-config")
     fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
     validate_fixture(fixture)
     replay = Replay(args, fixture)

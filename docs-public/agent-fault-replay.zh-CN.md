@@ -29,6 +29,24 @@ python deploy/scripts/agent-fault-replay.py --heap-mb 256 `
 
 新增检查覆盖资源清单、角色分权、机器告警、实时撤权、停写、Admin 重启后令牌/停写持久性、SSE 重放、安全审计和一致性备份，共 13 项；结果写入 `single-admin-probe.json` 与 `result.json.singleAdminChecks`。该运行会额外重启本次创建的 Admin，仍只清理自己的进程。`--heap-mb` 控制每个测试 JVM 的堆上限，范围 128～512 MB；内存紧张时与 Maven 顺序运行。这些检查不代替真实进程强制终止、预算恢复和 ZIP 实际恢复的 Java 测试，也不构成整体生产准入。
 
+S2 证据契约与原生历史窗口检查可追加 `--require-evidence-contract`。它会核对实际故障样本中的版本、实例、UID/代次、授权范围、响应来源、失败环节与历史覆盖；每个场景产生 `evidence-contract.json`，全部通过后设置 `result.json.evidenceContractGatePassed=true`。口径与限制见 [证据契约交付说明](agent-evidence-contract.zh-CN.md)。
+
+显式接入已配置的真实模型（会产生服务商 API 调用费用）：
+
+```powershell
+python deploy/scripts/agent-fault-replay.py --heap-mb 256 --require-durable-receipts `
+  --model-config E:/roverSuite/config/admin-model.properties `
+  --model-master-key-file E:/roverSuite/config/master.key
+```
+
+`--model-config` 指向已启用、保存完整的 Rover 加密模型配置；主密钥文件默认取该文件同目录的 `master.key`，也可显式指定。运行器将两者复制到本次隔离目录，在 finally 中清理这两个副本，保留原始配置。密钥不会出现在命令行或报告中。该模式需要允许 Admin 联网访问已配置服务商，仅发送本次模拟服务的证据。
+
+真实模型模式先验证连接，再执行四次故障调查，以及一次由模型实际调用只读工具的交互式调查。告警描述不提供 `bad-version` 等故障答案；同时检查实例证据必须识别出两个健康版本。`AI_EXPLANATION` 成功且解读非空、实际模型调用指标成功、对话取回工具证据、路由未被修改才算通过；规则回退不能替代模型验收。规划与解读的成功、超时、无效输出等分别保留在指标中；`liveModelGatePassed` 要求至少一次模型规划成功和全部故障解读成功，并非承诺每轮规划都成功。模型回答的事实准确性仍须对照原始证据人工复核，流量切换与恢复仍由 `test-harness` 执行。
+
+最后使用本机测试 HTTP 服务模拟模型供应商返回 503，检查任务能保留证据、明确标记 AI 解读失败、保持路由不变。这个服务仅接收专用假密钥。故障探针会修改隔离副本的模型配置，结束时一起清理；原始模型配置不变。结果记录在 `model-failure/` 和 `result.json.modelFailureChecks`，不算作真实服务商调用。
+
+本次实际接入发现的问题、修复与证据见[真实模型故障调查验收](agent-live-model-validation.zh-CN.md)。
+
 每次运行创建新的 `artifacts/agent-fault-replay/<时间-随机ID>/`。用 `--output artifacts/agent-fault-replay/my-run` 指定新的目录也可以；已有目录拒绝复用，以防旧 overlay、账号或结果混入。启动、失败、Ctrl+C 都清理本次持有的子进程；保留证据文件，便于排障。强制杀死运行器本身无法保证执行 finally，手动清理前需核对进程身份与日志，不能仅凭端口或旧 PID 杀进程。
 
 ## 2. 固定故障与请求集合
@@ -80,13 +98,16 @@ python deploy/scripts/agent-fault-replay.py --require-durable-receipts
 | cases/*/*-metrics.json / *-traces.json | 同时采到的真实 Gateway 窗口指标与抽样追踪 |
 | cases/*/alert-input.json / task.json / workspace.json | 实际告警窗口、Agent 证据/假设/限制、处理人可见的工作台数据 |
 | receipt-probe.json | 参数重放、重启、205 次操作前后的请求和回执 |
+| live-model-config.json / live-model-connection.json | 真实模型模式的生效配置摘要和实际连接结果，不含密钥 |
+| cases/*/live-model.json / *-agent-metrics.prom | 每次真实模型解读、步骤、证据数量和模型调用结果指标 |
+| conversation/task.json / workspace.json / checks.json | 模型交互调查的工具证据、回答、调用指标及路由未变检查 |
 | 各组件 process-*.log | 所有本次启动进程的日志；Gateway 重启保留不同代次日志 |
 
 人工复核至少检查：baseline/fault 使用同一批用户；实际故障状态码匹配；告警窗口覆盖真实请求；调查中历史与当前证据分开；停推后的样本量足够且只有 v1；恢复后两版本回归；回执 UNKNOWN 被列为缺口。
 
 窗口指标可能同时包含多个阶段，不能将其当作某一个阶段的独立错误率。阶段错误率以请求 JSONL 为准。默认全量采样用于可重复实验，不是生产采样配置或性能基准。
 
-测试配置和 H2 均位于本次目录，不读取现有工作目录下的运行配置。子进程不继承 Rover/Spring/OpenAI 模型配置环境变量和 Java agent 注入参数；模型保持关闭。本次只创建随机测试令牌与本地测试账号，不使用生产密钥或客户数据。`artifacts/` 不入库。
+测试配置和 H2 均位于本次目录。默认不读取现有工作目录下的运行配置；子进程不继承 Rover/Spring/OpenAI 模型配置环境变量和 Java agent 注入参数，模型保持关闭。只有显式传入 `--model-config` 才复制指定模型凭据并访问真实服务商。本次只创建随机管理令牌与本地测试账号，不使用客户业务数据。`artifacts/` 不入库，分享产物前须排除数据库、备份和运行时配置。
 
 运行器自身的失败分支检查：
 

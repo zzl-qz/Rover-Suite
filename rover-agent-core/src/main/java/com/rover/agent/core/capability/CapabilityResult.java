@@ -136,7 +136,8 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
                     : capability == AgentCapability.KNOWLEDGE_RETRIEVAL ? "REFERENCE" : "REQUESTED_WINDOW");
             scoped.add(new Evidence(item.evidenceId(), item.taskId(), item.type(), item.source(), item.title(),
                     currentContext ? "当前状态参考（不覆盖指定时段）：" + item.summary() : item.summary(),
-                    item.rawReference(), Map.copyOf(metadata), item.observedAtMillis()));
+                    item.rawReference(), Map.copyOf(metadata), item.observedAtMillis(),
+                    item.envelope().requested(range, currentContext)));
         }
         List<String> bounds = new ArrayList<>(limitations);
         if (currentContext) {

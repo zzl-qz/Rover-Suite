@@ -129,7 +129,7 @@ public class RouteAndProxyFilter implements Filter {
         RouteConfig route = routeMatcher.match(requestPath);
         gatewayContext.markPhase(TracePhase.ROUTE.phaseName(), System.nanoTime() - routeStartNanos);
         if (route == null) {
-            gatewayContext.writeText(HttpResponseStatus.NOT_FOUND, "No route matched: " + requestPath);
+            gatewayContext.writeText(HttpResponseStatus.NOT_FOUND, "No route matched: " + requestPath, "ROUTE_UNMATCHED");
             return CompletableFuture.completedFuture(null);
         }
 
@@ -178,12 +178,12 @@ public class RouteAndProxyFilter implements Filter {
                 .thenCompose(first -> retryOrFinish(gatewayContext, route, target, requestPath, chosen, first, mayRetry))
                 .thenApply(attempt -> {
                     gatewayContext.markPhase(TracePhase.PROXY.phaseName(), System.nanoTime() - proxyStartNanos);
-                    gatewayContext.setStatusCode(attempt.result().statusCode());
+                    // Final status and origin are committed together below.
                     gatewayContext.setUpstreamHostPort(hostPortOf(attempt.instance()));
                     gatewayContext.setUpstreamCostMillis(attempt.result().upstreamCostMillis());
                     gatewayContext.setUpstreamConnectFail(attempt.result().connectFail());
                     gatewayContext.setUpstreamTimeout(attempt.result().timeout());
-                    gatewayContext.markCompleted();
+                    gatewayContext.completeProxy(attempt.result());
                     return null;
                 });
     }
@@ -265,7 +265,10 @@ public class RouteAndProxyFilter implements Filter {
                         circuitBreaker.onResult(instance, isUpstreamAlive(result, err));
                     }
                 })
-                .thenApply(result -> new Attempt(result, instance));
+                .thenApply(result -> {
+                    gatewayContext.recordAttempt(hostPortOf(instance), chosen.target(), result);
+                    return new Attempt(result, instance);
+                });
     }
 
     /** 只救连不上，而且 body 还在。请求超时、5xx、已经发出去的都不换台。 */

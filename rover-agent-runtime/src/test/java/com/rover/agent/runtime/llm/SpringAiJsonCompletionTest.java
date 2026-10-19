@@ -11,6 +11,7 @@ import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.InterruptedIOException;
+import java.net.http.HttpTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -35,6 +36,35 @@ class SpringAiJsonCompletionTest {
 
     /** 测试用契约：原样接受任何文本（这些用例只关心调用与重试行为，不关心契约内容）。 */
     private static final Function<String, Optional<String>> ACCEPT_ANY = Optional::of;
+
+    @Test
+    void jdkHttpClientTimeoutAlsoRetriesOnce() {
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(model.call(any(Prompt.class)))
+                .thenThrow(new RuntimeException(new HttpTimeoutException("Request cancelled")))
+                .thenReturn(response("ok"));
+        RecordingGateway gateway = new RecordingGateway(model);
+
+        assertEquals(Optional.of("ok"), new SpringAiJsonCompletion(gateway, AgentMetrics.NOOP, "调查规划", 10)
+                .complete("system", "question", ACCEPT_ANY));
+        assertEquals(List.of(10, 10), gateway.requestedTimeouts);
+    }
+
+    @Test
+    void repeatedJdkTimeoutsAreMeasuredAsTimeoutRatherThanOrdinaryErrors() {
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(model.call(any(Prompt.class))).thenThrow(new RuntimeException(new HttpTimeoutException("Request cancelled")));
+        RecordingGateway gateway = new RecordingGateway(model);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        assertTrue(new SpringAiJsonCompletion(gateway, new MicrometerAgentMetrics(registry), "调查规划", 10)
+                .complete("system", "question", ACCEPT_ANY).isEmpty());
+        assertEquals(List.of(10, 10), gateway.requestedTimeouts);
+        assertEquals(1.0, registry.get("rover.agent.model.calls").tag("outcome", "timeout").counter().count());
+        assertNull(registry.find("rover.agent.model.calls").tag("outcome", "error").counter());
+    }
 
     @Test
     void retriesOnceWithTheSameSceneTimeoutAfterATimeout() {

@@ -18,6 +18,31 @@ import org.junit.jupiter.api.Test;
 class EvidenceNarratorTest {
 
     @Test
+    void multipleRouteGroupsMatchEachVersionAndExcludeOtherGroups() {
+        RouteSnapshot route = new RouteSnapshot("replay", "/api/replay", "demo", "v1,v2", "", "", 1L);
+        List<InstanceSnapshot> rows = List.of(
+                new InstanceSnapshot("demo", "v1", "v1", "127.0.0.1", 8081, true, 100, true, 0),
+                new InstanceSnapshot("demo", "v2", "v2", "127.0.0.1", 8082, true, 100, true, 0),
+                new InstanceSnapshot("demo", "v3", "v3", "127.0.0.1", 8083, true, 100, true, 0));
+        String detail = EvidenceNarrator.instances(rows, route).detail();
+        assertTrue(detail.contains("注册实例 2 个，其中健康 2 个"), detail);
+        assertFalse(detail.contains("v3@"), detail);
+        assertEquals(2, EvidenceNarrator.healthyCount(rows, "demo", "v1,v2"));
+        assertEquals(3, EvidenceNarrator.healthyCount(rows, "demo", ""));
+        assertEquals(0, EvidenceNarrator.healthyCount(rows, "demo", "v4"));
+    }
+
+    @Test
+    void traceStatusCountsUseWholeWindowRatherThanTheFiveExampleRows() {
+        List<TraceRow> rows = java.util.stream.IntStream.range(0, 12)
+                .mapToObj(index -> new TraceRow("t" + index, "/api/replay", index < 5 ? 503 : 200, 1000L))
+                .toList();
+        String detail = EvidenceNarrator.traces(new TraceSnapshot(true, 1, rows, 1001L), "/api/replay").detail();
+        assertTrue(detail.contains("HTTP 200=7 条"), detail);
+        assertTrue(detail.contains("HTTP 503=5 条"), detail);
+    }
+
+    @Test
     void describesMatchedRouteAndMissingRoute() {
         RouteSnapshot route = new RouteSnapshot("demo-tt", "/api/demo/tt", "demo", "", "", "", 1L);
 

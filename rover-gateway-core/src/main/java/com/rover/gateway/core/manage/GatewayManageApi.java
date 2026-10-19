@@ -79,6 +79,17 @@ public class GatewayManageApi extends AbstractManageApi {
             QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
             String routeId = firstQuery(decoder, ManageApiPaths.PARAM_ROUTE_ID);
             int range = ManageApiPaths.clampLiveRange(firstQuery(decoder, ManageApiPaths.PARAM_RANGE));
+            String from = firstQuery(decoder, "fromMillis"), to = firstQuery(decoder, "toMillis");
+            if (from != null || to != null) {
+                try {
+                    if (from == null || to == null || routeId == null || routeId.isBlank()) { throw new IllegalArgumentException(); }
+                    writeJson(ctx, HttpResponseStatus.OK,
+                            runtime.getMetricsRegistry().routeWindowJson(routeId, Long.parseLong(from), Long.parseLong(to)));
+                } catch (IllegalArgumentException ex) {
+                    writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"error\":\"invalid final-response window\"}");
+                }
+                return true;
+            }
             writeJson(ctx, HttpResponseStatus.OK,
                     runtime.getMetricsRegistry().routeMetricsJson(routeId, range));
             return true;
@@ -393,6 +404,10 @@ public class GatewayManageApi extends AbstractManageApi {
         resp.put("sampleRate", runtime.getTraceSettings().getSampleRate());
         resp.put("capacity", runtime.getTraceBuffer().capacity());
         resp.put("count", runtime.getTraceBuffer().size());
+        resp.put("observedAtMillis", System.currentTimeMillis());
+        resp.put("collectionStartedAtMillis", runtime.getTraceBuffer().startedAtMillis());
+        resp.put("overwritten", runtime.getTraceBuffer().overwritten());
+        resp.put("samplingMode", "RANDOM_PLUS_SLOW");
 
         List<Map<String, Object>> rows = new ArrayList<>();
         for (com.rover.gateway.core.trace.RequestTrace trace : runtime.getTraceBuffer().snapshot()) {
@@ -431,6 +446,7 @@ public class GatewayManageApi extends AbstractManageApi {
         row.put("startMillis", trace.getStartMillis());
         row.put("totalCostMs", trace.getTotalCostMs());
         row.put("slow", trace.isSlow());
+        row.put("observation", trace.getObservation());
         List<Map<String, Object>> phases = new ArrayList<>();
         for (com.rover.gateway.core.trace.RequestTrace.Phase phase : trace.getPhases()) {
             Map<String, Object> phaseRow = new LinkedHashMap<>();

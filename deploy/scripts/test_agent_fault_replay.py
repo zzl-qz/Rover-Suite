@@ -16,6 +16,62 @@ SPEC.loader.exec_module(replay)
 
 
 class ReplayTest(unittest.TestCase):
+    def test_response_origin_gate_rejects_status_only_guesses_and_wrong_version(self):
+        scope = {"organizationId": "org", "teamId": "team", "environmentId": "test"}
+        row = {"statusCode": 503, "routeId": "r", "group": "v2", "hostPort": "h:80", "resourceUid": "uid",
+               "generation": 1, "responseOrigin": "UPSTREAM", "failurePhase": "NONE", "attempts": [{}]}
+        evidence = [{"taskId": "t", "type": "TRACE", "envelope": {"schemaVersion": 1, "qualityStatus": "PARTIAL",
+                     "context": {"scope": scope, "controlTargetId": "gw", "taskId": "t"}, "facts": {"rows": [row],
+                         "samplePopulations": [{"group": "v2", "hostPort": "h:80", "sampleRequests": 1, "sample5xx": 1, "sample5xxRate": 1}]},
+                     "resourceRefs": [{"scope": scope, "resourceUid": "uid", "generation": 1}]}}]
+        self.assertEqual(1, replay.validate_evidence_contract(evidence, 503, "r", "h:80")["capturedFailureSamples"])
+        for field, value in (("responseOrigin", "GATEWAY"), ("group", "v1"), ("resourceUid", "invented")):
+            wrong = copy.deepcopy(evidence)
+            wrong[0]["envelope"]["facts"]["rows"][0][field] = value
+            with self.assertRaises(RuntimeError):
+                replay.validate_evidence_contract(wrong, 503, "r", "h:80")
+        wrong = copy.deepcopy(evidence)
+        wrong[0]["envelope"]["facts"]["samplePopulations"][0]["sampleRequests"] = 62
+        with self.assertRaises(RuntimeError):
+            replay.validate_evidence_contract(wrong, 503, "r", "h:80")
+
+    def test_rule_fallback_cannot_pass_a_live_model_test(self):
+        task = {"status": "COMPLETED", "result": {"aiAnalysis": None}, "steps": [
+            {"type": "AI_EXPLANATION", "status": "FAILED"}]}
+        with self.assertRaisesRegex(RuntimeError, "rule fallback"):
+            replay.validate_live_analysis(task)
+        task["result"]["aiAnalysis"] = "partial streamed text before provider failure"
+        with self.assertRaises(RuntimeError):
+            replay.validate_live_analysis(task)
+
+    def test_live_model_requires_completed_explanation_and_nonempty_answer(self):
+        task = {"status": "RUNNING", "result": {"aiAnalysis": "evidence-based answer"}, "steps": [
+            {"type": "AI_EXPLANATION", "status": "COMPLETED"}]}
+        with self.assertRaises(RuntimeError):
+            replay.validate_live_analysis(task)
+        task["status"] = "COMPLETED"
+        self.assertEqual("evidence-based answer", replay.validate_live_analysis(task)["analysis"])
+
+    def test_live_credential_cleanup_removes_only_fixture_copies(self):
+        temporary = replay.ROOT / ".tmp"
+        temporary.mkdir(exist_ok=True)
+        fixture = json.loads(replay.SCENARIOS.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory(dir=temporary) as work:
+            config = Path(work) / "original.properties"
+            key = Path(work) / "original.key"
+            config.write_text("encrypted-test-config", encoding="utf-8")
+            key.write_text("test-key", encoding="utf-8")
+            args = argparse.Namespace(output=Path(work) / "result", base_port=19080, model_config=config)
+            run = replay.Replay(args, fixture)
+            private = run.component_dir("admin") / "config"
+            private.mkdir(parents=True)
+            (private / "model.properties").write_bytes(config.read_bytes())
+            (private / "master.key").write_bytes(key.read_bytes())
+            run.close()
+            self.assertEqual("encrypted-test-config", config.read_text(encoding="utf-8"))
+            self.assertEqual("test-key", key.read_text(encoding="utf-8"))
+            self.assertEqual([], list(private.iterdir()))
+
     def test_empty_traffic_cannot_be_reported_as_recovered(self):
         with self.assertRaisesRegex(RuntimeError, "No traffic samples"):
             replay.summarize([])

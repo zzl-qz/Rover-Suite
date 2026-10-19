@@ -17,6 +17,8 @@ public class TraceBuffer {
     private final int capacity;
     private int next;
     private int size;
+    private long overwritten;
+    private final long startedAtMillis = System.currentTimeMillis();
 
     public TraceBuffer() {
         this(DEFAULT_CAPACITY);
@@ -33,7 +35,7 @@ public class TraceBuffer {
         next = (next + 1) % capacity;
         if (size < capacity) {
             size++;
-        }
+        } else { overwritten++; }
     }
 
     /** 按时间倒序（最新在前）返回快照。 */
@@ -52,6 +54,9 @@ public class TraceBuffer {
     public synchronized int size() {
         return size;
     }
+
+    public synchronized long overwritten() { return overwritten; }
+    public long startedAtMillis() { return startedAtMillis; }
 
     public int capacity() {
         return capacity;

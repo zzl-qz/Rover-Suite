@@ -754,6 +754,11 @@
                                                             <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
                                                         </div>
                                                         <div v-if="wbEvidenceScope(item)" class="muted wb-evidence-ref">{{ wbEvidenceScope(item) }}</div>
+                                        <details v-if="item.envelope" class="muted wb-evidence-ref">
+                                            <summary>查看取证详情与判断边界</summary>
+                                            <div v-for="(bound, boundIndex) in (item.envelope.limitations || [])" :key="boundIndex">{{ bound }}</div>
+                                            <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto">{{ JSON.stringify(item.envelope, null, 2) }}</pre>
+                                        </details>
                                                     </div>
                                                 </div>
                                             </div>
@@ -1024,6 +1029,11 @@
                                             <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
                                         </div>
                                         <div v-if="wbEvidenceScope(item)" class="muted wb-evidence-ref">{{ wbEvidenceScope(item) }}</div>
+                                        <details v-if="item.envelope" class="muted wb-evidence-ref">
+                                            <summary>查看取证详情与判断边界</summary>
+                                            <div v-for="(bound, boundIndex) in (item.envelope.limitations || [])" :key="boundIndex">{{ bound }}</div>
+                                            <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto">{{ JSON.stringify(item.envelope, null, 2) }}</pre>
+                                        </details>
                                     </div>
                                 </div>
                             </div>

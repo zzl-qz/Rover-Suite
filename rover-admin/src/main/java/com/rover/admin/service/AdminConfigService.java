@@ -291,6 +291,15 @@ public class AdminConfigService {
         }
     }
 
+    public JsonNode loadRouteWindow(String routeId, long fromMillis, long toMillis) {
+        try {
+            String path = ManageApiPaths.METRICS_ROUTES + "?routeId="
+                    + URLEncoder.encode(routeId == null ? "" : routeId, StandardCharsets.UTF_8)
+                    + "&fromMillis=" + fromMillis + "&toMillis=" + toMillis;
+            return httpClient.getJson(properties.getGatewayUrl(), path);
+        } catch (Exception ex) { throw new IllegalStateException("读取 Gateway 历史最终响应窗口失败", ex); }
+    }
+
     /** 读取 Gateway 指标自洽校验结果（/api/selfcheck）。 */
     public JsonNode loadSelfcheck() {
         try {

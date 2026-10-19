@@ -62,12 +62,18 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
         Round round = prepare(request);
-        return Mono.fromCallable(() -> chain.nextCall(round.request))
-                .subscribeOn(Schedulers.boundedElastic())
-                .doOnNext(response -> round.collect(response.chatResponse()))
-                .takeUntilOther(budget.stopSignal())
-                .doOnSuccess(response -> { budget.check(); budget.modelCallCompleted(); })
-                .block(budget.remaining());
+        try {
+            return Mono.fromCallable(() -> chain.nextCall(round.request))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .doOnNext(response -> round.collect(response.chatResponse()))
+                    .takeUntilOther(budget.stopSignal())
+                    .doOnSuccess(response -> { budget.check(); budget.modelCallCompleted(); })
+                    .block(budget.remaining());
+        } catch (RuntimeException failure) {
+            // 阻塞等待可能比任务定时器先到截止点；先结算预算，不能留下未标记的超时任务。
+            budget.check();
+            throw failure;
+        }
     }
 
     @Override

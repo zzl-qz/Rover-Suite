@@ -50,6 +50,7 @@ public class AdminRouteControlAdapter implements RouteControlPort {
 
     @Override public boolean requiresResourceIdentity() { return true; }
     @Override public ResourceScope resourceScope() { return scope; }
+    @Override public String controlTargetId() { return controlTargetId; }
     @Override public String resourceNamespace() { return digest(JsonCodec.toJson(List.of(scope, controlTargetId))); }
 
     private static String digest(String input) {

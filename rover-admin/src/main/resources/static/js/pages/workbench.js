@@ -1426,16 +1426,33 @@ window.RoverAdminPages.workbench = {
          */
         wbEvidenceScope(item) {
             const meta = (item && item.metadata) || {};
+            const envelope = item && item.envelope;
             const parts = [];
+            if (envelope) {
+                parts.push(this.wbEvidenceQualityLabel(envelope.qualityStatus));
+                parts.push('样本 ' + envelope.sampleCount);
+                parts.push('覆盖 ' + (envelope.coverageRange ? this.wbTimeRangeText(envelope.coverageRange) : '未声明'));
+                if (envelope.requestedRange && envelope.requestedRange.toMillis) {
+                    parts.push('请求时段 ' + this.wbTimeRangeText(envelope.requestedRange));
+                }
+                const refs = envelope.resourceRefs || [];
+                refs.slice(0, 3).forEach(ref => parts.push(ref.resourceId + ' UID=' + ref.resourceUid + ' 代次=' + ref.generation));
+                if (refs.length > 3) parts.push('另有 ' + (refs.length - 3) + ' 个资源身份，见详情');
+            }
             const windowSeconds = Number(meta.windowSeconds);
             if (windowSeconds > 0) parts.push('窗口 ' + windowSeconds + 's');
-            else if (windowSeconds === 0) parts.push('时点快照');
+            else if (windowSeconds === 0 && !envelope) parts.push('时点快照');
             const sampleSize = Number(meta.sampleSize);
-            if (Number.isFinite(sampleSize) && sampleSize > 0) parts.push('样本 ' + sampleSize);
+            if (!envelope && Number.isFinite(sampleSize) && sampleSize >= 0) parts.push('样本 ' + sampleSize);
             if (meta.routeId) parts.push('路由 ' + meta.routeId);
             if (meta.hostPort) parts.push('上游 ' + meta.hostPort);
             if (meta.component) parts.push('组件 ' + meta.component);
             return parts.join(' · ');
+        },
+
+        wbEvidenceQualityLabel(quality) {
+            return { AVAILABLE: '可用', EMPTY: '无样本', PARTIAL: '覆盖不完整', UNAVAILABLE: '数据不可用',
+                STALE: '已过期', OUT_OF_RANGE: '不覆盖该时段' }[quality] || '质量未知';
         },
 
         wbTimeRangeText(range) {

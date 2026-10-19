@@ -920,13 +920,19 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     private void writeEvidence(String taskId, List<Evidence> reported) {
         List<Evidence> evidence = reported == null ? List.of() : reported;
+        List<Evidence> saved = query("SELECT * FROM agent_evidence WHERE task_id=? ORDER BY sequence_no",
+                JdbcAgentStore::readEvidence, taskId);
+        if (evidence.size() < saved.size() || !evidence.subList(0, saved.size()).equals(saved)) {
+            throw new IllegalArgumentException("已采集证据只允许追加；修正事实必须生成新证据 ID");
+        }
         List<String> kept = new ArrayList<>();
         int sequence = 0;
         for (Evidence item : evidence) {
             int order = sequence++;
             kept.add(item.evidenceId());
             Object[] values = {taskId, item.type().name(), order, item.source(), item.title(), item.summary(),
-                    item.rawReference(), toJson(item.metadata()), item.observedAtMillis()};
+                    item.rawReference(), toJson(Map.of("evidenceEnvelopeVersion", 1, "metadata", item.metadata(),
+                            "envelope", item.envelope())), item.observedAtMillis()};
             upsert("UPDATE agent_evidence SET task_id = ?, evidence_type = ?, sequence_no = ?, source = ?, title = ?, "
                             + "summary = ?, raw_reference = ?, payload_json = ?, observed_at = ? WHERE evidence_id = ?",
                     "INSERT INTO agent_evidence (task_id, evidence_type, sequence_no, source, title, summary, "
@@ -972,10 +978,21 @@ public final class JdbcAgentStore implements AutoCloseable {
     }
 
     private static Evidence readEvidence(ResultSet rows) throws SQLException {
+        String payload = rows.getString("payload_json");
+        com.rover.agent.core.model.EvidenceEnvelope envelope = null;
+        Map<String, String> metadata;
+        try {
+            var json = payload == null || payload.isBlank() ? JSON.createObjectNode() : JSON.readTree(payload);
+            if (json.has("evidenceEnvelopeVersion") && json.path("evidenceEnvelopeVersion").isIntegralNumber()) {
+                if (json.path("evidenceEnvelopeVersion").asInt() != 1) { throw new IllegalArgumentException("不支持的证据版本"); }
+                metadata = JSON.convertValue(json.required("metadata"), new TypeReference<Map<String, String>>() { });
+                envelope = JSON.convertValue(json.required("envelope"), com.rover.agent.core.model.EvidenceEnvelope.class);
+            } else { metadata = metadataOf(payload); }
+        } catch (Exception ex) { throw new SQLException("读取证据契约失败", ex); }
         return new Evidence(rows.getString("evidence_id"), rows.getString("task_id"),
                 EvidenceType.valueOf(rows.getString("evidence_type")), rows.getString("source"),
                 rows.getString("title"), rows.getString("summary"), rows.getString("raw_reference"),
-                metadataOf(rows.getString("payload_json")), rows.getLong("observed_at"));
+                metadata, rows.getLong("observed_at"), envelope);
     }
 
     // ---------------------------------------------------------------- 行投影

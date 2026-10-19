@@ -22,6 +22,16 @@ class InvestigationRulesTest {
     private static final String PATH = "/api/demo/tt";
 
     @Test
+    void multipleVersionRouteDoesNotInventMissingInstances() {
+        Findings findings = evaluate(route("/api/demo/tt", "demo", "v1,v2"), true, DiscoveryMode.NAMESERVER,
+                List.of(new InstanceSnapshot("demo", "v1", "v1", "127.0.0.1", 8081, true, 100, true, 0L),
+                        new InstanceSnapshot("demo", "v2", "v2", "127.0.0.1", 8082, true, 100, true, 0L)), null);
+        assertEquals(Verdict.REJECTED, hypothesis(findings, "H3").status());
+        assertEquals(Verdict.REJECTED, hypothesis(findings, "H4").status());
+        assertTrue(findings.summary().contains("2 个匹配的健康实例"), findings.summary());
+    }
+
+    @Test
     void confirmedRouteMissIsHighConfidence() {
         Findings findings = evaluate(null, true, DiscoveryMode.NAMESERVER, null, null);
 

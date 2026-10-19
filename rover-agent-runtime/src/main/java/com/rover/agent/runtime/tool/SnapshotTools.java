@@ -40,7 +40,7 @@ public final class SnapshotTools {
         this.evidence = List.copyOf(evidence);
         // 按取数地址建索引：工具的入参是来源地址，不是给人看的来源名。
         // 同一地址出现多条时保留第一条：索引只为取回快照文本，重复地址不该让整段解读失败。
-        this.snapshots = evidence.stream().collect(Collectors.toMap(Evidence::rawReference, Evidence::summary,
+        this.snapshots = evidence.stream().collect(Collectors.toMap(Evidence::rawReference, Evidence::modelText,
                 (first, second) -> first));
     }
 
@@ -109,6 +109,10 @@ public final class SnapshotTools {
         Map<String, String> core = new LinkedHashMap<>();
         core.put(TOOL_ROUTE, routeText());
         core.put(TOOL_INSTANCE, instanceText());
+        String observations = evidence.stream().filter(item -> item.envelope().facts().containsKey("samplePopulations")
+                        || "gateway.final-responses".equals(item.envelope().sourceId()))
+                .map(Evidence::modelText).collect(Collectors.joining("\n"));
+        if (!observations.isBlank()) { core.put("已采集故障观测", observations); }
         // 指定时段的日志和知识已经采集完成，解读必须看得到，不能只给当前路由与实例。
         for (String reference : List.of("/api/logs", "/api/knowledge")) {
             String text = snapshots.get(reference);
@@ -147,7 +151,7 @@ public final class SnapshotTools {
         calls.addIfAbsent(tool);
         String joined = evidence.stream()
                 .filter(item -> item.rawReference() != null && item.rawReference().startsWith(referencePrefix))
-                .map(Evidence::summary).collect(Collectors.joining("；"));
+                .map(Evidence::modelText).collect(Collectors.joining("；"));
         return joined.isBlank() ? fallback : joined;
     }
 }

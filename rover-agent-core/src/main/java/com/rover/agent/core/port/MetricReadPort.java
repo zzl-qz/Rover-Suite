@@ -7,6 +7,14 @@ import java.util.List;
 /** 只读读取 Gateway 指标。 */
 public interface MetricReadPort {
 
+    default com.rover.agent.core.snapshot.RouteWindowSnapshot routeWindow(String routeId, int windowSeconds) {
+        throw new SnapshotUnavailableException("当前 Gateway 未提供原生最终响应窗口");
+    }
+
+    default com.rover.agent.core.snapshot.RouteWindowSnapshot routeWindow(String routeId, com.rover.agent.core.model.TimeRange range) {
+        throw new SnapshotUnavailableException("当前 Gateway 未提供历史最终响应窗口");
+    }
+
     /**
      * 读取 Gateway 最近 windowSeconds 秒的全局流量与拒绝计数快照。
      * 指标未启用或数据不可用时抛 {@link SnapshotUnavailableException}。

@@ -19,7 +19,7 @@ import com.rover.agent.runtime.llm.SpringAiConversationModel;
 import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.task.InvestigationTask;
 import com.rover.agent.runtime.tool.OpsTools;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import org.slf4j.Logger;
@@ -41,7 +41,7 @@ public final class ToolLoopService {
             "当前没有配置可用的模型，Ops Agent 无法理解问题与组织回答。"
                     + "请在「模型配置」里填入可用的模型地址与密钥后重试。";
 
-    private static final DateTimeFormatter STAMP = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter STAMP = DateTimeFormatter.ISO_OFFSET_DATE_TIME;
 
     /** 对话提示词：讲清怎么问、怎么查、怎么答，其余交给模型。 */
     private static final String SYSTEM_PROMPT = "你是 Rover Ops Agent——一个网关运维诊断助手，"
@@ -208,7 +208,8 @@ public final class ToolLoopService {
         if (styleInstruction != null && !styleInstruction.isBlank()) {
             message.append(styleInstruction.trim()).append('\n');
         }
-        message.append("【当前时间】").append(LocalDateTime.now().format(STAMP)).append('\n');
+        message.append("【当前时间】").append(OffsetDateTime.now().format(STAMP)).append('\n');
+        message.append("时间中的 Z 表示 UTC；比较时间前先按时区偏移换算，不能直接相减钟面小时。\n");
         String context = contextSummary == null ? "" : contextSummary.trim();
         if (!context.isEmpty()) {
             message.append(UntrustedText.block("会话背景", context));

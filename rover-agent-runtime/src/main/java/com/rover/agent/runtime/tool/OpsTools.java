@@ -414,7 +414,7 @@ public final class OpsTools {
             if (!text.isEmpty()) {
                 text.append('\n');
             }
-            text.append("- ").append(item.summary());
+            text.append("- ").append(item.modelText());
         }
         if (text.isEmpty()) {
             text.append(result.limitations().isEmpty()

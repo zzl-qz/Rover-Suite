@@ -39,6 +39,8 @@ public interface RouteControlPort {
 
     default String resourceNamespace() { return ""; }
 
+    default String controlTargetId() { return ""; }
+
     default RouteChangeResult adjustTargetWeight(String routeId, String serviceName, String group, int weight,
                                                  int expectedRevision, String operationId,
                                                  com.rover.agent.core.model.ResourceRef expectedResource) {
