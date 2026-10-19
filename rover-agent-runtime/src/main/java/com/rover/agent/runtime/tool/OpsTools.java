@@ -67,6 +67,10 @@ public final class OpsTools {
     private List<InstanceSnapshot> instances;
     private TraceSnapshot traces;
     private List<RouteUpstreamSnapshot> routeUpstreams;
+    private record QueryKey(AgentCapability capability, ResourceTarget target, String path, com.rover.agent.core.model.TimeRange range) { }
+    private record ReadAttempt(int count, boolean retryable, String text) { }
+    private record LogKey(String type, String target, Integer hours, com.rover.agent.core.model.TimeRange range) { }
+    private final java.util.Map<Object, ReadAttempt> reads = new java.util.HashMap<>();
 
     public OpsTools(CapabilityExecutor executor, InvestigationTask task) {
         this(executor, task, null);
@@ -184,6 +188,11 @@ public final class OpsTools {
         List<String> types = Texts.orEmpty(type).isBlank() ? null : List.of(Texts.orEmpty(type));
         Long from = hours == null || hours <= 0 ? null : System.currentTimeMillis() - hours * 3_600_000L;
         String entity = Texts.orEmpty(target);
+        LogKey key = new LogKey(Texts.orEmpty(type), entity, hours, task.timeRange());
+        ReadAttempt previous = reads.get(key);
+        if (previous != null && (!previous.retryable() || previous.count() >= 2)) {
+            return previous.text() + "\n相同日志查询已完成，未再次取数；没有新信息。缺口仍存在时请说明无法确认。";
+        }
         task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.RUNNING,
                 entity.isBlank() ? "正在查询历史日志" : "正在查询 " + entity + " 的历史日志");
         Long to = null;
@@ -197,6 +206,7 @@ public final class OpsTools {
         evidence.addAll(result.evidence());
         limitations.addAll(result.limitations());
         String rendered = render(result);
+        reads.put(key, new ReadAttempt(previous == null ? 1 : previous.count() + 1, result.retryable(), fence(AgentCapability.LOG_QUERY, rendered)));
         task.step(AgentStepType.LOG_INVESTIGATION, STEP_LOG, StepStatus.COMPLETED,
                 result.evidence().isEmpty() ? rendered : brief(result));
         markSafePoint(result);
@@ -335,8 +345,10 @@ public final class OpsTools {
             return null;
         }
         String path = task.path() == null || task.path().isBlank() ? investigatedPath : task.path();
-        return InvestigationRules.evaluate(new FindingsInput(path, route, routeRead, discovery,
-                instances, traces, routeUpstreams, task.timeRange()));
+        Findings findings = com.rover.agent.core.investigation.HypothesisAssessment.evaluate(new FindingsInput(path, route, routeRead, discovery,
+                instances, traces, routeUpstreams, task.timeRange()), evidence());
+        task.reportPlan(task.resumePlan().assessed(findings.hypotheses(), task.resumePlan().progress()));
+        return findings;
     }
 
     /** 模型按路径查过的那条路径。目标解析没认出来时，用它作为资源笔记的键。 */
@@ -354,6 +366,11 @@ public final class OpsTools {
         if (!withinBudget()) {
             return BUDGET_EXHAUSTED;
         }
+        QueryKey key = new QueryKey(capability, target, path, task.timeRange());
+        ReadAttempt previous = reads.get(key);
+        if (previous != null && (!previous.retryable() || previous.count() >= 2)) {
+            return previous.text() + "\n相同目标与时间范围已查询，未再次取数；没有新信息。仍有证据缺口时请补充其他来源或明确无法确认。";
+        }
         task.step(stepType, stepName, StepStatus.RUNNING, runningText);
         CapabilityResult result = executor.execute(capability, target, path == null ? "" : path, task.taskId(),
                 null, task.timeRange());
@@ -362,7 +379,9 @@ public final class OpsTools {
         limitations.addAll(result.limitations());
         remember(result, path);
         String text = render(result);
-        task.step(stepType, stepName, StepStatus.COMPLETED, result.evidence().isEmpty() ? text : brief(result));
+        reads.put(key, new ReadAttempt(previous == null ? 1 : previous.count() + 1, result.retryable(), fence(capability, text)));
+        task.step(stepType, stepName, result.readFailed() || result.retryable() ? StepStatus.FAILED : StepStatus.COMPLETED,
+                result.evidence().isEmpty() ? text : brief(result));
         markSafePoint(result);
         return fence(capability, text);
     }
@@ -381,7 +400,7 @@ public final class OpsTools {
     /** 只保留规则判定要用的快照，和调查图里的取舍一致。 */
     private void remember(CapabilityResult result, String path) {
         if (result.capability() == AgentCapability.ROUTE_QUERY) {
-            boolean lookedUp = result.evidence().stream().anyMatch(item -> "路由匹配".equals(item.title()));
+            boolean lookedUp = path != null && !path.isBlank();
             if (!lookedUp) {
                 return;
             }

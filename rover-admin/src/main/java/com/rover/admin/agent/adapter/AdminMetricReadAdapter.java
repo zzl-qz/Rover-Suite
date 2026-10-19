@@ -25,14 +25,14 @@ public class AdminMetricReadAdapter implements MetricReadPort {
     public com.rover.agent.core.snapshot.RouteWindowSnapshot routeWindow(String routeId, int windowSeconds) {
         try { return decodeWindow(routeId, admin.loadRouteUpstreams(routeId, windowSeconds)); }
         catch (SnapshotUnavailableException ex) { throw ex; }
-        catch (Exception ex) { throw new SnapshotUnavailableException("读取原生最终响应窗口失败", ex); }
+        catch (Exception ex) { throw AdminValues.unavailable("读取原生最终响应窗口失败", ex); }
     }
 
     @Override
     public com.rover.agent.core.snapshot.RouteWindowSnapshot routeWindow(String routeId, com.rover.agent.core.model.TimeRange range) {
         try { return decodeWindow(routeId, admin.loadRouteWindow(routeId, range.fromMillis(), range.toMillis())); }
         catch (SnapshotUnavailableException ex) { throw ex; }
-        catch (Exception ex) { throw new SnapshotUnavailableException("读取历史最终响应窗口失败", ex); }
+        catch (Exception ex) { throw AdminValues.unavailable("读取历史最终响应窗口失败", ex); }
     }
 
     private static com.rover.agent.core.snapshot.RouteWindowSnapshot decodeWindow(String routeId, JsonNode payload) {
@@ -92,7 +92,7 @@ public class AdminMetricReadAdapter implements MetricReadPort {
             return new com.rover.agent.core.snapshot.RouteWindowSnapshot(routeId, requested, coverage, observed,
                     quality, total, errors, window.required("samplingMode").asText(), facts, List.copyOf(limitations));
         } catch (SnapshotUnavailableException ex) { throw ex; }
-        catch (Exception ex) { throw new SnapshotUnavailableException("读取原生最终响应窗口失败", ex); }
+        catch (Exception ex) { throw AdminValues.unavailable("读取原生最终响应窗口失败", ex); }
     }
 
     @Override
@@ -115,7 +115,7 @@ public class AdminMetricReadAdapter implements MetricReadPort {
         } catch (SnapshotUnavailableException ex) {
             throw ex;
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取 Gateway 指标失败", ex);
+            throw AdminValues.unavailable("读取 Gateway 指标失败", ex);
         }
     }
 
@@ -154,7 +154,7 @@ public class AdminMetricReadAdapter implements MetricReadPort {
         } catch (SnapshotUnavailableException ex) {
             throw ex;
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取 Gateway 按上游实例指标失败", ex);
+            throw AdminValues.unavailable("读取 Gateway 按上游实例指标失败", ex);
         }
     }
 }

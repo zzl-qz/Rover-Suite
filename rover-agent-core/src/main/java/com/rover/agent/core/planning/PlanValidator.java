@@ -58,7 +58,16 @@ public final class PlanValidator {
             }
             steps.add(new PlannedStep(capability, step.reason(), target, step.required()));
         }
-        return new InvestigationPlan(source.goal(), trimHypotheses(source.hypotheses()), steps);
+        // 模型只提供候选方向；判定、引用和运行进度只信任运行时。
+        List<com.rover.agent.core.model.Hypothesis> assessments = new ArrayList<>(context.assessments());
+        for (var hypothesis : source.assessments()) {
+            if (hypothesis.id() == null || !hypothesis.id().matches("M[1-6]")
+                    || assessments.stream().anyMatch(h -> h.id().equals(hypothesis.id()))) { continue; }
+            assessments.add(new com.rover.agent.core.model.Hypothesis(hypothesis.id(), hypothesis.statement(),
+                    com.rover.agent.core.model.Verdict.UNKNOWN, "模型候选，仍需人工或直接证据验证", List.of(), List.of(), List.of(),
+                    hypothesis.missingEvidence(), hypothesis.nextCapabilities().stream().filter(registry::selectable).distinct().toList()));
+        }
+        return new InvestigationPlan(source.goal(), trimHypotheses(source.hypotheses()), steps, assessments, PlanProgress.empty());
     }
 
     /** 本次请求的边界目标：优先用已解析目标，其次是请求路径推导出的路由目标。 */

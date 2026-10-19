@@ -205,7 +205,8 @@ public final class InvestigationService {
                 if (!incidents.accepts(owner)) { throw new com.rover.agent.core.port.AgentAccess.Denied("任务资源范围已失效"); }
                 access.require(owner.userId(), com.rover.agent.core.port.AgentAccess.Permission.INVESTIGATE);
             }
-            if (task.resumeRounds() >= limits.maxRounds() || task.resumeToolCalls() >= limits.maxToolCalls()) {
+            if ((task.resumeRounds() >= limits.maxRounds() || task.resumeToolCalls() >= limits.maxToolCalls())
+                    && task.resumePlan().progress().facts() == null) {
                 task.fail("恢复点已用尽规划或工具预算，保留现有证据，请人工复核");
                 return;
             }

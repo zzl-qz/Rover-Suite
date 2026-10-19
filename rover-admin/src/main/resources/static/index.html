@@ -730,17 +730,22 @@
                                             <div v-else class="empty slim">计划未给出候选原因</div>
 
                                             <h4>调查过程</h4>
-                                            <div v-if="turn.task.result && turn.task.result.hypotheses && turn.task.result.hypotheses.length">
-                                                <div v-for="(item, index) in turn.task.result.hypotheses" :key="item.id || index" class="diagnosis-step">
+                                            <div v-if="wbHypotheses(turn.task).length">
+                                                <div v-for="(item, index) in wbHypotheses(turn.task)" :key="item.id || index" class="diagnosis-step">
                                                     <span class="diagnosis-step-num">{{ item.id }}</span>
                                                     <strong>{{ item.statement }}</strong>
                                                     <span class="badge" :class="wbHypothesisBadge(item.status)">{{ wbHypothesisLabel(item.status) }}</span>
                                                     <span class="muted">{{ item.detail }}
                                                         <span v-if="item.sources && item.sources.length"> · 依据 {{ item.sources.join('、') }}</span>
                                                     </span>
+                                                    <div v-if="item.supportingEvidenceIds && item.supportingEvidenceIds.length" class="card-hint">支持证据：<code>{{ item.supportingEvidenceIds.join('、') }}</code></div>
+                                                    <div v-if="item.counterEvidenceIds && item.counterEvidenceIds.length" class="card-hint">反证：<code>{{ item.counterEvidenceIds.join('、') }}</code></div>
+                                                    <div v-if="item.missingEvidence && item.missingEvidence.length" class="card-hint">缺失证据：{{ item.missingEvidence.join('；') }}</div>
+                                                    <div v-if="item.nextCapabilities && item.nextCapabilities.length" class="card-hint">下一步检查：{{ item.nextCapabilities.join('、') }}（已查询但仍缺证据时需人工补充，不代表会无限重试）</div>
                                                 </div>
                                             </div>
                                             <div v-else class="empty slim">暂无假设验证明细</div>
+                                            <div v-if="turn.task.plan && turn.task.plan.progress && turn.task.plan.progress.stopReason" class="card-hint">调查停止原因：{{ turn.task.plan.progress.stopReason }}</div>
 
                                             <h4>证据</h4>
                                             <div v-if="!turn.task.evidence || !turn.task.evidence.length" class="empty slim">暂无可用证据</div>

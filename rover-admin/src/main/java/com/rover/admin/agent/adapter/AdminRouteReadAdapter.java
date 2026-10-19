@@ -26,7 +26,7 @@ public class AdminRouteReadAdapter implements RouteReadPort {
         try {
             return admin.listRoutes().stream().map(route -> toSnapshot(route, observedAt)).toList();
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取 Gateway 路由失败", ex);
+            throw AdminValues.unavailable("读取 Gateway 路由失败", ex);
         }
     }
 

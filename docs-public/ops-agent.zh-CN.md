@@ -478,6 +478,8 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 
 ## 9. 相关文档
 
+- [假设调查循环](./agent-hypothesis-loop.zh-CN.md)：证据与反证引用、缺口补查、有限重试、H2 恢复及实际验收边界
+
 - [Admin 使用手册](./admin-guide.zh-CN.md)：Agent 工作台使用方式与控制台模型配置
 - [Admin API](./admin-api.zh-CN.md)：会话 / 事件 / 调查任务接口契约
 - [配置项参考](./configuration-reference.zh-CN.md)：Agent 与落盘记录库的全部配置项

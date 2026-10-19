@@ -43,7 +43,7 @@ public class AdminTraceReadAdapter implements TraceReadPort {
                     traces.path("collectionStartedAtMillis").asLong(0), traces.path("overwritten").asLong(-1),
                     traces.path("samplingMode").asText("UNKNOWN_LEGACY"));
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取 Gateway 追踪失败", ex);
+            throw AdminValues.unavailable("读取 Gateway 追踪失败", ex);
         }
     }
 }

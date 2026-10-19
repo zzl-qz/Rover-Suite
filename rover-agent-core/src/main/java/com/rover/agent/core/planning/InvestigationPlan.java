@@ -15,12 +15,23 @@ import java.util.Set;
  * @param hypotheses 候选故障原因（供解释与人工核对，不是结论）
  * @param steps      按序执行的只读步骤
  */
-public record InvestigationPlan(String goal, List<String> hypotheses, List<PlannedStep> steps) {
+public record InvestigationPlan(String goal, List<String> hypotheses, List<PlannedStep> steps,
+                                List<com.rover.agent.core.model.Hypothesis> assessments, PlanProgress progress) {
 
     public InvestigationPlan {
         goal = goal == null ? "" : goal.trim();
         hypotheses = hypotheses == null ? List.of() : List.copyOf(hypotheses);
         steps = steps == null ? List.of() : List.copyOf(steps);
+        assessments = assessments == null ? List.of() : List.copyOf(assessments);
+        progress = progress == null ? PlanProgress.empty() : progress;
+    }
+
+    public InvestigationPlan(String goal, List<String> hypotheses, List<PlannedStep> steps) {
+        this(goal, hypotheses, steps, List.of(), PlanProgress.empty());
+    }
+
+    public InvestigationPlan assessed(List<com.rover.agent.core.model.Hypothesis> items, PlanProgress state) {
+        return new InvestigationPlan(goal, hypotheses, steps, items, state);
     }
 
     /** 空计划：没有任何可执行步骤（如目标与路径都不足时）。 */

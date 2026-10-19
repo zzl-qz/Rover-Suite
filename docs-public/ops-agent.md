@@ -672,6 +672,8 @@ however, are entirely different.
 
 ## 9. Related documents
 
+- [Hypothesis investigation loop (Chinese)](./agent-hypothesis-loop.zh-CN.md): evidence references, missing evidence, bounded retries, H2 resume, and validation limits
+
 - [Admin User Guide](./admin-guide.md): Agent Workbench usage and console model configuration
 - [Admin API](./admin-api.md): session / task / event API contract
 - [Configuration reference](./configuration-reference.md): every Agent and record-store setting

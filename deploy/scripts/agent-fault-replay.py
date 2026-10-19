@@ -85,6 +85,31 @@ def validate_evidence_contract(evidence, expected_status, route_id, v2_host_port
             "v2SampleRateComputedByProgram": True}
 
 
+def validate_hypothesis_contract(task):
+    findings = task["result"]["hypotheses"]
+    ids = {item["evidenceId"] for item in task["result"]["evidence"]}
+    require(findings, "No structured hypothesis assessment")
+    for item in findings:
+        support, counter = item.get("supportingEvidenceIds", []), item.get("counterEvidenceIds", [])
+        require(set(support + counter) <= ids, "Hypothesis contains forged or missing evidence references")
+        if item["status"] == "CONFIRMED":
+            require(support, "Confirmed hypothesis has no supporting evidence")
+        elif item["status"] == "REJECTED":
+            require(counter, "Rejected hypothesis has no counter evidence")
+        else:
+            require(item.get("missingEvidence"), "Unknown hypothesis lost its evidence gap")
+    progress = task["plan"]["progress"]
+    require(progress.get("stopReason"), "Investigation stopped without a recorded reason")
+    attempts = progress["attempts"]
+    require(attempts and progress["toolCalls"] <= 10 and progress["rounds"] <= 3, "Investigation budget exceeded")
+    counts = {a["capability"]: sum(b["capability"] == a["capability"] for b in attempts) for a in attempts}
+    require(all(count <= 2 for count in counts.values()), "Repeated capability exceeded the one-retry limit")
+    require(all(not item["id"].startswith("M") or item["status"] == "UNKNOWN" for item in findings),
+            "Model candidate was promoted to a verified conclusion")
+    return {"actualEvidenceReferences": True, "unknownRetainsGaps": True, "modelCannotConfirm": True,
+            "boundedAttempts": counts, "stopReason": progress["stopReason"]}
+
+
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -235,6 +260,8 @@ class Replay:
             self.report["liveModelGatePassed"] = False
         if getattr(args, "require_change_timeline", False):
             self.report["changeTimelineGatePassed"] = False
+        if getattr(args, "require_hypothesis_contract", False):
+            self.report["hypothesisContractGatePassed"] = False
 
     def event(self, message):
         print(time.strftime("%H:%M:%S") + " " + message, flush=True)
@@ -594,6 +621,8 @@ class Replay:
             require(any(item["id"] == case["confirmedHypothesis"] and item["status"] == "CONFIRMED" for item in findings),
                     "Observed in-window 503 was not confirmed")
         evidence = task["result"]["evidence"]
+        if getattr(self.args, "require_hypothesis_contract", False):
+            save(directory / "hypothesis-contract.json", validate_hypothesis_contract(task))
         require(bool(evidence), "No investigation evidence")
         if getattr(self.args, "require_change_timeline", False):
             checks = validate_change_timeline(evidence, self.timeline_release, window)
@@ -755,6 +784,8 @@ class Replay:
             for case in self.fixture["scenarios"])
         require(self.report["repeatable"], "At least two repetitions must produce matching per-user outcomes")
         self.report["faultReplayPassed"] = True
+        if getattr(self.args, "require_hypothesis_contract", False):
+            self.report["hypothesisContractGatePassed"] = True
         if getattr(self.args, "require_change_timeline", False):
             self.report["changeTimelineGatePassed"] = True
         if getattr(self.args, "require_evidence_contract", False):
@@ -889,6 +920,7 @@ def main():
     parser.add_argument("--require-single-admin-foundation", action="store_true", help="Also verify identity, roles, machine ingress, Admin restart, SSE and backup over real HTTP")
     parser.add_argument("--require-evidence-contract", action="store_true", help="Verify S2 captured identity, response origin, evidence quality and native historical windows")
     parser.add_argument("--require-change-timeline", action="store_true", help="Verify release-only ingress, idempotent release evidence, pre-incident association and actual observed route mitigation")
+    parser.add_argument("--require-hypothesis-contract", action="store_true", help="Verify hypothesis evidence references, unknown gaps, persisted progress and bounded attempts")
     parser.add_argument("--model-config", type=Path, help="Opt in to actual paid model calls using this existing encrypted Rover model config")
     parser.add_argument("--model-master-key-file", type=Path, help="Existing master-key file; defaults to master.key next to --model-config")
     args = parser.parse_args()

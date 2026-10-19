@@ -23,7 +23,7 @@ public class AdminConfigReadAdapter implements ConfigReadPort {
         try {
             return admin.listConfigs().stream().map(AdminConfigReadAdapter::toSnapshot).toList();
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取生效配置失败", ex);
+            throw AdminValues.unavailable("读取生效配置失败", ex);
         }
     }
 

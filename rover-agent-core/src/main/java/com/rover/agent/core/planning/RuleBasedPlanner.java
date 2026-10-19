@@ -59,6 +59,15 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
             add(steps, AgentCapability.CHANGE_TIMELINE_QUERY, "核对故障前后的发布、配置与实例变化；相关性不等于根因", target, true);
         }
         addQuestionDrivenSteps(steps, context, target);
+        for (var hypothesis : context.assessments()) {
+            if (hypothesis.status() == com.rover.agent.core.model.Verdict.UNKNOWN) {
+                for (AgentCapability capability : hypothesis.nextCapabilities()) {
+                    if (steps.stream().noneMatch(s -> s.capability() == capability)) {
+                        add(steps, capability, "补查 " + hypothesis.id() + "：" + hypothesis.statement(), target, true);
+                    }
+                }
+            }
+        }
         return new InvestigationPlan(goal(context, target, hasPath), hypotheses(hasPath), steps);
     }
 
@@ -81,7 +90,9 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         Set<AgentCapability> missing = new LinkedHashSet<>(requiredCapabilities(context));
         missing.removeAll(state.settled());
         if (missing.isEmpty()) {
-            return PlanningDecision.finish("关键事实已采集完毕，进入结论综合");
+            boolean unknown = context.assessments().stream().anyMatch(h -> h.status() == com.rover.agent.core.model.Verdict.UNKNOWN);
+            return PlanningDecision.finish(unknown ? "可用只读查询已完成，仍有证据缺口，保留无法确认的假设并交人工复核"
+                    : "关键假设已有证据验证，进入结论综合");
         }
         if (missing.stream().noneMatch(registry::selectable)) {
             return PlanningDecision.finish("还缺少的能力尚未接入，无法继续采集");
@@ -94,6 +105,8 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         PlanningRequest context = request == null
                 ? new PlanningRequest("", ResourceTarget.unknown(), "", List.of(), List.of()) : request;
         Set<AgentCapability> required = new LinkedHashSet<>();
+        context.assessments().stream().filter(h -> h.status() == com.rover.agent.core.model.Verdict.UNKNOWN)
+                .forEach(h -> required.addAll(h.nextCapabilities()));
         if (!context.timeRange().isUnspecified()) {
             required.add(AgentCapability.LOG_QUERY);
         }

@@ -83,7 +83,7 @@ class AgentExecutionLimitsTest {
                     () -> new SpringAiConversationModel(gateway).converse("system", "user", tools, null, null));
             assertTrue(task.budget().stopReason().contains("模型调用次数"), failure.toString());
             assertEquals(2, calls.get(), "第三次模型请求必须在发送前被阻止");
-            assertEquals(2, reads.get());
+            assertEquals(1, reads.get(), "第二次相同只读请求复用已取得的证据，不重新取数");
         } finally {
             registry.stop();
         }

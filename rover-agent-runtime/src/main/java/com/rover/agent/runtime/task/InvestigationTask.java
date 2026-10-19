@@ -136,6 +136,8 @@ public final class InvestigationTask implements InvestigationReporter {
 
     @Override public synchronized int resumeRounds() { return lastRoundNo; }
     @Override public synchronized int resumeToolCalls() { return lastToolCallCount; }
+    @Override public synchronized InvestigationPlan resumePlan() { return plan; }
+    @Override public synchronized List<Evidence> resumeEvidence() { return List.copyOf(evidence); }
 
     public String taskId() {
         return taskId;

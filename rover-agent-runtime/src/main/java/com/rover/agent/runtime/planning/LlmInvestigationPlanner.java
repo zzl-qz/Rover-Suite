@@ -6,6 +6,8 @@ import com.rover.agent.core.capability.CapabilityDescriptor;
 import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.capability.UntrustedText;
 import com.rover.agent.core.model.Evidence;
+import com.rover.agent.core.model.Hypothesis;
+import com.rover.agent.core.model.Verdict;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.planning.InvestigationPlanner;
 import com.rover.agent.core.planning.PlanProgress;
@@ -90,9 +92,30 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
             }
         }
         String goal = ModelJson.text(node, "goal");
-        List<String> hypotheses = ModelJson.strings(node, "hypotheses");
+        List<Hypothesis> assessments = new ArrayList<>(request.assessments());
+        List<String> hypotheses = new ArrayList<>();
+        // 兼容旧模型字符串计划；新候选只作为待验证方向，模型不能覆盖规则状态或编造证据引用。
+        hypotheses.addAll(ModelJson.strings(node, "hypotheses"));
+        for (JsonNode item : ModelJson.objects(node, "candidates")) {
+            String statement = cut(ModelJson.text(item, "statement"));
+            if (statement.isBlank() || assessments.stream().anyMatch(h -> statement.equals(h.statement()))
+                    || assessments.stream().filter(h -> h.id().startsWith("M")).count() >= 6) { continue; }
+            List<AgentCapability> next = new ArrayList<>();
+            for (String name : ModelJson.strings(item, "nextCapabilities")) {
+                AgentCapability capability = capability(name);
+                if (capability != null && registry.selectable(capability) && !next.contains(capability)) {
+                    next.add(capability);
+                    if (!contains(steps, capability)) { steps.add(PlannedStep.optional(capability, "验证候选：" + statement, PlanValidator.requestTarget(request))); }
+                }
+            }
+            String id = "M" + (assessments.stream().filter(h -> h.id().startsWith("M")).count() + 1);
+            List<String> missing = ModelJson.strings(item, "missingEvidence").stream().limit(4).map(LlmInvestigationPlanner::cut).toList();
+            assessments.add(new Hypothesis(id, statement, Verdict.UNKNOWN, "模型提出的候选，尚无确定性证据确认",
+                    List.of(), List.of(), List.of(), missing.isEmpty() ? List.of("需要可复核的直接证据") : missing, next));
+            hypotheses.add(statement);
+        }
         return new InvestigationPlan(goal.isBlank() ? base.goal() : goal,
-                hypotheses.isEmpty() ? base.hypotheses() : hypotheses, steps);
+                hypotheses.isEmpty() ? base.hypotheses() : hypotheses, steps, assessments, base.progress());
     }
 
     private static boolean contains(List<PlannedStep> steps, AgentCapability capability) {
@@ -130,15 +153,21 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
                     evidenceLines.append("- …（其余证据略）\n");
                     break;
                 }
-                evidenceLines.append("- [").append(evidence.type()).append("] ")
-                        .append(cut(evidence.summary())).append('\n');
+                evidenceLines.append("- ").append(evidence.evidenceId()).append(" [").append(evidence.type()).append("] ")
+                        .append(cut(evidence.modelText())).append('\n');
             }
             prompt.append("\n已采集证据：\n").append(UntrustedText.block("已采集证据", evidenceLines.toString()));
         }
         if (!request.limitations().isEmpty()) {
             prompt.append("\n已知判断边界：").append(cut(String.join("；", request.limitations())));
         }
-        prompt.append("\n输出 JSON：{\"goal\":\"本次要回答的问题\",\"hypotheses\":[\"候选原因\"],")
+        for (Hypothesis hypothesis : request.assessments()) {
+            prompt.append(UntrustedText.block("假设 " + hypothesis.id(), hypothesis.statement() + " 状态=" + hypothesis.status()
+                    + " 支持证据=" + hypothesis.supportingEvidenceIds() + " 反证=" + hypothesis.counterEvidenceIds()
+                    + " 缺口=" + hypothesis.missingEvidence() + " 下一步=" + hypothesis.nextCapabilities()));
+        }
+        prompt.append("\n不要把工具执行过当成验证成功；新方向只列为候选，状态由运行时判断。")
+                .append("\n输出 JSON：{\"goal\":\"本次要回答的问题\",\"candidates\":[{\"statement\":\"候选原因\",\"missingEvidence\":[\"尚缺证据\"],\"nextCapabilities\":[\"能力名\"]}],")
                 .append("\"steps\":[{\"capability\":\"能力名\",\"reason\":\"选择依据\"}]}");
         return prompt.toString();
     }

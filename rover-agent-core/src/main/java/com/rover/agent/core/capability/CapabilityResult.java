@@ -22,7 +22,8 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
                                RouteSnapshot route, boolean routeRead, DiscoveryMode discoveryMode,
                                List<InstanceSnapshot> instances, TraceSnapshot traces,
                                GatewayMetricSnapshot metric, List<RouteUpstreamSnapshot> routeUpstreams,
-                               List<ConfigEntrySnapshot> configs, List<RegistryEventSnapshot> events) {
+                               List<ConfigEntrySnapshot> configs, List<RegistryEventSnapshot> events,
+                               boolean retryable) {
 
     public CapabilityResult {
         capability = capability == null ? AgentCapability.ROUTE_QUERY : capability;
@@ -31,6 +32,38 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
         evidence = List.copyOf(stamp(evidence == null ? List.of() : evidence));
         limitations = limitations == null ? List.of() : List.copyOf(limitations);
         discoveryMode = discoveryMode == null ? DiscoveryMode.UNKNOWN : discoveryMode;
+    }
+
+    public CapabilityResult(AgentCapability capability, AgentStepType stepType, String stepName, boolean executed,
+                            List<Evidence> evidence, List<String> limitations, RouteSnapshot route, boolean routeRead,
+                            DiscoveryMode discoveryMode, List<InstanceSnapshot> instances, TraceSnapshot traces,
+                            GatewayMetricSnapshot metric, List<RouteUpstreamSnapshot> routeUpstreams,
+                            List<ConfigEntrySnapshot> configs, List<RegistryEventSnapshot> events) {
+        this(capability, stepType, stepName, executed, evidence, limitations, route, routeRead, discoveryMode,
+                instances, traces, metric, routeUpstreams, configs, events, false);
+    }
+
+    public CapabilityResult retryable(boolean value) {
+        return new CapabilityResult(capability, stepType, stepName, executed, evidence, limitations, route, routeRead,
+                discoveryMode, instances, traces, metric, routeUpstreams, configs, events, value);
+    }
+
+    /** 服务发现概览读取成功，不能掩盖同一次调用的路由表读取失败。 */
+    public boolean readFailed() {
+        return !executed || evidence.isEmpty() || capability == AgentCapability.ROUTE_QUERY && !routeRead;
+    }
+
+    /** 只按异常类型识别网络瞬态失败；缺配置、无样本、权限、解析错误均不靠文本猜测重试。 */
+    public static boolean transientFailure(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof com.rover.agent.core.port.SnapshotUnavailableException unavailable
+                    && unavailable.retryable()) { return true; }
+            if (cause instanceof java.net.SocketTimeoutException || cause instanceof java.net.ConnectException
+                    || cause instanceof java.net.http.HttpTimeoutException
+                    || cause instanceof java.util.concurrent.TimeoutException) { return true; }
+            if (cause.getCause() == cause) { break; }
+        }
+        return false;
     }
 
     /** 执行成功：带证据与判断边界。 */
@@ -170,6 +203,6 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
                                   List<ConfigEntrySnapshot> nextConfigs, List<RegistryEventSnapshot> nextEvents) {
         return new CapabilityResult(capability, stepType, stepName, executed, nextEvidence, nextLimitations, nextRoute,
                 nextRouteRead, nextDiscovery, nextInstances, nextTraces, nextMetric, nextRouteUpstreams, nextConfigs,
-                nextEvents);
+                nextEvents, retryable);
     }
 }

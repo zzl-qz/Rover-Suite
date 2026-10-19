@@ -211,7 +211,9 @@ public final class ModelExplainer {
         StringBuilder builder = new StringBuilder();
         for (Hypothesis item : hypotheses) {
             builder.append("\n- [").append(statusLabel(item.status())).append("] ").append(item.statement())
-                    .append("：").append(item.detail());
+                    .append("：").append(item.detail()).append("；支持 evidenceId=").append(item.supportingEvidenceIds())
+                    .append("；反证 evidenceId=").append(item.counterEvidenceIds()).append("；缺失证据=").append(item.missingEvidence())
+                    .append("；下一步只读能力=").append(item.nextCapabilities());
         }
         return builder.isEmpty() ? "" : "\n已完成的假设验证：" + builder;
     }

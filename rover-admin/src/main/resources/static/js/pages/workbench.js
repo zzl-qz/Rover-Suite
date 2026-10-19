@@ -1489,6 +1489,9 @@ window.RoverAdminPages.workbench = {
             return { CONFIRMED: '确认', REJECTED: '排除', UNKNOWN: '无法验证' }[status] || status || '未验证';
         },
 
+        wbHypotheses(task) {
+            return (task && task.result && task.result.hypotheses) || (task && task.plan && task.plan.assessments) || [];
+        },
         wbHypothesisBadge(status) {
             return { CONFIRMED: 'bad', REJECTED: 'ok', UNKNOWN: 'warn' }[status] || 'comp';
         },

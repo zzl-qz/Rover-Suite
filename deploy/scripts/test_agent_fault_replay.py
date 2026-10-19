@@ -168,5 +168,26 @@ class ReplayTest(unittest.TestCase):
             self.assertFalse(receipt["faultReplayPassed"])
 
 
+class HypothesisContractTest(unittest.TestCase):
+    def test_gate_rejects_forged_references_missing_gaps_and_unbounded_retries(self):
+        task = {"result": {"hypotheses": [{"id": "H7", "status": "UNKNOWN", "missingEvidence": ["应用日志"],
+                  "supportingEvidenceIds": ["e1"], "counterEvidenceIds": []}], "evidence": [{"evidenceId": "e1"}]},
+                "plan": {"progress": {"rounds": 2, "toolCalls": 1, "stopReason": "无法确认",
+                  "attempts": [{"capability": "TRACE_QUERY"}]}}}
+        replay.validate_hypothesis_contract(task)
+        for mutation in ("forged", "gap", "retry", "model"):
+            changed = copy.deepcopy(task)
+            if mutation == "forged":
+                changed["result"]["hypotheses"][0]["supportingEvidenceIds"] = ["fake"]
+            elif mutation == "gap":
+                changed["result"]["hypotheses"][0]["missingEvidence"] = []
+            elif mutation == "retry":
+                changed["plan"]["progress"]["attempts"] *= 3
+            else:
+                changed["result"]["hypotheses"][0].update(id="M1", status="CONFIRMED")
+            with self.subTest(mutation=mutation), self.assertRaises(RuntimeError):
+                replay.validate_hypothesis_contract(changed)
+
+
 if __name__ == "__main__":
     unittest.main()

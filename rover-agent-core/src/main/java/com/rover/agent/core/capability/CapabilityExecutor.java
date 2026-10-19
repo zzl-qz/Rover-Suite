@@ -232,7 +232,7 @@ public final class CapabilityExecutor {
         } catch (Exception ex) {
             if (ex instanceof com.rover.agent.core.port.AgentAccess.Denied denied) { throw denied; }
             log.warn("Agent 查询变更时间线失败", ex);
-            return CapabilityResult.failed(AgentCapability.CHANGE_TIMELINE_QUERY, descriptor, "变更时间线不可用，无法核对发布、配置或实例变化，不能据此排除变更相关故障。");
+            return CapabilityResult.failed(AgentCapability.CHANGE_TIMELINE_QUERY, descriptor, "变更时间线不可用，无法核对发布、配置或实例变化，不能据此排除变更相关故障。").retryable(CapabilityResult.transientFailure(ex));
         }
     }
 
@@ -250,6 +250,7 @@ public final class CapabilityExecutor {
         List<String> limitations = new ArrayList<>();
         RouteSnapshot route = null;
         boolean routeRead = false;
+        boolean retryable = false;
         long observedAt = System.currentTimeMillis();
         try {
             if (path.isBlank()) {
@@ -271,19 +272,21 @@ public final class CapabilityExecutor {
         } catch (Exception ex) {
             log.warn("Agent 读取路由失败", ex);
             limitations.add(EvidenceNarrator.routeUnavailable());
+            retryable = CapabilityResult.transientFailure(ex);
         }
         DiscoveryMode discovery = DiscoveryMode.UNKNOWN;
         try {
             discovery = routes.discoveryMode();
         } catch (Exception ex) {
             log.warn("Agent 读取服务发现模式失败", ex);
+            retryable |= CapabilityResult.transientFailure(ex);
         }
         EvidenceNarration discoveryNarration = EvidenceNarrator.discoveryMode(discovery);
         evidence.add(Evidence.of(taskId, EvidenceType.ROUTE, SOURCE_OVERVIEW, "服务发现模式",
                 discoveryNarration.detail(), "/api/overview", metadata(discoveryNarration, observedAt), observedAt));
         limitations.addAll(discoveryNarration.limitations());
         return CapabilityResult.success(capability, descriptor, evidence, limitations)
-                .withRoute(route, routeRead, discovery);
+                .withRoute(route, routeRead, discovery).retryable(retryable);
     }
 
     private CapabilityResult readInstances(AgentCapability capability, CapabilityDescriptor descriptor,
@@ -305,7 +308,7 @@ public final class CapabilityExecutor {
                     .withInstances(snapshot);
         } catch (Exception ex) {
             log.warn("Agent 读取实例失败", ex);
-            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.instancesUnavailable());
+            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.instancesUnavailable()).retryable(CapabilityResult.transientFailure(ex));
         }
     }
 
@@ -319,11 +322,13 @@ public final class CapabilityExecutor {
         List<Evidence> evidence = new ArrayList<>();
         List<String> limitations = new ArrayList<>();
         GatewayMetricSnapshot metric = null;
+        boolean[] retryable = {false};
         try {
             metric = metrics.gatewayWindow(METRIC_WINDOW_SECONDS);
         } catch (Exception ex) {
             log.warn("Agent 读取指标失败", ex);
             limitations.add(EvidenceNarrator.metricsUnavailable());
+            retryable[0] |= CapabilityResult.transientFailure(ex);
         }
         if (metric != null) {
             EvidenceNarration narration = EvidenceNarrator.metrics(metric);
@@ -336,12 +341,12 @@ public final class CapabilityExecutor {
         String routeId = resolveRouteId(route, lookup, limitations);
         List<RouteUpstreamSnapshot> upstreams = List.of();
         if (!routeId.isBlank()) {
-            readFinalWindow(routeId, taskId, evidence, limitations, TimeRange.unspecified());
-            upstreams = readRouteUpstreams(routeId, taskId, observedAt, evidence, limitations);
+            readFinalWindow(routeId, taskId, evidence, limitations, TimeRange.unspecified(), retryable);
+            upstreams = readRouteUpstreams(routeId, taskId, observedAt, evidence, limitations, retryable);
         }
         return CapabilityResult.success(capability, descriptor, evidence, limitations)
                 .withMetric(metric)
-                .withRouteUpstreams(upstreams);
+                .withRouteUpstreams(upstreams).retryable(retryable[0]);
     }
 
     /** 本次指标证据要归因到哪条路由：优先用已读到的路由事实，其次按路径补一次匹配。 */
@@ -368,12 +373,13 @@ public final class CapabilityExecutor {
         List<String> limitations = new ArrayList<>();
         String routeId = resolveRouteId(route, lookup, limitations);
         if (routeId.isBlank()) { return CapabilityResult.failed(capability, descriptor, "缺少明确路由标识，不能回溯最终响应窗口。"); }
-        readFinalWindow(routeId, taskId, evidence, limitations, range);
+        boolean[] retryable = {false};
+        readFinalWindow(routeId, taskId, evidence, limitations, range, retryable);
         limitations.add("路由标识通过当前路径配置定位；请求时身份以窗口维度与追踪中的 UID 为准，不能据当前配置重建历史路由映射。");
-        return CapabilityResult.success(capability, descriptor, evidence, limitations);
+        return CapabilityResult.success(capability, descriptor, evidence, limitations).retryable(retryable[0]);
     }
 
-    private void readFinalWindow(String routeId, String taskId, List<Evidence> evidence, List<String> limitations, TimeRange range) {
+    private void readFinalWindow(String routeId, String taskId, List<Evidence> evidence, List<String> limitations, TimeRange range, boolean[] retryable) {
         long at = System.currentTimeMillis();
         String query = "/api/metrics/routes?routeId=" + urlEncode(routeId) + (range.isUnspecified()
                 ? "&range=" + METRIC_WINDOW_SECONDS : "&fromMillis=" + range.fromMillis() + "&toMillis=" + range.toMillis());
@@ -393,6 +399,7 @@ public final class CapabilityExecutor {
             limitations.addAll(bounds);
         } catch (Exception ex) {
             String bound = "该路由的原生最终响应窗口不可用，不能回溯指定时间范围；不能用当前指标、累计拒绝数或抽样追踪替代完整请求计数。";
+            retryable[0] |= CapabilityResult.transientFailure(ex);
             limitations.add(bound);
             evidence.add(Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "路由最终响应窗口不可用", bound,
                     query, Map.of(KEY_ROUTE_ID, routeId), at).withEnvelope(new com.rover.agent.core.model.EvidenceEnvelope(
@@ -476,7 +483,7 @@ public final class CapabilityExecutor {
         }
         return new CapabilityResult(result.capability(), result.stepType(), result.stepName(), result.executed(),
                 enriched, result.limitations(), result.route(), result.routeRead(), result.discoveryMode(), result.instances(),
-                result.traces(), result.metric(), result.routeUpstreams(), result.configs(), result.events());
+                result.traces(), result.metric(), result.routeUpstreams(), result.configs(), result.events(), result.retryable());
     }
 
     private static void addRef(List<com.rover.agent.core.model.ResourceRef> refs,
@@ -494,12 +501,13 @@ public final class CapabilityExecutor {
      * 取数失败只降级为判断边界：一条路由的实例维度指标不可用，不该让全局指标证据一起作废。
      */
     private List<RouteUpstreamSnapshot> readRouteUpstreams(String routeId, String taskId, long observedAt,
-                                                           List<Evidence> evidence, List<String> limitations) {
+                                                           List<Evidence> evidence, List<String> limitations, boolean[] retryable) {
         List<RouteUpstreamSnapshot> rows;
         try {
             rows = metrics.routeUpstreams(routeId, METRIC_WINDOW_SECONDS);
         } catch (Exception ex) {
             log.warn("Agent 读取按上游实例指标失败", ex);
+            retryable[0] |= CapabilityResult.transientFailure(ex);
             limitations.add(EvidenceNarrator.routeUpstreamsUnavailable(routeId));
             return List.of();
         }
@@ -541,7 +549,7 @@ public final class CapabilityExecutor {
             snapshot = configs.configs();
         } catch (Exception ex) {
             log.warn("Agent 读取配置失败", ex);
-            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.configsUnavailable());
+            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.configsUnavailable()).retryable(CapabilityResult.transientFailure(ex));
         }
         List<ConfigEntrySnapshot> rows = snapshot == null ? List.of() : snapshot;
         long observedAt = System.currentTimeMillis();
@@ -574,7 +582,7 @@ public final class CapabilityExecutor {
             snapshot = events.events();
         } catch (Exception ex) {
             log.warn("Agent 读取注册事件失败", ex);
-            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.eventsUnavailable());
+            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.eventsUnavailable()).retryable(CapabilityResult.transientFailure(ex));
         }
         List<RegistryEventSnapshot> rows = snapshot == null ? List.of() : snapshot;
         if (!range.isUnspecified()) {
@@ -612,7 +620,7 @@ public final class CapabilityExecutor {
                     .withTraces(snapshot);
         } catch (Exception ex) {
             log.warn("Agent 读取追踪失败", ex);
-            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.tracesUnavailable());
+            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.tracesUnavailable()).retryable(CapabilityResult.transientFailure(ex));
         }
     }
 
@@ -649,7 +657,7 @@ public final class CapabilityExecutor {
                     narration.limitations());
         } catch (Exception ex) {
             log.warn("Agent 查询历史日志失败", ex);
-            return CapabilityResult.failed(AgentCapability.LOG_QUERY, descriptor, EvidenceNarrator.logsUnavailable());
+            return CapabilityResult.failed(AgentCapability.LOG_QUERY, descriptor, EvidenceNarrator.logsUnavailable()).retryable(CapabilityResult.transientFailure(ex));
         }
     }
 
@@ -669,7 +677,7 @@ public final class CapabilityExecutor {
                     narration.limitations());
         } catch (Exception ex) {
             log.warn("Agent 检索知识失败", ex);
-            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.knowledgeUnavailable());
+            return CapabilityResult.failed(capability, descriptor, EvidenceNarrator.knowledgeUnavailable()).retryable(CapabilityResult.transientFailure(ex));
         }
     }
 
