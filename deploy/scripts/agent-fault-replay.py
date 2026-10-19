@@ -177,6 +177,39 @@ def validate_live_analysis(task):
             "executedCapabilities": task.get("executedCapabilities", [])}
 
 
+def validate_change_timeline(evidence, expected, window):
+    timelines = [item["envelope"] for item in evidence
+                 if item.get("envelope", {}).get("sourceId") == "rover.change-timeline"]
+    require(bool(timelines), "Investigation did not collect the durable change timeline")
+    for envelope in timelines:
+        require(envelope.get("qualityStatus") == "PARTIAL" and envelope.get("coverageRange") is None,
+                "Polling/push timeline claimed complete coverage")
+        facts = envelope.get("facts", {})
+        requested = facts.get("investigationRange", {})
+        actual = facts.get("queryRange", {})
+        require(requested == {"fromMillis": window["fromMillis"], "toMillis": window["toMillis"]},
+                "Timeline lost the incident window")
+        require(0 <= requested["fromMillis"] - actual.get("fromMillis", -1) <= 900_000
+                and actual.get("toMillis") == requested["toMillis"], "Timeline lookback was not bounded or explicit")
+        require(facts.get("causalityConfirmed") is False, "Temporal correlation was treated as confirmed causality")
+        for event in facts.get("events", []):
+            if event.get("eventId") != expected["eventId"]:
+                continue
+            require(event.get("sourceEventId") == expected["sourceEventId"] and event.get("sourceId") == expected["sourceId"]
+                    and event.get("facts", {}).get("releaseId") == expected["facts"]["releaseId"]
+                    and event.get("facts", {}).get("artifact") == expected["facts"]["artifact"]
+                    and event.get("scope") == envelope["context"]["scope"]
+                    and event.get("controlTargetId") == envelope["context"]["controlTargetId"]
+                    and event.get("subject", {}).get("group") == "v2", "Release evidence lost its identity or trusted scope")
+            require(actual["fromMillis"] <= event["occurredAtMillis"] <= actual["toMillis"],
+                    "Release lies outside the documented source query")
+            require(event["occurredAtMillis"] < window["fromMillis"], "Fixture did not verify a pre-incident release")
+            return {"releaseId": expected["facts"]["releaseId"], "eventId": expected["eventId"],
+                    "programBoundedLookback": True, "preIncidentReleaseAssociated": True,
+                    "qualityPartial": True, "causalityNotAsserted": True}
+    raise RuntimeError("The pre-incident release was not associated with this route's historical service")
+
+
 class Replay:
     def __init__(self, args, fixture):
         self.args, self.fixture = args, fixture
@@ -200,6 +233,8 @@ class Replay:
                        "mitigationActor": "test-harness", "error": None}
         if self.live_model:
             self.report["liveModelGatePassed"] = False
+        if getattr(args, "require_change_timeline", False):
+            self.report["changeTimelineGatePassed"] = False
 
     def event(self, message):
         print(time.strftime("%H:%M:%S") + " " + message, flush=True)
@@ -382,6 +417,57 @@ class Replay:
         self.report["liveModel"] = public
         self.event("actual model connection verified")
 
+    def timeline_query(self, from_millis, to_millis):
+        query = urllib.parse.urlencode({"targetType": "ROUTE", "target": self.fixture["path"],
+                                      "fromMillis": from_millis, "toMillis": to_millis, "limit": 200})
+        return self.admin.request(self.urls["admin"] + "/api/agent/timeline?" + query)[1]
+
+    def setup_change_timeline(self):
+        self.event("waiting for durable route observations and issuing a release-only fixture identity")
+        issued = self.admin.request(self.urls["admin"] + "/api/agent/security/connectors",
+                                   {"name": "fixture-ci", "purpose": "RELEASE"}, self.csrf)[1]
+        self.timeline_bearer = {"Authorization": "Bearer " + issued["token"]}
+        def ready():
+            now = time.time_ns() // 1_000_000
+            result = self.timeline_query(now - 60_000, now)
+            healthy_sources = {row["sourceId"] for row in result.get("sources", []) if row.get("available") and row.get("lastSuccessAtMillis", 0) > 0}
+            return {"rover.routes", "rover.instances", "rover.config.gateway", "rover.config.nameserver"} <= healthy_sources \
+                and any(row["kind"] == "ROUTE_BASELINE" and row["subject"]["routeId"] == self.fixture["routeId"]
+                        for row in result.get("events", []))
+        self.wait("admin", ready)
+
+    def publish_fixture_release(self, directory, case, repetition):
+        now = time.time_ns() // 1_000_000
+        request = {"sourceEventId": uuid.uuid4().hex, "releaseId": f"fixture-{case['id']}-{repetition}",
+                   "artifact": f"fixture:{case['id']}:{repetition}", "serviceName": "replay-service", "group": "v2",
+                   "status": "SUCCEEDED", "occurredAtMillis": now}
+        machine = Http()
+        _, accepted, _ = machine.request(self.urls["admin"] + "/api/agent/releases/ingest", request,
+                                         self.timeline_bearer, allowed=(201,))
+        _, replayed, _ = machine.request(self.urls["admin"] + "/api/agent/releases/ingest", request,
+                                         self.timeline_bearer, allowed=(200,))
+        require(replayed["duplicate"] and replayed["event"] == accepted["event"], "Release replay changed its durable facts")
+        require(machine.request(self.urls["admin"] + "/api/agent/events/ingest", {"path": self.fixture["path"]},
+                                self.timeline_bearer, allowed=(403,))[0] == 403, "Release token could submit alerts")
+        self.timeline_release = accepted["event"]
+        save(directory / "release-event.json", {"request": request, "accepted": accepted, "replayed": replayed})
+
+    def verify_timeline_mitigation(self, directory, since):
+        evidence = {}
+        def observed():
+            now = time.time_ns() // 1_000_000
+            result = self.timeline_query(since, now)
+            evidence.update(result)
+            for event in result.get("events", []):
+                after = event.get("facts", {}).get("after") or {}
+                if event["kind"] == "ROUTE_CHANGED" and event["subject"].get("routeId") == self.fixture["routeId"] \
+                        and event["observedAtMillis"] >= since \
+                        and any(t.get("group") == "v2" and t.get("weight") == 0 for t in after.get("targets", [])):
+                    return True
+            return False
+        self.wait("admin", observed)
+        save(directory / "timeline-after-mitigation.json", evidence)
+
     def model_metrics(self, directory, label):
         scrape = self.admin.request(self.urls["admin"] + "/actuator/prometheus")[1]
         require(isinstance(scrape, str), "Prometheus model evidence is unavailable")
@@ -509,6 +595,9 @@ class Replay:
                     "Observed in-window 503 was not confirmed")
         evidence = task["result"]["evidence"]
         require(bool(evidence), "No investigation evidence")
+        if getattr(self.args, "require_change_timeline", False):
+            checks = validate_change_timeline(evidence, self.timeline_release, window)
+            save(directory / "change-timeline-contract.json", checks)
         require(any(item["type"] == "INSTANCE" and "健康 2 个" in item["summary"] for item in evidence),
                 "Fixture has two healthy registered versions, but instance evidence does not describe them")
         require(all(item["metadata"].get("requestedFromMillis") == str(window["fromMillis"])
@@ -559,6 +648,8 @@ class Replay:
         baseline, result["baseline"] = self.traffic(directory, "baseline")
         require(result["baseline"]["failures"] == 0 and set(result["baseline"]["responseVersions"]) == {"v1", "v2"},
                 "Baseline must serve both versions without errors")
+        if getattr(self.args, "require_change_timeline", False):
+            self.publish_fixture_release(directory, case, repetition)
         self.fault(case["fault"]["status"], case["fault"]["delayMillis"])
         failed, result["fault"] = self.traffic(directory, "fault")
         expected = {row["key"]: row["responseVersion"] for row in baseline}
@@ -568,11 +659,14 @@ class Replay:
         # Close trace completion before querying the exact client-observed window.
         time.sleep(.1)
         result["alert"] = self.alert(directory, case, result["fault"])
+        mitigation_started = time.time_ns() // 1_000_000
         result["mitigation"] = self.weight(0)
         require(result["mitigation"]["response"]["status"] == "APPLIED", "Fixture mitigation failed")
         mitigated, result["mitigated"] = self.traffic(directory, "mitigated")
         require(result["mitigated"]["failures"] == 0 and result["mitigated"]["responseVersions"] == {"v1": len(mitigated)},
                 "Stopping v2 did not restore the sampled requests")
+        if getattr(self.args, "require_change_timeline", False):
+            self.verify_timeline_mitigation(directory, mitigation_started)
         # This is a TEST HARNESS operation, never presented as an autonomous agent action.
         self.fault()
         time.sleep(1.1 if case["fault"]["delayMillis"] else .05)
@@ -647,6 +741,8 @@ class Replay:
         self.start("admin")
         self.wait("admin", lambda: self.admin.request(self.urls["admin"] + "/api/auth/status"))
         self.login()
+        if getattr(self.args, "require_change_timeline", False):
+            self.setup_change_timeline()
         if self.live_model:
             self.verify_model()
         # Discovery has to reach the gateway, not just the registry.
@@ -659,6 +755,8 @@ class Replay:
             for case in self.fixture["scenarios"])
         require(self.report["repeatable"], "At least two repetitions must produce matching per-user outcomes")
         self.report["faultReplayPassed"] = True
+        if getattr(self.args, "require_change_timeline", False):
+            self.report["changeTimelineGatePassed"] = True
         if getattr(self.args, "require_evidence_contract", False):
             self.report["evidenceContractGatePassed"] = True
         if self.live_model:
@@ -790,6 +888,7 @@ def main():
     parser.add_argument("--require-durable-receipts", action="store_true", help="Fail if the S1-05 receipt production gate is not met")
     parser.add_argument("--require-single-admin-foundation", action="store_true", help="Also verify identity, roles, machine ingress, Admin restart, SSE and backup over real HTTP")
     parser.add_argument("--require-evidence-contract", action="store_true", help="Verify S2 captured identity, response origin, evidence quality and native historical windows")
+    parser.add_argument("--require-change-timeline", action="store_true", help="Verify release-only ingress, idempotent release evidence, pre-incident association and actual observed route mitigation")
     parser.add_argument("--model-config", type=Path, help="Opt in to actual paid model calls using this existing encrypted Rover model config")
     parser.add_argument("--model-master-key-file", type=Path, help="Existing master-key file; defaults to master.key next to --model-config")
     args = parser.parse_args()

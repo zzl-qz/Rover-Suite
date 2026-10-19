@@ -204,6 +204,19 @@ public final class OpsTools {
     }
 
     /** 检索运维知识库：怎么配置限流/熔断/超时/采样率、怎么接入服务、怎么做灰度、怎么排查。 */
+    @Tool(description = "查询发布、配置、路由与实例变化的持久时间线。targetType 为 ROUTE/SERVICE/INSTANCE，target 为路径/服务名/实例地址。"
+            + "优先使用任务指定时间窗，未指定时查最近一小时。返回源时间、采集时间、历史服务关联与记录缺口；时间相关不能当作根因。")
+    public String getChangeTimeline(@ToolParam(description = "ROUTE、SERVICE 或 INSTANCE") String targetType,
+                                    @ToolParam(description = "请求路径、服务名或实例地址") String target) {
+        com.rover.agent.core.model.TargetType type;
+        try { type = com.rover.agent.core.model.TargetType.valueOf(Texts.orEmpty(targetType)); }
+        catch (IllegalArgumentException ex) { return "targetType 必须为 ROUTE、SERVICE 或 INSTANCE"; }
+        if (type == com.rover.agent.core.model.TargetType.UNKNOWN || Texts.orEmpty(target).isBlank()) { return "需要明确的查询目标"; }
+        return query(AgentCapability.CHANGE_TIMELINE_QUERY, AgentStepType.EVENT_INVESTIGATION, "读取变更时间线",
+                "正在核对发布、配置与实例变化", new ResourceTarget(type, target), "");
+    }
+
+    /** 检索运维知识库。 */
     @Tool(description = "检索运维知识库，回答「怎么配置 / 怎么接入 / 怎么排查」这类使用方式问题。"
             + "问「限流怎么配置」「怎么接入一个服务」「怎么做灰度发布」「怎么摘除异常实例」时用它。"
             + "它返回文档/经验，不是当前实时状态；要查当前生效值请用配置或指标工具。")
@@ -401,6 +414,7 @@ public final class OpsTools {
     private static String untrustedLabel(AgentCapability capability) {
         return switch (capability) {
             case LOG_QUERY -> "历史日志";
+            case CHANGE_TIMELINE_QUERY -> "变更时间线";
             case KNOWLEDGE_RETRIEVAL -> "知识检索";
             case EVENT_QUERY -> "注册中心事件";
             default -> "工具结果";

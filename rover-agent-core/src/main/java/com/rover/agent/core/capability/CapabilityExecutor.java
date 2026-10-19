@@ -86,6 +86,7 @@ public final class CapabilityExecutor {
     private final CapabilityRegistry registry;
     private final java.util.function.Consumer<String> authorize;
     private final java.util.function.Function<String, com.rover.agent.core.model.InvestigationContext> contexts;
+    private final com.rover.agent.core.port.TimelineReadPort timeline;
 
     public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                               TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
@@ -106,6 +107,16 @@ public final class CapabilityExecutor {
                               LogQueryPort logs, KnowledgeReadPort knowledge, CapabilityRegistry registry,
                               java.util.function.Consumer<String> authorize,
                               java.util.function.Function<String, com.rover.agent.core.model.InvestigationContext> contexts) {
+        this(routes, instances, metrics, traces, configs, events, logs, knowledge, registry, authorize, contexts,
+                query -> { throw new com.rover.agent.core.port.SnapshotUnavailableException("变更时间线未接入"); });
+    }
+
+    public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
+                              TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
+                              LogQueryPort logs, KnowledgeReadPort knowledge, CapabilityRegistry registry,
+                              java.util.function.Consumer<String> authorize,
+                              java.util.function.Function<String, com.rover.agent.core.model.InvestigationContext> contexts,
+                              com.rover.agent.core.port.TimelineReadPort timeline) {
         this.routes = routes;
         this.instances = instances;
         this.metrics = metrics;
@@ -117,6 +128,7 @@ public final class CapabilityExecutor {
         this.registry = registry == null ? CapabilityRegistry.standard() : registry;
         this.authorize = authorize;
         this.contexts = contexts;
+        this.timeline = timeline;
     }
 
     /**
@@ -161,13 +173,67 @@ public final class CapabilityExecutor {
             case TRACE_QUERY -> readTraces(capability, descriptor, lookup, taskId, range);
             case CONFIG_READ -> readConfigs(capability, descriptor, taskId);
             case EVENT_QUERY -> readEvents(capability, descriptor, taskId, range);
+            case CHANGE_TIMELINE_QUERY -> readTimeline(descriptor, resolved, taskId, range);
             case LOG_QUERY -> queryLogs(lookup, null,
                     range.isUnspecified() ? System.currentTimeMillis() - 24L * 3_600_000L : range.fromMillis(),
                     range.isUnspecified() ? null : range.toMillis(), taskId);
             case KNOWLEDGE_RETRIEVAL -> readKnowledge(capability, descriptor, lookup, taskId);
             default -> CapabilityResult.unavailable(capability, descriptor);
         };
-        return enrich(result.inTimeRange(range), contexts.apply(taskId).query(resolved, range), taskId);
+        TimeRange evidenceRange = capability == AgentCapability.CHANGE_TIMELINE_QUERY && range.isUnspecified() && !result.evidence().isEmpty()
+                ? result.evidence().get(0).envelope().requestedRange() : range;
+        return enrich(result.inTimeRange(range), contexts.apply(taskId).query(resolved, evidenceRange), taskId);
+    }
+
+    private CapabilityResult readTimeline(CapabilityDescriptor descriptor, ResourceTarget target, String taskId, TimeRange range) {
+        long now = System.currentTimeMillis();
+        TimeRange requested = range.isUnspecified() ? new TimeRange(Math.max(1, now - 3_600_000), now) : range;
+        long lookback = range.isUnspecified() ? 0 : Math.min(900_000L,
+                Math.max(0, 7L * 24 * 3_600_000 - (requested.toMillis() - requested.fromMillis())));
+        TimeRange queryRange = new TimeRange(Math.max(0, requested.fromMillis() - lookback), requested.toMillis());
+        try {
+            var context = contexts.apply(taskId).query(target, requested);
+            var snapshot = timeline.query(new com.rover.agent.core.timeline.TimelineQuery(context, target, queryRange, 100));
+            Map<String, Object> facts = new LinkedHashMap<>();
+            facts.put("events", snapshot.events().stream().map(com.rover.agent.core.timeline.ChangeEvent::json).toList());
+            facts.put("sources", snapshot.sources()); facts.put("truncated", snapshot.truncated()); facts.put("causalityConfirmed", false);
+            facts.put("investigationRange", Map.of("fromMillis", requested.fromMillis(), "toMillis", requested.toMillis()));
+            facts.put("queryRange", Map.of("fromMillis", queryRange.fromMillis(), "toMillis", queryRange.toMillis()));
+            facts.put("lookbackMillis", requested.fromMillis() - queryRange.fromMillis());
+            StringBuilder summary = new StringBuilder("变更时间线（UTC，实际查询 ").append(queryRange.describe())
+                    .append("；调查窗口 ").append(requested.describe()).append("，额外向前查询最多十五分钟）：")
+                    .append(snapshot.events().size()).append(" 条已记录事件，不能据空列表排除变更。");
+            // Prefer release/change facts over baseline inventory when the model text is bounded.
+            var modelEvents = snapshot.events().stream().sorted(Comparator
+                    .comparingInt((com.rover.agent.core.timeline.ChangeEvent e) -> e.kind().startsWith("RELEASE_") ? 0 : e.kind().endsWith("_BASELINE") ? 2 : 1)
+                    .thenComparing(Comparator.comparingLong((com.rover.agent.core.timeline.ChangeEvent e) -> e.occurrenceRange().fromMillis()).reversed()))
+                    .limit(20).sorted(Comparator.comparingLong(e -> e.occurrenceRange().fromMillis())).toList();
+            for (var event : modelEvents) {
+                summary.append("\n[eventId=").append(event.eventId()).append("] ").append(event.kind()).append(" ")
+                        .append(event.occurredAtMillis() == null ? "观测区间 " + event.occurrenceRange().describe()
+                                : "源时间 " + java.time.Instant.ofEpochMilli(event.occurredAtMillis()))
+                        .append("；接收/采集 ").append(java.time.Instant.ofEpochMilli(event.observedAtMillis()))
+                        .append("；资源 ").append(event.subject()).append("；事实 ").append(event.facts())
+                        .append("；边界 ").append(String.join("；", event.limitations()));
+            }
+            if (snapshot.events().size() > 20) { summary.append("\n文本最多展示 20 条，优先发布和变化事件；结构化证据保留所有本次返回事件。"); }
+            List<com.rover.agent.core.model.ResourceRef> refs = new ArrayList<>();
+            for (var event : snapshot.events()) {
+                var subject = event.subject();
+                addRef(refs, context, subject.routeId(), subject.routeUid(), subject.generation());
+            }
+            var envelope = new com.rover.agent.core.model.EvidenceEnvelope(1, "rover.change-timeline", "EVENT",
+                    "/api/agent/timeline?fromMillis=" + queryRange.fromMillis() + "&toMillis=" + queryRange.toMillis(),
+                    "timeline-v1", requested, null, null, snapshot.observedAtMillis(), null, "POLL_AND_PUSH_PARTIAL",
+                    snapshot.events().size(), snapshot.quality(), context, refs, facts, snapshot.limitations(), null, null, "timeline-allowlist-v1");
+            Evidence evidence = Evidence.of(taskId, EvidenceType.EVENT, "持久变更时间线", "发布与变更时间线", summary.toString(),
+                    "/api/agent/timeline", Map.of("sampleSize", Integer.toString(snapshot.events().size())), snapshot.observedAtMillis()).withEnvelope(envelope);
+            return CapabilityResult.success(AgentCapability.CHANGE_TIMELINE_QUERY, descriptor, List.of(evidence), snapshot.limitations());
+        } catch (Exception ex) {
+            if (ex instanceof com.rover.agent.core.port.AgentAccess.Denied denied) { throw denied; }
+            log.warn("Agent 查询变更时间线失败", ex);
+            return CapabilityResult.failed(AgentCapability.CHANGE_TIMELINE_QUERY, descriptor, "变更时间线不可用，无法核对发布、配置或实例变化，不能据此排除变更相关故障。");
+        }
     }
 
     /** 取数路径：调用方给出的路径优先，其次用路由目标的取值。 */
@@ -383,7 +449,7 @@ public final class CapabilityExecutor {
                                      String taskId) {
         List<Evidence> enriched = new ArrayList<>();
         for (Evidence item : result.evidence()) {
-            List<com.rover.agent.core.model.ResourceRef> refs = new ArrayList<>();
+            List<com.rover.agent.core.model.ResourceRef> refs = new ArrayList<>(item.envelope().resourceRefs());
             if (item.type() == EvidenceType.ROUTE && result.route() != null) {
                 var route = result.route();
                 addRef(refs, context, route.routeId(), route.resourceUid(), route.generation());

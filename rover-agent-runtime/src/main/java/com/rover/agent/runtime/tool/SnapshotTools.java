@@ -114,10 +114,10 @@ public final class SnapshotTools {
                 .map(Evidence::modelText).collect(Collectors.joining("\n"));
         if (!observations.isBlank()) { core.put("已采集故障观测", observations); }
         // 指定时段的日志和知识已经采集完成，解读必须看得到，不能只给当前路由与实例。
-        for (String reference : List.of("/api/logs", "/api/knowledge")) {
+        for (String reference : List.of("/api/logs", "/api/knowledge", "/api/agent/timeline")) {
             String text = snapshots.get(reference);
             if (text != null && !text.isBlank()) {
-                core.put(reference.equals("/api/logs") ? "历史日志" : "运维知识参考", text);
+                core.put(reference.equals("/api/logs") ? "历史日志" : reference.equals("/api/agent/timeline") ? "发布与变更时间线" : "运维知识参考", text);
             }
         }
         return core;

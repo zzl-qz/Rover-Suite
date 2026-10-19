@@ -55,6 +55,9 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         if (!context.timeRange().isUnspecified()) {
             add(steps, AgentCapability.LOG_QUERY, "按指定调查时间范围查询落盘证据", target, true);
         }
+        if (needsTimeline(context)) {
+            add(steps, AgentCapability.CHANGE_TIMELINE_QUERY, "核对故障前后的发布、配置与实例变化；相关性不等于根因", target, true);
+        }
         addQuestionDrivenSteps(steps, context, target);
         return new InvestigationPlan(goal(context, target, hasPath), hypotheses(hasPath), steps);
     }
@@ -94,6 +97,7 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         if (!context.timeRange().isUnspecified()) {
             required.add(AgentCapability.LOG_QUERY);
         }
+        if (needsTimeline(context)) { required.add(AgentCapability.CHANGE_TIMELINE_QUERY); }
         if (!context.path().isBlank()) {
             required.add(AgentCapability.ROUTE_QUERY);
             required.add(AgentCapability.INSTANCE_QUERY);
@@ -110,6 +114,10 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
             steps.add(required ? PlannedStep.required(capability, reason, target)
                     : PlannedStep.optional(capability, reason, target));
         }
+    }
+
+    private static boolean needsTimeline(PlanningRequest request) {
+        return !request.timeRange().isUnspecified() || request.question().matches("(?is).*(发布|变更|上线|下线|回滚|时间线|deploy|release|timeline).*" );
     }
 
     private static List<String> hypotheses(boolean hasPath) {

@@ -15,7 +15,7 @@ public class AgentSecurityController {
     private final AgentSecurityService security;
     public AgentSecurityController(AgentSecurityService security) { this.security = security; }
     public record UserRequest(String username, String password, Set<String> roles, boolean enabled) { }
-    public record TokenRequest(String name, Long expiresAtMillis) { }
+    public record TokenRequest(String name, Long expiresAtMillis, String purpose) { }
 
     @GetMapping("/me") public Object me(Authentication actor) {
         return Map.of("principal", actor.getName(), "permissions", security.permissions(actor.getName()));
@@ -27,7 +27,7 @@ public class AgentSecurityController {
     @GetMapping("/connectors") public Object tokens(Authentication actor) { return security.machines(actor.getName()); }
     @PostMapping("/connectors") public ResponseEntity<?> issue(@RequestBody TokenRequest body, Authentication actor) {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore())
-                .body(security.issue(actor.getName(), body.name(), body.expiresAtMillis()));
+                .body(security.issue(actor.getName(), body.name(), body.expiresAtMillis(), body.purpose()));
     }
     @PostMapping("/connectors/{id}/revoke") public Object revoke(@PathVariable String id, Authentication actor) {
         return Map.of("revoked", security.revoke(actor.getName(), id));

@@ -16,6 +16,25 @@ SPEC.loader.exec_module(replay)
 
 
 class ReplayTest(unittest.TestCase):
+    def test_change_timeline_requires_pre_incident_release_and_honest_query_scope(self):
+        event = {"eventId": "e", "sourceId": "release:ci", "sourceEventId": "ci-1", "occurredAtMillis": 900,
+                 "scope": {"environmentId": "test"}, "controlTargetId": "gateway", "subject": {"group": "v2"},
+                 "facts": {"releaseId": "deploy-1", "artifact": "build-1"}}
+        envelope = {"sourceId": "rover.change-timeline", "qualityStatus": "PARTIAL", "coverageRange": None,
+                    "context": {"scope": event["scope"], "controlTargetId": "gateway"}, "facts": {"events": [event],
+                    "queryRange": {"fromMillis": 100, "toMillis": 2000}, "investigationRange": {"fromMillis": 1000, "toMillis": 2000},
+                    "causalityConfirmed": False}}
+        self.assertTrue(replay.validate_change_timeline([{"envelope": envelope}], event, {"fromMillis": 1000, "toMillis": 2000})["preIncidentReleaseAssociated"])
+        for field, value in (("qualityStatus", "AVAILABLE"), ("coverageRange", {"fromMillis": 100, "toMillis": 2000})):
+            wrong = copy.deepcopy(envelope)
+            wrong[field] = value
+            with self.assertRaises(RuntimeError):
+                replay.validate_change_timeline([{"envelope": wrong}], event, {"fromMillis": 1000, "toMillis": 2000})
+        wrong = copy.deepcopy(envelope)
+        wrong["facts"]["events"][0]["facts"]["artifact"] = "invented-build"
+        with self.assertRaises(RuntimeError):
+            replay.validate_change_timeline([{"envelope": wrong}], event, {"fromMillis": 1000, "toMillis": 2000})
+
     def test_response_origin_gate_rejects_status_only_guesses_and_wrong_version(self):
         scope = {"organizationId": "org", "teamId": "team", "environmentId": "test"}
         row = {"statusCode": 503, "routeId": "r", "group": "v2", "hostPort": "h:80", "resourceUid": "uid",

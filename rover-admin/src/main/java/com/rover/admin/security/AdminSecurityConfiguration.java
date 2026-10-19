@@ -50,8 +50,10 @@ public class AdminSecurityConfiguration {
     public SecurityFilterChain adminSecurityFilterChain(HttpSecurity http, AgentSecurityService agentSecurity) throws Exception {
         http.addFilterBefore(new AgentSecurityFilters.Machine(agentSecurity), CsrfFilter.class);
         http.addFilterAfter(new AgentSecurityFilters.Permissions(agentSecurity), AnonymousAuthenticationFilter.class);
+        http.addFilterAfter(new AgentSecurityFilters.ReleasePayload(), AgentSecurityFilters.Permissions.class);
         http.csrf(csrf -> csrf
-                .ignoringRequestMatchers(request -> AgentSecurityFilters.INGEST.equals(AgentSecurityFilters.path(request))
+                .ignoringRequestMatchers(request -> (AgentSecurityFilters.INGEST.equals(AgentSecurityFilters.path(request))
+                        || AgentSecurityFilters.RELEASE_INGEST.equals(AgentSecurityFilters.path(request)))
                         && "POST".equals(request.getMethod()) && request.getAttribute(AgentSecurityFilters.MACHINE) != null)
                 .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                 .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler()));

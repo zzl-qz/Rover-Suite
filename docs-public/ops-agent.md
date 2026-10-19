@@ -123,7 +123,7 @@ Engineer-initiated (implemented)                     Event / alert triggered (im
   and in which order                                     synthesise (confirm / eliminate /
         │                                                unverifiable → conclusion)
         ↓                                                        ↓
-  9 read-only tools + 1 proposal tool (see §7) →           Hypothesis-driven root cause
+  10 read-only tools + 1 proposal tool (see §7) →           Hypothesis-driven root cause
         │                     limitations
         ↓
   answered while querying; the answer is written back
@@ -131,7 +131,7 @@ Engineer-initiated (implemented)                     Event / alert triggered (im
 ```
 
 Both paths read data through the same `CapabilityExecutor`: neither the model nor an alert can reach management APIs
-directly. The difference is *who decides what to query* — the model on the conversation path (9 read-only tools plus one
+directly. The difference is *who decides what to query* — the model on the conversation path (10 read-only tools plus one
 proposal tool, sharing a call budget), the planner on the investigation path (picks available capabilities from the
 registry, with hypothesis verification). The proposal tool neither reads data through a capability nor writes to the
 gateway: it only registers a pending change for human approval, so the "reads must go through `CapabilityExecutor`"
@@ -227,7 +227,7 @@ rover-agent-core (plain Java: domain objects, read-only ports, neutral snapshots
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner: rule-based baseline plus model candidates, out-of-scope steps dropped by PlanValidator |
 | | `com.rover.agent.runtime.task` | Task lifecycle, Session / Incident registry (through the storage interfaces only; capacity limits mean something for the in-memory implementations) |
 | | `com.rover.agent.runtime.repository` | `JdbcAgentStore`: the relational implementation of session / message / incident / task / step / evidence / safe resume points / controlled change records (versioned migrations, durable jobs/budgets, independent audit, transactional event outbox, consistent H2 backups, and operation-ID reconciliation for interrupted writes), assembled by `AgentStore`; plus thread-safe in-memory implementations used when no record store path is configured |
-| | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 9 read-only tools plus 1 proposal tool (data entry point and the single suggestion entry point of the conversation path) |
+| | `com.rover.agent.runtime.tool` | SnapshotTools: exposes the snapshots collected in this run to the model; OpsTools: 10 read-only tools plus 1 proposal tool (data entry point and the single suggestion entry point of the conversation path) |
 | | `com.rover.agent.runtime.action` | `AgentActionService` (propose / approve / reject / rollback / resolve, state transitions claimed by CAS) plus `RouteWeightActionExecutor` (the only code that writes to the gateway) and `ActionDraft` / `RouteLocator` |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`: the built-in operations knowledge base, default `KnowledgeReadPort` implementation |
 | | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / ModelTargetInterpreter / SpringAiJsonCompletion / QuickModelCall, plus the conversation-side ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway (model adapter and honest degradation when no model exists) |
@@ -437,7 +437,7 @@ catalogue described in §7.
   decides what to query, how many times, and in what order** — rather than first classifying the question into "state
   query / investigation / capability summary" and running a different pipeline per shape. Every tool call is a real read,
   and all read-only tools run through the same `CapabilityExecutor`: the model never sees management-API credentials.
-  There are 9 read-only tools, one per capability in the registry:
+  There are 10 read-only tools for 9 registered capabilities (listRoutes and getRoute share ROUTE_QUERY):
 
   | Tool | What it reads | Capability |
   | :--- | :--- | :--- |
@@ -448,14 +448,17 @@ catalogue described in §7.
   | `getConfigs()` | Effective Gateway / Nameserver configuration | CONFIG_READ |
   | `listRegistryEvents()` | Recent register / deregister / evict / health-mark events | EVENT_QUERY |
   | `queryLogs(type, target, hours)` | Recorded evidence: CONFIG_CHANGE / ROLLBACK / ERROR / INSTANCE_EVENT / METRICS_SAMPLE / REQUEST_TRACE | LOG_QUERY |
+  | `getChangeTimeline(targetType, target)` | Durable release/config/route/instance timeline, source time, observation intervals, gaps and historical service association | CHANGE_TIMELINE_QUERY |
   | `searchKnowledge(query)` | Built-in operations FAQ: how to configure, onboard, and troubleshoot | KNOWLEDGE_RETRIEVAL |
+
+  Release ingress, historical service association, time/quality boundaries and validation are documented in the [change timeline contract (Chinese)](agent-change-timeline.zh-CN.md).
 
   Each tool description states what it returns, when to use it, when not to, and what it cannot provide, so the model does
   not ask a route snapshot for traffic or read "no traces" as "no problem". The call budget is enforced on both sides:
   `OpsTools.MAX_CALLS` (30) and `spring.ai.tools.limits.max-total-tool-calls` (30) are kept in sync, with a per-tool
   default limit of 10.
 
-  The tenth tool is the only non-read-only entry point, and its name is the boundary:
+  The eleventh tool is the only non-read-only entry point, and its name is the boundary:
   `proposeTargetWeightChange(route, group, desiredWeight)` — *propose*, not *execute*. It reads the routes once, checks the
   version target and its current weight, then registers a `PENDING_APPROVAL` change and answers "not executed yet";
   **no path from it reaches a write call** (`OpsToolsProposalTest` pins this down with a fake gateway that fails on any
@@ -656,7 +659,7 @@ catalogue described in §7.
 | Role | Data analyst | SRE / operations diagnostician |
 | Typical question | Why did sales drop? | Why is the service returning 5xx? |
 | Core data | Database | Gateway + Instances + Metrics + Trace + record store + operations knowledge |
-| Core tools | SQL / Python | 9 read-only tools: Route / Instance / Metrics / Trace / Config / Events / Logs / Knowledge (plus 1 tool that files a change for approval) |
+| Core tools | SQL / Python | 10 read-only tools: Route / Instance / Metrics / Trace / Config / Events / Logs / Timeline / Knowledge (plus 1 tool that files a change for approval) |
 | Output | Data analysis report | Incident diagnosis (plus a remediation plan awaiting human approval) |
 | Action | Data analysis | Controlled remediation: one action today — gray-release weight adjustment, executed and read back after human approval (the rest is planned) |
 | Risk surface | SQL / data | Production infrastructure |

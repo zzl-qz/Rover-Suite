@@ -237,7 +237,8 @@ public class AgentRuntimeConfiguration {
                                                      CapabilityRegistry agentCapabilityRegistry,
                                                      AgentTaskRepository tasks, AgentSessionRepository sessions,
                                                      RouteControlPort control, ObjectProvider<AgentAccess> access,
-                                                     InvestigationTaskRegistry running) {
+                                                     InvestigationTaskRegistry running,
+                                                     com.rover.agent.runtime.timeline.ChangeTimelineService timeline) {
         return new CapabilityExecutor(routeReadPort, instanceReadPort, metricReadPort, traceReadPort,
                 configReadPort, eventReadPort, logQueryPort, knowledgeReadPort, agentCapabilityRegistry, taskId -> {
                     AgentAccess policy = access.getIfAvailable(AgentAccess::local);
@@ -267,7 +268,13 @@ public class AgentRuntimeConfiguration {
                             control.controlTargetId(), control.resourceNamespace(), task == null ? null : task.target(),
                             execution == null ? null : execution.timeRange(), budget,
                             access.getIfAvailable(AgentAccess::local).managed() ? "LIVE_RBAC_V1" : "LOCAL_V1");
-                });
+                }, timeline);
+    }
+
+    @Bean
+    public com.rover.agent.runtime.timeline.ChangeTimelineService changeTimelineService(AgentStore store, RouteControlPort control,
+            @Value("${rover.admin.log-collect-interval-seconds:30}") long collectSeconds) {
+        return new com.rover.agent.runtime.timeline.ChangeTimelineService(store, control, Math.max(5, collectSeconds) * 1000);
     }
 
     /**

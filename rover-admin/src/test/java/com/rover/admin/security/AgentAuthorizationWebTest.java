@@ -71,4 +71,37 @@ class AgentAuthorizationWebTest {
                 .contentType(MediaType.APPLICATION_JSON).content("{\"path\":\"/orders\"}"))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test void releasePurposeIsSeparateDurableIdempotentAndRevocable() throws Exception {
+        var release = security.issue("admin", "ci-" + System.nanoTime(), null, "RELEASE");
+        var alert = security.issue("admin", "alert-" + System.nanoTime(), null);
+        String body = "{\"sourceEventId\":\"" + java.util.UUID.randomUUID() + "\",\"releaseId\":\"release-1\",\"artifact\":\"sha256:fixture-build\","
+                + "\"serviceName\":\"orders\",\"group\":\"v2\",\"status\":\"SUCCEEDED\",\"occurredAtMillis\":" + System.currentTimeMillis() + "}";
+        http.perform(post("/api/agent/releases/ingest").header("Authorization", "Bearer " + alert.token())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+        http.perform(post("/api/agent/events/ingest").header("Authorization", "Bearer " + release.token())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"path\":\"/orders\"}")).andExpect(status().isForbidden());
+        http.perform(post("/api/agent/releases/ingest").header("Authorization", "Bearer " + release.token())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isCreated())
+                .andExpect(jsonPath("$.event.subject.services[0]").value("orders"))
+                .andExpect(jsonPath("$.event.facts.artifact").value("sha256:fixture-build"));
+        http.perform(post("/api/agent/releases/ingest").header("Authorization", "Bearer " + release.token())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isOk()).andExpect(jsonPath("$.duplicate").value(true));
+        http.perform(post("/api/agent/releases/ingest").header("Authorization", "Bearer " + release.token())
+                .contentType(MediaType.APPLICATION_JSON).content(body.replace("fixture-build", "different-build"))).andExpect(status().isConflict());
+        http.perform(post("/api/agent/releases/ingest").header("Authorization", "Bearer " + release.token())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"unknown\":\"" + "x".repeat(17000) + "\"}"))
+                .andExpect(status().isPayloadTooLarge());
+        http.perform(post("/api/agent/releases/ingest").with(user("operator"))
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+        http.perform(post("/api/agent/releases/ingest").with(user("reader")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isForbidden());
+        http.perform(get("/api/agent/timeline").with(user("reader")).param("targetType", "SERVICE").param("target", "orders")
+                .param("fromMillis", Long.toString(System.currentTimeMillis() - 60000)).param("toMillis", Long.toString(System.currentTimeMillis() + 1000)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.events").isArray());
+        http.perform(get("/api/agent/timeline").header("Authorization", "Bearer " + release.token())).andExpect(status().isForbidden());
+        security.revoke("admin", release.id());
+        http.perform(post("/api/agent/releases/ingest").header("Authorization", "Bearer " + release.token())
+                .contentType(MediaType.APPLICATION_JSON).content(body)).andExpect(status().isUnauthorized());
+    }
 }

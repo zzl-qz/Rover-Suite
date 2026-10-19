@@ -35,6 +35,7 @@ public class TelemetryCollector implements AutoCloseable {
     private final AdminConfigService service;
     private final RecordStore store;
     private final PeriodicTask task;
+    private final TimelineObservationCollector timeline;
     /** 各组件上次可达性，用于只在状态翻转时记 INSTANCE_EVENT。 */
     private final Map<String, Boolean> lastReachable = new ConcurrentHashMap<>();
     /** 单实例上次健康状态（key=instanceId），用于只记注册/移除/上/下翻转。 */
@@ -45,8 +46,14 @@ public class TelemetryCollector implements AutoCloseable {
     private final Set<String> seenTraceIds = new LinkedHashSet<>();
 
     public TelemetryCollector(AdminConfigService service, RecordStore store, AdminProperties props) {
+        this(service, store, props, null);
+    }
+
+    public TelemetryCollector(AdminConfigService service, RecordStore store, AdminProperties props,
+                              com.rover.agent.runtime.timeline.ChangeTimelineService timeline) {
         this.service = service;
         this.store = store;
+        this.timeline = timeline == null ? null : new TimelineObservationCollector(service, timeline);
         this.task = new PeriodicTask("rover-telemetry-collector");
         long intervalMs = Math.max(5, props.getLogCollectIntervalSeconds()) * 1000L;
         // 初始延迟一个周期，等其余 bean 就绪再首采，避免启动窗口内的噪声
@@ -55,6 +62,7 @@ public class TelemetryCollector implements AutoCloseable {
 
     /** 单次采集：组件健康翻转 → 实例健康翻转 → 指标采样 → 慢/错误链路。包可见，便于测试直接驱动。 */
     void collect() {
+        if (timeline != null) { timeline.collect(); }
         try {
             collectHealth();
             collectInstanceHealth();

@@ -754,6 +754,17 @@
                                                             <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
                                                         </div>
                                                         <div v-if="wbEvidenceScope(item)" class="muted wb-evidence-ref">{{ wbEvidenceScope(item) }}</div>
+                                        <details v-if="wbTimelineEvents(item).length" class="muted wb-evidence-ref">
+                                            <summary>查看发布与变更时间线（UTC）</summary>
+                                            <ol style="max-height:420px;overflow:auto">
+                                                <li v-for="change in wbTimelineEvents(item)" :key="change.eventId" style="margin-bottom:12px;overflow-wrap:anywhere">
+                                                    <strong>{{ change.kind }}</strong> · {{ wbTimelineTime(change) }}
+                                                    <div>{{ wbTimelineDescription(change) }}</div>
+                                                    <div>采集/接收：{{ new Date(Number(change.observedAtMillis)).toISOString() }} · 来源：{{ change.sourceId }} · 事件：{{ change.eventId }}</div>
+                                                    <div v-for="(bound, index) in change.limitations" :key="index">{{ bound }}</div>
+                                                </li>
+                                            </ol>
+                                        </details>
                                         <details v-if="item.envelope" class="muted wb-evidence-ref">
                                             <summary>查看取证详情与判断边界</summary>
                                             <div v-for="(bound, boundIndex) in (item.envelope.limitations || [])" :key="boundIndex">{{ bound }}</div>
@@ -1029,6 +1040,17 @@
                                             <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
                                         </div>
                                         <div v-if="wbEvidenceScope(item)" class="muted wb-evidence-ref">{{ wbEvidenceScope(item) }}</div>
+                                        <details v-if="wbTimelineEvents(item).length" class="muted wb-evidence-ref">
+                                            <summary>查看发布与变更时间线（UTC）</summary>
+                                            <ol style="max-height:420px;overflow:auto">
+                                                <li v-for="change in wbTimelineEvents(item)" :key="change.eventId" style="margin-bottom:12px;overflow-wrap:anywhere">
+                                                    <strong>{{ change.kind }}</strong> · {{ wbTimelineTime(change) }}
+                                                    <div>{{ wbTimelineDescription(change) }}</div>
+                                                    <div>采集/接收：{{ new Date(Number(change.observedAtMillis)).toISOString() }} · 来源：{{ change.sourceId }} · 事件：{{ change.eventId }}</div>
+                                                    <div v-for="(bound, index) in change.limitations" :key="index">{{ bound }}</div>
+                                                </li>
+                                            </ol>
+                                        </details>
                                         <details v-if="item.envelope" class="muted wb-evidence-ref">
                                             <summary>查看取证详情与判断边界</summary>
                                             <div v-for="(bound, boundIndex) in (item.envelope.limitations || [])" :key="boundIndex">{{ bound }}</div>

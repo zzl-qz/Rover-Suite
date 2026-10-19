@@ -1455,6 +1455,27 @@ window.RoverAdminPages.workbench = {
                 STALE: '已过期', OUT_OF_RANGE: '不覆盖该时段' }[quality] || '质量未知';
         },
 
+        wbTimelineEvents(item) {
+            return item && item.envelope && item.envelope.sourceId === 'rover.change-timeline'
+                && Array.isArray(item.envelope.facts.events) ? item.envelope.facts.events : [];
+        },
+
+        wbTimelineTime(event) {
+            const utc = value => Number.isFinite(Number(value)) && Number(value) > 0 ? new Date(Number(value)).toISOString() : '未知';
+            if (event.occurredAtMillis) return '源时间 ' + utc(event.occurredAtMillis) + '（源时钟未校准）';
+            const range = event.occurrenceRange || {};
+            return '观测区间 ' + utc(range.fromMillis) + ' ~ ' + utc(range.toMillis) + '（实际变更时刻未知）';
+        },
+
+        wbTimelineDescription(event) {
+            const subject = event.subject || {};
+            const facts = event.facts || {};
+            const identity = [subject.routeId, subject.routeUid && ('UID=' + subject.routeUid + ' 代次=' + subject.generation),
+                (subject.services || []).join(', '), subject.group, subject.hostPort, subject.component].filter(Boolean).join(' · ');
+            return identity + (facts.releaseId ? ' · 发布 ' + facts.releaseId + ' · 制品 ' + facts.artifact + ' · ' + facts.status
+                : ' · ' + JSON.stringify({ before: facts.before, after: facts.after }));
+        },
+
         wbTimeRangeText(range) {
             if (!range || (!range.fromMillis && !range.toMillis)) return '默认窗口';
             return this.fmtTime(range.fromMillis) + ' ~ ' + this.fmtTime(range.toMillis);

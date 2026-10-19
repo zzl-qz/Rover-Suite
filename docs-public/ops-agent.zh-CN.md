@@ -104,14 +104,14 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
   模型自己决定查什么、查几次、按什么顺序                synthesise
         │                                    （假设：确认 / 排除 / 无法验证 → 结论）
         ↓                                              ↓
-  9 个只读工具 + 1 个提案工具（见 §7）→ 事实 + 依据 + 局限   假设式 Root Cause
+  10 个只读工具 + 1 个提案工具（见 §7）→ 事实 + 依据 + 局限   假设式 Root Cause
         │
         ↓
   边查边答，结论作为一条 Agent 回复写回会话
 ```
 
 两条路径的取数口是同一个 `CapabilityExecutor`：模型与告警都无法越过它直连管理接口。区别在于「谁决定查什么」——
-对话路径交给模型（9 个只读工具 + 1 个提案工具，共用同一份调用预算），调查路径交给规划器（注册表里挑已接入能力，带假设验证）。
+对话路径交给模型（10 个只读工具 + 1 个提案工具，共用同一份调用预算），调查路径交给规划器（注册表里挑已接入能力，带假设验证）。
 提案工具不取数、也不写网关，它只登记一条待人工审批的变更，因此不改变「取数必须经 CapabilityExecutor」这条边界。
 
 会话主路径不再先判「状态查询 / 故障调查 / 能力说明」再各走一套：一句话里问了几件事就查几次，答不了的那件如实说
@@ -194,7 +194,7 @@ rover-agent-core（纯 Java：领域对象、只读端口、中立快照、诊�
 | | `com.rover.agent.runtime.task` | 任务生命周期、Session / Incident 登记（只走存储接口；容量上限只对内存实现有意义） |
 | | `com.rover.agent.runtime.repository` | `JdbcAgentStore`：会话 / 消息 / 事件 / 任务 / 步骤 / 证据 / 安全恢复点 / 受控变更记录的关系表实现（版本化迁移、持久 Job/预算、独立执行审计、事件 outbox、H2 一致性备份，启动时对半途写操作按原操作号对账），`AgentStore` 负责装配；另有线程安全内存实现，只供非生产宿主显式使用；生产模式禁止内存回退 |
 | | `com.rover.agent.runtime.action` | `AgentActionService`（提议 / 批准 / 拒绝 / 回滚 / 结果确认，状态迁移用 CAS 抢）+ `RouteWeightActionExecutor`（唯一写网关的确定性代码）+ `ActionDraft` / `RouteLocator` |
-| | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型；OpsTools：9 个只读工具 + 1 个提案工具（对话主路径的数据入口与唯一建议入口） |
+| | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型；OpsTools：10 个只读工具 + 1 个提案工具（对话主路径的数据入口与唯一建议入口） |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`：内置运维知识库，`KnowledgeReadPort` 的默认实现 |
 | | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / ModelTargetInterpreter / SpringAiJsonCompletion / QuickModelCall，对话侧另有 ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway（模型适配与未配置时的诚实降级） |
 | `rover-admin` | `com.rover.admin.agent.adapter` | 6 个只读适配器：Route / Instance / Metric / Trace / Config / Event → 端口，不触发任何写操作；另有 `AdminRouteControlAdapter`（RouteControlPort 的管理口实现，只服务受控变更链路） |
@@ -343,7 +343,7 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 
 - 对话主路径 `ToolLoopService`（模型自主取数）：一次提问进来后，**由模型自己决定查什么、查几次、按什么顺序查**，
   不存在「先判断这句话属于查询、解释还是调查，再分流」的中间层——那正是已从主链上撤下的旧做法，现在连代码都不在了。每次工具调用都是一次真实取数，
-  工具的共同执行体仍是 `CapabilityExecutor`——模型拿不到管理接口凭证。共 9 个只读工具，
+  工具的共同执行体仍是 `CapabilityExecutor`——模型拿不到管理接口凭证。共 10 个只读工具，
   与能力注册表一一对应：
 
   | 工具 | 读到什么 | 对应能力 |
@@ -355,14 +355,17 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
   | `getConfigs()` | Gateway / Nameserver 当前生效配置 | CONFIG_READ |
   | `listRegistryEvents()` | 最近注册 / 注销 / 剔除 / 健康标记事件 | EVENT_QUERY |
   | `queryLogs(type, target, hours)` | 落盘历史证据：CONFIG_CHANGE / ROLLBACK / ERROR / INSTANCE_EVENT / METRICS_SAMPLE / REQUEST_TRACE | LOG_QUERY |
+  | `getChangeTimeline(targetType, target)` | 发布、配置、路由和实例的持久历史；含源时间、观测区间、采集空档及历史服务关联 | CHANGE_TIMELINE_QUERY |
   | `searchKnowledge(query)` | 内置运维 FAQ：怎么配置、怎么接入、怎么排查 | KNOWLEDGE_RETRIEVAL |
+
+  发布接入、历史服务关联、时间与质量边界、工作台展示及验收入口见[统一变更时间线](agent-change-timeline.zh-CN.md)。
 
   每个工具的 description 都写明「读到什么、什么时候该用、什么时候不该用、拿不到什么」，模型因此不会去向路由快照要流量，
   也不会把「追踪无记录」当成「没有问题」。调用预算由两侧同时兜：`OpsTools.MAX_CALLS`（30）与
   `spring.ai.tools.limits.max-total-tool-calls`（30）保持一致，单工具默认上限 10；模型不可用时不假降级到规则流程，
   而是如实回「当前没有可用的模型，请在模型配置页填好后重试」——这条路径的每次取数与每句结论都出自模型，冒充不了。
 
-  第 10 个工具是唯一的非只读入口，名字就是边界：`proposeTargetWeightChange(route, group, desiredWeight)`
+  第 11 个工具是唯一的非只读入口，名字就是边界：`proposeTargetWeightChange(route, group, desiredWeight)`
   ——「propose」不是「execute」。它读一次路由、核对版本目标与当前权重，然后登记一条 `PENDING_APPROVAL` 变更并返回
   「尚未执行」的说明；<b>它没有任何路径能走到写接口</b>（`OpsToolsProposalTest` 用一个「写方法一被调用就失败」的假网关把这一点固定下来）。
   它也刻意不推进安全恢复点：恢复点的前提是「重做不产生副作用」，而这条调用会写库，重做会多出一张待审批卡。
@@ -463,7 +466,7 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 | 角色 | 数据分析师 | SRE / 运维诊断员 |
 | 典型问题 | 销售额为什么下降？ | 服务为什么 5xx？ |
 | 核心数据 | Database | Gateway + Instances + Metrics + Trace + 历史落库 + 运维知识 |
-| 核心工具 | SQL / Python | 9 个只读工具：Route / Instance / Metrics / Trace / Config / Events / Logs / Knowledge（+1 个待审批变更的提案工具） |
+| 核心工具 | SQL / Python | 10 个只读工具：Route / Instance / Metrics / Trace / Config / Events / Logs / Timeline / Knowledge（+1 个待审批变更的提案工具） |
 | 最终产物 | 数据分析报告 | Incident Diagnosis（+ 待人工审批的处置计划） |
 | Action | 数据分析 | 受控运维处置：当前一个动作——灰度权重调整，人工批准后执行并回读验证（其余规划中） |
 | 风险面 | SQL / 数据 | 生产基础设施 |

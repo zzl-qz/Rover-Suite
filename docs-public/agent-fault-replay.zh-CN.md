@@ -47,6 +47,8 @@ python deploy/scripts/agent-fault-replay.py --heap-mb 256 --require-durable-rece
 
 本次实际接入发现的问题、修复与证据见[真实模型故障调查验收](agent-live-model-validation.zh-CN.md)。
 
+追加 `--require-change-timeline` 可验证 S2-03：四个采集源均可用、发布专用令牌不能提交告警、发布事件重放不改写、故障前发布通过历史服务关系进入调查，以及测试程序停推后产生真实的路由变化观测。该门禁默认不调用模型；接入契约与验收范围见[发布与变更时间线](agent-change-timeline.zh-CN.md)。
+
 每次运行创建新的 `artifacts/agent-fault-replay/<时间-随机ID>/`。用 `--output artifacts/agent-fault-replay/my-run` 指定新的目录也可以；已有目录拒绝复用，以防旧 overlay、账号或结果混入。启动、失败、Ctrl+C 都清理本次持有的子进程；保留证据文件，便于排障。强制杀死运行器本身无法保证执行 finally，手动清理前需核对进程身份与日志，不能仅凭端口或旧 PID 杀进程。
 
 ## 2. 固定故障与请求集合

@@ -34,7 +34,7 @@ public class AgentSecurityService implements AgentAccess {
     public void beginClosing() { closing = true; }
 
     public record Machine(String id, String principal, String namespace, long expiresAtMillis,
-                          boolean revoked, String createdBy) { }
+                          boolean revoked, String createdBy, String purpose) { }
     public record IssuedToken(String id, String principal, String token, long expiresAtMillis) { }
 
     @Autowired
@@ -60,6 +60,7 @@ public class AgentSecurityService implements AgentAccess {
                         + "principal VARCHAR(128) NOT NULL, token_hash VARCHAR(64) UNIQUE NOT NULL, "
                         + "resource_namespace VARCHAR(64) NOT NULL, expires_at BIGINT NOT NULL, revoked BOOLEAN NOT NULL, "
                         + "created_by VARCHAR(128) NOT NULL)");
+                statement.execute("ALTER TABLE admin_agent_token ADD COLUMN IF NOT EXISTS purpose VARCHAR(16) DEFAULT 'ALERT' NOT NULL");
             }
         } catch (SQLException ex) { throw new IllegalStateException("打开机器身份存储失败", ex); }
     }
@@ -141,8 +142,14 @@ public class AgentSecurityService implements AgentAccess {
     }
 
     public synchronized IssuedToken issue(String actor, String name, Long expiresAtMillis) {
+        return issue(actor, name, expiresAtMillis, "ALERT");
+    }
+
+    public synchronized IssuedToken issue(String actor, String name, Long expiresAtMillis, String purpose) {
         require(actor, Permission.POLICY_ADMIN);
-        requireHandler();
+        String tokenPurpose = purpose == null ? "ALERT" : purpose;
+        if (!Set.of("ALERT", "RELEASE").contains(tokenPurpose)) { throw new IllegalArgumentException("令牌用途必须为 ALERT 或 RELEASE"); }
+        if (tokenPurpose.equals("ALERT")) { requireHandler(); }
         if (name == null || !name.matches("[A-Za-z0-9._-]{1,64}")) { throw new IllegalArgumentException("机器来源名称不合法"); }
         long expiry = expiresAtMillis == null ? clock.millis() + Duration.ofDays(30).toMillis() : expiresAtMillis;
         if (expiry <= clock.millis() || expiry - clock.millis() > Duration.ofDays(365).toMillis()) {
@@ -154,11 +161,11 @@ public class AgentSecurityService implements AgentAccess {
         String id = UUID.randomUUID().toString();
         String principal = "connector:" + name;
         return transaction(() -> {
-        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO admin_agent_token VALUES(?,?,?,?,?,?,?)")) {
+        try (PreparedStatement statement = connection.prepareStatement("INSERT INTO admin_agent_token(token_id,principal,token_hash,resource_namespace,expires_at,revoked,created_by,purpose) VALUES(?,?,?,?,?,?,?,?)")) {
             statement.setString(1, id); statement.setString(2, principal); statement.setString(3, digest(secret));
             statement.setString(4, control.resourceNamespace()); statement.setLong(5, expiry);
-            statement.setBoolean(6, false); statement.setString(7, actor); statement.executeUpdate();
-            audit("CONNECTOR_ISSUED", id, actor, Map.of("principal", principal, "expiresAtMillis", expiry));
+            statement.setBoolean(6, false); statement.setString(7, actor); statement.setString(8, tokenPurpose); statement.executeUpdate();
+            audit("CONNECTOR_ISSUED", id, actor, Map.of("principal", principal, "expiresAtMillis", expiry, "purpose", tokenPurpose));
             return new IssuedToken(id, principal, secret, expiry);
         } catch (SQLException ex) { throw new IllegalStateException("创建机器身份失败", ex); }
         });
@@ -171,9 +178,9 @@ public class AgentSecurityService implements AgentAccess {
             try (ResultSet row = statement.executeQuery()) {
                 if (!row.next()) { return null; }
                 Machine machine = read(row);
-                if (machine.revoked() || machine.expiresAtMillis() <= clock.millis()
+                if (!Set.of("ALERT", "RELEASE").contains(machine.purpose()) || machine.revoked() || machine.expiresAtMillis() <= clock.millis()
                         || !machine.namespace().equals(control.resourceNamespace())) { return null; }
-                requireHandler();
+                if (machine.purpose().equals("ALERT")) { requireHandler(); }
                 return machine;
             }
         } catch (SQLException ex) { throw new IllegalStateException("读取机器身份失败", ex); }
@@ -227,7 +234,7 @@ public class AgentSecurityService implements AgentAccess {
 
     private static Machine read(ResultSet row) throws SQLException {
         return new Machine(row.getString("token_id"), row.getString("principal"), row.getString("resource_namespace"),
-                row.getLong("expires_at"), row.getBoolean("revoked"), row.getString("created_by"));
+                row.getLong("expires_at"), row.getBoolean("revoked"), row.getString("created_by"), row.getString("purpose"));
     }
 
     private static String digest(String value) {

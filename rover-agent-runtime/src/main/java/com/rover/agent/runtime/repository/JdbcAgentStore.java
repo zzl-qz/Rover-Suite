@@ -204,6 +204,10 @@ public final class JdbcAgentStore implements AutoCloseable {
         catch (SQLException ex) { return false; }
     }
 
+    public com.rover.agent.runtime.timeline.JdbcChangeTimeline timeline() {
+        return new com.rover.agent.runtime.timeline.JdbcChangeTimeline(connection, this);
+    }
+
     public record Job(String taskId, String kind, String payloadJson, long attempt, String state,
                       String budgetJson, long notBeforeMillis) { }
 
@@ -1259,7 +1263,22 @@ public final class JdbcAgentStore implements AutoCloseable {
                         List.of("CREATE TABLE IF NOT EXISTS agent_job (task_id VARCHAR(64) PRIMARY KEY REFERENCES agent_task(task_id) ON DELETE CASCADE, "
                                         + "job_kind VARCHAR(32) NOT NULL, payload_json TEXT NOT NULL, attempt BIGINT NOT NULL, state VARCHAR(32) NOT NULL, "
                                         + "budget_json TEXT, not_before BIGINT NOT NULL)",
-                                "CREATE INDEX IF NOT EXISTS idx_agent_job_due ON agent_job(state,not_before)"), List.of(), List.of()));
+                                "CREATE INDEX IF NOT EXISTS idx_agent_job_due ON agent_job(state,not_before)"), List.of(), List.of()),
+                new Migration(10, "durable change timeline and source baselines",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_change_event (resource_namespace VARCHAR(64) NOT NULL, "
+                                        + "event_id VARCHAR(64) NOT NULL, source_id VARCHAR(255) NOT NULL, source_event_id VARCHAR(255) NOT NULL, "
+                                        + "event_kind VARCHAR(64) NOT NULL, range_from BIGINT NOT NULL, range_to BIGINT NOT NULL, observed_at BIGINT NOT NULL, "
+                                        + "route_id VARCHAR(255) NOT NULL, route_prefix VARCHAR(255) NOT NULL, component VARCHAR(255) NOT NULL, "
+                                        + "intent_digest VARCHAR(64) NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(resource_namespace,event_id), "
+                                        + "UNIQUE(resource_namespace,source_id,source_event_id))",
+                                "CREATE INDEX IF NOT EXISTS idx_change_window ON agent_change_event(resource_namespace,range_from,range_to)",
+                                "CREATE INDEX IF NOT EXISTS idx_change_route ON agent_change_event(resource_namespace,source_id,route_prefix,range_to)",
+                                "CREATE TABLE IF NOT EXISTS agent_change_link (resource_namespace VARCHAR(64) NOT NULL,event_id VARCHAR(64) NOT NULL, "
+                                        + "link_kind VARCHAR(32) NOT NULL,resource_id VARCHAR(255) NOT NULL, PRIMARY KEY(resource_namespace,event_id,link_kind,resource_id), "
+                                        + "FOREIGN KEY(resource_namespace,event_id) REFERENCES agent_change_event(resource_namespace,event_id) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_change_resource ON agent_change_link(resource_namespace,link_kind,resource_id,event_id)",
+                                "CREATE TABLE IF NOT EXISTS agent_timeline_source (resource_namespace VARCHAR(64) NOT NULL,source_id VARCHAR(255) NOT NULL, "
+                                        + "payload_json TEXT NOT NULL,PRIMARY KEY(resource_namespace,source_id))"), List.of(), List.of()));
 
     private void migrate() throws SQLException {
         // applied_at 用毫秒时间戳：与业务表同一口径，也不依赖各驱动对 TIMESTAMP 的绑定细节。
