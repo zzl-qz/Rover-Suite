@@ -28,5 +28,9 @@ public enum AgentCapability {
     CHANGE_TIMELINE_QUERY,
 
     /** 检索运维知识库（怎么配置/怎么接入/怎么排查等文档与经验） */
-    KNOWLEDGE_RETRIEVAL
+    KNOWLEDGE_RETRIEVAL,
+
+    APPLICATION_METRICS_QUERY,
+    APPLICATION_LOG_QUERY,
+    APPLICATION_TRACE_QUERY
 }

@@ -219,8 +219,8 @@ public class AgentRuntimeConfiguration {
 
     /** 能力注册表：能力清单、规划可选集合与执行映射共用同一份，避免口径分叉。 */
     @Bean
-    public CapabilityRegistry agentCapabilityRegistry() {
-        return CapabilityRegistry.standard();
+    public CapabilityRegistry agentCapabilityRegistry(ObjectProvider<com.rover.agent.core.port.TelemetryReadPort> telemetry) {
+        return CapabilityRegistry.withTelemetry(telemetry.getIfAvailable(com.rover.agent.core.port.TelemetryReadPort::disconnected).capabilities());
     }
 
     /** 运维知识库：内存 FAQ 种子，回答「怎么配置 / 怎么接入 / 怎么排查」；换落盘或向量检索时替换此实现。 */
@@ -239,7 +239,8 @@ public class AgentRuntimeConfiguration {
                                                      AgentTaskRepository tasks, AgentSessionRepository sessions,
                                                      RouteControlPort control, ObjectProvider<AgentAccess> access,
                                                      InvestigationTaskRegistry running,
-                                                     com.rover.agent.runtime.timeline.ChangeTimelineService timeline) {
+                                                     com.rover.agent.runtime.timeline.ChangeTimelineService timeline,
+                                                     ObjectProvider<com.rover.agent.core.port.TelemetryReadPort> telemetry) {
         return new CapabilityExecutor(routeReadPort, instanceReadPort, metricReadPort, traceReadPort,
                 configReadPort, eventReadPort, logQueryPort, knowledgeReadPort, agentCapabilityRegistry, taskId -> {
                     AgentAccess policy = access.getIfAvailable(AgentAccess::local);
@@ -269,7 +270,7 @@ public class AgentRuntimeConfiguration {
                             control.controlTargetId(), control.resourceNamespace(), task == null ? null : task.target(),
                             execution == null ? null : execution.timeRange(), budget,
                             access.getIfAvailable(AgentAccess::local).managed() ? "LIVE_RBAC_V1" : "LOCAL_V1");
-                }, timeline);
+                }, timeline, telemetry.getIfAvailable(com.rover.agent.core.port.TelemetryReadPort::disconnected));
     }
 
     @Bean

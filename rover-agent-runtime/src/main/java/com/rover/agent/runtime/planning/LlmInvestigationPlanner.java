@@ -46,7 +46,7 @@ public final class LlmInvestigationPlanner implements InvestigationPlanner {
     private static final Set<String> PLANNING_FACTS = Set.of("samplePopulations", "finalRequests", "final5xx",
             "final5xxRate", "responseOrigins", "failurePhases", "incompleteResponses", "samplingMode",
             "coverageFromMillis", "coverageToMillis", "dimensions", "dimensionsMayBeTruncated", "versions",
-            "events", "causalityConfirmed", "truncated");
+            "events", "causalityConfirmed", "truncated", "telemetryRows", "service", "pagesRead", "queryWindow");
 
     private final RuleBasedPlanner rules;
     private final JsonCompletion completion;

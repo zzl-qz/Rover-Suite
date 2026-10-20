@@ -538,6 +538,9 @@ public final class DynamicInvestigationGraph {
             case EVENT_QUERY -> AgentStepType.EVENT_INVESTIGATION;
             case LOG_QUERY -> AgentStepType.LOG_INVESTIGATION;
             case CHANGE_TIMELINE_QUERY -> AgentStepType.EVENT_INVESTIGATION;
+            case APPLICATION_METRICS_QUERY -> AgentStepType.METRIC_INVESTIGATION;
+            case APPLICATION_LOG_QUERY -> AgentStepType.LOG_INVESTIGATION;
+            case APPLICATION_TRACE_QUERY -> AgentStepType.TRACE_INVESTIGATION;
             case KNOWLEDGE_RETRIEVAL -> AgentStepType.KNOWLEDGE_INVESTIGATION;
         };
     }
@@ -553,6 +556,9 @@ public final class DynamicInvestigationGraph {
             case EVENT_QUERY -> "读取事件";
             case LOG_QUERY -> "读取历史日志";
             case CHANGE_TIMELINE_QUERY -> "读取变更时间线";
+            case APPLICATION_METRICS_QUERY -> "读取应用指标";
+            case APPLICATION_LOG_QUERY -> "读取应用日志";
+            case APPLICATION_TRACE_QUERY -> "读取应用链路";
             case KNOWLEDGE_RETRIEVAL -> "检索知识";
         };
     }
@@ -572,6 +578,9 @@ public final class DynamicInvestigationGraph {
             case EVENT_QUERY -> "正在读取注册中心近期事件";
             case LOG_QUERY -> "正在读取落盘历史日志";
             case CHANGE_TIMELINE_QUERY -> "正在核对发布、配置与实例变化时间线";
+            case APPLICATION_METRICS_QUERY -> "正在按授权范围查询应用指标";
+            case APPLICATION_LOG_QUERY -> "正在按授权范围查询应用日志";
+            case APPLICATION_TRACE_QUERY -> "正在按授权范围查询应用链路";
             case KNOWLEDGE_RETRIEVAL -> "正在检索运维知识库";
         };
     }

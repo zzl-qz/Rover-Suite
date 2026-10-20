@@ -56,6 +56,8 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 Agent 能查询 Route、Instance、Metrics、Trace、Config、Events、Logs（历史日志）、Knowledge（运维知识）等运行态数据，全程只读。
 
+S2-05 增加可选的 Prometheus 应用指标、Loki 应用日志与 Tempo 链路摘要读取。三类能力使用服务端固定的资源映射、环境过滤和查询模板，接入现有调查图、对话、证据持久化与工作台；默认未配置，不会自动访问外部平台。配置、预算、脱敏、分页和覆盖语义见 [外部只读遥测接入](agent-telemetry-connectors.zh-CN.md)。
+
 **状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）由 `AgentOrchestrator` 驱动，采集路由、实例、指标、追踪、配置、注册事件、历史日志、运维知识八类快照，返回结论、证据来源和采集时间。其中指标除全局窗口外，还能按「路由 × 上游实例」取到窗口请求数、状态码、错误率与延迟，用于指出是哪台实例在出错；历史日志按类型 / 目标 / 时间范围过滤（配置变更、回滚、错误、实例上下线、指标采样、慢与错误链路），运维知识回答「怎么配置 / 怎么接入 / 怎么排查」。
 
 ### Level B：Reason（调查 + 推理）

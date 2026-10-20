@@ -17,6 +17,8 @@
 
 ## Admin 启动配置
 
+Agent 外部遥测使用 `rover.agent.telemetry.sources`（默认空）与 `rover.agent.telemetry.limits`，重启生效。范围、读取预算和标签要求见 [S2-05 接入说明](agent-telemetry-connectors.zh-CN.md)，可用配置见 [追加配置示例](../deploy/production/agent-telemetry.example.yml)。它与 Admin 指标导出的 Prometheus 开关是两条独立链路。
+
 | 配置 | 默认值 | 说明 | 生效方式 |
 | --- | --- | --- | --- |
 | `server.port` | `9090` | Admin HTTP 端口 | 重启 |

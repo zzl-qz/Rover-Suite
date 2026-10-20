@@ -87,6 +87,7 @@ public final class CapabilityExecutor {
     private final java.util.function.Consumer<String> authorize;
     private final java.util.function.Function<String, com.rover.agent.core.model.InvestigationContext> contexts;
     private final com.rover.agent.core.port.TimelineReadPort timeline;
+    private final com.rover.agent.core.port.TelemetryReadPort telemetry;
 
     public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
                               TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
@@ -117,6 +118,17 @@ public final class CapabilityExecutor {
                               java.util.function.Consumer<String> authorize,
                               java.util.function.Function<String, com.rover.agent.core.model.InvestigationContext> contexts,
                               com.rover.agent.core.port.TimelineReadPort timeline) {
+        this(routes, instances, metrics, traces, configs, events, logs, knowledge, registry, authorize, contexts,
+                timeline, com.rover.agent.core.port.TelemetryReadPort.disconnected());
+    }
+
+    public CapabilityExecutor(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
+                              TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
+                              LogQueryPort logs, KnowledgeReadPort knowledge, CapabilityRegistry registry,
+                              java.util.function.Consumer<String> authorize,
+                              java.util.function.Function<String, com.rover.agent.core.model.InvestigationContext> contexts,
+                              com.rover.agent.core.port.TimelineReadPort timeline,
+                              com.rover.agent.core.port.TelemetryReadPort telemetry) {
         this.routes = routes;
         this.instances = instances;
         this.metrics = metrics;
@@ -129,6 +141,7 @@ public final class CapabilityExecutor {
         this.authorize = authorize;
         this.contexts = contexts;
         this.timeline = timeline;
+        this.telemetry = telemetry;
     }
 
     /**
@@ -174,15 +187,31 @@ public final class CapabilityExecutor {
             case CONFIG_READ -> readConfigs(capability, descriptor, taskId);
             case EVENT_QUERY -> readEvents(capability, descriptor, taskId, range);
             case CHANGE_TIMELINE_QUERY -> readTimeline(descriptor, resolved, taskId, range);
+            case APPLICATION_METRICS_QUERY, APPLICATION_LOG_QUERY, APPLICATION_TRACE_QUERY ->
+                    readTelemetry(capability, descriptor, resolved, taskId, range);
             case LOG_QUERY -> queryLogs(lookup, null,
                     range.isUnspecified() ? System.currentTimeMillis() - 24L * 3_600_000L : range.fromMillis(),
                     range.isUnspecified() ? null : range.toMillis(), taskId);
             case KNOWLEDGE_RETRIEVAL -> readKnowledge(capability, descriptor, lookup, taskId);
             default -> CapabilityResult.unavailable(capability, descriptor);
         };
-        TimeRange evidenceRange = capability == AgentCapability.CHANGE_TIMELINE_QUERY && range.isUnspecified() && !result.evidence().isEmpty()
+        TimeRange evidenceRange = (capability == AgentCapability.CHANGE_TIMELINE_QUERY
+                || capability == AgentCapability.APPLICATION_METRICS_QUERY || capability == AgentCapability.APPLICATION_LOG_QUERY
+                || capability == AgentCapability.APPLICATION_TRACE_QUERY) && range.isUnspecified() && !result.evidence().isEmpty()
                 ? result.evidence().get(0).envelope().requestedRange() : range;
         return enrich(result.inTimeRange(range), contexts.apply(taskId).query(resolved, evidenceRange), taskId);
+    }
+
+    private CapabilityResult readTelemetry(AgentCapability capability, CapabilityDescriptor descriptor,
+                                           ResourceTarget target, String taskId, TimeRange range) {
+        try {
+            var evidence = telemetry.query(capability, contexts.apply(taskId).query(target, range));
+            return CapabilityResult.success(capability, descriptor, evidence,
+                    evidence.stream().flatMap(e -> e.envelope().limitations().stream()).distinct().toList());
+        } catch (com.rover.agent.core.port.AgentAccess.Denied ex) { throw ex; }
+        catch (Exception ex) {
+            return CapabilityResult.failed(capability, descriptor, "外部遥测不可用；没有可用证据，不能判断健康。");
+        }
     }
 
     private CapabilityResult readTimeline(CapabilityDescriptor descriptor, ResourceTarget target, String taskId, TimeRange range) {

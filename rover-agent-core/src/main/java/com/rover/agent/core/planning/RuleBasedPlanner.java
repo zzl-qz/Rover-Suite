@@ -59,6 +59,9 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
             add(steps, AgentCapability.CHANGE_TIMELINE_QUERY, "核对故障前后的发布、配置与实例变化；相关性不等于根因", target, true);
         }
         addQuestionDrivenSteps(steps, context, target);
+        for (AgentCapability capability : telemetryCapabilities()) {
+            add(steps, capability, "补充同范围应用遥测；缺失数据不能用于排除故障", target, true);
+        }
         for (var hypothesis : context.assessments()) {
             if (hypothesis.status() == com.rover.agent.core.model.Verdict.UNKNOWN) {
                 for (AgentCapability capability : hypothesis.nextCapabilities()) {
@@ -118,7 +121,13 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         } else if (PlanValidator.requestTarget(context).type() != TargetType.UNKNOWN) {
             required.add(AgentCapability.INSTANCE_QUERY);
         }
+        required.addAll(telemetryCapabilities());
         return required;
+    }
+
+    private List<AgentCapability> telemetryCapabilities() {
+        return List.of(AgentCapability.APPLICATION_METRICS_QUERY, AgentCapability.APPLICATION_LOG_QUERY,
+                AgentCapability.APPLICATION_TRACE_QUERY).stream().filter(registry::selectable).toList();
     }
 
     private void add(List<PlannedStep> steps, AgentCapability capability, String reason, ResourceTarget target,

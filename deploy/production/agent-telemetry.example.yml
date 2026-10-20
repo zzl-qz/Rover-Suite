@@ -1,0 +1,66 @@
+# 外部遥测追加配置示例：复制到受保护的本机 config/agent-telemetry.yml 后修改，勿提交真实凭证。
+# java -jar rover-admin.jar --spring.config.additional-location=file:./config/agent-telemetry.yml
+# control-target-id 必须使用现有部署的 ID，不要为了套示例修改管理目标 ID。
+rover:
+  agent:
+    telemetry:
+      limits:
+        timeout-seconds: 15
+        max-window-seconds: 3600
+        max-rows: 150
+        page-size: 50
+        max-pages: 3
+        max-response-bytes: 1048576
+        freshness-seconds: 120
+      sources:
+        - id: application-metrics
+          kind: PROMETHEUS
+          endpoint: ${ROVER_PROMETHEUS_ENDPOINT:https://prometheus.example.invalid}
+          allowed-addresses: [10.20.0.10]
+          scope:
+            organization-id: ${rover.admin.agent-organization-id:local}
+            team-id: ${rover.admin.agent-team-id:operators}
+            environment-id: ${rover.admin.agent-environment-id:local}
+          control-target-id: ${rover.admin.gateway-control-target-id}
+          namespace: apps
+          bearer-token: ${ROVER_PROMETHEUS_READ_TOKEN:}
+          metrics: [http_server_requests_seconds_count, process_cpu_usage, jvm_memory_used_bytes]
+          bindings:
+            - target-type: ROUTE
+              target: /api/orders
+              service: orders
+            - target-type: SERVICE
+              target: orders
+              service: orders
+        - id: application-logs
+          kind: LOKI
+          endpoint: ${ROVER_LOKI_ENDPOINT:https://loki.example.invalid}
+          allowed-addresses: [10.20.0.11]
+          scope:
+            organization-id: ${rover.admin.agent-organization-id:local}
+            team-id: ${rover.admin.agent-team-id:operators}
+            environment-id: ${rover.admin.agent-environment-id:local}
+          control-target-id: ${rover.admin.gateway-control-target-id}
+          namespace: apps
+          tenant-id: ${ROVER_LOKI_TENANT:operators}
+          bearer-token: ${ROVER_LOKI_READ_TOKEN:}
+          bindings:
+            - target-type: ROUTE
+              target: /api/orders
+              service: orders
+        - id: application-traces
+          kind: TEMPO
+          endpoint: ${ROVER_TEMPO_ENDPOINT:https://tempo.example.invalid}
+          allowed-addresses: [10.20.0.12]
+          scope:
+            organization-id: ${rover.admin.agent-organization-id:local}
+            team-id: ${rover.admin.agent-team-id:operators}
+            environment-id: ${rover.admin.agent-environment-id:local}
+          control-target-id: ${rover.admin.gateway-control-target-id}
+          namespace: apps
+          tenant-id: ${ROVER_TEMPO_TENANT:operators}
+          bearer-token: ${ROVER_TEMPO_READ_TOKEN:}
+          bindings:
+            - target-type: ROUTE
+              target: /api/orders
+              service: orders

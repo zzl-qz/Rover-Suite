@@ -50,7 +50,9 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
 
     /** 服务发现概览读取成功，不能掩盖同一次调用的路由表读取失败。 */
     public boolean readFailed() {
-        return !executed || evidence.isEmpty() || capability == AgentCapability.ROUTE_QUERY && !routeRead;
+        return !executed || evidence.isEmpty() || capability == AgentCapability.ROUTE_QUERY && !routeRead
+                || evidence.stream().allMatch(e -> e.envelope().qualityStatus() == com.rover.agent.core.model.EvidenceQuality.UNAVAILABLE
+                        || e.envelope().qualityStatus() == com.rover.agent.core.model.EvidenceQuality.OUT_OF_RANGE);
     }
 
     /** 只按异常类型识别网络瞬态失败；缺配置、无样本、权限、解析错误均不靠文本猜测重试。 */
