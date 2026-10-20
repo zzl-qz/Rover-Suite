@@ -8,7 +8,7 @@ package com.rover.agent.core.snapshot;
  * @param group 实例被选中时的版本分组；空串表示默认组或无版本
  * @param windowSeconds 统计窗口秒数
  * @param windowRequests 窗口内转发请求数，也是本次判断的样本量
- * @param status5xx 窗口内 5xx 数
+ * @param status5xx 转发窗口内 5xx 数，含后端状态码和网关生成错误，不能据此推断响应来源
  * @param connectFail 窗口内连接失败次数
  * @param timeout 窗口内超时次数
  * @param avgMillis 窗口内平均耗时（毫秒）

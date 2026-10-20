@@ -21,6 +21,14 @@ public interface ChatModelGateway {
      */
     ChatClient chatClient(int timeoutSeconds);
 
+    /**
+     * 调查规划使用主模型，拥有独立超时与思考设置；不能因配置了快速模型而自动降档。
+     * 宿主仍须将超时限制在模型配置内。不支持思考控制的宿主必须显式拒绝启用。
+     */
+    default ChatClient planningClient(int timeoutSeconds, boolean thinkingEnabled) {
+        throw new UnsupportedOperationException("宿主未实现独立的调查规划客户端");
+    }
+
     /** 供控制台展示的脱敏描述，如 "gpt-5-mini @ api.openai.com"。 */
     String description();
 

@@ -16,6 +16,22 @@ SPEC.loader.exec_module(replay)
 
 
 class ReplayTest(unittest.TestCase):
+    def test_conversation_does_not_require_traces_but_cannot_mislabel_gateway_failures(self):
+        task = {"result": {"summary": "根因尚未确认。最终请求 35，最终 5xx 35；后端原始 5xx=0，网关生成 5xx=35 [evidenceId=e] 尚未执行修复或验证业务恢复",
+                "evidence": [{"evidenceId": "e", "envelope": {"sourceId": "gateway.final-responses", "facts": {
+                    "finalRequests": 35, "final5xx": 35, "upstream5xx": 0, "gateway5xx": 35}}}],
+                "hypotheses": [{"id": "H5", "status": "UNKNOWN"}, {"id": "H6", "status": "CONFIRMED",
+                    "statement": "访问上游实例时出现 5xx", "detail": "不能据此确认响应来源或业务根因"}]}}
+        self.assertIsNone(replay.validate_conversation_report(task)["sampleChecks"])
+        wrong = copy.deepcopy(task)
+        wrong["result"]["hypotheses"][1]["statement"] = "上游实例返回了 5xx"
+        with self.assertRaisesRegex(RuntimeError, "backend response codes"):
+            replay.validate_conversation_report(wrong)
+        wrong = copy.deepcopy(task)
+        wrong["result"]["summary"] = wrong["result"]["summary"].replace("后端原始 5xx=0", "后端原始 5xx=35")
+        with self.assertRaises(RuntimeError):
+            replay.validate_conversation_report(wrong)
+
     def test_grounded_report_checks_published_numbers_and_comparison_group_against_rows(self):
         populations, rows, lines = [], [], []
         for group, status in (("v1", 200), ("v2", 503)):

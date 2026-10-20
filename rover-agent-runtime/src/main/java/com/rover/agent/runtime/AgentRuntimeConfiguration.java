@@ -166,7 +166,7 @@ public class AgentRuntimeConfiguration {
             @Value("${rover.agent.limits.max-model-calls:20}") int maxModelCalls,
             @Value("${rover.agent.limits.max-output-tokens:4096}") int maxOutputTokens,
             @Value("${rover.agent.limits.max-total-tokens:100000}") long maxTotalTokens,
-            @Value("${rover.agent.limits.task-timeout-seconds:180}") int timeoutSeconds,
+            @Value("${rover.agent.limits.task-timeout-seconds:300}") int timeoutSeconds,
             @Value("${rover.agent.limits.max-repeated-tool-results:3}") int maxRepeatedToolResults) {
         return new AgentRunLimits(maxModelCalls, maxOutputTokens, maxTotalTokens,
                 java.time.Duration.ofSeconds(timeoutSeconds), maxRepeatedToolResults);
@@ -192,8 +192,9 @@ public class AgentRuntimeConfiguration {
 
     @Bean
     public ModelExplainer agentModelExplainer(ObjectProvider<ChatModelGateway> chatModelGateways,
-                                              AgentMetrics agentMetrics) {
-        return new ModelExplainer(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics);
+                                              AgentMetrics agentMetrics,
+                                              @Value("${rover.agent.llm.report-timeout-seconds:30}") int timeoutSeconds) {
+        return new ModelExplainer(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics, timeoutSeconds);
     }
 
     /**
@@ -204,7 +205,7 @@ public class AgentRuntimeConfiguration {
      */
     @Bean
     public TargetInterpreter agentTargetInterpreter(ObjectProvider<ChatModelGateway> chatModelGateways,
-                                                    @Value("${rover.agent.llm.quick-timeout-seconds:10}")
+                                                    @Value("${rover.agent.llm.target-timeout-seconds:${rover.agent.llm.quick-timeout-seconds:10}}")
                                                     int quickTimeoutSeconds) {
         return new ModelTargetInterpreter(chatModelGateways.getIfAvailable(NoopChatModelGateway::new),
                 quickTimeoutSeconds);
@@ -294,11 +295,13 @@ public class AgentRuntimeConfiguration {
     public InvestigationPlanner agentInvestigationPlanner(CapabilityRegistry agentCapabilityRegistry,
                                                          ObjectProvider<ChatModelGateway> chatModelGateways,
                                                          AgentMetrics agentMetrics,
-                                                         @Value("${rover.agent.llm.quick-timeout-seconds:10}")
-                                                         int quickTimeoutSeconds) {
+                                                         @Value("${rover.agent.llm.planning-timeout-seconds:60}") int timeoutSeconds,
+                                                         @Value("${rover.agent.llm.planning-max-output-tokens:2048}") int outputTokens,
+                                                         @Value("${rover.agent.llm.planning-thinking-enabled:false}") boolean thinkingEnabled,
+                                                         @Value("${rover.agent.llm.planning-evidence-context-chars:24000}") int contextChars) {
         return new LlmInvestigationPlanner(new RuleBasedPlanner(agentCapabilityRegistry),
-                new SpringAiJsonCompletion(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics,
-                        "调查规划", quickTimeoutSeconds, 512), agentCapabilityRegistry);
+                SpringAiJsonCompletion.investigation(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics,
+                        timeoutSeconds, outputTokens, thinkingEnabled), agentCapabilityRegistry, contextChars);
     }
 
     @Bean

@@ -12,6 +12,60 @@ import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 class StructuredPlanningTest {
+    @Test void fullModelPlanRetainsRequiredReadsAndCannotDowngradeTheirFlags() {
+        var registry=CapabilityRegistry.standard();
+        JsonCompletion model=new JsonCompletion() {
+            public <T> Optional<T> complete(String system,String user,Function<String,Optional<T>> parser) {
+                return parser.apply("{\"steps\":[\"LOG_QUERY\",\"CONFIG_READ\",\"EVENT_QUERY\",\"GATEWAY_METRICS_QUERY\",\"TRACE_QUERY\",\"CHANGE_TIMELINE_QUERY\"]}");
+            }
+        };
+        var request=new PlanningRequest("排查",ResourceTarget.route("/orders"),"/orders",List.of(),List.of());
+        var required=new RuleBasedPlanner(registry).plan(request).steps().stream().filter(PlannedStep::required).map(PlannedStep::capability).toList();
+        var validated=new PlanValidator(registry,PlanningLimits.defaults()).validate(
+                new LlmInvestigationPlanner(null,model,registry).plan(request),request,Set.of());
+        var retained=validated.steps().stream().filter(PlannedStep::required).map(PlannedStep::capability).toList();
+        assertTrue(retained.containsAll(required));
+        assertTrue(validated.steps().size()<=6);
+    }
+    @Test void evidenceBudgetKeepsReferencedLateFactsAndBothVersionPopulations() {
+        var rows = new java.util.ArrayList<Evidence>();
+        for (int i=0;i<30;i++) {
+            rows.add(Evidence.of("t",EvidenceType.LOG,"logs","noise","unrelated context ".repeat(100),"/logs",i));
+        }
+        Evidence trace=Evidence.of("t",EvidenceType.TRACE,"gateway","trace","context ".repeat(40)+"POOL_EXHAUSTED_AFTER_HEADER","/traces",100);
+        trace=trace.withEnvelope(new EvidenceEnvelope(1,"gateway.traces","TRACE","q","v1",new TimeRange(1,10),null,null,100,null,
+                "SAMPLED",120,EvidenceQuality.PARTIAL,null,List.of(),java.util.Map.of("samplePopulations",List.of(
+                    java.util.Map.of("group","v1","sampleRequests",62,"sample5xx",0),
+                    java.util.Map.of("group","v2","sampleRequests",58,"sample5xx",58))),List.of(),null,null,"v1"));
+        rows.add(trace);
+        String evidenceId=trace.evidenceId();
+        var hypothesis=new Hypothesis("H5","窗口内失败",Verdict.UNKNOWN,"待验证",List.of(),List.of(evidenceId),List.of(),
+                List.of("应用内部证据"),List.of(AgentCapability.LOG_QUERY));
+        JsonCompletion capture=new JsonCompletion() {
+            public <T> Optional<T> complete(String system,String user,Function<String,Optional<T>> parser) {
+                assertTrue(user.contains("POOL_EXHAUSTED_AFTER_HEADER"),"关键线索不能在 160 字截断中丢失");
+                assertTrue(user.contains("\"group\":\"v1\"") && user.contains("\"group\":\"v2\""));
+                assertTrue(user.contains("\"sampleRequests\":58") && user.contains("\"sample5xx\":58"));
+                assertTrue(user.contains("支持=["+evidenceId+"]"));
+                assertTrue(user.contains("已省略") && user.contains("省略不表示无异常"));
+                return parser.apply("{\"steps\":[\"LOG_QUERY\"]}");
+            }
+        };
+        new LlmInvestigationPlanner(null,capture,CapabilityRegistry.standard(),4000).plan(
+                new PlanningRequest("排查",ResourceTarget.route("/orders"),"/orders",rows,List.of(),null,List.of(hypothesis)));
+    }
+
+    @Test void onePlanningResponseCannotExhaustAllCandidateSlots() {
+        JsonCompletion model=new JsonCompletion() {
+            public <T> Optional<T> complete(String system,String user,Function<String,Optional<T>> parser) {
+                return parser.apply("{\"candidates\":[{\"statement\":\"a\"},{\"statement\":\"b\"},{\"statement\":\"c\"},{\"statement\":\"d\"}]}");
+            }
+        };
+        var request=new PlanningRequest("排查",ResourceTarget.route("/orders"),"/orders",List.of(),List.of());
+        var plan=new LlmInvestigationPlanner(null,model,CapabilityRegistry.standard()).plan(request);
+        assertEquals(3,plan.assessments().stream().filter(h->h.id().startsWith("M")).count());
+        assertTrue(plan.assessments().stream().allMatch(h->h.status()==Verdict.UNKNOWN));
+    }
     @Test void plannerKeepsTheFactWhenTheEvidenceHeaderAloneExceedsTheOldCutoff() {
         Evidence e = Evidence.of("t",EvidenceType.TRACE,"gateway","trace","REAL_FACT_MARKER v2 58/58 sampled 503","/api/traces",System.currentTimeMillis());
         e = e.withEnvelope(new EvidenceEnvelope(1,"gateway.traces","TRACE","q","v1",new TimeRange(1,10),null,new TimeRange(1,10),
@@ -22,7 +76,7 @@ class StructuredPlanningTest {
             public <T> Optional<T> complete(String system,String user,Function<String,Optional<T>> parser) {
                 assertTrue(user.contains("REAL_FACT_MARKER"));
                 assertTrue(user.contains("PARTIAL"));
-                assertTrue(system.contains("最多1个新候选、3个步骤"));
+                assertTrue(system.contains("最多3个新候选、6个步骤"));
                 return parser.apply("{\"steps\":[]}");
             }
         };

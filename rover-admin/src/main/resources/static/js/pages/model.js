@@ -66,7 +66,7 @@ window.RoverAdminPages.model = {
         modelThinkingHint() {
             if (this.isCustom) return '自定义模型走 OpenAI 兼容协议，是否产出思考内容取决于模型本身。';
             if (this.modelVendor === 'zhipu') {
-                return '主模型用于对话和解读；快速模型用于目标解析和调查规划，具体模型名以后台映射为准。';
+                return '主模型用于对话和调查规划；快速模型用于目标识别和诊断事实选择，具体模型名以后台映射为准。';
             }
             if (this.modelVendor === 'deepseek') {
                 return 'deepseek-chat 不产出思考内容。';

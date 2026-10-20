@@ -153,6 +153,43 @@ def validate_grounded_report(task):
             "constrainedReportOnly": True}
 
 
+def validate_conversation_report(task):
+    """Check only observed data: a conversation need not fetch sampled traces to report metrics."""
+    result = task["result"]
+    report = result.get("summary") or ""
+    evidence = result["evidence"]
+    ids = {item["evidenceId"] for item in evidence}
+    refs = re.findall(r"\[evidenceId=([^\]]+)\]", report)
+    require(report.startswith("根因尚未确认。") and "尚未执行修复或验证业务恢复" in report,
+            "Conversation published an unbounded diagnostic or repair claim")
+    require(refs and set(refs) <= ids, "Conversation has missing or invented evidence references")
+    native = 0
+    for item in evidence:
+        envelope = item.get("envelope", {})
+        if envelope.get("sourceId") != "gateway.final-responses":
+            continue
+        facts = envelope["facts"]
+        require(f"最终请求 {int(facts['finalRequests'])}" in report
+                and f"最终 5xx {int(facts['final5xx'])}" in report
+                and f"后端原始 5xx={int(facts['upstream5xx'])}" in report
+                and f"网关生成 5xx={int(facts['gateway5xx'])}" in report,
+                "Conversation native counts or origins differ from captured facts")
+        native += 1
+    h6 = next((h for h in result.get("hypotheses", []) if h["id"] == "H6"), None)
+    if h6 and h6["status"] == "CONFIRMED":
+        require("访问" in h6["statement"] and "返回" not in h6["statement"]
+                and "不能据此确认响应来源" in h6["detail"],
+                "Legacy forwarding counters were mistaken for actual backend response codes")
+    populations = sum(len(e.get("envelope", {}).get("facts", {}).get("samplePopulations", [])) for e in evidence)
+    sample_checks = validate_grounded_report({"result": dict(result, aiAnalysis=report)}) if populations >= 2 else None
+    if populations == 0:
+        h5 = next((h for h in result.get("hypotheses", []) if h["id"] == "H5"), None)
+        require(not h5 or h5["status"] == "UNKNOWN", "Missing trace data was presented as a verified trace conclusion")
+    return {"publishedReferencesValid": True, "nativeWindowsChecked": native,
+            "forwardingFailureDoesNotProveBackendOrigin": True, "sampleChecks": sample_checks,
+            "sampleCoverageClaimedWithoutData": False}
+
+
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -577,7 +614,7 @@ class Replay:
         save(directory / "input.json", question)
         task = self.admin.request(self.urls["admin"] + "/api/agent/sessions/" + session["sessionId"] + "/messages",
                                   question, self.csrf, allowed=(202,))[1]
-        task = self.wait_task(task, 240, "live model tool conversation")
+        task = self.wait_task(task, 360, "live model tool conversation")
         save(directory / "task.json", task)
         workspace = self.admin.request(self.urls["admin"] + "/api/agent/sessions/" + session["sessionId"] + "/workspace")[1]
         save(directory / "workspace.json", workspace)
@@ -590,6 +627,8 @@ class Replay:
         save(directory / "checks.json", {"checks": checks, "calls": calls})
         self.report["conversationChecks"] = checks
         require(all(checks.values()), "Live model tool conversation failed")
+        if getattr(self.args, "require_grounded_report", False):
+            save(directory / "grounded-report.json", validate_conversation_report(task))
 
     def model_failure_probe(self):
         """Fail a local provider after the real-model cases; never forward real credentials to it."""
@@ -644,7 +683,7 @@ class Replay:
         before = self.model_metrics(directory, "before") if self.live_model else {}
         _, task, _ = self.admin.request(url + "/api/agent/events/ingest", payload, self.csrf, allowed=(202,))
         save(directory / "accepted-task.json", task)
-        task = self.wait_task(task, 240 if self.live_model else 60, "investigation " + case["id"])
+        task = self.wait_task(task, 360 if self.live_model else 60, "investigation " + case["id"])
         save(directory / "task.json", task)
         workspace = self.admin.request(url + "/api/agent/sessions/" + task["sessionId"] + "/workspace")[1]
         save(directory / "workspace.json", workspace)

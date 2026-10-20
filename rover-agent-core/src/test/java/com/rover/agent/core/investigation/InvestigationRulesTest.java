@@ -209,6 +209,20 @@ class InvestigationRulesTest {
         assertTrue(findings.summary().contains("order-2"), "结论同样要点名异常实例");
     }
 
+    @Test
+    void gatewayTimeoutCountersConfirmForwardingFailuresWithoutClaimingBackendResponses() {
+        var row = new RouteUpstreamSnapshot("order-route","order-2",RouteUpstreamSnapshot.NO_GROUP,60,
+                35,35,0,35,250,250,System.currentTimeMillis());
+        Findings findings=evaluateWithUpstreams(route("/api/order","order-service",""),true,
+                DiscoveryMode.NAMESERVER,List.of(),null,List.of(row));
+        Hypothesis h6=hypothesis(findings,"H6");
+        assertEquals(Verdict.CONFIRMED,h6.status());
+        assertTrue(h6.statement().contains("访问"));
+        assertFalse(h6.statement().contains("返回"));
+        assertTrue(h6.detail().contains("不能据此确认响应来源或业务根因"));
+        assertFalse(findings.summary().contains("返回了 5xx"));
+    }
+
     /**
      * H6 已点名异常实例时，结论里不能再留「数据不足以确定原因」——同一份报告不能一边说查不出来、
      * 一边给出确定的异常实例（真实故障注入时就是这样自相矛盾）。

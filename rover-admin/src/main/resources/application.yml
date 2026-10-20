@@ -56,8 +56,16 @@ rover:
       # 服务商未返回 usage 时按本地 tokenizer 估算；累计包含输入、输出和思考。
       max-total-tokens: 100000
       # 从 Worker 开始执行计时，持续输出不会延长时限。
-      task-timeout-seconds: 180
+      task-timeout-seconds: 300
       max-repeated-tool-results: 3
+    llm:
+      # 轻量目标识别沿用旧 quick 超时作为兼容值；规划不再共用短超时。
+      target-timeout-seconds: ${ROVER_AGENT_TARGET_TIMEOUT_SECONDS:${rover.agent.llm.quick-timeout-seconds:10}}
+      planning-timeout-seconds: ${ROVER_AGENT_PLANNING_TIMEOUT_SECONDS:60}
+      planning-max-output-tokens: ${ROVER_AGENT_PLANNING_OUTPUT_TOKENS:2048}
+      planning-thinking-enabled: ${ROVER_AGENT_PLANNING_THINKING:false}
+      planning-evidence-context-chars: ${ROVER_AGENT_PLANNING_CONTEXT_CHARS:24000}
+      report-timeout-seconds: ${ROVER_AGENT_REPORT_TIMEOUT_SECONDS:30}
     context:
       # 上下文窗口：每次提问最多带上最近多少条会话消息；历史不会被无限制发给模型
       recent-message-limit: ${ROVER_AGENT_CONTEXT_MESSAGE_LIMIT:8}

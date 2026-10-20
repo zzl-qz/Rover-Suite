@@ -33,6 +33,7 @@ public final class ModelExplainer {
 
     private final ChatModelGateway gateway;
     private final AgentMetrics metrics;
+    private final int timeoutSeconds;
 
     /** 不关心指标的构造入口（如宿主未提供注册表）：指标端口退化为空实现。 */
     public ModelExplainer(ChatModelGateway gateway) {
@@ -40,8 +41,14 @@ public final class ModelExplainer {
     }
 
     public ModelExplainer(ChatModelGateway gateway, AgentMetrics metrics) {
+        this(gateway, metrics, 30);
+    }
+
+    public ModelExplainer(ChatModelGateway gateway, AgentMetrics metrics, int timeoutSeconds) {
+        if (timeoutSeconds <= 0) { throw new IllegalArgumentException("报告选择超时必须为正数"); }
         this.gateway = gateway == null ? new NoopChatModelGateway() : gateway;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
+        this.timeoutSeconds = timeoutSeconds;
     }
 
     /** 是否已配置模型（不代表当前可用）。 */
@@ -77,7 +84,7 @@ public final class ModelExplainer {
         long startedAt = System.nanoTime();
         ModelCallOutcome outcome = ModelCallOutcome.OK;
         try {
-            AgentBudgetAdvisor.client(gateway.chatClient(0),
+            AgentBudgetAdvisor.client(gateway.chatClient(timeoutSeconds),
                     AgentRunBudget.current(), gateway::reasoningDelta).prompt()
                     .system(SYSTEM_PROMPT)
                     .options(org.springframework.ai.chat.prompt.ChatOptions.builder().maxTokens(512))

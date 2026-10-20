@@ -59,6 +59,8 @@ public class AdminChatModelGateway implements ChatModelGateway {
     private volatile Map<Integer, ChatClient> sceneClients = new ConcurrentHashMap<>();
     /** 快速模型的场景超时客户端缓存。 */
     private volatile Map<Integer, ChatClient> fastSceneClients = new ConcurrentHashMap<>();
+    private record PlanningClientKey(int timeoutSeconds, boolean thinkingEnabled) { }
+    private volatile Map<PlanningClientKey, ChatClient> planningClients = new ConcurrentHashMap<>();
     private final AtomicLong buildSequence = new AtomicLong();
     private volatile long buildId;
     private volatile Instant appliedAt;
@@ -91,6 +93,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
             this.fastClient = null;
             this.sceneClients = new ConcurrentHashMap<>();
             this.fastSceneClients = new ConcurrentHashMap<>();
+            this.planningClients = new ConcurrentHashMap<>();
             this.lastError = null;
             return;
         }
@@ -100,6 +103,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
             this.fastClient = null;
             this.sceneClients = new ConcurrentHashMap<>();
             this.fastSceneClients = new ConcurrentHashMap<>();
+            this.planningClients = new ConcurrentHashMap<>();
             this.lastError = "API 密钥无法解密，请重新填写";
             log.warn("模型 API 密钥无法解密，模型停用");
             return;
@@ -120,6 +124,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
             this.fastClient = fastBuilt;
             this.sceneClients = new ConcurrentHashMap<>();
             this.fastSceneClients = new ConcurrentHashMap<>();
+            this.planningClients = new ConcurrentHashMap<>();
             this.lastError = null;
             this.buildId = buildSequence.incrementAndGet();
             this.appliedAt = Instant.now();
@@ -159,11 +164,11 @@ public class AdminChatModelGateway implements ChatModelGateway {
         return current;
     }
 
-    /** 按场景收紧超时并缓存客户端；请求上限不小于配置值时复用当前客户端。 */
+    /** 目标识别、事实选择等轻量调用：收紧超时，关闭思考，可使用快速模型。 */
     @Override
     public ChatClient chatClient(int timeoutSeconds) {
         ModelSettings settings = applied;
-        // 配置了快速模型：廉价调用（目标/规划）一律路由到快速模型，不再用思考模型硬扛。
+        // 规划有独立入口；快速模型只承接轻量调用。
         if (settings.fastConfigured()) {
             return fastScene(timeoutSeconds);
         }
@@ -179,6 +184,17 @@ public class AdminChatModelGateway implements ChatModelGateway {
         ChatClient scene = transientClient(settings, effectiveTimeout);
         cache.put(effectiveTimeout, scene);
         return scene;
+    }
+
+    @Override
+    public ChatClient planningClient(int timeoutSeconds, boolean thinkingEnabled) {
+        chatClient();
+        ModelSettings settings = applied;
+        int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
+        int effective = timeoutSeconds <= 0 ? configured : Math.min(configured, ModelSettings.clampTimeout(timeoutSeconds));
+        var key = new PlanningClientKey(effective, thinkingEnabled);
+        return planningClients.computeIfAbsent(key, ignored -> build(new ModelSettings(settings.enabled(), settings.baseUrl(),
+                settings.apiKey(), settings.model(), effective, settings.source(), settings.keyState()), thinkingEnabled));
     }
 
     /** 配置了快速模型时的廉价调用入口：走快速模型；构建失败则回退主模型场景客户端。 */
@@ -248,7 +264,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
      */
     public ChatClient transientClient(ModelSettings settings, int timeoutSeconds) {
         // 场景客户端服务的是「廉价调用」（见 ChatModelGateway#chatClient(int)），因此不开深度思考：
-        // 那些调用上限只有 10 秒，让模型先想一遍既拖慢等待，也更容易撞上超时后回退规则。
+        // 调查规划的主模型与思考策略由 planningClient 单独处理。
         int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
         int effective = timeoutSeconds <= 0 ? configured : Math.min(configured, ModelSettings.clampTimeout(timeoutSeconds));
         return build(new ModelSettings(settings.enabled(), settings.baseUrl(), settings.apiKey(), settings.model(),

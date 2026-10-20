@@ -141,7 +141,7 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         hypotheses.add("目标服务没有匹配的注册实例");
         hypotheses.add("匹配实例均不健康");
         if (hasPath) {
-            hypotheses.add("该路由的某个上游实例返回了 5xx");
+            hypotheses.add("该路由访问某个上游实例时出现 5xx");
             hypotheses.add("该路径近期返回 503");
         }
         return List.copyOf(hypotheses);

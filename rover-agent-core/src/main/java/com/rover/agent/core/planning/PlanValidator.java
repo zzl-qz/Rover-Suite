@@ -44,7 +44,9 @@ public final class PlanValidator {
         Set<AgentCapability> handled = settled == null ? Set.of() : settled;
         List<PlannedStep> steps = new ArrayList<>();
         Set<AgentCapability> seen = new LinkedHashSet<>();
-        for (PlannedStep step : source.steps()) {
+        // 必查项先占额度；模型建议再多也不能挤掉路由、实例和追踪等基础取证。
+        for (PlannedStep step : source.steps().stream()
+                .sorted(java.util.Comparator.comparingInt((PlannedStep step) -> step.required() ? 0 : 1)).toList()) {
             if (steps.size() >= limits.maxPlanSteps()) {
                 break;
             }

@@ -116,6 +116,29 @@ class AgentExecutionLimitsTest {
     }
 
     @Test
+    void longerPlanningCannotResetTheSharedCallOutputOrDeadlineBudget() {
+        AtomicInteger calls = new AtomicInteger();
+        Gateway gateway = new Gateway(prompt -> {
+            calls.incrementAndGet();
+            assertTrue(prompt.getOptions().getMaxTokens() <= 64);
+            return Flux.just(answer("ok"));
+        });
+        InvestigationTaskRegistry registry = registry(limits(2,64,10000,Duration.ofSeconds(5)));
+        InvestigationTask task = registry.register("planning-budget", "调查");
+        task.start(); task.markRunning();
+        try {
+            long deadline = task.budget().snapshot().deadlineAtMillis();
+            QuickModelCall.content(gateway,10,"目标解析",client->client.prompt().user("target").call().content());
+            var completion = SpringAiJsonCompletion.investigation(gateway,AgentMetrics.NOOP,60,2048,false);
+            assertTrue(completion.complete("system","evidence",java.util.Optional::of).isPresent());
+            assertTrue(completion.complete("system","evidence",java.util.Optional::of).isEmpty());
+            assertEquals(2,calls.get());
+            assertEquals(deadline,task.budget().snapshot().deadlineAtMillis());
+            assertTrue(task.budget().stopReason().contains("模型调用次数"));
+        } finally { task.clearRunning(); registry.stop(); }
+    }
+
+    @Test
     void rejectsOversizedInputBeforeSendingAModelRequest() {
         AtomicInteger calls = new AtomicInteger();
         Gateway gateway = new Gateway(prompt -> {
@@ -395,6 +418,7 @@ class AgentExecutionLimitsTest {
         @Override public boolean available() { return true; }
         @Override public ChatClient chatClient() { return client; }
         @Override public ChatClient chatClient(int timeoutSeconds) { return client; }
+        @Override public ChatClient planningClient(int timeoutSeconds, boolean thinkingEnabled) { return client; }
         @Override public String description() { return "scripted"; }
         @Override public String reasoningDelta(ChatResponse response) {
             return response.getResult() == null ? ""
