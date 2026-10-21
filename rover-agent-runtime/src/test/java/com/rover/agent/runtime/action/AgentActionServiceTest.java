@@ -76,8 +76,18 @@ class AgentActionServiceTest {
 
     // ---------------------------------------------------------------- 1. 正常执行
 
+    @Test void approvedDeterministicExecutionStillWorksWhileProviderCircuitIsOpen() {
+        var isolation=new com.rover.agent.runtime.llm.ProviderIsolation(new com.rover.agent.runtime.llm.ProviderIsolation.Policy(1,30,1));
+        isolation.acquire("model").failure(new com.rover.agent.runtime.llm.ModelProviderFailure(503,0));
+        assertThrows(com.rover.agent.runtime.llm.ProviderIsolation.Rejected.class,()->isolation.acquire("model"));
+        AgentAction pending=propose(20);
+        AgentAction result=service.approve(pending.actionId(),OWNER);
+        assertEquals(ActionStatus.SUCCESS,result.status());
+    }
+
     @Test
     void anotherAuthorizedApproverCanApproveWithoutSharingPrivateChats() {
+        gateway.resourceRef = planResource();
         com.rover.agent.core.port.AgentAccess access = principal -> "reviewer".equals(principal)
                 ? Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ, com.rover.agent.core.port.AgentAccess.Permission.APPROVE)
                 : Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ, com.rover.agent.core.port.AgentAccess.Permission.PROPOSE);
@@ -92,6 +102,7 @@ class AgentActionServiceTest {
 
     @Test
     void permissionRevokedDuringPreviewPreventsTheActualWrite() {
+        gateway.resourceRef = planResource();
         AtomicBoolean allowed = new AtomicBoolean(true);
         com.rover.agent.core.port.AgentAccess access = principal -> allowed.get()
                 ? Set.of(com.rover.agent.core.port.AgentAccess.Permission.values()) : Set.of();
@@ -597,6 +608,140 @@ class AgentActionServiceTest {
     }
 
     // ---------------------------------------------------------------- 工具与假网关
+
+    @Test void planRevisionCreatesNewApprovalAndKeepsTheOldSnapshot() {
+        gateway.resourceRef = planResource();
+        AgentAction first = propose(20);
+        var original = first.plan();
+        assertNotNull(original);
+        AgentAction second = service.revisePlan(original.planId(), 1, original.planHash(), 30,
+                WeightRequestUnit.RAW_WEIGHT, OWNER);
+        assertEquals(2, second.plan().planVersion());
+        assertEquals(original, repository.findPlan(original.planId(), 1).orElseThrow());
+        assertEquals(ActionStatus.SUPERSEDED, repository.find(first.actionId()).orElseThrow().status());
+        assertEquals(ActionStatus.PENDING_APPROVAL, second.status());
+        assertNull(second.approvedBy());
+        assertNull(second.applyOperationId());
+        assertEquals(2, service.planVersions(original.planId(), OWNER).orElseThrow().size());
+        assertTrue(service.planVersions(original.planId(), "mallory").isEmpty());
+        assertThrows(ActionRequestException.class, () -> service.approve(first.actionId(), OWNER));
+        assertThrows(ActionRequestException.class, () -> service.approve(second.actionId(), OWNER, 1, original.planHash()));
+        assertEquals(0, gateway.writes);
+        assertEquals(ActionStatus.SUCCESS, service.approve(second.actionId(), OWNER, 2, second.plan().planHash()).status());
+        assertEquals(30, gateway.weightOf("v2"));
+        assertEquals(1, gateway.writes);
+    }
+
+    @Test void planRevisionChecksInputSnapshotAndResourceIdentity() {
+        gateway.resourceRef = planResource();
+        AgentAction first = propose(20);
+        var plan = first.plan();
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, "0".repeat(64), 30, WeightRequestUnit.RAW_WEIGHT, OWNER));
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, plan.planHash(), 101, WeightRequestUnit.TRAFFIC_PERCENT, OWNER));
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, plan.planHash(), 30, null, OWNER));
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, plan.planHash(), 20, WeightRequestUnit.RAW_WEIGHT, OWNER));
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(plan.scope(), "gateway-one", "GATEWAY_ROUTE", "order-api", "recreated", 2);
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, plan.planHash(), 30, WeightRequestUnit.RAW_WEIGHT, OWNER));
+        assertEquals(ActionStatus.PENDING_APPROVAL, repository.find(first.actionId()).orElseThrow().status());
+        assertEquals(1, repository.planVersions(plan.planId()).size());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test void approvalRequiresTheExactPreviewAndCannotReviseAnApprovedPlan() {
+        gateway.resourceRef = planResource();
+        AgentAction action = propose(20);
+        assertThrows(ActionRequestException.class, () -> service.approve(action.actionId(), OWNER, null, null));
+        assertThrows(ActionRequestException.class, () -> service.approve(action.actionId(), OWNER, 1, "0".repeat(64)));
+        assertEquals(0, gateway.writes);
+        service.approve(action.actionId(), OWNER, 1, action.plan().planHash());
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(action.plan().planId(), 1,
+                action.plan().planHash(), 30, WeightRequestUnit.RAW_WEIGHT, OWNER));
+        assertEquals(1, repository.planVersions(action.plan().planId()).size());
+    }
+
+    @Test void planCompensationRejectsSameValueAfterInterveningChanges() {
+        gateway.resourceRef = planResource();
+        AgentAction applied = service.approve(propose(20).actionId(), OWNER);
+        gateway.applyWeight("v2", 40);
+        gateway.applyWeight("v2", 20);
+        AgentAction refused = service.rollback(applied.actionId(), OWNER);
+        assertEquals(ActionStatus.ROLLBACK_PRECONDITION_FAILED, refused.status());
+        assertEquals(20, gateway.weightOf("v2"));
+        assertEquals(1, gateway.writes);
+    }
+
+    @Test void planCompensationWorksWhenTheOriginalRevisionStillOwnsTheValue() {
+        gateway.resourceRef = planResource();
+        AgentAction applied = service.approve(propose(20).actionId(), OWNER);
+        AgentAction rolledBack = service.rollback(applied.actionId(), OWNER);
+        assertEquals(ActionStatus.ROLLED_BACK, rolledBack.status());
+        assertEquals(applied.plan(), rolledBack.plan());
+        assertEquals(5, gateway.weightOf("v2"));
+        assertEquals(2, gateway.writes);
+    }
+
+    @Test void managedHostRefusesLegacyApprovalButKeepsOriginalOperationReconciliation() {
+        AgentAction pending = propose(20);
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(pending.actionId(), OWNER);
+        assertEquals(ActionStatus.UNCERTAIN, uncertain.status());
+        AgentAction legacyPending = propose(30);
+        com.rover.agent.core.port.AgentAccess managed = principal -> Set.of(com.rover.agent.core.port.AgentAccess.Permission.values());
+        service = new AgentActionService(repository, sessions, gateway, new RouteWeightActionExecutor(gateway, repository, managed), managed);
+        assertThrows(ActionRequestException.class, () -> service.approve(legacyPending.actionId(), OWNER));
+        AgentAction reconciled = service.resolve(uncertain.actionId(), OWNER);
+        assertEquals(uncertain.applyOperationId(), reconciled.applyOperationId());
+        assertEquals(ActionStatus.UNCERTAIN, reconciled.status());
+        assertEquals(1, gateway.writes);
+    }
+
+    @Test void expiredPlanCannotBeApprovedOrSubmitted() {
+        gateway.resourceRef = planResource();
+        long created = System.currentTimeMillis() - 120_000;
+        AgentAction expired = new AgentAction("expired", SESSION, null, null,
+                com.rover.agent.core.model.ActionType.ADJUST_ROUTE_TARGET_WEIGHT, ActionStatus.PENDING_APPROVAL,
+                "order-api", "/api/order", "order-service", "v2", 5, 20, 20, WeightRequestUnit.RAW_WEIGHT,
+                5, 17.4, PROPOSED_REVISION, null, null, null, OWNER, null, 0, List.of(), "test", null,
+                created, created).withResourceRef(gateway.resourceRef);
+        expired = expired.withPlan(com.rover.agent.core.model.RemediationPlan.forRouteWeight(expired, "expired", 1, created + 60_000));
+        AgentAction saved = repository.save(expired);
+        assertThrows(ActionRequestException.class, () -> service.approve(saved.actionId(), OWNER));
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test void unsupportedAdapterAndChecksCannotReachTheGateway() {
+        gateway.resourceRef = planResource();
+        AgentAction pending = propose(20);
+        var p = pending.plan();
+        var s = p.steps().get(0);
+        var unsupported = new com.rover.agent.core.model.RemediationPlan.RouteWeightStep(s.sequence(), s.actionType(),
+                "unregistered-v99", s.resourceRef(), s.routeId(), s.businessPrefix(), s.serviceName(), s.group(),
+                s.beforeWeight(), s.desiredWeight(), s.requestedValue(), s.requestedUnit(), s.beforeTrafficPercent(),
+                s.desiredTrafficPercent(), s.expectedRevision(), s.requiredChecks(), s.expectedEffect());
+        var changed = new com.rover.agent.core.model.RemediationPlan(p.planId(), p.planVersion(), p.sessionId(),
+                p.incidentId(), p.taskId(), p.requestedBy(), p.scope(), p.goal(), p.alternatives(), p.evidenceRefs(),
+                p.unresolvedAssumptions(), List.of(unsupported), p.riskAssessment(), p.resourceBudget(),
+                p.verificationSpec(), p.compensationSpec(), p.timeoutMillis(), p.createdAtMillis(), p.expiresAtMillis(),
+                p.provenance(), null);
+        assertThrows(IllegalArgumentException.class, () -> RouteWeightActionExecutor.requireSupportedPlan(pending.withPlan(changed)));
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test void replayDoesNotReturnASupersededApprovalCard() {
+        gateway.resourceRef = planResource();
+        AgentAction first = propose(20);
+        service.revisePlan(first.plan().planId(), 1, first.plan().planHash(), 30, WeightRequestUnit.RAW_WEIGHT, OWNER);
+        AgentAction replay = propose(20);
+        assertFalse(replay.actionId().equals(first.actionId()));
+        assertEquals(ActionStatus.PENDING_APPROVAL, replay.status());
+        assertEquals(0, gateway.writes);
+    }
+
+    private static com.rover.agent.core.model.ResourceRef planResource() {
+        return new com.rover.agent.core.model.ResourceRef(
+                new com.rover.agent.core.model.ResourceScope("org", "ops", "prod"),
+                "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-one", 1);
+    }
 
     private AgentAction propose(int weight) {
         return propose(weight, WeightRequestUnit.RAW_WEIGHT);

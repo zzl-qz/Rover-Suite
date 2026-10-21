@@ -91,6 +91,8 @@ window.RoverAdminPages.workbench = {
             wbActionBusy: {},
             /** 每条变更最近一次操作失败的原因：服务端拒绝（409/404）时显示在卡片里，而不是整页报错。 */
             wbActionError: {},
+            /** 修改仅登记新版本，旧计划继续作为历史记录展示。 */
+            wbPlanEdits: {},
         };
     },
 
@@ -337,6 +339,7 @@ window.RoverAdminPages.workbench = {
             this.wbActions = [];
             this.wbActionBusy = {};
             this.wbActionError = {};
+            this.wbPlanEdits = {};
             this._wbLoadedSessionId = '';
             this.wbDetailOpen = {};
             this.wbError = null;
@@ -541,12 +544,18 @@ window.RoverAdminPages.workbench = {
          */
         async wbActionCommand(action, command) {
             if (!action || this.wbActionBusy[action.actionId]) return;
+            if (command === 'approve' && (!action.plan || this.wbPlanExpired(action.plan))) return;
             this.wbActionBusy = Object.assign({}, this.wbActionBusy, { [action.actionId]: command });
             this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: '' });
             try {
+                const options = { method: 'POST' };
+                if (command === 'approve' && action.plan) {
+                    options.headers = { 'Content-Type': 'application/json' };
+                    options.body = JSON.stringify({ planVersion: action.plan.planVersion, planHash: action.plan.planHash });
+                }
                 const updated = await RoverAdminApi.api(
                     '/api/agent/actions/' + encodeURIComponent(action.actionId) + '/' + command,
-                    { method: 'POST' });
+                    options);
                 this.wbReplaceAction(updated);
             } catch (e) {
                 // 被拒（已被处理过、状态不允许）或执行异常：记在卡片上，并重新拉一次真实状态
@@ -563,6 +572,7 @@ window.RoverAdminPages.workbench = {
         /** 就地替换一条变更：不整表重取，避免列表顺序与正在看的卡片跳动。 */
         wbReplaceAction(updated) {
             if (!updated || !updated.actionId) return;
+            if (updated.sessionId && updated.sessionId !== this.wbActiveSessionId) return;
             const exists = this.wbActions.some(item => item.actionId === updated.actionId);
             this.wbActions = exists
                 ? this.wbActions.map(item => (item.actionId === updated.actionId ? updated : item))
@@ -572,6 +582,57 @@ window.RoverAdminPages.workbench = {
         /** 是否没有正在进行的操作（按钮据此禁用，避免双击发出两次请求）。 */
         wbActionIdle(action) {
             return action && !this.wbActionBusy[action.actionId];
+        },
+
+        wbPlanExpired(plan) {
+            return plan && plan.expiresAtMillis <= (this.wbNow || Date.now());
+        },
+
+        wbEditPlan(action) {
+            if (!action || !action.plan || action.status !== 'PENDING_APPROVAL' || !this.wbActionIdle(action)) return;
+            this.wbPlanEdits = Object.assign({}, this.wbPlanEdits, { [action.actionId]: {
+                requestedValue: action.requestedValue,
+                requestedUnit: action.requestedUnit,
+            } });
+        },
+
+        wbCancelPlanEdit(action) {
+            const edits = Object.assign({}, this.wbPlanEdits);
+            delete edits[action.actionId];
+            this.wbPlanEdits = edits;
+        },
+
+        async wbSavePlanRevision(action) {
+            const edit = action && this.wbPlanEdits[action.actionId];
+            if (!edit || !action.plan || action.status !== 'PENDING_APPROVAL' || !this.wbActionIdle(action)) return;
+            const value = Number(edit.requestedValue);
+            if (String(edit.requestedValue).trim() === '' || !Number.isInteger(value)
+                || !['RAW_WEIGHT', 'TRAFFIC_PERCENT'].includes(edit.requestedUnit)
+                || value < 0 || value > (edit.requestedUnit === 'RAW_WEIGHT' ? 10000 : 100)) {
+                this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: '请明确单位并填写范围内的整数目标值' });
+                return;
+            }
+            const sessionId = this.wbActiveSessionId;
+            this.wbActionBusy = Object.assign({}, this.wbActionBusy, { [action.actionId]: 'revise' });
+            this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: '' });
+            try {
+                await RoverAdminApi.api('/api/agent/v1/plans/' + encodeURIComponent(action.plan.planId) + '/versions', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expectedVersion: action.plan.planVersion, expectedPlanHash: action.plan.planHash,
+                        requestedValue: value, requestedUnit: edit.requestedUnit }),
+                });
+                this.wbCancelPlanEdit(action);
+            } catch (e) {
+                if (this.wbActiveSessionId === sessionId) {
+                    this.wbActionError = Object.assign({}, this.wbActionError,
+                        { [action.actionId]: (e && e.message) ? e.message : '新版本登记失败' });
+                }
+            } finally {
+                const busy = Object.assign({}, this.wbActionBusy);
+                delete busy[action.actionId];
+                this.wbActionBusy = busy;
+                await this.wbLoadActions(sessionId);
+            }
         },
 
         wbActionTypeLabel(type) {
@@ -588,6 +649,7 @@ window.RoverAdminPages.workbench = {
                 PRECONDITION_FAILED: '预检未通过',
                 UNCERTAIN: '结果未知',
                 REJECTED: '已拒绝',
+                SUPERSEDED: '已有新版本',
                 ROLLING_BACK: '回滚中',
                 ROLLED_BACK: '已回滚',
                 ROLLBACK_PRECONDITION_FAILED: '回滚预检未通过',
@@ -605,6 +667,7 @@ window.RoverAdminPages.workbench = {
                 UNCERTAIN: 'warn',
                 PENDING_APPROVAL: 'warn',
                 REJECTED: 'comp',
+                SUPERSEDED: 'comp',
             }[status] || 'comp';
         },
 
@@ -703,6 +766,8 @@ window.RoverAdminPages.workbench = {
                     return { mark: '○', text: '尚未执行，等人工批准', tone: 'idle' };
                 case 'REJECTED':
                     return { mark: '○', text: '已拒绝，未执行', tone: 'idle' };
+                case 'SUPERSEDED':
+                    return { mark: '○', text: '已由新版本替代，原版本未执行且不能再批准', tone: 'idle' };
                 case 'EXECUTING':
                     return { mark: '●', text: '已批准，正在校验当前状态并提交', tone: 'run' };
                 case 'VERIFYING':

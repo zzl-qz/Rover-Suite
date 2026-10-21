@@ -120,6 +120,7 @@ public final class InvestigationTask implements InvestigationReporter {
         budget = new AgentRunBudget(new AgentRunLimits(state.maxModelCalls(), state.maxOutputTokens(), state.maxTotalTokens(),
                 java.time.Duration.ofMillis(state.timeoutMillis()), state.maxRepeatedToolResults()));
         budget.restore(state);
+        budget.observeTemplates(evidence);
     }
 
     void restore(TaskView saved, com.rover.agent.core.event.TaskSnapshot stream, AgentCheckpoint mark) {
@@ -245,6 +246,7 @@ public final class InvestigationTask implements InvestigationReporter {
             return;
         }
         evidence.addAll(collected);
+        budget.observeTemplates(collected);
     }
 
     /** 步骤完成、证据交付后推进恢复点，与任务快照和证据一起保存。 */
@@ -540,7 +542,7 @@ public final class InvestigationTask implements InvestigationReporter {
     public synchronized TaskView view() {
         return new TaskView(taskId, sessionId, incidentId, status, currentStage, path, target, question,
                 createdAtMillis, completedAtMillis, List.copyOf(steps), report, error, clarification,
-                taskType, plan, List.copyOf(executedCapabilities), recalls, List.copyOf(evidence));
+                taskType, plan, List.copyOf(executedCapabilities), recalls, List.copyOf(evidence), budget.modelInvocations());
     }
 
     /** 任务快照：视图 + 已产生的解读与思考全文 + 已发布的最新事件序号（订阅者的对齐依据）。 */

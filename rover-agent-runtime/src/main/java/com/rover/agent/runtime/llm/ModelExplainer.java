@@ -84,8 +84,8 @@ public final class ModelExplainer {
         long startedAt = System.nanoTime();
         ModelCallOutcome outcome = ModelCallOutcome.OK;
         try {
-            AgentBudgetAdvisor.client(gateway.chatClient(timeoutSeconds),
-                    AgentRunBudget.current(), gateway::reasoningDelta).prompt()
+            AgentBudgetAdvisor.client(gateway.select(ChatModelGateway.Purpose.LIGHTWEIGHT,timeoutSeconds,false),
+                    AgentRunBudget.current(), gateway::reasoningDelta,SCENE,ModelContracts.REPORT).prompt()
                     .system(SYSTEM_PROMPT)
                     .options(org.springframework.ai.chat.prompt.ChatOptions.builder().maxTokens(512))
                     .user("请求路径：" + path + "\n" + UntrustedText.block("用户问题", question)
@@ -125,8 +125,10 @@ public final class ModelExplainer {
             try { rendered = report.render(ids); }
             catch (IllegalArgumentException invalid) { outcome = ModelCallOutcome.REJECTED; throw invalid; }
             onDelta.accept(rendered);
+            if (AgentRunBudget.current()!=null) { AgentRunBudget.current().validation(SCENE,true); }
             return new Explanation(rendered, List.of("结构化证据目录"), List.of());
         } catch (RuntimeException ex) {
+            if (AgentRunBudget.current()!=null && outcome==ModelCallOutcome.REJECTED) { AgentRunBudget.current().validation(SCENE,false); }
             if (outcome == ModelCallOutcome.OK) {
                 outcome = QuickModelCall.classify(ex);
             }

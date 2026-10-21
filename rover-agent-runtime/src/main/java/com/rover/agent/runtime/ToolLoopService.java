@@ -194,7 +194,7 @@ public final class ToolLoopService {
                 // 取消过程中断：结论已被标记 CANCELLED，不要覆盖成失败。
                 return;
             }
-            log.warn("Agent 对话执行失败", ex);
+            log.warn("Agent 对话执行失败（{}）",com.rover.agent.runtime.llm.ModelFailures.kind(ex));
             String reason = failureText(ex, tools);
             task.step(AgentStepType.ANSWER, STEP_ANSWER, StepStatus.FAILED, reason);
             task.fail(reason);
@@ -226,7 +226,7 @@ public final class ToolLoopService {
     private static String failureText(Exception ex, OpsTools tools) {
         String reason = tools.budget().stopReason();
         if (reason == null) {
-            reason = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+            reason = "模型或工具请求未完成（"+com.rover.agent.runtime.llm.ModelFailures.kind(ex)+"）";
         }
         return tools.callCount() == 0
                 ? "模型调用失败，本次没有取到任何数据：" + reason

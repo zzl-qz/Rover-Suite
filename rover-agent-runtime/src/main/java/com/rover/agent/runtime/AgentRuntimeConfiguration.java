@@ -59,6 +59,13 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 public class AgentRuntimeConfiguration {
+    @Bean
+    public com.rover.agent.runtime.llm.ProviderIsolation.Policy modelIsolationPolicy(
+            @Value("${rover.agent.llm.isolation.failure-threshold:3}") int failures,
+            @Value("${rover.agent.llm.isolation.cooldown-seconds:30}") int cooldown,
+            @Value("${rover.agent.llm.isolation.max-concurrent:4}") int concurrent) {
+        return new com.rover.agent.runtime.llm.ProviderIsolation.Policy(failures,cooldown,concurrent);
+    }
 
     /** 内存实现的容量上限：落库实现不受它约束，业务代码也不感知区别。 */
     private static final int SESSION_CAPACITY = 200;

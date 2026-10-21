@@ -2,6 +2,7 @@ package com.rover.agent.core.repository;
 
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.RemediationPlan;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
@@ -21,6 +22,13 @@ public interface AgentActionRepository {
 
     /** 某个会话的全部变更记录，新的在前。 */
     List<AgentAction> bySession(String sessionId);
+
+    /** 不可变计划历史，按 planVersion 升序；仅服务端授权后的调用方可暴露这些内容。 */
+    default List<RemediationPlan> planVersions(String planId) { return List.of(); }
+
+    default Optional<RemediationPlan> findPlan(String planId, int planVersion) {
+        return planVersions(planId).stream().filter(plan -> plan.planVersion() == planVersion).findFirst();
+    }
 
     /**
      * 原子状态迁移：当前状态与 {@code expected} 一致时，把 {@code mutation} 的结果落库并返回；

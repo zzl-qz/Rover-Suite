@@ -303,7 +303,7 @@ public final class InvestigationService {
             return new InvestigationReport(report.summary(), report.confidence(), report.evidence(),
                     report.limitations(), report.hypotheses(), explanation.text().trim());
         } catch (Exception ex) {
-            log.warn("Agent 模型解读失败", ex);
+            log.warn("Agent 模型解读失败（{}）",com.rover.agent.runtime.llm.ModelFailures.kind(ex));
             task.step(AgentStepType.AI_EXPLANATION, STEP_AI, StepStatus.FAILED, AI_FAILED);
             return withoutAnalysis(report, AI_UNAVAILABLE);
         }

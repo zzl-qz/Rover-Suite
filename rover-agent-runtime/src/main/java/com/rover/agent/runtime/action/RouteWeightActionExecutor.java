@@ -3,6 +3,7 @@ package com.rover.agent.runtime.action;
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.RemediationPlan;
 import com.rover.agent.core.port.RouteChangePreview;
 import com.rover.agent.core.port.AgentAccess;
 import com.rover.agent.core.port.AgentAccess.Permission;
@@ -53,6 +54,10 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
     }
 
     @Override public AgentAction execute(AgentAction action, String actor) {
+        String planFailure = planFailure(action, true);
+        if (planFailure != null) {
+            return settle(action, ActionStatus.PRECONDITION_FAILED, planFailure);
+        }
         if (!access.writeAllowed(actor)) {
             return settle(action, ActionStatus.PRECONDITION_FAILED, "审批账号已被撤权，未提交写请求");
         }
@@ -79,6 +84,10 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         if (!access.writeAllowed(actor)) {
             return settle(submitting, ActionStatus.PRECONDITION_FAILED, "提交前审批权限已失效，未提交写请求");
         }
+        if (action.plan() != null && (action.plan().expiresAtMillis() <= System.currentTimeMillis()
+                || System.currentTimeMillis() - action.approvedAtMillis() >= action.plan().timeoutMillis())) {
+            return settle(submitting, ActionStatus.PRECONDITION_FAILED, "提交前计划已过期或预检超时，未提交写请求");
+        }
 
         RouteChangeResult result;
         try {
@@ -101,6 +110,8 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
     }
 
     @Override public AgentAction rollback(AgentAction action, String actor) {
+        String planFailure = planFailure(action, false);
+        if (planFailure != null) { return backToSuccess(action, planFailure); }
         if (!access.writeAllowed(actor)) {
             return backToSuccess(action, "回滚账号已被撤权，未提交写请求");
         }
@@ -116,6 +127,11 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
             return backToSuccess(action, "回滚未提交：" + located.message() + "，请人工确认当前状态");
         }
         int current = located.target().weight();
+        if (action.plan() != null && (action.appliedRevision() == null
+                || state.revision() != action.appliedRevision())) {
+            return settle(action, ActionStatus.ROLLBACK_PRECONDITION_FAILED,
+                    "回滚未提交：路由版本已不属于本次执行，不能覆盖后续修改；请重新调查并生成计划");
+        }
         if (current == action.beforeWeight()) {
             // 已经是补偿目标：再写一次不会让世界更好，只会多一条操作记录。
             return settle(action, ActionStatus.ROLLED_BACK, null);
@@ -133,6 +149,9 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
 
         if (!access.writeAllowed(actor)) {
             return backToSuccess(submitting, "提交前回滚权限已失效，未提交写请求");
+        }
+        if (action.plan() != null && System.currentTimeMillis() - action.updatedAtMillis() >= action.plan().timeoutMillis()) {
+            return backToSuccess(submitting, "补偿预检已超时，未提交写请求");
         }
 
         RouteChangeResult result;
@@ -189,6 +208,38 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
     }
 
     // ---------------------------------------------------------------- 预检与定位
+
+    /** 计划可描述后续多步骤/业务观察，但当前执行器必须完整支持才允许写入。 */
+    static void requireSupportedPlan(AgentAction action) {
+        RemediationPlan plan = action.plan();
+        if (plan == null) { return; }
+        plan.requireMatches(action);
+        if (plan.steps().size() != 1
+                || plan.steps().get(0).actionType() != ActionType.ADJUST_ROUTE_TARGET_WEIGHT
+                || !RemediationPlan.ROUTE_WEIGHT_ADAPTER_VERSION.equals(plan.steps().get(0).adapterVersion())
+                || plan.riskAssessment().level() != RemediationPlan.RiskLevel.R2
+                || !"CONTROL_PLANE_ONLY".equals(plan.verificationSpec().mode().name())
+                || plan.steps().get(0).requiredChecks().stream().anyMatch(check -> switch (check) {
+                    case TARGET_IDENTITY, ROUTE_BINDING, EXPECTED_REVISION, EXPECTED_BEFORE_WEIGHT -> false;
+                    default -> true;
+                })) {
+            throw new IllegalArgumentException("当前执行器不支持这份计划的全部步骤或验证要求，未提交写请求");
+        }
+    }
+
+    private String planFailure(AgentAction action, boolean applying) {
+        if (action.plan() == null) {
+            return applying && (control.requiresResourceIdentity() || access.managed())
+                    ? "旧提案没有不可变计划，请重新生成后批准" : null;
+        }
+        try {
+            requireSupportedPlan(action);
+            if (applying && action.plan().expiresAtMillis() <= System.currentTimeMillis()) {
+                return "处置计划已过期，未提交写请求";
+            }
+            return null;
+        } catch (IllegalArgumentException ex) { return ex.getMessage(); }
+    }
 
     /** 预检：revision、路由、目标、当前权重四件事全部对上才允许提交。 */
     private Precondition check(AgentAction action) {
@@ -265,6 +316,10 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         if (current != expectedWeight) {
             return settle(submitted, ActionStatus.FAILED,
                     "回读确认不一致：当前权重为 " + current + "，期望 " + expectedWeight + "，变更没有按预期生效");
+        }
+        if (action.plan() != null && state.revision() != appliedRevision) {
+            return settle(submitted, ActionStatus.UNCERTAIN,
+                    "操作已提交，但回读路由版本已变化；保留原操作号与生效版本，请核对后续变更");
         }
         log.info("变更 {} 已生效并回读确认：{}，revision {}", action.actionId(), action.describe(), appliedRevision);
         return settle(submitted, success, null);

@@ -19,6 +19,8 @@
 
 Agent 外部遥测使用 `rover.agent.telemetry.sources`（默认空）与 `rover.agent.telemetry.limits`，重启生效。范围、读取预算和标签要求见 [S2-05 接入说明](agent-telemetry-connectors.zh-CN.md)，可用配置见 [追加配置示例](../deploy/production/agent-telemetry.example.yml)。它与 Admin 指标导出的 Prometheus 开关是两条独立链路。
 
+模型任务隔离使用 `rover.agent.llm.isolation.failure-threshold`（3）、`cooldown-seconds`（30）、`max-concurrent`（4），重启生效；按端点与凭证分组，半开仅允许一个探测，不排队等待并发槽。冷却与调用超时是不同参数。配置与预算账本语义见 [S2-06 说明](agent-model-resilience.zh-CN.md)。
+
 | 配置 | 默认值 | 说明 | 生效方式 |
 | --- | --- | --- | --- |
 | `server.port` | `9090` | Admin HTTP 端口 | 重启 |

@@ -45,7 +45,8 @@ public final class SpringAiConversationModel implements ConversationModel {
         long startedAt = System.nanoTime();
         ModelCallOutcome outcome = ModelCallOutcome.OK;
         try {
-            AgentBudgetAdvisor.client(gateway.chatClient(), tools.budget(), gateway::reasoningDelta).prompt()
+            AgentBudgetAdvisor.client(gateway.select(ChatModelGateway.Purpose.CONVERSATION,0,true), tools.budget(), gateway::reasoningDelta,
+                            SCENE,ModelContracts.CONVERSATION).prompt()
                     .system(systemPrompt)
                     .user(userMessage)
                     .tools(tools)

@@ -66,6 +66,10 @@ rover:
       planning-thinking-enabled: ${ROVER_AGENT_PLANNING_THINKING:false}
       planning-evidence-context-chars: ${ROVER_AGENT_PLANNING_CONTEXT_CHARS:24000}
       report-timeout-seconds: ${ROVER_AGENT_REPORT_TIMEOUT_SECONDS:30}
+      isolation:
+        failure-threshold: 3
+        cooldown-seconds: 30
+        max-concurrent: 4
     context:
       # 上下文窗口：每次提问最多带上最近多少条会话消息；历史不会被无限制发给模型
       recent-message-limit: ${ROVER_AGENT_CONTEXT_MESSAGE_LIMIT:8}

@@ -65,8 +65,12 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         for (var hypothesis : context.assessments()) {
             if (hypothesis.status() == com.rover.agent.core.model.Verdict.UNKNOWN) {
                 for (AgentCapability capability : hypothesis.nextCapabilities()) {
-                    if (steps.stream().noneMatch(s -> s.capability() == capability)) {
+                    int existing=java.util.stream.IntStream.range(0,steps.size()).filter(i->steps.get(i).capability()==capability).findFirst().orElse(-1);
+                    if (existing<0) {
                         add(steps, capability, "补查 " + hypothesis.id() + "：" + hypothesis.statement(), target, true);
+                    } else if (!steps.get(existing).required()) {
+                        var optional=steps.get(existing);
+                        steps.set(existing,new PlannedStep(capability,"补查 "+hypothesis.id()+"："+hypothesis.statement(),optional.target(),true));
                     }
                 }
             }

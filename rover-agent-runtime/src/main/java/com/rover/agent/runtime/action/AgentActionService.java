@@ -3,6 +3,7 @@ package com.rover.agent.runtime.action;
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.RemediationPlan;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.WeightRequestUnit;
 import com.rover.agent.core.port.RouteChangePreview;
@@ -31,6 +32,8 @@ import org.slf4j.LoggerFactory;
 public final class AgentActionService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentActionService.class);
+    /** 待批方案的默认新鲜度窗口；过期后须重新读取资源生成版本。 */
+    private static final long PLAN_LIFETIME_MILLIS = 10 * 60_000L;
 
     private final AgentActionRepository actions;
     private final AgentSessionRepository sessions;
@@ -69,6 +72,11 @@ public final class AgentActionService {
      */
     public ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
                                   Integer requestedValue, WeightRequestUnit unit) {
+        return propose(sessionId, taskId, incidentId, route, group, requestedValue, unit, null);
+    }
+
+    private ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
+                                   Integer requestedValue, WeightRequestUnit unit, RemediationPlan previousPlan) {
         String wantedRoute = Texts.orEmpty(route);
         String wantedGroup = Texts.orEmpty(group);
         if (wantedRoute.isBlank()) {
@@ -133,14 +141,28 @@ public final class AgentActionService {
         if (control.requiresResourceIdentity() && matched.resourceRef() == null) {
             return ActionProposal.rejected("Gateway 未返回可信资源 UID，不能生成可执行变更；请先升级并核对资产身份");
         }
+        if (matched.resourceRef() != null && ((session.scope() != null
+                && !session.scope().equals(matched.resourceRef().scope()))
+                || (control.resourceScope() != null && !control.resourceScope().equals(matched.resourceRef().scope()))
+                || (!control.controlTargetId().isBlank()
+                    && !control.controlTargetId().equals(matched.resourceRef().controlTargetId()))
+                || !"GATEWAY_ROUTE".equals(matched.resourceRef().kind())
+                || !matched.routeId().equals(matched.resourceRef().resourceId()))) {
+            return ActionProposal.rejected("路由资源身份与当前管理范围不一致，不能生成处置计划");
+        }
+        if (previousPlan != null && !previousPlan.steps().get(0).resourceRef().equals(matched.resourceRef())) {
+            return ActionProposal.rejected("资源身份已改变，请重新调查并创建独立计划");
+        }
         if (target.weight() == desiredWeight) {
             return ActionProposal.rejected("「" + target.label() + "」当前权重已经是 " + desiredWeight
                     + "，不需要变更");
         }
 
         // 同一只读 Job 重启续跑时可再次到达 propose；返回已登记的相同意图，不复制审批卡。
-        if (taskId != null) {
+        if (taskId != null && previousPlan == null) {
             AgentAction existing = actions.bySession(sessionId).stream().filter(candidate -> taskId.equals(candidate.taskId())
+                    && candidate.status() != ActionStatus.SUPERSEDED
+                    && (candidate.plan() == null || candidate.plan().expiresAtMillis() > System.currentTimeMillis())
                     && Objects.equals(candidate.resourceRef(), matched.resourceRef()) && candidate.routeId().equals(matched.routeId())
                     && candidate.group().equals(target.group()) && candidate.serviceName().equals(target.serviceName())
                     && candidate.requestedValue() == requestedValue && candidate.requestedUnit() == unit
@@ -162,6 +184,12 @@ public final class AgentActionService {
                 previewOf(matched, target, desiredWeight), impactOf(target, desiredWeight), null,
                 now, now).withResourceRef(matched.resourceRef());
         try {
+            if (action.resourceRef() != null) {
+                action = action.withPlan(RemediationPlan.forRouteWeight(action,
+                        previousPlan == null ? action.actionId() : previousPlan.planId(),
+                        previousPlan == null ? 1 : Math.addExact(previousPlan.planVersion(), 1),
+                        Math.addExact(now, PLAN_LIFETIME_MILLIS)));
+            }
             action = actions.save(action);
         } catch (RuntimeException ex) {
             log.warn("登记待审批变更失败: session={} route={}", sessionId, wantedRoute, ex);
@@ -271,25 +299,108 @@ public final class AgentActionService {
                 .filter(action -> action.status().awaitingApproval() && ownedBy(action, userId)).toList();
     }
 
+    /** 历史内容由仓储保留，外部读取仍须通过原会话的当前权限和范围。 */
+    public Optional<List<RemediationPlan>> planVersions(String planId, String userId) {
+        return find(planId, userId).filter(action -> action.plan() != null
+                        && planId.equals(action.plan().planId()))
+                .map(action -> actions.planVersions(planId));
+    }
+
+    public Optional<RemediationPlan> plan(String planId, int version, String userId) {
+        return planVersions(planId, userId).flatMap(plans -> plans.stream()
+                .filter(plan -> plan.planVersion() == version).findFirst());
+    }
+
+    /** 修订只接受用户意图；资源、换算、风险、有效期和摘要均重新由服务端确定。 */
+    public AgentAction revisePlan(String planId, int expectedVersion, String expectedPlanHash,
+                                  Integer requestedValue, WeightRequestUnit unit, String userId) {
+        access.require(userId, Permission.PROPOSE);
+        if (expectedVersion < 1 || expectedPlanHash == null || !expectedPlanHash.matches("[0-9a-f]{64}")
+                || requestedValue == null || unit == null || requestedValue < 0
+                || requestedValue > (unit == WeightRequestUnit.RAW_WEIGHT ? AgentAction.MAX_WEIGHT : 100)) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "需要合法的版本、摘要、数值和明确单位");
+        }
+        List<RemediationPlan> history = planVersions(planId, userId).orElseThrow(() ->
+                new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "找不到处置计划"));
+        RemediationPlan latest = history.get(history.size() - 1);
+        if (latest.planVersion() != expectedVersion || !latest.planHash().equals(expectedPlanHash)) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "计划已改变，请刷新后再修改");
+        }
+        AgentAction previous = actions.bySession(latest.sessionId()).stream()
+                .filter(action -> action.plan() != null && latest.equals(action.plan())).findFirst()
+                .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.CONFLICT, "计划对应的动作记录不存在"));
+        if (!previous.status().awaitingApproval()) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "只允许修订尚未批准的最新计划");
+        }
+        if (previous.requestedValue() == requestedValue && previous.requestedUnit() == unit
+                && latest.expiresAtMillis() > System.currentTimeMillis()) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "参数没有变化，无需创建新版本");
+        }
+        ActionProposal result = propose(previous.sessionId(), previous.taskId(), previous.incidentId(),
+                previous.routeId(), previous.group(), requestedValue, unit, latest);
+        if (!result.created()) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, result.reason());
+        }
+        return result.action();
+    }
+
     // ---------------------------------------------------------------- 人工动作
 
     /** 通过 CAS 批准并立即执行，仅成功迁移状态的请求可提交。 */
     public AgentAction approve(String actionId, String userId) {
+        AgentAction current = require(actionId, userId);
+        return approve(actionId, userId, current.plan() == null ? null : current.plan().planVersion(),
+                current.plan() == null ? null : current.plan().planHash());
+    }
+
+    /** HTTP 审批必须提交审批人看过的版本和摘要，不能默认批准服务器最新内容。 */
+    public AgentAction approve(String actionId, String userId, Integer planVersion, String planHash) {
         access.require(userId, Permission.APPROVE);
         AgentAction pending = require(actionId, userId);
         if (!pending.status().awaitingApproval()) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
                     "这条变更当前是「" + pending.status().label() + "」，不能再次批准");
         }
+        requireApprovablePlan(pending, planVersion, planHash);
         long now = System.currentTimeMillis();
         String approver = normalize(userId);
         AgentAction claimed = actions.transition(actionId, ActionStatus.PENDING_APPROVAL,
-                        current -> new ActionDraft(current).approvedBy(approver, now)
-                                .move(ActionStatus.EXECUTING, null).toAction(now))
+                        current -> {
+                            requireApprovablePlan(current, planVersion, planHash);
+                            return new ActionDraft(current).approvedBy(approver, now)
+                                    .move(ActionStatus.EXECUTING, null).toAction(now);
+                        })
                 .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.CONFLICT,
                         "这条变更已经被处理过了，不会重复执行"));
         log.info("变更 {} 已批准，开始执行：{}（批准人 {}）", actionId, claimed.describe(), approver);
         return execute(claimed, userId);
+    }
+
+    private void requireApprovablePlan(AgentAction action, Integer planVersion, String planHash) {
+        RemediationPlan plan = action.plan();
+        if (plan == null) {
+            if (control.requiresResourceIdentity() || access.managed()) {
+                throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                        "旧提案没有不可变计划，请重新生成后批准");
+            }
+            return;
+        }
+        if (!Objects.equals(planVersion, plan.planVersion()) || !Objects.equals(planHash, plan.planHash())) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "审批版本或摘要不一致，请重新查看计划");
+        }
+        if (plan.expiresAtMillis() <= System.currentTimeMillis()) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "计划已过期，请刷新资源并生成新版本");
+        }
+        List<RemediationPlan> history = actions.planVersions(plan.planId());
+        if (history.isEmpty() || !history.get(history.size() - 1).equals(plan)) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "只能批准最新的已保存计划版本");
+        }
+        try {
+            plan.requireMatches(action);
+            RouteWeightActionExecutor.requireSupportedPlan(action);
+        } catch (IllegalArgumentException ex) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, ex.getMessage());
+        }
     }
 
     /** 拒绝：不执行，也不会执行。 */

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -56,9 +57,13 @@ public class AgentActionController {
 
     /** 批准并同步执行；重复批准返回 409。 */
     @PostMapping("/{actionId}/approve")
-    public ResponseEntity<?> approve(@PathVariable String actionId, Authentication authentication) {
-        return apply(() -> actions.approve(actionId, user(authentication)));
+    public ResponseEntity<?> approve(@PathVariable String actionId, Authentication authentication,
+                                     @RequestBody(required = false) ApprovalRequest request) {
+        return apply(() -> actions.approve(actionId, user(authentication),
+                request == null ? null : request.planVersion(), request == null ? null : request.planHash()));
     }
+
+    public record ApprovalRequest(Integer planVersion, String planHash) { }
 
     /** 拒绝待审批变更。 */
     @PostMapping("/{actionId}/reject")
@@ -82,8 +87,11 @@ public class AgentActionController {
         try {
             return ResponseEntity.ok(operation.get());
         } catch (ActionRequestException ex) {
-            HttpStatus status = ex.code() == ActionRequestException.Code.NOT_FOUND
-                    ? HttpStatus.NOT_FOUND : HttpStatus.CONFLICT;
+            HttpStatus status = switch (ex.code()) {
+                case NOT_FOUND -> HttpStatus.NOT_FOUND;
+                case CONFLICT -> HttpStatus.CONFLICT;
+                case INVALID_REQUEST -> HttpStatus.BAD_REQUEST;
+            };
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("code", ex.code().name());
             body.put("message", ex.getMessage());

@@ -49,6 +49,9 @@ public class AdminChatModelGateway implements ChatModelGateway {
     private final ModelConfigStore store;
     private final ObjectProvider<ToolCallingManager> toolCallingManagers;
     private final AgentRunLimits runLimits;
+    private final com.rover.agent.runtime.llm.ProviderIsolation.Policy isolationPolicy;
+    private volatile com.rover.agent.runtime.llm.ProviderIsolation isolation;
+    private final String isolationSalt=java.util.UUID.randomUUID().toString();
 
     private volatile ModelSettings applied = ModelSettings.none();
     private volatile ChatClient client;
@@ -69,12 +72,19 @@ public class AdminChatModelGateway implements ChatModelGateway {
         this(store, toolCallingManagers, AgentRunLimits.defaults());
     }
 
-    @Autowired
     public AdminChatModelGateway(ModelConfigStore store, ObjectProvider<ToolCallingManager> toolCallingManagers,
                                 AgentRunLimits runLimits) {
+        this(store,toolCallingManagers,runLimits,com.rover.agent.runtime.llm.ProviderIsolation.Policy.defaults());
+    }
+
+    @Autowired
+    public AdminChatModelGateway(ModelConfigStore store,ObjectProvider<ToolCallingManager> toolCallingManagers,
+                                 AgentRunLimits runLimits,com.rover.agent.runtime.llm.ProviderIsolation.Policy isolationPolicy) {
         this.store = store;
         this.toolCallingManagers = toolCallingManagers;
         this.runLimits = runLimits;
+        this.isolationPolicy=isolationPolicy;
+        this.isolation=new com.rover.agent.runtime.llm.ProviderIsolation(isolationPolicy);
     }
 
     @PostConstruct
@@ -86,7 +96,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
      * 构建成功后应用配置；失败保留原客户端并记录 lastError。
      * 密钥解密失败时停用客户端，保留已配置状态。
      */
-    public void apply(ModelSettings candidate) {
+    public synchronized void apply(ModelSettings candidate) {
         if (!candidate.configured()) {
             this.applied = candidate;
             this.client = null;
@@ -128,6 +138,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
             this.lastError = null;
             this.buildId = buildSequence.incrementAndGet();
             this.appliedAt = Instant.now();
+            this.isolation=new com.rover.agent.runtime.llm.ProviderIsolation(isolationPolicy);
             log.info("模型已生效：{}（buildId={}）", description(), buildId);
         } catch (RuntimeException | LinkageError ex) {
             // LinkageError（类缺失、依赖版本不匹配）也在这里收敛：模型建不起来只是「模型不可用」，
@@ -153,6 +164,29 @@ public class AdminChatModelGateway implements ChatModelGateway {
     @Override
     public boolean available() {
         return applied.configured() && client != null;
+    }
+
+    @Override
+    public synchronized com.rover.agent.runtime.llm.ModelClient select(Purpose purpose,int timeoutSeconds,boolean thinkingEnabled) {
+        ChatClient selected=switch(purpose) {
+            case CONVERSATION -> chatClient();
+            case LIGHTWEIGHT -> chatClient(timeoutSeconds);
+            case PLANNING -> planningClient(timeoutSeconds,thinkingEnabled);
+        };
+        ModelSettings settings=applied;
+        if (purpose==Purpose.LIGHTWEIGHT && settings.fastConfigured() && fastClient!=null) {
+            var fast=settings.fast();
+            settings=new ModelSettings(true,fast.baseUrl(),fast.apiKey(),fast.model(),settings.timeoutSeconds(),settings.source(),ModelSettings.keyStateOf(fast.apiKey()));
+        }
+        int effective=purpose==Purpose.CONVERSATION || timeoutSeconds<=0 ? settings.timeoutSeconds() : Math.min(settings.timeoutSeconds(),timeoutSeconds);
+        effective=ModelSettings.clampTimeout(effective);
+        boolean thinking=purpose==Purpose.CONVERSATION || purpose==Purpose.PLANNING && thinkingEnabled;
+        URI endpoint=URI.create(settings.baseUrl());
+        String endpointId=com.rover.agent.runtime.llm.ModelContracts.digest(endpoint.getScheme(),endpoint.getHost(),Integer.toString(endpoint.getPort()),endpoint.getRawPath());
+        String revision=com.rover.agent.runtime.llm.ModelContracts.digest(endpointId,settings.model(),Integer.toString(effective),Boolean.toString(thinking),Integer.toString(runLimits.maxOutputTokens()));
+        var identity=new com.rover.agent.core.model.ModelIdentity(vendorOf(settings.baseUrl()).name(),settings.model(),endpointId,revision,effective,thinking);
+        String key=com.rover.agent.runtime.llm.ModelContracts.digest(isolationSalt,endpointId,settings.apiKey());
+        return new com.rover.agent.runtime.llm.ModelClient(selected,identity,isolation,key);
     }
 
     @Override
@@ -332,6 +366,13 @@ public class AdminChatModelGateway implements ChatModelGateway {
                 .baseUrl(settings.baseUrl())
                 .apiKey(key(settings))
                 .restClientBuilder(restClient(settings))
+                .responseErrorHandler(new org.springframework.web.client.ResponseErrorHandler() {
+                    @Override public boolean hasError(org.springframework.http.client.ClientHttpResponse response) throws java.io.IOException { return response.getStatusCode().isError(); }
+                    @Override public void handleError(URI uri,org.springframework.http.HttpMethod method,org.springframework.http.client.ClientHttpResponse response) throws java.io.IOException {
+                        int retry=com.rover.agent.runtime.llm.ModelFailures.parseRetryAfter(response.getHeaders().getFirst("Retry-After"));
+                        throw new com.rover.agent.runtime.llm.ModelProviderFailure(response.getStatusCode().value(),retry);
+                    }
+                })
                 .build();
         return DeepSeekChatModel.builder()
                 .deepSeekApi(api)

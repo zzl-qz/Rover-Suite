@@ -5,6 +5,17 @@ import org.springframework.ai.chat.model.ChatResponse;
 
 /** 模型接入端口，由宿主进程实现；available=true 时必须已 configured。 */
 public interface ChatModelGateway {
+    enum Purpose { CONVERSATION, LIGHTWEIGHT, PLANNING }
+
+    /** 旧宿主身份未知时明确记录 UNKNOWN，不能从展示文案猜真实模型。 */
+    default ModelClient select(Purpose purpose,int timeoutSeconds,boolean thinkingEnabled) {
+        ChatClient selected=switch(purpose) {
+            case CONVERSATION -> chatClient();
+            case LIGHTWEIGHT -> chatClient(timeoutSeconds);
+            case PLANNING -> planningClient(timeoutSeconds,thinkingEnabled);
+        };
+        return new ModelClient(selected,com.rover.agent.core.model.ModelIdentity.unknown(),null,null);
+    }
 
     /** 是否"配置了模型"（与能否构建成功无关）。未配置 → false。 */
     boolean configured();

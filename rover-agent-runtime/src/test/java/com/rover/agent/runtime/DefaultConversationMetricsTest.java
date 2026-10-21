@@ -60,6 +60,7 @@ class DefaultConversationMetricsTest {
         ChatModelGateway gateway = mock(ChatModelGateway.class);
         when(gateway.available()).thenReturn(true);
         when(gateway.chatClient()).thenReturn(ChatClient.builder(model).build());
+        when(gateway.select(org.mockito.ArgumentMatchers.any(),org.mockito.ArgumentMatchers.anyInt(),org.mockito.ArgumentMatchers.anyBoolean())).thenCallRealMethod();
         when(gateway.description()).thenReturn("fixture-model @ localhost");
         when(gateway.reasoningDelta(any(ChatResponse.class))).thenReturn("");
         DefaultListableBeanFactory beans = new DefaultListableBeanFactory();

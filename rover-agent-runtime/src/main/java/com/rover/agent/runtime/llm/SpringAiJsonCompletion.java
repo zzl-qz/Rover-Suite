@@ -81,15 +81,17 @@ public final class SpringAiJsonCompletion implements JsonCompletion {
                         return content(request.call().chatResponse());
                     };
             String content = planning
-                    ? call.apply(AgentBudgetAdvisor.client(gateway.planningClient(timeoutSeconds, thinkingEnabled),
-                            AgentRunBudget.current(), gateway::reasoningDelta))
+                    ? call.apply(AgentBudgetAdvisor.client(gateway.select(ChatModelGateway.Purpose.PLANNING,timeoutSeconds,thinkingEnabled),
+                            AgentRunBudget.current(), gateway::reasoningDelta,scene,ModelContracts.PLANNING))
                     : QuickModelCall.content(gateway, timeoutSeconds, scene, call);
             if (content == null || content.isBlank()) {
+                if (AgentRunBudget.current()!=null) { AgentRunBudget.current().validation(scene,false); }
                 outcome = ModelCallOutcome.EMPTY;
                 log.warn("Agent 模型返回空内容（{}），退回规则结果", scene);
                 return Optional.empty();
             }
             Optional<T> parsed = parser.apply(content);
+            if (AgentRunBudget.current()!=null) { AgentRunBudget.current().validation(scene,parsed.isPresent()); }
             if (parsed.isEmpty()) {
                 // 有内容却转不成结果：这是契约与提示词的问题，不是链路问题，单独记一类。
                 outcome = ModelCallOutcome.REJECTED;
@@ -97,6 +99,7 @@ public final class SpringAiJsonCompletion implements JsonCompletion {
             }
             return parsed;
         } catch (TruncatedOutput ex) {
+            if (AgentRunBudget.current()!=null) { AgentRunBudget.current().validation(scene,false); }
             outcome = ModelCallOutcome.REJECTED;
             log.warn("Agent 模型输出被供应商截断（{}），不采纳不完整计划", scene);
             return Optional.empty();
@@ -104,9 +107,9 @@ public final class SpringAiJsonCompletion implements JsonCompletion {
             outcome = QuickModelCall.classify(ex);
             if (outcome == ModelCallOutcome.TIMEOUT) {
                 // 超时重试已由 QuickModelCall 完成，这里只留一条不带栈的告警，避免每次卡顿刷一屏堆栈。
-                log.warn("Agent 模型调用超时（{}），退回规则结果：{}", scene, ex.getMessage());
+                log.warn("Agent 模型调用超时（{}），退回规则结果", scene);
             } else {
-                log.warn("Agent 模型结构化调用失败（{}），退回规则结果", scene, ex);
+                log.warn("Agent 模型结构化调用失败（{}，{}），退回规则结果", scene, ModelFailures.kind(ex));
             }
             return Optional.empty();
         } finally {

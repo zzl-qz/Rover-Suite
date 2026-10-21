@@ -1,6 +1,7 @@
 package com.rover.agent.core.model;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 运维变更记录，包含目标、审批、执行与回滚信息。
@@ -46,7 +47,8 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
                           String applyOperationId, Integer appliedRevision, String rollbackOperationId,
                           String requestedBy, String approvedBy, long approvedAtMillis,
                           List<String> preview, String impact, String errorMessage,
-                          long createdAtMillis, long updatedAtMillis, long version, ResourceRef resourceRef) {
+                          long createdAtMillis, long updatedAtMillis, long version, ResourceRef resourceRef,
+                          RemediationPlan plan) {
 
     /** 权重上限，与 Gateway 的 RouteTarget.MAX_WEIGHT 保持一致。 */
     public static final int MAX_WEIGHT = 10_000;
@@ -64,6 +66,23 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
         preview = preview == null ? List.of() : List.copyOf(preview);
         impact = impact == null ? "" : impact;
         errorMessage = blankToNull(errorMessage);
+    }
+
+    /** 历史记录不补造计划；新计划由服务端基于实际资源快照生成。 */
+    public AgentAction(String actionId, String sessionId, String incidentId, String taskId,
+                       ActionType type, ActionStatus status,
+                       String routeId, String businessPrefix, String serviceName, String group,
+                       int beforeWeight, int desiredWeight, int requestedValue, WeightRequestUnit requestedUnit,
+                       double beforeTrafficPercent, double desiredTrafficPercent, int expectedRevision,
+                       String applyOperationId, Integer appliedRevision, String rollbackOperationId,
+                       String requestedBy, String approvedBy, long approvedAtMillis,
+                       List<String> preview, String impact, String errorMessage,
+                       long createdAtMillis, long updatedAtMillis, long version, ResourceRef resourceRef) {
+        this(actionId, sessionId, incidentId, taskId, type, status, routeId, businessPrefix, serviceName, group,
+                beforeWeight, desiredWeight, requestedValue, requestedUnit, beforeTrafficPercent,
+                desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision, rollbackOperationId,
+                requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage, createdAtMillis,
+                updatedAtMillis, version, resourceRef, null);
     }
 
     /** 新建变更的兼容入口；已持久化记录的迁移必须保留其行版本。 */
@@ -105,7 +124,7 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
                 serviceName, group, beforeWeight, desiredWeight, requestedValue, requestedUnit,
                 beforeTrafficPercent, desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision,
                 rollbackOperationId, requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage,
-                createdAtMillis, updatedAtMillis, nextVersion, resourceRef);
+                createdAtMillis, updatedAtMillis, nextVersion, resourceRef, plan);
     }
 
     public AgentAction withResourceRef(ResourceRef ref) {
@@ -113,7 +132,48 @@ public record AgentAction(String actionId, String sessionId, String incidentId, 
                 serviceName, group, beforeWeight, desiredWeight, requestedValue, requestedUnit,
                 beforeTrafficPercent, desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision,
                 rollbackOperationId, requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage,
-                createdAtMillis, updatedAtMillis, version, ref);
+                createdAtMillis, updatedAtMillis, version, ref, plan);
+    }
+
+    public AgentAction withPlan(RemediationPlan value) {
+        AgentAction result = new AgentAction(actionId, sessionId, incidentId, taskId, type, status, routeId,
+                businessPrefix, serviceName, group, beforeWeight, desiredWeight, requestedValue, requestedUnit,
+                beforeTrafficPercent, desiredTrafficPercent, expectedRevision, applyOperationId, appliedRevision,
+                rollbackOperationId, requestedBy, approvedBy, approvedAtMillis, preview, impact, errorMessage,
+                createdAtMillis, updatedAtMillis, version, resourceRef, value);
+        if (value != null) { value.requireMatches(result); }
+        return result;
+    }
+
+    /** 行版本只推进运行状态；改变意图必须创建新的计划版本和动作记录。 */
+    public void requireSameIntent(AgentAction previous) {
+        if (!Objects.equals(actionId, previous.actionId) || !Objects.equals(sessionId, previous.sessionId)
+                || !Objects.equals(incidentId, previous.incidentId) || !Objects.equals(taskId, previous.taskId)
+                || type != previous.type || !Objects.equals(routeId, previous.routeId)
+                || !Objects.equals(businessPrefix, previous.businessPrefix)
+                || !Objects.equals(serviceName, previous.serviceName) || !Objects.equals(group, previous.group)
+                || beforeWeight != previous.beforeWeight || desiredWeight != previous.desiredWeight
+                || requestedValue != previous.requestedValue || requestedUnit != previous.requestedUnit
+                || Double.compare(beforeTrafficPercent, previous.beforeTrafficPercent) != 0
+                || Double.compare(desiredTrafficPercent, previous.desiredTrafficPercent) != 0
+                || expectedRevision != previous.expectedRevision || !Objects.equals(requestedBy, previous.requestedBy)
+                || !Objects.equals(impact, previous.impact) || createdAtMillis != previous.createdAtMillis
+                || !Objects.equals(resourceRef, previous.resourceRef) || !Objects.equals(plan, previous.plan)) {
+            throw new IllegalArgumentException("不能原地修改处置意图，请创建新的计划版本");
+        }
+        if (plan != null) { plan.requireMatches(this); }
+    }
+
+    /** 只供仓储在原子登记下一计划版本时废弃尚未批准的旧动作。 */
+    public AgentAction superseded(long atMillis) {
+        if (status != ActionStatus.PENDING_APPROVAL || applyOperationId != null || approvedAtMillis != 0) {
+            throw new IllegalArgumentException("只有尚未批准的计划可以被新版本替代");
+        }
+        return new AgentAction(actionId, sessionId, incidentId, taskId, type, ActionStatus.SUPERSEDED,
+                routeId, businessPrefix, serviceName, group, beforeWeight, desiredWeight, requestedValue,
+                requestedUnit, beforeTrafficPercent, desiredTrafficPercent, expectedRevision, applyOperationId,
+                appliedRevision, rollbackOperationId, requestedBy, approvedBy, approvedAtMillis, preview, impact,
+                "已有新计划版本，请查看最新版本后重新批准", createdAtMillis, atMillis, version, resourceRef, plan);
     }
 
     /** 目标标签：{@code service@group}，与网关的集群键同一口径。 */

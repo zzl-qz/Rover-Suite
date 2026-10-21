@@ -23,6 +23,7 @@ import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.RecallChoice;
 import com.rover.agent.core.model.ResourceTarget;
+import com.rover.agent.core.model.RemediationPlan;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.Step;
@@ -57,6 +58,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.UnaryOperator;
 import org.slf4j.Logger;
@@ -703,7 +705,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         @Override
         public Optional<AgentAction> find(String actionId) {
             synchronized (JdbcAgentStore.this) {
-                return queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore::readActionRow,
+                return queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore.this::readActionRow,
                         actionId);
             }
         }
@@ -712,7 +714,15 @@ public final class JdbcAgentStore implements AutoCloseable {
         public List<AgentAction> bySession(String sessionId) {
             synchronized (JdbcAgentStore.this) {
                 return query("SELECT * FROM agent_action WHERE session_id = ? ORDER BY created_at DESC, action_id",
-                        JdbcAgentStore::readActionRow, sessionId);
+                        JdbcAgentStore.this::readActionRow, sessionId);
+            }
+        }
+
+        @Override
+        public List<RemediationPlan> planVersions(String planId) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT plan_json FROM agent_remediation_plan WHERE plan_id = ? ORDER BY plan_version",
+                        rows -> fromJson(rows.getString("plan_json"), RemediationPlan.class), planId);
             }
         }
 
@@ -721,7 +731,7 @@ public final class JdbcAgentStore implements AutoCloseable {
                                                 UnaryOperator<AgentAction> mutation) {
             synchronized (JdbcAgentStore.this) {
                 AgentAction current = queryOne("SELECT * FROM agent_action WHERE action_id = ?",
-                        JdbcAgentStore::readActionRow, actionId).orElse(null);
+                        JdbcAgentStore.this::readActionRow, actionId).orElse(null);
                 if (current == null || current.status() != expected) {
                     return Optional.empty();
                 }
@@ -751,16 +761,97 @@ public final class JdbcAgentStore implements AutoCloseable {
     private int writeAction(AgentAction action, ActionStatus expectedStatus) {
         synchronized (this) {
             return inTransaction(() -> {
+                AgentAction current = actions.find(action.actionId()).orElse(null);
+                if (current == null ? action.version() != 0
+                        : action.version() == 0 || action.version() != current.version()) { return 0; }
+                if (expectedStatus != null && (current == null || current.status() != expectedStatus)) { return 0; }
+                if (current != null) {
+                    action.requireSameIntent(current);
+                    if (current.status() == ActionStatus.SUPERSEDED && action.status() != current.status()) {
+                        throw new ActionUpdateConflictException(action.actionId());
+                    }
+                    if (action.plan() != null && action.status() == ActionStatus.EXECUTING
+                            && latestPlan(action.plan().planId()).planVersion() != action.plan().planVersion()) {
+                        throw new ActionUpdateConflictException(action.actionId());
+                    }
+                } else {
+                    // 删除工作区只删除运行记录；不得重用历史动作 ID 继承旧计划或审批权限。
+                    if (planForAction(action.actionId()).isPresent()) {
+                        throw new ActionUpdateConflictException(action.actionId());
+                    }
+                    AgentAction parent = validateNewPlan(action);
+                    if (parent != null) {
+                        AgentAction superseded = parent.superseded(action.createdAtMillis());
+                        if (writeActionRow(superseded, ActionStatus.PENDING_APPROVAL) != 1) {
+                            throw new ActionUpdateConflictException(parent.actionId());
+                        }
+                        auditAction(superseded);
+                    }
+                }
                 int changed = writeActionRow(action, expectedStatus);
                 if (changed != 0) {
-                    appendAudit("ACTION_" + action.status().name(), action.actionId(),
-                            com.rover.agent.core.util.AuditActor.current(action.approvedBy() == null ? action.requestedBy() : action.approvedBy()),
-                            sessions.find(action.sessionId()).map(Session::targetNamespace).orElse(""),
-                            action.withVersion(action.version() + 1));
+                    if (current == null && action.plan() != null) {
+                        RemediationPlan plan = action.plan();
+                        run("INSERT INTO agent_remediation_plan(plan_id,plan_version,action_id,session_id,plan_hash,plan_json,created_at) "
+                                        + "VALUES(?,?,?,?,?,?,?)", plan.planId(), plan.planVersion(), action.actionId(),
+                                action.sessionId(), plan.planHash(), toJson(plan), plan.createdAtMillis());
+                        appendAudit("REMEDIATION_PLAN_CREATED", plan.planId(),
+                                com.rover.agent.core.util.AuditActor.current(action.requestedBy()),
+                                sessions.find(action.sessionId()).map(Session::targetNamespace).orElse(""), plan);
+                    }
+                    auditAction(action);
                 }
                 return changed;
             });
         }
+    }
+
+    private void auditAction(AgentAction action) {
+        appendAudit("ACTION_" + action.status().name(), action.actionId(),
+                com.rover.agent.core.util.AuditActor.current(action.approvedBy() == null ? action.requestedBy() : action.approvedBy()),
+                sessions.find(action.sessionId()).map(Session::targetNamespace).orElse(""),
+                action.withVersion(Math.addExact(action.version(), 1L)));
+    }
+
+    private Optional<RemediationPlan> planForAction(String actionId) {
+        return queryOne("SELECT plan_json FROM agent_remediation_plan WHERE action_id = ?",
+                rows -> fromJson(rows.getString("plan_json"), RemediationPlan.class), actionId);
+    }
+
+    private RemediationPlan latestPlan(String planId) {
+        List<RemediationPlan> versions = actions.planVersions(planId);
+        return versions.isEmpty() ? null : versions.get(versions.size() - 1);
+    }
+
+    private AgentAction validateNewPlan(AgentAction action) {
+        RemediationPlan plan = action.plan();
+        if (plan == null) { return null; }
+        plan.requireMatches(action);
+        if (action.status() != ActionStatus.PENDING_APPROVAL || action.applyOperationId() != null
+                || action.rollbackOperationId() != null || action.approvedAtMillis() != 0) {
+            throw new IllegalArgumentException("新计划必须从待批准状态开始");
+        }
+        RemediationPlan previous = latestPlan(plan.planId());
+        if (previous == null) {
+            if (plan.planVersion() != 1) { throw new ActionUpdateConflictException(action.actionId()); }
+            return null;
+        }
+        if (plan.planVersion() != previous.planVersion() + 1) {
+            throw new ActionUpdateConflictException(action.actionId());
+        }
+        String parentId = queryOne("SELECT action_id FROM agent_remediation_plan WHERE plan_id = ? AND plan_version = ?",
+                rows -> rows.getString("action_id"), plan.planId(), previous.planVersion()).orElseThrow();
+        AgentAction parent = actions.find(parentId).orElse(null);
+        if (parent == null || parent.status() != ActionStatus.PENDING_APPROVAL
+                || !Objects.equals(parent.sessionId(), action.sessionId())
+                || !Objects.equals(parent.resourceRef(), action.resourceRef())
+                || !Objects.equals(parent.routeId(), action.routeId())
+                || !Objects.equals(parent.businessPrefix(), action.businessPrefix())
+                || !Objects.equals(parent.serviceName(), action.serviceName())
+                || !Objects.equals(parent.group(), action.group()) || parent.type() != action.type()) {
+            throw new ActionUpdateConflictException(action.actionId());
+        }
+        return parent;
     }
 
     private int writeActionRow(AgentAction action, ActionStatus expectedStatus) {
@@ -789,7 +880,7 @@ public final class JdbcAgentStore implements AutoCloseable {
             if (action.version() > 0) {
                 return run(update, updateValues);
             }
-            if (queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore::readActionRow,
+            if (queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore.this::readActionRow,
                     action.actionId()).isPresent()) {
                 return 0;
             }
@@ -805,7 +896,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         }
     }
 
-    private static AgentAction readActionRow(ResultSet rows) throws SQLException {
+    private AgentAction readActionRow(ResultSet rows) throws SQLException {
         return new AgentAction(rows.getString("action_id"), rows.getString("session_id"),
                 rows.getString("incident_id"), rows.getString("task_id"),
                 ActionType.valueOf(rows.getString("action_type")), ActionStatus.valueOf(rows.getString("status")),
@@ -820,7 +911,8 @@ public final class JdbcAgentStore implements AutoCloseable {
                 rows.getString("approved_by"), rows.getLong("approved_at"),
                 orEmpty(fromJson(rows.getString("preview_json"), STRINGS)), Texts.raw(rows.getString("impact")),
                 rows.getString("error_message"), rows.getLong("created_at"), rows.getLong("updated_at"),
-                rows.getLong("version")).withResourceRef(fromJson(rows.getString("resource_ref_json"), com.rover.agent.core.model.ResourceRef.class));
+                rows.getLong("version")).withResourceRef(fromJson(rows.getString("resource_ref_json"), com.rover.agent.core.model.ResourceRef.class))
+                .withPlan(planForAction(rows.getString("action_id")).orElse(null));
     }
 
     /** 单位列：历史数据没有单位时存 NULL，读回来也是 null，不要退化成某个默认值。 */
@@ -853,7 +945,13 @@ public final class JdbcAgentStore implements AutoCloseable {
                 Texts.raw(row.path()), row.target(), row.question(), row.createdAtMillis(), row.completedAtMillis(),
                 steps, assembleReport(row, evidence), row.error(), row.clarification(), row.taskType(),
                 fromJson(row.planJson(), InvestigationPlan.class), orEmpty(fromJson(row.executedJson(),
-                        CAPABILITIES)), orEmpty(fromJson(row.recallsJson(), RECALLS)), evidence);
+                        CAPABILITIES)), orEmpty(fromJson(row.recallsJson(), RECALLS)), evidence,modelInvocations(row.taskId()));
+    }
+
+    /** 模型调用与预算共用同一持久账本，避免两份状态在崩溃点不一致；旧任务没有账本则返回空。 */
+    private List<com.rover.agent.core.model.ModelInvocation> modelInvocations(String taskId) {
+        return queryOne("SELECT budget_json FROM agent_job WHERE task_id=? AND budget_json IS NOT NULL",row->row.getString(1),taskId)
+                .map(json->fromJson(json,com.rover.agent.runtime.task.AgentRunBudget.State.class).modelInvocations()).orElse(List.of());
     }
 
     /**
@@ -1278,7 +1376,14 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "FOREIGN KEY(resource_namespace,event_id) REFERENCES agent_change_event(resource_namespace,event_id) ON DELETE CASCADE)",
                                 "CREATE INDEX IF NOT EXISTS idx_change_resource ON agent_change_link(resource_namespace,link_kind,resource_id,event_id)",
                                 "CREATE TABLE IF NOT EXISTS agent_timeline_source (resource_namespace VARCHAR(64) NOT NULL,source_id VARCHAR(255) NOT NULL, "
-                                        + "payload_json TEXT NOT NULL,PRIMARY KEY(resource_namespace,source_id))"), List.of(), List.of()));
+                                        + "payload_json TEXT NOT NULL,PRIMARY KEY(resource_namespace,source_id))"), List.of(), List.of()),
+                new Migration(11, "immutable remediation plan versions",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_remediation_plan (plan_id VARCHAR(128) NOT NULL, "
+                                        + "plan_version INT NOT NULL, action_id VARCHAR(64) NOT NULL UNIQUE, "
+                                        + "session_id VARCHAR(64) NOT NULL, plan_hash VARCHAR(64) NOT NULL, "
+                                        + "plan_json TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(plan_id,plan_version))",
+                                "CREATE INDEX IF NOT EXISTS idx_remediation_plan_session ON agent_remediation_plan(session_id,created_at)"),
+                        List.of(), List.of()));
 
     private void migrate() throws SQLException {
         // applied_at 用毫秒时间戳：与业务表同一口径，也不依赖各驱动对 TIMESTAMP 的绑定细节。
@@ -1409,7 +1514,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         synchronized (this) {
             inTransaction(() -> {
             List<AgentAction> interrupted = query("SELECT * FROM agent_action WHERE status IN (?,?,?)",
-                    JdbcAgentStore::readActionRow, ActionStatus.EXECUTING.name(), ActionStatus.VERIFYING.name(), ActionStatus.ROLLING_BACK.name());
+                    JdbcAgentStore.this::readActionRow, ActionStatus.EXECUTING.name(), ActionStatus.VERIFYING.name(), ActionStatus.ROLLING_BACK.name());
             long now = System.currentTimeMillis();
             int unsent = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
                             + "version = version + 1 WHERE status = ? AND apply_operation_id IS NULL",

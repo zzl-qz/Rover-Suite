@@ -110,6 +110,7 @@ final class AgentSecurityFilters {
         if (path.startsWith("/api/agent/actions/")) {
             return path.endsWith("/resolve") ? Permission.READ : Permission.APPROVE;
         }
+        if (path.startsWith("/api/agent/v1/plans/") && path.endsWith("/versions")) { return Permission.PROPOSE; }
         if (path.equals(INGEST) || path.equals(RELEASE_INGEST)) { return Permission.INGEST; }
         return path.startsWith("/api/agent/") ? Permission.INVESTIGATE : Permission.MANAGE_SYSTEM;
     }

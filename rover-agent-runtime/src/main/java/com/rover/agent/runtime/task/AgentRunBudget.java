@@ -26,13 +26,27 @@ public final class AgentRunBudget {
     private Runnable attemptGuard = () -> { };
     public synchronized void validateWith(Runnable guard) { attemptGuard = guard; }
     private volatile String stopReason;
+    private final java.util.List<com.rover.agent.core.model.ModelInvocation> invocations = new java.util.ArrayList<>();
+    private final java.util.Set<String> queryTemplates = new java.util.TreeSet<>();
 
     public record State(int modelCalls, long tokens, int pendingOutput, int toolCalls, long deadlineAtMillis,
-                        int maxModelCalls, int maxOutputTokens, long maxTotalTokens, long timeoutMillis, int maxRepeatedToolResults) { }
+                        int maxModelCalls, int maxOutputTokens, long maxTotalTokens, long timeoutMillis, int maxRepeatedToolResults,
+                        java.util.List<com.rover.agent.core.model.ModelInvocation> modelInvocations, java.util.List<String> queryTemplateVersions) {
+        public State {
+            modelInvocations = modelInvocations == null ? java.util.List.of() : java.util.List.copyOf(modelInvocations);
+            queryTemplateVersions = queryTemplateVersions == null ? java.util.List.of() : java.util.List.copyOf(queryTemplateVersions);
+        }
+        public State(int modelCalls,long tokens,int pendingOutput,int toolCalls,long deadlineAtMillis,int maxModelCalls,
+                     int maxOutputTokens,long maxTotalTokens,long timeoutMillis,int maxRepeatedToolResults) {
+            this(modelCalls,tokens,pendingOutput,toolCalls,deadlineAtMillis,maxModelCalls,maxOutputTokens,maxTotalTokens,
+                    timeoutMillis,maxRepeatedToolResults,java.util.List.of(),java.util.List.of());
+        }
+    }
 
     public synchronized State snapshot() {
         return new State(modelCalls, tokens, pendingOutput, toolCalls, deadlineAtMillis, limits.maxModelCalls(),
-                limits.maxOutputTokens(), limits.maxTotalTokens(), limits.taskTimeout().toMillis(), limits.maxRepeatedToolResults());
+                limits.maxOutputTokens(), limits.maxTotalTokens(), limits.taskTimeout().toMillis(), limits.maxRepeatedToolResults(),
+                java.util.List.copyOf(invocations),java.util.List.copyOf(queryTemplates));
     }
 
     public synchronized void persistTo(java.util.function.Consumer<State> sink) { this.stateSink = sink; }
@@ -42,8 +56,59 @@ public final class AgentRunBudget {
         // 中断调用的输出无法精确计费，按已预留上限计入，不能借重启获得新额度。
         tokens = state.tokens() + state.pendingOutput(); toolCalls = state.toolCalls();
         deadlineAtMillis = state.deadlineAtMillis();
+        invocations.clear();
+        state.modelInvocations().forEach(call -> invocations.add("STARTED".equals(call.status())
+                ? call.finish("INTERRUPTED",call.accountedInputTokens(),call.outputLimit(),null,null) : call));
+        queryTemplates.clear(); queryTemplates.addAll(state.queryTemplateVersions());
         if (deadlineAtMillis > 0) {
             deadline = System.nanoTime() + Math.max(0, deadlineAtMillis - System.currentTimeMillis()) * 1_000_000L;
+        }
+    }
+
+    public synchronized java.util.List<com.rover.agent.core.model.ModelInvocation> modelInvocations() { return java.util.List.copyOf(invocations); }
+
+    public synchronized void observeTemplates(java.util.List<com.rover.agent.core.model.Evidence> evidence) {
+        int before=queryTemplates.size();
+        if (evidence != null) { evidence.forEach(e -> { if (e.envelope().queryTemplateVersion() != null) { queryTemplates.add(e.envelope().queryTemplateVersion()); } }); }
+        if (queryTemplates.size()!=before) { stateSink.accept(snapshot()); }
+    }
+
+    public synchronized String invocationStarted(String scene, com.rover.agent.core.model.ModelIdentity identity,
+            String promptVersion,String promptDigest,String toolsDigest,long input,int output) {
+        check();
+        if (invocations.size() >= 60) { throw stop("模型调用审计已达上限（60 条）"); }
+        String id = java.util.UUID.randomUUID().toString();
+        invocations.add(new com.rover.agent.core.model.ModelInvocation(id,scene,identity,promptVersion,
+                com.rover.agent.runtime.llm.ModelContracts.POLICY,promptDigest,toolsDigest,java.util.List.copyOf(queryTemplates),
+                System.currentTimeMillis(),null,"STARTED","NOT_EVALUATED",input,0,output,null,null));
+        stateSink.accept(snapshot()); return id;
+    }
+
+    public record Reservation(String id,int outputLimit) { }
+    public synchronized Reservation beginModelInvocation(String scene,com.rover.agent.core.model.ModelIdentity identity,
+            String promptVersion,String promptDigest,String toolsDigest,long input,Integer requestedOutput) {
+        check();
+        if (invocations.size()>=60) { throw stop("模型调用审计已达上限（60 条）"); }
+        int output=beginModelCall(input,requestedOutput,false);
+        String id=invocationStarted(scene,identity,promptVersion,promptDigest,toolsDigest,input,output);
+        return new Reservation(id,output);
+    }
+
+    public synchronized void invocationFinished(String id,String status,long input,long output,String model,String fingerprint) {
+        for (int i=0;i<invocations.size();i++) {
+            var call=invocations.get(i);
+            if (call.id().equals(id) && "STARTED".equals(call.status())) {
+                invocations.set(i,call.finish(status,input,output,model,fingerprint)); stateSink.accept(snapshot()); return;
+            }
+        }
+    }
+
+    public synchronized void validation(String scene,boolean accepted) {
+        for (int i=invocations.size()-1;i>=0;i--) {
+            var call=invocations.get(i);
+            if (call.scene().equals(scene) && "SUCCEEDED".equals(call.status())) {
+                invocations.set(i,call.validated(accepted ? "ACCEPTED" : "REJECTED")); stateSink.accept(snapshot()); return;
+            }
         }
     }
 
@@ -54,6 +119,17 @@ public final class AgentRunBudget {
     }
 
     public synchronized void modelCallCompleted() { pendingOutput = 0; stateSink.accept(snapshot()); }
+    /** 响应结算与调用终态一次落盘，不能在两次写入之间留下已退预算、调用却未完成的窗口。 */
+    public synchronized void modelInvocationCompleted(String id,String status,long input,long output,String model,String fingerprint) {
+        for (int i=0;i<invocations.size();i++) {
+            var call=invocations.get(i);
+            if (call.id().equals(id) && "STARTED".equals(call.status())) {
+                if (!"SUCCEEDED".equals(status)) { tokens+=pendingOutput;output+=pendingOutput; }
+                pendingOutput=0;
+                invocations.set(i,call.finish(status,input,output,model,fingerprint)); stateSink.accept(snapshot()); return;
+            }
+        }
+    }
 
     public AgentRunBudget(AgentRunLimits limits) {
         this.limits = limits;
@@ -104,6 +180,10 @@ public final class AgentRunBudget {
 
     /** 调用前计入输入估算，并按剩余总预算收紧本轮输出上限。 */
     public synchronized int beginModelCall(long inputTokens, Integer requestedOutput) {
+        return beginModelCall(inputTokens,requestedOutput,true);
+    }
+
+    private int beginModelCall(long inputTokens,Integer requestedOutput,boolean persist) {
         check();
         if (pendingOutput > 0) { tokens += pendingOutput; pendingOutput = 0; }
         if (modelCalls >= limits.maxModelCalls()) {
@@ -118,15 +198,20 @@ public final class AgentRunBudget {
         int output = requestedOutput == null || requestedOutput <= 0
                 ? limits.maxOutputTokens() : Math.min(requestedOutput, limits.maxOutputTokens());
         pendingOutput = (int) Math.min(output, available);
-        stateSink.accept(snapshot());
+        if (persist) { stateSink.accept(snapshot()); }
         return pendingOutput;
     }
 
     /** 流式用量按增量结算；服务端没有 usage 时使用本地 tokenizer 估算。 */
     public synchronized void consume(long additionalTokens) {
+        consumeModelTokens(0,additionalTokens);
+    }
+
+    /** 输入修正不能吃掉输出预留，否则流式中断会少算仍可能产生的输出。 */
+    public synchronized void consumeModelTokens(long additionalInput,long additionalOutput) {
         check();
-        tokens += Math.max(0, additionalTokens);
-        pendingOutput = (int) Math.max(0, pendingOutput - Math.max(0, additionalTokens));
+        tokens += Math.max(0,additionalInput)+Math.max(0,additionalOutput);
+        pendingOutput = (int) Math.max(0, pendingOutput - Math.max(0, additionalOutput));
         stateSink.accept(snapshot());
         if (tokens > limits.maxTotalTokens()) {
             throw stop("累计 token 预算已达上限（" + limits.maxTotalTokens() + "），任务已停止");
@@ -160,6 +245,11 @@ public final class AgentRunBudget {
         synchronized (this) {
             if (stopReason == null) {
                 stopReason = reason;
+                for (int i=0;i<invocations.size();i++) {
+                    var call=invocations.get(i);
+                    if ("STARTED".equals(call.status())) { invocations.set(i,call.finish("CANCELLED",call.accountedInputTokens(),call.outputLimit(),null,null)); }
+                }
+                stateSink.accept(snapshot());
             }
         }
         stopped.tryEmitValue(stopReason);

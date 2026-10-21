@@ -30,6 +30,9 @@ public enum ActionStatus {
     /** 人拒绝了这个变更：未执行，也不会执行。 */
     REJECTED("已拒绝"),
 
+    /** 新版本已登记，旧版本保留历史且不得批准。 */
+    SUPERSEDED("已被新版本替代"),
+
     /** 正在用同一个窄原语把权重补偿回变更前的值。 */
     ROLLING_BACK("回滚中"),
 
@@ -56,7 +59,7 @@ public enum ActionStatus {
     /** 是否已经落定、不会再自行变化（{@link #UNCERTAIN} 不算：它可以被回查结果改写）。 */
     public boolean settled() {
         return this == SUCCESS || this == FAILED || this == PRECONDITION_FAILED || this == REJECTED
-                || this == ROLLED_BACK || this == ROLLBACK_PRECONDITION_FAILED;
+                || this == ROLLED_BACK || this == ROLLBACK_PRECONDITION_FAILED || this == SUPERSEDED;
     }
 
     /** 是否允许人工批准/拒绝。 */

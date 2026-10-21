@@ -779,6 +779,16 @@
                                                 </div>
                                             </div>
 
+                                            <details v-if="turn.task.modelInvocations && turn.task.modelInvocations.length" class="diagnosis-limitations">
+                                                <summary>模型调用记录（{{ turn.task.modelInvocations.length }}）</summary>
+                                                <div v-for="call in turn.task.modelInvocations" :key="call.id" style="margin-top:10px;overflow-wrap:anywhere">
+                                                    <strong>{{ call.scene }}</strong> · {{ call.identity.requestedModel }} · {{ call.status }}
+                                                    <div>输出校验：{{ call.validation }} · 核算输入/输出：{{ call.accountedInputTokens }}/{{ call.accountedOutputTokens }} token</div>
+                                                    <div>供应商返回模型：{{ call.returnedModel || '未提供' }} · {{ call.completedAtMillis ? (call.completedAtMillis - call.startedAtMillis) + ' ms' : '进行中' }}</div>
+                                                    <details><summary>版本与查询依据</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">{{ JSON.stringify(call, null, 2) }}</pre></details>
+                                                </div>
+                                                <div class="muted">核算值用于任务预算，失败/中断按输出预留保守计入，不代表供应商账单；请求成功不代表诊断或修复成功。</div>
+                                            </details>
                                             <div v-if="turn.task.result && turn.task.result.limitations && turn.task.result.limitations.length" class="diagnosis-limitations">
                                                 <h4>判断范围</h4>
                                                 <ul><li v-for="(item, index) in turn.task.result.limitations" :key="index">{{ item }}</li></ul>
@@ -956,6 +966,36 @@
                                         </template>
                                         按「{{ wbActionRequestText(action) }}」提出 · 路由表版本 {{ action.expectedRevision }}<template v-if="action.appliedRevision != null"> → {{ action.appliedRevision }}</template>
                                     </div>
+                                    <div v-if="action.plan" class="wb-action-facts">
+                                        <div><strong>计划第 {{ action.plan.planVersion }} 版</strong> · 有效至 {{ fmtTime(action.plan.expiresAtMillis) }}
+                                            <span v-if="action.status === 'PENDING_APPROVAL' && wbPlanExpired(action.plan)" class="badge warn">已过期，需生成新版本</span>
+                                        </div>
+                                        <div v-if="action.plan.riskAssessment">
+                                            风险 {{ action.plan.riskAssessment.level }} · 服务端评估，需人工审批
+                                            <div class="muted">{{ action.plan.riskAssessment.blastRadius }}</div>
+                                            <div v-if="!action.plan.riskAssessment.capacityEvidenceAvailable" class="muted">剩余容量尚无充分证据，审批前需人工核实。</div>
+                                            <ul v-if="action.plan.riskAssessment.reasons && action.plan.riskAssessment.reasons.length">
+                                                <li v-for="(reason, index) in action.plan.riskAssessment.reasons" :key="index">{{ reason }}</li>
+                                            </ul>
+                                        </div>
+                                        <div v-if="action.plan.unresolvedAssumptions && action.plan.unresolvedAssumptions.length">
+                                            待核实事项
+                                            <ul><li v-for="(assumption, index) in action.plan.unresolvedAssumptions" :key="index">{{ assumption }}</li></ul>
+                                        </div>
+                                        <div v-if="action.plan.verificationSpec && action.plan.verificationSpec.mode === 'CONTROL_PLANE_ONLY'" class="muted">
+                                            执行后仅核对配置是否生效；错误率、延迟等业务效果尚未验证。
+                                        </div>
+                                        <div v-if="action.plan.compensationSpec" class="muted">
+                                            补偿需另行人工批准；仅恢复本次触及的权重，提交前核对资源身份、当前值和生效版本。
+                                        </div>
+                                        <details class="wb-action-diff">
+                                            <summary>计划详情 · 摘要 {{ (action.plan.planHash || '').slice(0, 12) }}</summary>
+                                            <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto">{{ JSON.stringify(action.plan, null, 2) }}</pre>
+                                        </details>
+                                    </div>
+                                    <div v-else-if="action.status === 'PENDING_APPROVAL'" class="banner warn slim">
+                                        这是未保存完整计划的历史提案，请重新生成后再批准。
+                                    </div>
                                     <div v-if="wbActionPreviewNote(action)" class="muted wb-action-facts">{{ wbActionPreviewNote(action) }}</div>
                                     <details v-else-if="action.preview && action.preview.length" class="wb-action-diff">
                                         <summary>整条路由改前 / 改后</summary>
@@ -975,12 +1015,34 @@
                                     <div v-if="wbActionError[action.actionId]" class="banner warn slim">
                                         {{ wbActionError[action.actionId] }}
                                     </div>
+                                    <form v-if="action.plan && action.status === 'PENDING_APPROVAL' && wbPlanEdits[action.actionId]"
+                                          @submit.prevent="wbSavePlanRevision(action)" class="wb-action-facts">
+                                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">
+                                            <div class="field">
+                                                <label :for="'wb-plan-unit-' + action.actionId">目标单位</label>
+                                                <select :id="'wb-plan-unit-' + action.actionId" v-model="wbPlanEdits[action.actionId].requestedUnit" :disabled="!wbActionIdle(action)" required>
+                                                    <option value="RAW_WEIGHT">相对权重</option>
+                                                    <option value="TRAFFIC_PERCENT">流量占比（%）</option>
+                                                </select>
+                                            </div>
+                                            <div class="field">
+                                                <label :for="'wb-plan-value-' + action.actionId">新目标值</label>
+                                                <input :id="'wb-plan-value-' + action.actionId" v-model="wbPlanEdits[action.actionId].requestedValue"
+                                                       type="number" min="0" :max="wbPlanEdits[action.actionId].requestedUnit === 'RAW_WEIGHT' ? 10000 : 100"
+                                                       step="1" :disabled="!wbActionIdle(action)" required>
+                                            </div>
+                                        </div>
+                                        <p class="muted">将重新读取当前路由并生成待审批的新版本，旧版本保留且不能执行。</p>
+                                        <button class="btn mini primary" type="submit" :disabled="!wbActionIdle(action)">{{ wbActionBusy[action.actionId] === 'revise' ? '生成中…' : '生成新版本' }}</button>
+                                        <button class="btn mini" type="button" :disabled="!wbActionIdle(action)" @click="wbCancelPlanEdit(action)">取消修改</button>
+                                    </form>
                                     <div class="wb-action-foot">
                                         <span class="muted wb-action-meta">{{ wbActionMeta(action) }}</span>
                                         <template v-if="wbActionIdle(action) && action.status === 'PENDING_APPROVAL'">
                                             <button class="btn mini" :disabled="wbActionBusy[action.actionId]"
                                                     @click="wbActionCommand(action, 'reject')">拒绝</button>
-                                            <button class="btn mini primary" :disabled="wbActionBusy[action.actionId]"
+                                            <button v-if="action.plan && !wbPlanEdits[action.actionId]" class="btn mini" @click="wbEditPlan(action)">修改计划</button>
+                                            <button v-if="action.plan" class="btn mini primary" :disabled="wbActionBusy[action.actionId] || wbPlanExpired(action.plan)"
                                                     @click="wbActionCommand(action, 'approve')">
                                                 {{ wbActionBusy[action.actionId] === 'approve' ? '执行中…' : '批准并执行' }}
                                             </button>

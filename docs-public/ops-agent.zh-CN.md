@@ -58,6 +58,10 @@ Agent 能查询 Route、Instance、Metrics、Trace、Config、Events、Logs（�
 
 S2-05 增加可选的 Prometheus 应用指标、Loki 应用日志与 Tempo 链路摘要读取。三类能力使用服务端固定的资源映射、环境过滤和查询模板，接入现有调查图、对话、证据持久化与工作台；默认未配置，不会自动访问外部平台。配置、预算、脱敏、分页和覆盖语义见 [外部只读遥测接入](agent-telemetry-connectors.zh-CN.md)。
 
+S2-06 增加任务模型调用账本、按端点/凭证的供应商隔离和十二场景离线回放。工作台区分请求模型、供应商返回身份、传输状态与输出契约状态；调用数、预留输出和原截止时间随 H2 Job 恢复。实现与真实验收范围见 [模型故障隔离与回放](agent-model-resilience.zh-CN.md)。
+
+S3-01 把灰度权重的待审批记录冻结为不可变 `RemediationPlan`：计划摘要、风险、资源/参数、验证和补偿条件必须与审批精确绑定；更改目标值会产生新版本并使旧版失效。当前只回读控制面，不把权重写成功说成服务恢复。实现、API 与边界见[不可变处置计划](agent-remediation-plan.zh-CN.md)。
+
 **状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）由 `AgentOrchestrator` 驱动，采集路由、实例、指标、追踪、配置、注册事件、历史日志、运维知识八类快照，返回结论、证据来源和采集时间。其中指标除全局窗口外，还能按「路由 × 上游实例」取到窗口请求数、状态码、错误率与延迟，用于指出是哪台实例在出错；历史日志按类型 / 目标 / 时间范围过滤（配置变更、回滚、错误、实例上下线、指标采样、慢与错误链路），运维知识回答「怎么配置 / 怎么接入 / 怎么排查」。
 
 ### Level B：Reason（调查 + 推理）
@@ -88,8 +92,8 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
 
 **状态：进行中（第一个动作已打通，见 §7「受控变更闭环」）。** 当前唯一可执行的动作是 `ADJUST_ROUTE_TARGET_WEIGHT`
 （调整某个灰度版本的流量权重）：模型只负责开出待审批变更单，人工批准后才由 `RouteWeightActionExecutor` 做
-「状态预检 → 乐观锁提交 → 回读验证」，补偿回滚走同一个窄原语。Policy、RBAC 与风险分级仍是规划中——
-这一版靠「动作面只开一个、写权限只给执行器、变更必须人工批准」把风险压低，而不是假装治理层已经齐了。
+「状态预检 → 乐观锁提交 → 回读验证」，补偿回滚走同一个窄原语。S3-01 为此动作加入固定 R2 风险、不可变计划摘要、
+有效期和单独补偿批准；通用策略、双人批准和更多动作仍是规划中。当前回读只证明控制面生效，业务恢复验证尚未实现。
 
 ## 5. 两个入口
 
@@ -376,14 +380,17 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
   - **Observe / Plan**：`proposeTargetWeightChange` 读一次当前路由（含 revision 与各版本权重），登记一条
     `PENDING_APPROVAL` 变更，**Gateway 一个字节都不会被改动**。路由没匹配上、版本不存在、权重已经是目标值，
     都返回一句有依据的「为什么提不了」，不硬凑一张卡出来。
-  - **Approve**：`POST /api/agent/actions/{actionId}/approve|reject|rollback|resolve`。「待审批 → 执行中」是一次
-    原子状态迁移（`AgentActionRepository.transition` 的状态 CAS），因此连点三下只会执行一次；变更归属创建它的会话用户，
-    别人的变更对当前用户按不存在处理（404）。
+   - **Plan / Approve**：S3-01 的 `RemediationPlan` 冻结对象 UID/generation、路由 revision、改前/目标值、风险、
+     未消除假设、控制面验证和补偿条件，并计算服务端可复算的 `planHash`。批准请求精确绑定当前 `planVersion + planHash`；
+     改目标值只会经 `POST /api/agent/v1/plans/{planId}/versions` 重读路由后生成新版本，旧卡变 `SUPERSEDED`，不会原地覆盖。
+     `POST /api/agent/actions/{actionId}/approve|reject|rollback|resolve` 的「待审批 → 执行中」是一次原子状态迁移
+     （`AgentActionRepository.transition` 的状态 CAS），因此连点三下只会执行一次；变更归属创建它的会话用户，别人的变更对当前用户按不存在处理（404）。
   - **Precondition**：重新读整表，核对 revision、目标是否还在、当前权重是否仍等于提议时的值。审批卡可能在人面前放了十分钟，
     这十分钟里别人改过的路由不能被这张卡覆盖——不一致就落 `PRECONDITION_FAILED`，**不发出任何写请求**。
   - **Execute**：预览（候选整表交网关校验并比对差异，不落盘、不生效）→ **先把 `operationId` 落库再发请求** →
     用提议时读到的 revision 提交。
-  - **Verify**：网关返回 200 只代表请求生效，目标是否达成必须自己回读确认；回读不一致就是 `FAILED`——不回读就报成功等于谎报。
+   - **Verify**：网关返回 200 只代表请求生效，目标是否达成必须自己回读确认；回读不一致就是 `FAILED`——不回读就报成功等于谎报。
+     当前计划明确标注为 `CONTROL_PLANE_ONLY`，所以这个结论只表示资源、权重和 revision 一致；错误率、延迟、样本量和业务恢复仍待 S3-05 的独立效果验证器判断。
   - **Rollback**：补偿动作，不是整表回滚。只把这一次改过的那个目标改回 `beforeWeight`，并用**当前** revision 提交；
     整表退回旧版本会把别人在这之后的修改一起抹掉。
 - **`revision` 与 `operationId` 解决的是两个不同的问题**：前者是乐观锁（防止用旧状态覆盖别人的修改，冲突由网关返回 409，
@@ -395,9 +402,9 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
   「写请求已发出、但没拿到响应且回查不可达」既不是成功也不是失败，只能如实说结果未知。
 - **重启恢复**：停在半路的变更按「幂等号有没有落库」处理——没有号说明写请求根本没发出去（判 `FAILED`），
   有号说明可能已经生效（判 `UNCERTAIN`，用同一个号确认）；回滚中断则退回 `SUCCESS`，人还能再点一次回滚。
-- **变更记录（`agent_action`）**：一行记录一次变更的全部依据与结果——对象、两端权重、期望 revision、两个幂等号、
-  生效 revision、提议人 / 批准人、预览差异、失败说明与行版本号（Schema v4）。会话被整组清理时连带删除，
-  任务被淘汰时只把外键置空：变更的审计价值高于它的来路链接。
+   - **变更记录与计划历史**：`agent_action` 记录对象、两端权重、期望 revision、两个幂等号、生效 revision、提议人 /
+     批准人、预览差异、失败说明与行版本号。Schema v11 的 `agent_remediation_plan` 以 `(plan_id, plan_version)` 只追加保存
+     每次计划正文与摘要；执行状态更新不覆盖计划，会话清理也不允许计划 ID 被复用破坏审计。
 - **Workbench「变更与处置」卡片**：逐条展示变更，只在服务端状态允许时才给按钮（待审批 → 批准 / 拒绝；已完成 → 回滚；
   结果未知 → 重新确认）。执行是同步的，返回即终态；前端不做「先乐观变绿」——变更有没有生效只能由服务端的回读说了算。
 - Admin「Agent 工作台」+ 会话式接口：`POST/GET /api/agent/sessions`、`POST /api/agent/sessions/{sessionId}/messages`、`GET /api/agent/sessions/{sessionId}/workspace`、`GET /api/agent/tasks/{taskId}`、`GET /api/agent/tasks/{taskId}/events`（SSE）；
@@ -439,7 +446,7 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 `operationId` 落库再发请求，重启时按「幂等号有没有落库」把半途的变更判成失败或结果未知。
 - **恢复点存高水位，不存清单**：`stage` 只描述业务阶段（`STARTED` / `PLANNED` / `TOOL_COMPLETED` / `ROUND_EVALUATED` / `SYNTHESIS_COMPLETED` / `COMPLETED`），再加轮数、已调用次数、步骤条数与证据条数；具体是哪些步骤与证据按序号从关系表读回来，不在这里复制 ID 列表。图节点名只作诊断字段（`runtime_node`），恢复流程不依赖它——换框架、改节点名都不能影响恢复语义。`resume_state_json` 留给「无法从关系表重建的运行态」，本轮两条路径的运行态都能重建，因此先留空，不写没有来源的内容。
 - **恢复点与事实同一次写入**：任务状态、步骤、证据与恢复点在一个事务里落下，所以不会出现「恢复点说证据 3 条、库里只有 2 条」这种恢复时才暴露的坏状态。证据也因此改成**增量落库**：工具一返回就随恢复点落库，不再等结论合成时一次性补写；任务视图上的 `evidence` 是「本次已取到的全部证据」，结论里的 `result.evidence` 是同一批。
-- **Schema 与迁移约定**：Agent 聚合的表（会话 / 消息 / 事件 / 任务 / 步骤 / 证据 + 安全恢复点 + 受控变更记录）按 `agent_schema_migrations` 版本化迁移管理：v1 建聚合表、v2 删旧 JSON 快照表、v3 加恢复点、v4 加变更记录、v5 加请求单位与流量预览、v6 加认证告警来源 `triggered_by`、v7 加资源身份和会话范围、v8 加独立审计与事件 outbox、v9 加持久 Job 和预算。升级只新增迁移，不改已发布迁移、不要求清库；历史事件来源未知时保留空值，不从处理账号反推。关系由外键维护；删会话仍会连带清理记录，独立执行审计已保留，外部不可变归档和长期留存策略仍后置。
+- **Schema 与迁移约定**：Agent 聚合的表（会话 / 消息 / 事件 / 任务 / 步骤 / 证据 + 安全恢复点 + 受控变更记录）按 `agent_schema_migrations` 版本化迁移管理：v1 建聚合表、v2 删旧 JSON 快照表、v3 加恢复点、v4 加变更记录、v5 加请求单位与流量预览、v6 加认证告警来源 `triggered_by`、v7 加资源身份和会话范围、v8 加独立审计与事件 outbox、v9 加持久 Job 和预算、v10 加变更时间线、v11 加不可变处置计划。升级只新增迁移，不改已发布迁移、不要求清库；历史事件来源未知时保留空值，不从处理账号反推。关系由外键维护；删会话仍会连带清理记录，独立执行审计已保留，外部不可变归档和长期留存策略仍后置。
 - **变更写回的并发契约**：`AgentAction.version` 是记录行版本，与 Gateway 的路由 revision 分开。仓储新建返回版本 1，后续更新必须携带读到的版本，成功后递增；过期或已删除的记录拒绝写回。审批/回滚入口同时检查状态和行版本，执行器的每次保存也检查版本，迟到的 resolve 不能覆盖回滚。异常恢复读取已持久化的操作号，按原号对账，不换号重发。该保护不等于多节点运行能力，单进程持久 Job 已接入，跨进程 Worker、租约和共享生产存储后置 S7。
 - 结构化输出强约束 + 失败分类：`JsonCompletion` 的解析契约由调用方传入（`Function<String, Optional<T>> parser`）；`LlmInvestigationPlanner` 与 `ModelTargetInterpreter` 走严格契约——JSON 非法、或取值越界，整条结果直接丢弃并回退规则层，不再静默补默认值；`ModelCallOutcome` 把调用结局区分为 `OK` / `NOT_CONFIGURED` / `UNAVAILABLE` / `TIMEOUT` / `ERROR` / `EMPTY` / `REJECTED`，其中 `rejected` 专门表示「模型返回了文本但不符合契约」。解决「越界输出被补默认值后损失无法定位」的问题：宁可回退规则层，也不吞掉契约违规。
 - 模型调用可观测性（含 token 用量）：`AgentMetrics` 的口径变为 `modelCall(model, scene, durationMillis, outcome)`，并新增 `modelTokens(model, scene, promptTokens, completionTokens)`；Micrometer 侧暴露 `model.calls`（标签 `model` / `scene` / `outcome`）、`model.duration`（标签 `model` / `scene`）与 `model.tokens`（标签 `model` / `scene` / `kind`，取值 `prompt` / `completion`；拿不到用量就不上报、不记 0），并删除只能回答「失败几次」的 `model.error`。解决「调用次数与耗时说明不了成本与上下文膨胀」的问题：token 用量按场景可查，成本与提示词膨胀可以被量化。
