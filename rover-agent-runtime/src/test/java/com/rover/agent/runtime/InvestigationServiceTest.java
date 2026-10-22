@@ -8,11 +8,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.rover.agent.core.event.TaskEvent;
@@ -31,10 +34,13 @@ import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ModelExplainer;
+import com.rover.agent.runtime.action.ActionProposal;
+import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
@@ -120,6 +126,47 @@ class InvestigationServiceTest {
         // 结论产出后回写事件：摘要与状态是追问与处置复核时的聚合口径。
         assertEquals(task.result().summary(), incidentRegistry.incident(task.incidentId()).orElseThrow().summary());
         assertEquals("RESOLVED", incidentRegistry.incident(task.incidentId()).orElseThrow().status().name());
+    }
+
+    @Test
+    void alertInvestigationCreatesOnlyAnApprovalCandidateFromQualifiedUpstreamEvidence() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api/order", "order-service", "")));
+        when(instances.instances()).thenReturn(List.of());
+        when(metrics.routeUpstreams(anyString(), anyInt())).thenReturn(List.of(
+                upstream("v2", "10.0.0.2:8080", 20, 5),
+                upstream("v1", "10.0.0.1:8080", 20, 0)));
+        AgentActionService actions = mock(AgentActionService.class);
+        when(actions.proposeEvidenceGatedQuarantine(anyString(), anyString(), anyString(),
+                eq("/api/order"), eq("v2"), anyList()))
+                .thenReturn(ActionProposal.rejected("Gateway 路由已变化"));
+        investigations = new InvestigationService(routes, instances, metrics, traces, configs, events,
+                r -> List.of(), (q, limit) -> List.of(), incidentRegistry, taskRegistry,
+                new ModelExplainer(TestGateway.notConfigured()), actions);
+
+        TaskView task = await(diagnose("/api/order", "订单接口告警").taskId());
+
+        assertEquals("COMPLETED", task.status().name());
+        assertTrue(task.result().limitations().stream().anyMatch(text -> text.contains("Gateway 路由已变化")));
+        verify(actions).proposeEvidenceGatedQuarantine(anyString(), anyString(), anyString(),
+                eq("/api/order"), eq("v2"), anyList());
+    }
+
+    @Test
+    void alertInvestigationDoesNotProposeQuarantineForOne5xx() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api/order", "order-service", "")));
+        when(instances.instances()).thenReturn(List.of());
+        when(metrics.routeUpstreams(anyString(), anyInt())).thenReturn(List.of(
+                upstream("v2", "10.0.0.2:8080", 20, 1)));
+        AgentActionService actions = mock(AgentActionService.class);
+        investigations = new InvestigationService(routes, instances, metrics, traces, configs, events,
+                r -> List.of(), (q, limit) -> List.of(), incidentRegistry, taskRegistry,
+                new ModelExplainer(TestGateway.notConfigured()), actions);
+
+        TaskView task = await(diagnose("/api/order", "订单接口告警").taskId());
+
+        assertEquals("COMPLETED", task.status().name());
+        assertTrue(task.result().limitations().stream().anyMatch(text -> text.contains("单次 5xx 不会触发")));
+        verifyNoInteractions(actions);
     }
 
     @Test
@@ -563,6 +610,11 @@ class InvestigationServiceTest {
 
     private static RouteSnapshot route(String prefix, String serviceName, String group) {
         return new RouteSnapshot("id-" + prefix, prefix, serviceName, group, "", "", 1L);
+    }
+
+    private static RouteUpstreamSnapshot upstream(String group, String hostPort, long requests, long errors) {
+        return new RouteUpstreamSnapshot("id-/api/order", hostPort, group, 60, requests, errors,
+                0, 0, 10, 20, System.currentTimeMillis());
     }
 
     private TaskView await(String taskId) throws InterruptedException {

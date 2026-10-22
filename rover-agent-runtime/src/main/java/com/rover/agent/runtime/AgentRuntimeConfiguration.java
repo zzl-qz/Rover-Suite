@@ -339,11 +339,12 @@ public class AgentRuntimeConfiguration {
                                                           CapabilityExecutor agentCapabilityExecutor,
                                                           PlanningLimits agentPlanningLimits,
                                                           OpsJournal opsJournal,
+                                                          AgentActionService agentActionService,
                                                           @Value("${rover.agent.alerts.owner-user-id:}")
                                                           String alertOwnerUserId, ObjectProvider<AgentAccess> access) {
         var service = new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
                 agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits,
-                opsJournal, alertOwnerUserId);
+                opsJournal, alertOwnerUserId, agentActionService);
         service.access(access.getIfAvailable(AgentAccess::local));
         return service;
     }

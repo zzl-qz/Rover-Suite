@@ -72,11 +72,38 @@ public final class AgentActionService {
      */
     public ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
                                   Integer requestedValue, WeightRequestUnit unit) {
-        return propose(sessionId, taskId, incidentId, route, group, requestedValue, unit, null);
+        return propose(sessionId, taskId, incidentId, route, group, requestedValue, unit,
+                null, List.of(), false, false, null);
+    }
+
+    /**
+     * 从通过运行时证据门槛的诊断登记人工审批的版本隔离候选。
+     * 此入口只允许把目标版本权重降为 0，并要求留下可审计证据引用与正权重替代目标。
+     */
+    public ActionProposal proposeEvidenceGatedQuarantine(String sessionId, String taskId, String incidentId,
+                                                         String route, String group, List<String> evidenceRefs) {
+        if (evidenceRefs == null || evidenceRefs.isEmpty() || evidenceRefs.size() > 100
+                || evidenceRefs.stream().anyMatch(ref -> ref == null || ref.isBlank() || ref.length() > 128)) {
+            return ActionProposal.rejected("自动候选缺少有效的调查证据引用");
+        }
+        var provenance = new RemediationPlan.Provenance(null, null, null,
+                "route-weight-evidence-gate-v1", "RULE_EVIDENCE_GATE");
+        return propose(sessionId, taskId, incidentId, route, group, 0, WeightRequestUnit.RAW_WEIGHT,
+                null, List.copyOf(evidenceRefs), true, true, provenance);
     }
 
     private ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
                                    Integer requestedValue, WeightRequestUnit unit, RemediationPlan previousPlan) {
+        return propose(sessionId, taskId, incidentId, route, group, requestedValue, unit, previousPlan,
+                previousPlan == null ? List.of() : previousPlan.evidenceRefs(), false, false,
+                previousPlan == null ? null : previousPlan.provenance());
+    }
+
+    private ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
+                                   Integer requestedValue, WeightRequestUnit unit, RemediationPlan previousPlan,
+                                   List<String> evidenceRefs, boolean requireAlternativeTarget,
+                                   boolean requirePlanResourceIdentity,
+                                   RemediationPlan.Provenance provenance) {
         String wantedRoute = Texts.orEmpty(route);
         String wantedGroup = Texts.orEmpty(group);
         if (wantedRoute.isBlank()) {
@@ -138,7 +165,13 @@ public final class AgentActionService {
             return ActionProposal.clarificationRequired(resolved.message());
         }
         int desiredWeight = resolved.weight();
-        if (control.requiresResourceIdentity() && matched.resourceRef() == null) {
+        if (requireAlternativeTarget && desiredWeight == 0 && matched.targets().stream()
+                .filter(candidate -> !candidate.serviceName().equals(target.serviceName())
+                        || !candidate.group().equals(target.group()))
+                .noneMatch(candidate -> candidate.weight() > 0)) {
+            return ActionProposal.rejected("该版本之外没有正权重目标；归零会使路由失去承接流量的版本");
+        }
+        if ((control.requiresResourceIdentity() || requirePlanResourceIdentity) && matched.resourceRef() == null) {
             return ActionProposal.rejected("Gateway 未返回可信资源 UID，不能生成可执行变更；请先升级并核对资产身份");
         }
         if (matched.resourceRef() != null && ((session.scope() != null
@@ -168,7 +201,13 @@ public final class AgentActionService {
                     && candidate.requestedValue() == requestedValue && candidate.requestedUnit() == unit
                     && candidate.desiredWeight() == desiredWeight && candidate.expectedRevision() == state.revision())
                     .findFirst().orElse(null);
-            if (existing != null) { return ActionProposal.created(existing); }
+            if (existing != null) {
+                if (evidenceRefs.isEmpty() || existing.plan() != null
+                        && existing.plan().evidenceRefs().containsAll(evidenceRefs)) {
+                    return ActionProposal.created(existing);
+                }
+                return ActionProposal.rejected("同一任务已有相同变更，但计划没有绑定本次证据；未重复创建审批卡");
+            }
         }
 
         long now = System.currentTimeMillis();
@@ -188,7 +227,9 @@ public final class AgentActionService {
                 action = action.withPlan(RemediationPlan.forRouteWeight(action,
                         previousPlan == null ? action.actionId() : previousPlan.planId(),
                         previousPlan == null ? 1 : Math.addExact(previousPlan.planVersion(), 1),
-                        Math.addExact(now, PLAN_LIFETIME_MILLIS)));
+                        Math.addExact(now, PLAN_LIFETIME_MILLIS), evidenceRefs,
+                        provenance == null ? new RemediationPlan.Provenance(null, null, null,
+                                RemediationPlan.POLICY_VERSION, "SERVER_ACTION_PREVIEW") : provenance));
             }
             action = actions.save(action);
         } catch (RuntimeException ex) {

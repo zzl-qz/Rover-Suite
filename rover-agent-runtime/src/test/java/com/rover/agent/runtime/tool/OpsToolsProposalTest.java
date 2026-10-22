@@ -5,11 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.capability.CapabilityExecutor;
 import com.rover.agent.core.capability.CapabilityRegistry;
+import com.rover.agent.core.model.InvestigationContext;
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
+import com.rover.agent.core.model.TimeRange;
+import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteChangePreview;
 import com.rover.agent.core.port.RouteChangeResult;
 import com.rover.agent.core.port.RouteControlPort;
@@ -18,7 +21,10 @@ import com.rover.agent.core.port.RouteControlState;
 import com.rover.agent.core.port.RouteControlTarget;
 import com.rover.agent.core.port.RouteOperation;
 import com.rover.agent.core.snapshot.DiscoveryMode;
+import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
+import com.rover.agent.core.snapshot.TraceSnapshot;
 import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.action.RouteWeightActionExecutor;
 import com.rover.agent.runtime.repository.InMemoryAgentActionRepository;
@@ -76,6 +82,67 @@ class OpsToolsProposalTest {
         String answer = tools.proposeTargetWeightChange("/api/order", "v2", 20, "RAW_WEIGHT");
 
         assertTrue(answer.contains("只读诊断"), answer);
+    }
+
+    @Test
+    void automaticConversationProposalReadsMissingUpstreamMetricsAndOnlyCreatesApproval() {
+        InMemoryAgentActionRepository repository = new InMemoryAgentActionRepository(10);
+        InMemoryAgentSessionRepository sessions = new InMemoryAgentSessionRepository(10);
+        sessions.save(new Session(SESSION, "alice", "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of()));
+        UnwritableGateway gateway = new UnwritableGateway();
+        AgentActionService service = new AgentActionService(repository, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, repository));
+        InvestigationTaskRegistry taskRegistry = new InvestigationTaskRegistry();
+        try {
+            InvestigationTask task = taskRegistry.register(SESSION, "排查 /api/order");
+            task.bind("i1", "/api/order", ResourceTarget.route("/api/order"));
+            long observedAt = System.currentTimeMillis();
+            RouteSnapshot route = new RouteSnapshot("order-api", "/api/order", "order-service", "", "", "", observedAt);
+            MetricReadPort metrics = new MetricReadPort() {
+                @Override
+                public GatewayMetricSnapshot gatewayWindow(int windowSeconds) {
+                    return new GatewayMetricSnapshot(40, 0, 0, observedAt);
+                }
+
+                @Override
+                public List<RouteUpstreamSnapshot> routeUpstreams(String routeId, int windowSeconds) {
+                    return List.of(
+                            new RouteUpstreamSnapshot(routeId, "10.0.0.2:8080", "v2", windowSeconds,
+                                    20, 5, 0, 0, 10, 20, observedAt),
+                            new RouteUpstreamSnapshot(routeId, "10.0.0.1:8080", "v1", windowSeconds,
+                                    20, 0, 0, 0, 10, 20, observedAt));
+                }
+            };
+            CapabilityExecutor executor = new CapabilityExecutor(
+                    new com.rover.agent.core.port.RouteReadPort() {
+                        @Override
+                        public List<RouteSnapshot> routes() { return List.of(route); }
+                        @Override
+                        public DiscoveryMode discoveryMode() { return DiscoveryMode.NAMESERVER; }
+                    },
+                    List::of, metrics, path -> new TraceSnapshot(true, 1.0, List.of(), observedAt),
+                    List::of, List::of, path -> List.of(), (question, limit) -> List.of(),
+                    CapabilityRegistry.standard(), ignored -> { }, taskId -> new InvestigationContext(
+                            taskId, task.incidentId(), null, null, null, task.target(), task.timeRange(),
+                            java.util.Map.of(), "LOCAL_V1"));
+            OpsTools tools = new OpsTools(executor, task, service);
+
+            tools.getRoute("/api/order");
+            var findings = tools.judgeForProposal();
+            var decision = tools.proposeEvidenceGatedPlan(findings);
+
+            assertTrue(findings.hypotheses().stream().anyMatch(item -> "H6".equals(item.id())
+                    && item.status() == com.rover.agent.core.model.Verdict.CONFIRMED));
+            assertTrue(decision.created(), decision.detail());
+            AgentAction action = repository.bySession(SESSION).get(0);
+            assertEquals(ActionStatus.PENDING_APPROVAL, action.status());
+            assertEquals(List.of(ActionStatus.PENDING_APPROVAL), repository.bySession(SESSION).stream()
+                    .map(AgentAction::status).toList());
+            assertEquals("RULE_EVIDENCE_GATE", action.plan().provenance().source());
+            assertTrue(!action.plan().evidenceRefs().isEmpty());
+        } finally {
+            taskRegistry.stop();
+        }
     }
 
     /**
@@ -161,7 +228,10 @@ class OpsToolsProposalTest {
             return new RouteControlState(17, "",
                     List.of(new RouteControlRoute("order-api", "/api/order", "",
                             List.of(new RouteControlTarget("order-service", "v1", 95),
-                                    new RouteControlTarget("order-service", "v2", 5)))));
+                                    new RouteControlTarget("order-service", "v2", 5)),
+                            new com.rover.agent.core.model.ResourceRef(
+                                    new com.rover.agent.core.model.ResourceScope("org", "team", "test"),
+                                    "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-one", 1))));
         }
 
         @Override

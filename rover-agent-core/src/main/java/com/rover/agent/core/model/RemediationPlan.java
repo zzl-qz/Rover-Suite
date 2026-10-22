@@ -96,6 +96,14 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
     /** 现有单步动作的服务端计划入口；不凭空生成业务恢复阈值或容量证据。 */
     public static RemediationPlan forRouteWeight(AgentAction action, String planId, int version,
                                                  long expiresAtMillis) {
+        return forRouteWeight(action, planId, version, expiresAtMillis, List.of(),
+                new Provenance(null, null, null, POLICY_VERSION, "SERVER_ACTION_PREVIEW"));
+    }
+
+    /** 生成带调查证据引用的版本；证据 ID 与候选意图一并进入 planHash。 */
+    public static RemediationPlan forRouteWeight(AgentAction action, String planId, int version,
+                                                 long expiresAtMillis, List<String> evidenceRefs,
+                                                 Provenance provenance) {
         Objects.requireNonNull(action, "action");
         ResourceRef ref = Objects.requireNonNull(action.resourceRef(), "计划必须绑定资源 UID");
         RouteWeightStep step = new RouteWeightStep(1, action.type(), ADAPTER_VERSION, ref,
@@ -107,7 +115,7 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
                 "将指定路由目标权重变更到期望值；服务恢复效果需独立观察");
         return new RemediationPlan(planId, version, action.sessionId(), action.incidentId(), action.taskId(),
                 action.requestedBy(), ref.scope(), "调整 " + action.targetLabel() + " 的路由权重",
-                List.of("保持当前权重并继续调查", "由人工核对容量与影响后决定是否执行"), List.of(),
+                List.of("保持当前权重并继续调查", "由人工核对容量与影响后决定是否执行"), evidenceRefs,
                 List.of("尚未建立容量安全证据", "尚未配置业务恢复判据，控制面回读不代表服务恢复"),
                 List.of(step), new RiskAssessment(RiskLevel.R2, ApprovalMode.REQUIRE_APPROVAL, false,
                         List.of("流量会在同一路由的目标之间重新分配", "剩余容量尚未获得证据确认"),
@@ -123,7 +131,7 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
                                 List.of(RequiredCheck.TARGET_IDENTITY, RequiredCheck.EXPECTED_REVISION,
                                         RequiredCheck.EXPECTED_BEFORE_WEIGHT)))),
                 Math.min(60_000, expiresAtMillis - action.createdAtMillis()), action.createdAtMillis(),
-                expiresAtMillis, new Provenance(null, null, null, POLICY_VERSION, "SERVER_ACTION_PREVIEW"), null);
+                expiresAtMillis, provenance, null);
     }
 
     /** 防止兼容执行器读取到与批准计划不同的扁平参数；不读取 action.plan。 */

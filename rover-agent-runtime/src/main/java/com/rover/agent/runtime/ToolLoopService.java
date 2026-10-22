@@ -175,11 +175,19 @@ public final class ToolLoopService {
                     && !tools.investigatedPath().isBlank()) {
                 task.bind(task.incidentId(), tools.investigatedPath(), ResourceTarget.route(tools.investigatedPath()));
             }
-            Findings judged = tools.judge();
+            Findings judged = tools.judgeForProposal();
             if (judged != null) {
                 task.step(AgentStepType.DIAGNOSIS, "假设判定", StepStatus.COMPLETED,
                         InvestigationRules.describeVerdicts(judged.hypotheses()));
                 answer = new com.rover.agent.core.investigation.DiagnosticReport(tools.evidence(), judged.hypotheses()).renderDefault();
+                if (!tools.actionAttempted() && tools.hasActionCapability()) {
+                    var decision = tools.proposeEvidenceGatedPlan(judged);
+                    task.step(AgentStepType.ACTION_PROPOSAL, "处置计划准入",
+                            decision.evidenceQualified() && !decision.created() ? StepStatus.FAILED : StepStatus.COMPLETED,
+                            decision.detail());
+                    tools.recordPlanDecision(decision);
+                    answer += "\n\n" + decision.detail();
+                }
             }
             if (!tools.actionMessage().isBlank()) { answer = tools.actionMessage() + "\n\n" + (judged == null ? "" : answer); }
             // 调查正文只发布程序验证后的事实；没有诊断取证的普通回答沿用模型内容。

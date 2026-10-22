@@ -22,6 +22,7 @@ import com.rover.agent.core.snapshot.TraceSnapshot;
 import com.rover.agent.core.util.Texts;
 import com.rover.agent.runtime.action.ActionProposal;
 import com.rover.agent.runtime.action.AgentActionService;
+import com.rover.agent.runtime.action.EvidenceGatedPlanProposer;
 import com.rover.agent.runtime.task.InvestigationTask;
 import com.rover.agent.runtime.task.AgentRunBudget;
 import java.util.List;
@@ -67,14 +68,18 @@ public final class OpsTools {
     private List<InstanceSnapshot> instances;
     private TraceSnapshot traces;
     private List<RouteUpstreamSnapshot> routeUpstreams;
+    private boolean upstreamMetricsRead;
     private record QueryKey(AgentCapability capability, ResourceTarget target, String path, com.rover.agent.core.model.TimeRange range) { }
     private record ReadAttempt(int count, boolean retryable, String text) { }
     private record LogKey(String type, String target, Integer hours, com.rover.agent.core.model.TimeRange range) { }
     private final java.util.Map<Object, ReadAttempt> reads = new java.util.HashMap<>();
     private String actionMessage = "";
+    private boolean actionAttempted;
 
     /** 动作工具的确定性结果，不把模型对动作状态的转述当执行回执。 */
     public String actionMessage() { return actionMessage; }
+    public boolean actionAttempted() { return actionAttempted; }
+    public boolean hasActionCapability() { return actions != null; }
 
     public OpsTools(CapabilityExecutor executor, InvestigationTask task) {
         this(executor, task, null);
@@ -290,6 +295,7 @@ public final class OpsTools {
         if (!withinBudget()) {
             return BUDGET_EXHAUSTED;
         }
+        actionAttempted = true;
         if (actions == null) {
             actionMessage = "当前运行方式没有接入变更提议能力，只能提供只读诊断；未创建或执行变更。";
             return actionMessage;
@@ -382,6 +388,30 @@ public final class OpsTools {
         return findings;
     }
 
+    /** 计划评估需要版本组级别证据；对话没有主动查时，由运行时在原预算内补查一次。 */
+    public Findings judgeForProposal() {
+        String path = investigatedPath();
+        if (actions != null && !actionAttempted && task.timeRange().isUnspecified() && routeQueried
+                && route != null && !upstreamMetricsRead && calls.get() < MAX_CALLS && !path.isBlank()) {
+            query(AgentCapability.GATEWAY_METRICS_QUERY, AgentStepType.METRIC_INVESTIGATION, STEP_METRIC,
+                    "正在读取该路由的上游实例错误窗口，以判断是否存在可隔离版本",
+                    ResourceTarget.route(path), path);
+        }
+        return judge();
+    }
+
+    /** 调查结论形成后由编排器调用；模型不能改变自动提案的证据门槛。 */
+    public EvidenceGatedPlanProposer.Decision proposeEvidenceGatedPlan(Findings findings) {
+        return EvidenceGatedPlanProposer.propose(task, investigatedPath(), findings, evidence(), limitations(),
+                false, actions);
+    }
+
+    public void recordPlanDecision(EvidenceGatedPlanProposer.Decision decision) {
+        if (decision != null && !decision.created()) {
+            limitations.add("处置计划未生成：" + decision.detail());
+        }
+    }
+
     /** 模型按路径查过的那条路径。目标解析没认出来时，用它作为资源笔记的键。 */
     public String investigatedPath() {
         return investigatedPath == null ? "" : investigatedPath;
@@ -445,6 +475,7 @@ public final class OpsTools {
         } else if (result.capability() == AgentCapability.INSTANCE_QUERY && result.executed()) {
             instances = result.instances();
         } else if (result.capability() == AgentCapability.GATEWAY_METRICS_QUERY && result.executed()) {
+            upstreamMetricsRead = true;
             routeUpstreams = result.routeUpstreams();
         } else if (result.capability() == AgentCapability.TRACE_QUERY && result.executed()) {
             traces = result.traces();

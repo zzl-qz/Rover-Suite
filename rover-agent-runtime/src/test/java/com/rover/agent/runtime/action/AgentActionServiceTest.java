@@ -76,6 +76,48 @@ class AgentActionServiceTest {
 
     // ---------------------------------------------------------------- 1. 正常执行
 
+    @Test
+    void evidenceGatedQuarantineBindsEvidenceAndStillWaitsForApproval() {
+        gateway.resourceRef = planResource();
+
+        ActionProposal proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1", "ev-2"));
+
+        assertTrue(proposal.created(), proposal.reason());
+        AgentAction action = proposal.action();
+        assertEquals(ActionStatus.PENDING_APPROVAL, action.status());
+        assertEquals(0, action.desiredWeight());
+        assertEquals(List.of("ev-1", "ev-2"), action.plan().evidenceRefs());
+        assertEquals("route-weight-evidence-gate-v1", action.plan().provenance().policyVersion());
+        assertEquals("RULE_EVIDENCE_GATE", action.plan().provenance().source());
+        assertEquals(0, gateway.writes, "自动候选只能登记，不能写入 Gateway");
+    }
+
+    @Test
+    void evidenceGatedQuarantineCannotRemoveTheLastPositiveTarget() {
+        gateway.resourceRef = planResource();
+        gateway.removeTarget("v1");
+
+        ActionProposal proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1"));
+
+        assertFalse(proposal.created());
+        assertTrue(proposal.reason().contains("没有正权重目标"), proposal.reason());
+        assertEquals(0, repository.bySession(SESSION).size());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test
+    void evidenceGatedQuarantineRequiresIdentitySoEvidenceCanBeFrozenIntoAPlan() {
+        ActionProposal proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1"));
+
+        assertFalse(proposal.created());
+        assertTrue(proposal.reason().contains("可信资源 UID"), proposal.reason());
+        assertTrue(repository.bySession(SESSION).isEmpty());
+        assertEquals(0, gateway.writes);
+    }
+
     @Test void approvedDeterministicExecutionStillWorksWhileProviderCircuitIsOpen() {
         var isolation=new com.rover.agent.runtime.llm.ProviderIsolation(new com.rover.agent.runtime.llm.ProviderIsolation.Policy(1,30,1));
         isolation.acquire("model").failure(new com.rover.agent.runtime.llm.ModelProviderFailure(503,0));

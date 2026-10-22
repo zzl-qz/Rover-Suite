@@ -62,6 +62,7 @@ public final class CapabilityExecutor {
     private static final String SOURCE_OVERVIEW = "Gateway 概览";
     private static final String SOURCE_INSTANCES = "Nameserver 实例注册表";
     private static final String SOURCE_METRICS = "Gateway 实时指标";
+    private static final String SOURCE_UPSTREAM_METRICS_ID = "gateway.route-upstreams";
     private static final String SOURCE_TRACES = "Gateway 抽样追踪";
     private static final String SOURCE_CONFIGS = "Gateway / Nameserver 生效配置";
     private static final String SOURCE_EVENTS = "Nameserver 事件流";
@@ -557,10 +558,28 @@ public final class CapabilityExecutor {
                 ? sorted.subList(0, MAX_UPSTREAM_EVIDENCE) : sorted;
         for (RouteUpstreamSnapshot row : listed) {
             EvidenceNarration item = EvidenceNarrator.routeUpstream(row);
-            evidence.add(Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "上游实例窗口观测",
+            Evidence upstreamEvidence = Evidence.of(taskId, EvidenceType.METRIC, SOURCE_METRICS, "上游实例窗口观测",
                     item.detail(), "/api/metrics/routes?routeId=" + urlEncode(routeId),
                     metadata(item, observedAt, KEY_ROUTE_ID, routeId, KEY_HOST_PORT, Texts.orEmpty(row.hostPort())),
-                    observedAt));
+                    observedAt);
+            Map<String, Object> facts = new LinkedHashMap<>();
+            facts.put("routeId", Texts.orEmpty(row.routeId()));
+            facts.put("hostPort", Texts.orEmpty(row.hostPort()));
+            facts.put("group", row.group());
+            facts.put("windowSeconds", row.windowSeconds());
+            facts.put("windowRequests", row.windowRequests());
+            facts.put("status5xx", row.status5xx());
+            facts.put("complete", sorted.size() <= MAX_UPSTREAM_EVIDENCE);
+            var envelope = new com.rover.agent.core.model.EvidenceEnvelope(1, SOURCE_UPSTREAM_METRICS_ID,
+                    "METRIC", "/api/metrics/routes?routeId=" + urlEncode(routeId), "gateway-upstream-window-v1",
+                    TimeRange.unspecified(), null, null, observedAt, observedAt + METRIC_WINDOW_SECONDS * 1000L,
+                    "WINDOW_COUNTERS", Math.max(0L, row.windowRequests()),
+                    row.windowRequests() > 0 ? com.rover.agent.core.model.EvidenceQuality.AVAILABLE
+                            : com.rover.agent.core.model.EvidenceQuality.EMPTY,
+                    null, List.of(), facts,
+                    List.of("按上游实例统计的窗口指标；5xx 可能由上游或 Gateway 生成，不能单独确认业务根因。"),
+                    "gateway-upstream-window-v1", null, "gateway-upstream-window-v1");
+            evidence.add(upstreamEvidence.withEnvelope(envelope));
             limitations.addAll(item.limitations());
         }
         if (sorted.size() > MAX_UPSTREAM_EVIDENCE) {

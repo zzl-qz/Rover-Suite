@@ -28,6 +28,8 @@ import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.runtime.graph.DynamicInvestigationGraph;
 import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.graph.InvestigationOutcome;
+import com.rover.agent.runtime.action.AgentActionService;
+import com.rover.agent.runtime.action.EvidenceGatedPlanProposer;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTask;
@@ -69,6 +71,7 @@ public final class InvestigationService {
     private final PlanningLimits limits;
     private final OpsJournal journal;
     private final String alertOwnerUserId;
+    private final AgentActionService actions;
 
     /** 默认装配规则规划器、标准能力注册表和规划上限。 */
     public InvestigationService(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
@@ -76,12 +79,21 @@ public final class InvestigationService {
                                 LogQueryPort logs, KnowledgeReadPort knowledge,
                                 IncidentRegistry incidents, InvestigationTaskRegistry tasks,
                                 ModelExplainer explainer) {
+        this(routes, instances, metrics, traces, configs, events, logs, knowledge, incidents, tasks, explainer, null);
+    }
+
+    /** 端口装配的告警入口；允许宿主接入受权限检查的待审批提案服务。 */
+    public InvestigationService(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
+                                TraceReadPort traces, ConfigReadPort configs, EventReadPort events,
+                                LogQueryPort logs, KnowledgeReadPort knowledge,
+                                IncidentRegistry incidents, InvestigationTaskRegistry tasks,
+                                ModelExplainer explainer, AgentActionService actions) {
         this(incidents, tasks, explainer,
                 new RuleBasedPlanner(STANDARD_CAPABILITIES),
                 new PlanValidator(STANDARD_CAPABILITIES, PlanningLimits.defaults()),
                 new CapabilityExecutor(routes, instances, metrics, traces, configs, events, logs, knowledge,
-                        STANDARD_CAPABILITIES),
-                PlanningLimits.defaults(), OpsJournal.none());
+                        STANDARD_CAPABILITIES, taskId -> { }, taskId -> contextForTask(incidents, tasks, taskId)),
+                PlanningLimits.defaults(), OpsJournal.none(), null, actions);
     }
 
     /** 注入规划器、校验器、能力执行器和规划上限；取数统一经 CapabilityExecutor。 */
@@ -103,6 +115,14 @@ public final class InvestigationService {
                                 ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
                                 CapabilityExecutor executor, PlanningLimits limits, OpsJournal journal,
                                 String alertOwnerUserId) {
+        this(incidents, tasks, explainer, planner, validator, executor, limits, journal, alertOwnerUserId, null);
+    }
+
+    /** 完整装配；候选计划沿用调查会话归属与服务端提案权限。 */
+    public InvestigationService(IncidentRegistry incidents, InvestigationTaskRegistry tasks,
+                                ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
+                                CapabilityExecutor executor, PlanningLimits limits, OpsJournal journal,
+                                String alertOwnerUserId, AgentActionService actions) {
         this.incidents = incidents;
         this.tasks = tasks;
         this.explainer = explainer;
@@ -112,6 +132,7 @@ public final class InvestigationService {
         this.limits = limits == null ? PlanningLimits.defaults() : limits;
         this.journal = journal == null ? OpsJournal.none() : journal;
         this.alertOwnerUserId = identity(alertOwnerUserId);
+        this.actions = actions;
         tasks.handler("ALERT", (task, payload) -> {
             try {
                 TimeRange range = new com.fasterxml.jackson.databind.ObjectMapper()
@@ -234,6 +255,17 @@ public final class InvestigationService {
             if (task.cancelled()) {
                 return;
             }
+            var decision = EvidenceGatedPlanProposer.propose(task, task.path(), outcome.findings(),
+                    outcome.evidence(), outcome.limitations(), false, actions);
+            task.step(AgentStepType.ACTION_PROPOSAL, "处置计划准入",
+                    decision.evidenceQualified() && !decision.created() ? StepStatus.FAILED : StepStatus.COMPLETED,
+                    decision.detail());
+            if (!decision.created()) {
+                List<String> limitations = new ArrayList<>(report.limitations());
+                limitations.add("处置计划未生成：" + decision.detail());
+                report = new InvestigationReport(report.summary(), report.confidence(), report.evidence(),
+                        List.copyOf(limitations), report.hypotheses(), report.aiAnalysis());
+            }
             publish(onReport, report);
             task.complete(report);
             // 结论回写到事件：事件因此成为「一个问题的多次调查」的聚合点，追问时能继承最新结论。
@@ -332,6 +364,19 @@ public final class InvestigationService {
             throw new IllegalArgumentException("告警来源或处理账号不能超过 128 字");
         }
         return normalized;
+    }
+
+    private static com.rover.agent.core.model.InvestigationContext contextForTask(
+            IncidentRegistry incidents, InvestigationTaskRegistry tasks, String taskId) {
+        InvestigationTask task = tasks.find(taskId);
+        if (task == null) {
+            return com.rover.agent.core.model.InvestigationContext.legacy(taskId);
+        }
+        Session session = incidents.session(task.sessionId()).orElse(null);
+        return new com.rover.agent.core.model.InvestigationContext(task.taskId(), task.incidentId(),
+                session == null ? null : session.scope(), null,
+                session == null ? null : session.targetNamespace(), task.target(), task.timeRange(),
+                java.util.Map.of(), "LOCAL_V1");
     }
 
     private static String validatePath(String path) {
