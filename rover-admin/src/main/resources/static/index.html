@@ -927,6 +927,17 @@
                             </div>
                         </div>
 
+                        <div v-if="wbCanManagePolicies()" class="card wb-action-facts">
+                            <div class="card-head"><h2>受限自动处置授权</h2><span class="badge warn ml-auto">默认关闭 · 最长 7 天</span></div>
+                            <p class="muted">只授权指定路由和版本在小流量下执行权重归零；必须有证据和业务效果验证。其他计划仍需人工批准。</p>
+                            <div class="field"><label>路由</label><select v-model="wbAutoRouteId" :disabled="wbAutoPolicyBusy"><option v-for="item in wbAutoCandidates" :key="item.routeId" :value="item.routeId">{{ item.businessPrefix || item.routeId }}</option></select></div>
+                            <div class="field"><label>当前有流量的版本</label><select v-model="wbAutoTargetKey" :disabled="wbAutoPolicyBusy"><option v-for="item in wbAutoTargets()" :key="item.serviceName + ':' + item.group" :value="item.serviceName + ':' + item.group">{{ item.serviceName }}@{{ item.group }}（权重 {{ item.weight }}）</option></select></div>
+                            <div class="wb-kv"><div><span>授权前占比上限</span><b><input type="number" min="0.1" max="10" step="0.1" v-model.number="wbAutoMaxBefore"></b></div><div><span>单次变化上限</span><b><input type="number" min="0.1" max="10" step="0.1" v-model.number="wbAutoMaxShift"></b></div></div>
+                            <div class="wb-action-foot"><button class="btn mini primary" :disabled="wbAutoPolicyBusy || !wbAutoCandidates.length" @click="wbCreateAutoPolicy">创建 7 天授权</button><button class="btn mini" :disabled="wbAutoPolicyBusy" @click="wbLoadAutoPolicies">刷新</button></div>
+                            <p v-if="wbAutoPolicyError" class="muted">{{ wbAutoPolicyError }}</p>
+                            <div v-for="policy in wbAutoPolicies" :key="policy.policyId" class="wb-action-facts"><div><code>{{ policy.policyId }}</code> · v{{ policy.version }} · {{ policy.serviceName }}@{{ policy.group }}</div><div class="muted">{{ policy.resource.resourceUid }} · {{ policy.enabled && policy.expiresAtMillis > Date.now() ? '有效至 ' + fmtTime(policy.expiresAtMillis) : '已停用或过期' }}</div><button v-if="!policy.enabled && policy.expiresAtMillis > Date.now()" class="btn mini primary" :disabled="wbAutoPolicyBusy" @click="wbEnableAutoPolicy(policy)">显式启用</button><button v-if="policy.enabled" class="btn mini danger" :disabled="wbAutoPolicyBusy" @click="wbRevokeAutoPolicy(policy)">撤销（立即阻止未提交计划）</button></div>
+                        </div>
+
                         <div class="card">
                             <div class="card-head">
                                 <h2>当前事件</h2>

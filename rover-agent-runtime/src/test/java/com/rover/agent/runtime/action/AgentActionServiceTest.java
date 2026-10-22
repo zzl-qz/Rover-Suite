@@ -14,6 +14,7 @@ import static org.mockito.Mockito.spy;
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.AutoExecutionPolicy;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.WeightRequestUnit;
@@ -95,6 +96,127 @@ class AgentActionServiceTest {
         assertEquals("route-weight-evidence-gate-v1", action.plan().provenance().policyVersion());
         assertEquals("RULE_EVIDENCE_GATE", action.plan().provenance().source());
         assertEquals(0, gateway.writes, "自动候选只能登记，不能写入 Gateway");
+    }
+
+    @Test
+    void matchingPreauthorizationQueuesButRevocationBeforeWorkerPreventsWrite() throws Exception {
+        gateway.resourceRef = planResource();
+        AtomicReference<List<AutoExecutionPolicy>> current = new AtomicReference<>();
+        var access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean automatedWriteAllowed() { return true; }
+        };
+        gateway.namespace = "namespace-a";
+        sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
+                .withScope(gateway.resourceRef.scope(), gateway.namespace));
+        var commands = new InMemoryActionCommandRepository(10);
+        var draftPolicy = AutoExecutionPolicy.create("route-quarantine", "namespace-a", gateway.resourceRef,
+                "order-service", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        var policy = draftPolicy.revise(true, 5, 5, draftPolicy.expiresAtMillis(), "admin", System.currentTimeMillis());
+        current.set(List.of(policy));
+        var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, current::get);
+        var executor = new RouteWeightActionExecutor(gateway, repository, access, approval);
+        service = new AgentActionService(repository, sessions, gateway, new ActionExecutorRegistry(List.of(executor)),
+                access, approval, commands, true, null,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 10_000,
+                        30_000, 2, 10, 0.9, 120_000, 0.01, 500));
+        var proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-auto", "incident-auto", "/api/order", "v2", List.of("ev-1"));
+        assertTrue(proposal.created(), proposal.reason());
+        assertEquals(ActionStatus.QUEUED, proposal.action().status());
+        assertEquals(policy.policyVersion(), proposal.action().plan().provenance().policyVersion());
+        current.set(List.of(policy.revise(false, 5, 5, policy.expiresAtMillis(), "admin", System.currentTimeMillis())));
+        try (var runner = new com.rover.agent.runtime.action.ActionCommandRunner(commands, service, 1, 10, 50)) {
+            runner.start();
+            AgentAction stopped = awaitStatus(proposal.action().actionId(), ActionStatus.PRECONDITION_FAILED);
+            assertTrue(stopped.errorMessage().contains("预授权"), stopped.errorMessage());
+        }
+        assertEquals(0, gateway.writes, "撤销发生在 Worker 写入前，必须挡住 Gateway 调用");
+    }
+
+    @Test
+    void matchingPreauthorizationExecutesOnlyTheBoundedEvidenceGatedPlan() throws Exception {
+        gateway.resourceRef = planResource();
+        gateway.namespace = "namespace-a";
+        sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
+                .withScope(gateway.resourceRef.scope(), gateway.namespace));
+        var draft = AutoExecutionPolicy.create("route-quarantine", gateway.namespace, gateway.resourceRef,
+                "order-service", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        var policy = draft.revise(true, 5, 5, draft.expiresAtMillis(), "admin", System.currentTimeMillis());
+        var access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean automatedWriteAllowed() { return true; }
+        };
+        var commands = new InMemoryActionCommandRepository(10);
+        var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, List.of(policy));
+        var executor = new RouteWeightActionExecutor(gateway, repository, access, approval);
+        service = new AgentActionService(repository, sessions, gateway, new ActionExecutorRegistry(List.of(executor)),
+                access, approval, commands, true, null,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 10_000,
+                        30_000, 2, 10, 0.9, 120_000, 0.01, 500));
+
+        var proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-auto-success", "incident-auto",
+                "/api/order", "v2", List.of("evidence-1"));
+        assertTrue(proposal.created(), proposal.reason());
+        assertEquals(ActionStatus.QUEUED, proposal.action().status());
+        assertEquals("preauth:route-quarantine@2", proposal.action().plan().provenance().policyVersion());
+        assertFalse(policy.matches(proposal.action(), gateway.namespace, policy.expiresAtMillis()),
+                "策略有效期边界即失效，不允许 Worker 使用过期授权");
+        assertEquals(0, gateway.writes, "提案只入持久队列，Worker 才能写 Gateway");
+
+        try (var runner = new com.rover.agent.runtime.action.ActionCommandRunner(commands, service, 1, 10, 50)) {
+            runner.start();
+            AgentAction completed = awaitStatus(proposal.action().actionId(), ActionStatus.SUCCESS);
+            assertEquals(ActionStatus.SUCCESS, completed.status());
+        }
+        assertEquals(1, gateway.writes);
+        assertEquals(0, repository.approvals(proposal.action().actionId(),
+                com.rover.agent.core.model.ActionApproval.Stage.APPLY,
+                proposal.action().plan().planVersion(), proposal.action().plan().planHash(), approval.policyVersion()).size(),
+                "自动授权必须绑定到明确策略，不伪造人工审批记录");
+    }
+
+    @Test
+    void automaticProposalOutsidePolicyImpactLimitStillRequiresHumanApproval() {
+        gateway.resourceRef = planResource();
+        gateway.namespace = "namespace-a";
+        sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
+                .withScope(gateway.resourceRef.scope(), gateway.namespace));
+        var draft = AutoExecutionPolicy.create("too-narrow", gateway.namespace, gateway.resourceRef,
+                "order-service", "v2", 4, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        var policy = draft.revise(true, 4, 5, draft.expiresAtMillis(), "admin", System.currentTimeMillis());
+        var access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean automatedWriteAllowed() { return true; }
+        };
+        var commands = new InMemoryActionCommandRepository(10);
+        var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, List.of(policy));
+        service = new AgentActionService(repository, sessions, gateway,
+                new ActionExecutorRegistry(List.of(new RouteWeightActionExecutor(gateway, repository, access, approval))),
+                access, approval, commands, true, null,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 10_000,
+                        30_000, 2, 10, 0.9, 120_000, 0.01, 500));
+
+        var proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-auto-bound", "incident-auto",
+                "/api/order", "v2", List.of("evidence-1"));
+
+        assertTrue(proposal.created(), proposal.reason());
+        assertEquals(ActionStatus.PENDING_APPROVAL, proposal.action().status());
+        assertEquals(com.rover.agent.core.model.RemediationPlan.ApprovalMode.REQUIRE_APPROVAL,
+                proposal.action().plan().riskAssessment().approvalMode());
+        assertEquals(0, commands.pending(Long.MAX_VALUE, 10).size());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test
+    void preauthorizationRejectsPlansWithoutBusinessEffectEvidenceOrBoundedImpact() {
+        gateway.resourceRef = planResource();
+        var policy = AutoExecutionPolicy.create("bounded", "namespace-a", gateway.resourceRef,
+                "orders", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        assertFalse(policy.enabled(), "新策略创建时必须默认关闭");
+        AgentAction action = propose(20);
+        assertFalse(policy.matches(action, "namespace-a", System.currentTimeMillis()),
+                "普通人工计划不能被事后套上自动授权");
+        assertFalse(policy.matches(action, "other-namespace", System.currentTimeMillis()));
     }
 
     @Test
@@ -1012,6 +1134,7 @@ class AgentActionServiceTest {
 
         private int revision = PROPOSED_REVISION;
         private com.rover.agent.core.model.ResourceRef resourceRef;
+        private String namespace = "";
         private final Map<String, Integer> weights = new HashMap<>(Map.of("v1", 95, "v2", 5));
         private final Set<String> removed = new HashSet<>();
         private final Map<String, RouteOperationStatus> operations = new HashMap<>();
@@ -1029,6 +1152,10 @@ class AgentActionServiceTest {
         private boolean timeoutWithoutApply;
         /** 写完之后读不到路由。 */
         private boolean unreachableAfterWrite;
+
+        @Override public String resourceNamespace() { return namespace; }
+        @Override public com.rover.agent.core.model.ResourceScope resourceScope() { return null; }
+        @Override public String controlTargetId() { return resourceRef == null ? "" : resourceRef.controlTargetId(); }
 
         @Override
         public RouteControlState state() {

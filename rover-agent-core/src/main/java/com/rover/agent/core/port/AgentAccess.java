@@ -27,6 +27,9 @@ public interface AgentAccess {
     /** 执行入口在提交前重新调用；宿主可增加持久写停开关和存储健康检查。 */
     default boolean writeAllowed(String principal) { return permissions(principal).contains(Permission.APPROVE); }
 
+    /** Only the durable worker may use an explicit, currently matching preauthorization. */
+    default boolean automatedWriteAllowed() { return false; }
+
     final class Denied extends RuntimeException {
         public Denied(String message) { super(message); }
     }

@@ -152,6 +152,20 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
                 compensationSpec, timeoutMillis, createdAtMillis, expiresAtMillis, provenance, null);
     }
 
+    /** A preauthorization is part of the immutable plan hash and is rechecked by the execution worker. */
+    public RemediationPlan withPreauthorization(String policyVersion) {
+        String binding = required(policyVersion, "policyVersion");
+        return new RemediationPlan(planId, planVersion, sessionId, incidentId, taskId, requestedBy, scope,
+                goal, alternatives, evidenceRefs, unresolvedAssumptions, steps,
+                new RiskAssessment(riskAssessment.level(), ApprovalMode.PREAUTHORIZED,
+                        riskAssessment.capacityEvidenceAvailable(),
+                        withReason(riskAssessment.reasons(), "命中精确范围、短期有效的预授权策略 " + binding),
+                        riskAssessment.blastRadius()), resourceBudget, verificationSpec, compensationSpec,
+                timeoutMillis, createdAtMillis, expiresAtMillis,
+                new Provenance(provenance.runbookId(), provenance.runbookVersion(), provenance.modelVersion(),
+                        binding, provenance.source()), null);
+    }
+
     /** 防止兼容执行器读取到与批准计划不同的扁平参数；不读取 action.plan。 */
     public void requireMatches(AgentAction action) {
         Objects.requireNonNull(action, "action");
@@ -171,7 +185,7 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
     }
 
     public enum RiskLevel { R2, R3 }
-    public enum ApprovalMode { REQUIRE_APPROVAL }
+    public enum ApprovalMode { REQUIRE_APPROVAL, PREAUTHORIZED }
     public enum VerificationMode { CONTROL_PLANE_ONLY, BUSINESS_EFFECT }
     public enum CompensationMode { REQUIRE_SEPARATE_APPROVAL }
     public enum VersionGuard { MATCH_ORIGINAL_APPLIED_REVISION }
@@ -383,6 +397,11 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
     }
     private static String optional(String value) { return value == null || value.isBlank() ? null : required(value, "optional"); }
     private static String normalGroup(String group) { return group == null ? "" : group.trim(); }
+    private static List<String> withReason(List<String> reasons, String reason) {
+        List<String> next = new ArrayList<>(reasons);
+        next.add(reason);
+        return List.copyOf(next);
+    }
     private static void weight(int value) { check(value >= 0 && value <= AgentAction.MAX_WEIGHT, "权重必须为 0~10000"); }
     private static void percent(double value) {
         check(Double.isFinite(value) && (value == -1 || value >= 0 && value <= 100), "占比必须为 0~100 或 -1（未知）");

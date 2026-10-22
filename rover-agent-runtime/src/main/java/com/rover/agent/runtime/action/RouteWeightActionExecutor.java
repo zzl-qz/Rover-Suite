@@ -66,7 +66,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         if (planFailure != null) {
             return settle(action, ActionStatus.PRECONDITION_FAILED, planFailure);
         }
-        if (!access.writeAllowed(actor)) {
+        if (!writeAllowed(action, actor)) {
             return settle(action, ActionStatus.PRECONDITION_FAILED, "审批账号已被撤权，未提交写请求");
         }
         String approvalFailure = approvalFailure(action, ActionApproval.Stage.APPLY);
@@ -93,7 +93,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
                 .move(ActionStatus.EXECUTING, null).toAction(now());
         submitting = actions.save(submitting);
 
-        if (!access.writeAllowed(actor)) {
+        if (!writeAllowed(action, actor)) {
             return settle(submitting, ActionStatus.PRECONDITION_FAILED, "提交前审批权限已失效，未提交写请求");
         }
         approvalFailure = approvalFailure(action, ActionApproval.Stage.APPLY);
@@ -194,12 +194,17 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
     }
 
     private String approvalFailure(AgentAction action, ActionApproval.Stage stage) {
+        if (stage == ActionApproval.Stage.APPLY
+                && action.plan() != null && action.plan().riskAssessment().approvalMode() == RemediationPlan.ApprovalMode.PREAUTHORIZED) {
+            return approvalPolicy.matchesPreauthorization(action, control.resourceNamespace(), System.currentTimeMillis())
+                    && access.automatedWriteAllowed() ? null : "预授权已撤销、过期或自动化写入不可用，未提交写请求";
+        }
         if (action.plan() == null) {
             return access.managed() ? "不可变计划审批记录缺失，未提交写请求" : null;
         }
         RiskBasedApprovalPolicy.Decision decision;
         try {
-            decision = approvalPolicy.decisionFor(action);
+            decision = approvalPolicy.decisionFor(action, stage);
         } catch (RiskBasedApprovalPolicy.PolicyChangedException ex) {
             return ex.getMessage() + "；未提交写请求";
         }
@@ -215,6 +220,12 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
                     + "），计划或策略版本变化、审批人撤权或停写均需重新审批；未提交写请求";
         }
         return null;
+    }
+
+    private boolean writeAllowed(AgentAction action, String actor) {
+        return action.plan() != null && action.plan().riskAssessment().approvalMode() == RemediationPlan.ApprovalMode.PREAUTHORIZED
+                && approvalPolicy.matchesPreauthorization(action, control.resourceNamespace(), System.currentTimeMillis())
+                ? access.automatedWriteAllowed() : access.writeAllowed(actor);
     }
 
     @Override

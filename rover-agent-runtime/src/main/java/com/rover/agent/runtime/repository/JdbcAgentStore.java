@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.AutoExecutionPolicy;
 import com.rover.agent.core.model.AlertDelivery;
 import com.rover.agent.core.model.AlertEventState;
 import com.rover.agent.core.model.AlertLifecycle;
@@ -44,6 +45,7 @@ import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
+import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
 import com.rover.agent.core.repository.ActionEffectVerificationRepository;
 import com.rover.agent.core.repository.AlertLifecycleRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
@@ -109,6 +111,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final ActionCommands actionCommands = new ActionCommands();
     private final EffectVerifications effectVerifications = new EffectVerifications();
     private final AlertLifecycles alertLifecycles = new AlertLifecycles();
+    private final AutoPolicies autoPolicies = new AutoPolicies();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -162,6 +165,59 @@ public final class JdbcAgentStore implements AutoCloseable {
     public ActionEffectVerificationRepository effectVerifications() { return effectVerifications; }
 
     public AlertLifecycleRepository alertLifecycles() { return alertLifecycles; }
+
+    public AutoExecutionPolicyRepository autoExecutionPolicies() { return autoPolicies; }
+
+    private final class AutoPolicies implements AutoExecutionPolicyRepository {
+        @Override public List<AutoExecutionPolicy> list(String namespace) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT p.payload_json FROM agent_auto_policy p JOIN (SELECT policy_id,MAX(policy_version) AS v "
+                                + "FROM agent_auto_policy WHERE target_namespace=? GROUP BY policy_id) latest "
+                                + "ON p.policy_id=latest.policy_id AND p.policy_version=latest.v ORDER BY p.policy_id",
+                        row -> fromJson(row.getString(1), AutoExecutionPolicy.class), namespace);
+            }
+        }
+
+        @Override public Optional<AutoExecutionPolicy> find(String policyId) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_auto_policy WHERE policy_id=? ORDER BY policy_version DESC LIMIT 1",
+                        row -> fromJson(row.getString(1), AutoExecutionPolicy.class), policyId);
+            }
+        }
+
+        @Override public Optional<AutoExecutionPolicy> find(String policyId, String namespace) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_auto_policy WHERE policy_id=? AND target_namespace=? "
+                                + "ORDER BY policy_version DESC LIMIT 1",
+                        row -> fromJson(row.getString(1), AutoExecutionPolicy.class), policyId, namespace);
+            }
+        }
+
+        @Override public List<AutoExecutionPolicy> history(String policyId) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json FROM agent_auto_policy WHERE policy_id=? ORDER BY policy_version",
+                        row -> fromJson(row.getString(1), AutoExecutionPolicy.class), policyId);
+            }
+        }
+
+        @Override public AutoExecutionPolicy save(AutoExecutionPolicy policy, long expectedVersion) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    AutoExecutionPolicy current = find(policy.policyId()).orElse(null);
+                    long actual = current == null ? 0 : current.version();
+                    if (actual != expectedVersion || policy.version() != expectedVersion + 1
+                            || current != null && !current.targetNamespace().equals(policy.targetNamespace())) {
+                        throw new IllegalStateException("preauthorization policy version conflict");
+                    }
+                    run("INSERT INTO agent_auto_policy(policy_id,policy_version,target_namespace,enabled,payload_json,updated_at) "
+                                    + "VALUES(?,?,?,?,?,?)", policy.policyId(), policy.version(), policy.targetNamespace(),
+                            policy.enabled(), toJson(policy), policy.updatedAtMillis());
+                    appendAudit("AUTO_POLICY_VERSIONED", policy.policyId(), policy.updatedBy(), policy.targetNamespace(), policy);
+                    return policy;
+                });
+            }
+        }
+    }
 
     /** 资源笔记：有已确认根因的调查才会写，按资源键读一条。 */
     public synchronized Optional<ResourceNote> findNote(String resourceKey) {
@@ -1729,6 +1785,14 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "last_state VARCHAR(16) NOT NULL, last_fingerprint VARCHAR(64), updated_at BIGINT NOT NULL, "
                                         + "PRIMARY KEY(source_id,alert_key))",
                                 "CREATE INDEX IF NOT EXISTS idx_alert_delivery_accepted ON agent_alert_delivery(accepted_at)"),
+                        List.of(), List.of()),
+                new Migration(16, "versioned narrowly scoped autonomous action policies",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_auto_policy ("
+                                        + "policy_id VARCHAR(64) NOT NULL, policy_version BIGINT NOT NULL, "
+                                        + "target_namespace VARCHAR(128) NOT NULL, enabled BOOLEAN NOT NULL, "
+                                        + "payload_json TEXT NOT NULL, updated_at BIGINT NOT NULL, "
+                                        + "PRIMARY KEY(policy_id,policy_version))",
+                                "CREATE INDEX IF NOT EXISTS idx_agent_auto_policy_target ON agent_auto_policy(target_namespace,enabled,policy_id,policy_version)"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {

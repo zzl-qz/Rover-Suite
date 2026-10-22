@@ -72,7 +72,7 @@ class AgentActionStoreTest {
             first.actions().save(pendingAction("a1", "s1", ActionStatus.PENDING_APPROVAL, null, null));
             assertTrue(first.actions().recordApproval(approval));
             assertFalse(first.actions().recordApproval(approval), "相同审批人对同一版本不能重复记数");
-            assertEquals(14, first.schemaVersion());
+            assertEquals(16, first.schemaVersion());
         }
         try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
             assertEquals(List.of(approval), reopened.actions().approvals("a1", ActionApproval.Stage.APPLY,

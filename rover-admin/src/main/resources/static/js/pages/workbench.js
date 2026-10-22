@@ -89,6 +89,14 @@ window.RoverAdminPages.workbench = {
             wbActions: [],
             wbEffectVerifications: {},
             wbOperatorPermissions: [],
+            wbAutoPolicies: [],
+            wbAutoCandidates: [],
+            wbAutoRouteId: '',
+            wbAutoTargetKey: '',
+            wbAutoPolicyBusy: false,
+            wbAutoPolicyError: '',
+            wbAutoMaxBefore: 5,
+            wbAutoMaxShift: 5,
             wbOperationsStatus: null,
             wbReconciliationQueue: [],
             wbOperationBusy: false,
@@ -307,12 +315,20 @@ window.RoverAdminPages.workbench = {
             return this.wbOperatorPermissions.includes('MANAGE_SYSTEM');
         },
 
+        wbCanManagePolicies() { return this.wbOperatorPermissions.includes('POLICY_ADMIN'); },
+
+        wbAutoTargets() {
+            const candidate = this.wbAutoCandidates.find(item => item.routeId === this.wbAutoRouteId);
+            return candidate ? (candidate.targets || []).filter(target => target.weight > 0) : [];
+        },
+
         async wbLoadOperatorState(force) {
             if (!force && Date.now() - (this._wbOperatorRefreshAt || 0) < 5000) return;
             this._wbOperatorRefreshAt = Date.now();
             try {
                 const me = await RoverAdminApi.api('/api/agent/security/me');
                 this.wbOperatorPermissions = me && Array.isArray(me.permissions) ? me.permissions : [];
+                if (this.wbCanManagePolicies()) await this.wbLoadAutoPolicies();
                 if (!this.wbCanManageSystem()) {
                     this.wbOperationsStatus = null;
                     this.wbReconciliationQueue = [];
@@ -335,6 +351,70 @@ window.RoverAdminPages.workbench = {
                 this.wbOperationMessage = error && error.status === 403
                     ? '当前账号没有系统接管权限' : (error && error.message) || '无法读取运维状态';
             }
+        },
+
+        async wbLoadAutoPolicies() {
+            try {
+                const [policies, candidates] = await Promise.all([
+                    RoverAdminApi.api('/api/agent/policies/autonomous'),
+                    RoverAdminApi.api('/api/agent/policies/autonomous/candidates'),
+                ]);
+                this.wbAutoPolicies = Array.isArray(policies) ? policies : [];
+                this.wbAutoCandidates = Array.isArray(candidates) ? candidates : [];
+                if (!this.wbAutoRouteId && this.wbAutoCandidates.length) {
+                    this.wbAutoRouteId = this.wbAutoCandidates[0].routeId;
+                    const target = (this.wbAutoCandidates[0].targets || []).find(item => item.weight > 0);
+                    if (target) this.wbAutoTargetKey = target.serviceName + ':' + target.group;
+                }
+                this.wbAutoPolicyError = '';
+            } catch (error) { this.wbAutoPolicyError = error.message || '无法读取预授权策略'; }
+        },
+
+        async wbCreateAutoPolicy() {
+            if (!this.wbCanManagePolicies() || this.wbAutoPolicyBusy) return;
+            const parts = String(this.wbAutoTargetKey).split(':');
+            const serviceName = parts.shift();
+            const group = parts.join(':');
+            if (!this.wbAutoRouteId || !serviceName || !group) { this.wbAutoPolicyError = '请选择路由和当前有流量的版本'; return; }
+            this.wbAutoPolicyBusy = true;
+            try {
+                const now = Date.now();
+                await RoverAdminApi.api('/api/agent/policies/autonomous', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ policyId: 'quarantine-' + now + '-' + Math.random().toString(36).slice(2, 8),
+                        route: this.wbAutoRouteId, serviceName, group, maxBeforeTrafficPercent: Number(this.wbAutoMaxBefore),
+                        maxTrafficShiftPercent: Number(this.wbAutoMaxShift), expiresAtMillis: now + 7 * 86400000 }),
+                });
+                this.wbAutoPolicyError = '策略已创建；仅匹配带证据和业务效果验证的隔离计划';
+                await this.wbLoadAutoPolicies();
+            } catch (error) { this.wbAutoPolicyError = error.message || '创建预授权策略失败'; }
+            finally { this.wbAutoPolicyBusy = false; }
+        },
+
+        async wbRevokeAutoPolicy(policy) {
+            if (!this.wbCanManagePolicies() || !policy || !policy.enabled || this.wbAutoPolicyBusy) return;
+            this.wbAutoPolicyBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/policies/autonomous/' + encodeURIComponent(policy.policyId) + '/revoke', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expectedVersion: policy.version }),
+                });
+                await this.wbLoadAutoPolicies();
+            } catch (error) { this.wbAutoPolicyError = error.message || '撤销策略失败'; }
+            finally { this.wbAutoPolicyBusy = false; }
+        },
+
+        async wbEnableAutoPolicy(policy) {
+            if (!this.wbCanManagePolicies() || !policy || policy.enabled || this.wbAutoPolicyBusy) return;
+            this.wbAutoPolicyBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/policies/autonomous/' + encodeURIComponent(policy.policyId) + '/enable', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expectedVersion: policy.version }),
+                });
+                await this.wbLoadAutoPolicies();
+            } catch (error) { this.wbAutoPolicyError = error.message || '启用策略失败'; }
+            finally { this.wbAutoPolicyBusy = false; }
         },
 
         async wbToggleWriteStop(stopped) {

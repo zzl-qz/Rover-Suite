@@ -10,6 +10,7 @@ import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNotes;
 import com.rover.agent.core.model.AgentMessage;
 import com.rover.agent.core.model.AlertDelivery;
+import com.rover.agent.core.model.AutoExecutionPolicy;
 import com.rover.agent.core.model.AlertEventState;
 import com.rover.agent.core.model.AlertLifecycle;
 import com.rover.agent.core.model.AgentStepType;
@@ -231,7 +232,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(15, store.schemaVersion(),
+            assertEquals(16, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
                             + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
                             + "v13 保存按管理目标绑定的持久动作命令");
@@ -245,7 +246,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-        assertEquals(15, store.schemaVersion());
+        assertEquals(16, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -307,6 +308,31 @@ class JdbcAgentStoreTest {
     }
 
     @Test
+    void autonomousPoliciesAreVersionedAuditedAndSurviveRestart() throws Exception {
+        String path = tempPath("rover-auto-policy");
+        var scope = new com.rover.agent.core.model.ResourceScope("org", "team", "prod");
+        var resource = new com.rover.agent.core.model.ResourceRef(scope, "gateway", "GATEWAY_ROUTE", "orders", "uid-1", 1);
+        AutoExecutionPolicy policy = AutoExecutionPolicy.create("policy-1", "namespace-a", resource,
+                "orders", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.autoExecutionPolicies().save(policy, 0);
+            var revoked = policy.revise(false, 5, 5, policy.expiresAtMillis(), "admin", System.currentTimeMillis());
+            first.autoExecutionPolicies().save(revoked, 1);
+            assertEquals(2, first.autoExecutionPolicies().history("policy-1").size());
+            var audits = first.audit("namespace-a", 0, 10);
+            assertEquals("AUTO_POLICY_VERSIONED", audits.get(audits.size() - 1).kind());
+            assertThrows(IllegalStateException.class, () -> first.autoExecutionPolicies().save(
+                    revoked.revise(true, 5, 5, revoked.expiresAtMillis(), "admin", System.currentTimeMillis()), 1));
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            assertEquals(2, reopened.autoExecutionPolicies().find("policy-1").orElseThrow().version());
+            assertFalse(reopened.autoExecutionPolicies().find("policy-1").orElseThrow().enabled());
+            assertTrue(reopened.autoExecutionPolicies().find("policy-1", "other-namespace").isEmpty());
+            assertEquals(2, reopened.autoExecutionPolicies().history("policy-1").size());
+        }
+    }
+
+    @Test
     void schemaFiveUpgradeLeavesUnknownHistoricalSourcesUnset() throws Exception {
         String path = tempPath("rover-alert-upgrade");
         try (JdbcAgentStore first = new JdbcAgentStore(path)) {
@@ -319,7 +345,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(15, upgraded.schemaVersion());
+            assertEquals(16, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }

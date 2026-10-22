@@ -7,8 +7,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.mockito.Mockito.when;
 import com.rover.agent.core.model.AlertEventState;
 import com.rover.agent.core.model.AlertIngestResult;
+import com.rover.agent.core.model.AutoExecutionPolicy;
+import com.rover.agent.core.model.ResourceRef;
+import com.rover.agent.core.model.ResourceScope;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.port.RouteControlPort;
+import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
 import com.rover.agent.runtime.AgentOrchestrator;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +33,7 @@ class AgentAuthorizationWebTest {
     @Autowired AdminUserStore users;
     @Autowired AgentSecurityService security;
     @Autowired RouteControlPort control;
+    @Autowired AutoExecutionPolicyRepository policies;
     @MockitoBean AgentOrchestrator agent;
 
     @BeforeEach void roles() {
@@ -46,6 +51,52 @@ class AgentAuthorizationWebTest {
                 .andExpect(status().isForbidden());
         http.perform(post("/api/agent/security/users").with(user("policy")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content("{}")) .andExpect(status().isForbidden());
+        http.perform(get("/api/agent/policies/autonomous").with(user("operator"))).andExpect(status().isForbidden());
+        http.perform(post("/api/agent/policies/autonomous").with(user("operator")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{}" )).andExpect(status().isForbidden());
+    }
+
+    @Test void autonomousPoliciesRequirePolicyAdminAndAreDurableVersionedAndScoped() throws Exception {
+        String id = "policy-web-" + System.nanoTime();
+        http.perform(get("/api/agent/policies/autonomous").with(user("policy")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$").isArray());
+        http.perform(post("/api/agent/policies/autonomous").with(user("policy")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"policyId\":\"" + id
+                                + "\",\"route\":\"/api/order\",\"serviceName\":\"order-service\",\"group\":\"v2\","
+                                + "\"maxBeforeTrafficPercent\":5,\"maxTrafficShiftPercent\":5,\"expiresAtMillis\":"
+                                + (System.currentTimeMillis() + 60_000) + "}"))
+                .andExpect(status().isBadGateway()); // Gateway 状态读取不可用时必须拒绝创建
+        http.perform(post("/api/agent/policies/autonomous").with(user("policy")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test void autonomousPolicyEnableAndRevokeUseCompareAndSetVersions() throws Exception {
+        String id = "policy-cas-" + System.nanoTime();
+        long now = System.currentTimeMillis();
+        var resource = new ResourceRef(new ResourceScope("org", "ops", "prod"), "gateway-test",
+                "GATEWAY_ROUTE", "orders", "route-uid", 1);
+        var created = AutoExecutionPolicy.create(id, control.resourceNamespace(), resource,
+                "orders", "v2", 5, 5, now + 60_000, "policy", now);
+        policies.save(created, 0);
+
+        http.perform(post("/api/agent/policies/autonomous/" + id + "/enable").with(user("policy")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":9}"))
+                .andExpect(status().isConflict());
+        assertThat(policies.find(id).orElseThrow().version()).isEqualTo(1);
+        assertThat(policies.find(id).orElseThrow().enabled()).isFalse();
+
+        http.perform(post("/api/agent/policies/autonomous/" + id + "/enable").with(user("policy")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":1}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.enabled").value(true))
+                .andExpect(jsonPath("$.version").value(2));
+        http.perform(post("/api/agent/policies/autonomous/" + id + "/revoke").with(user("policy")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":1}"))
+                .andExpect(status().isConflict());
+        http.perform(post("/api/agent/policies/autonomous/" + id + "/revoke").with(user("policy")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"expectedVersion\":2}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.enabled").value(false))
+                .andExpect(jsonPath("$.version").value(3));
     }
 
     @Test void liveRevocationIgnoresStaleSessionRolesAndResourceScope() throws Exception {

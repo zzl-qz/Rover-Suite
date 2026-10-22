@@ -25,6 +25,7 @@ public class AgentSecurityService implements AgentAccess {
     private final Connection connection;
     private final Clock clock;
     private final AdminProperties properties;
+    private final com.rover.agent.runtime.repository.AgentStore store;
     @Value("${rover.agent.production-mode:false}") private boolean productionMode;
     @Value("${rover.agent.start-writes-stopped:false}") private boolean startWritesStopped;
     private volatile boolean closing;
@@ -41,16 +42,22 @@ public class AgentSecurityService implements AgentAccess {
     public AgentSecurityService(AdminProperties properties, AdminUserStore users, RouteControlPort control,
                                @Value("${rover.agent.alerts.owner-user-id:}") String alertOwner,
                                com.rover.agent.runtime.repository.AgentStore store) {
-        this(properties, users, control, alertOwner, Clock.systemUTC());
+        this(properties, users, control, alertOwner, Clock.systemUTC(), store);
     }
 
     AgentSecurityService(AdminProperties properties, AdminUserStore users, RouteControlPort control,
                          String alertOwner, Clock clock) {
+        this(properties, users, control, alertOwner, clock, null);
+    }
+
+    private AgentSecurityService(AdminProperties properties, AdminUserStore users, RouteControlPort control,
+                                 String alertOwner, Clock clock, com.rover.agent.runtime.repository.AgentStore store) {
         this.users = users;
         this.properties = properties;
         this.control = control;
         this.alertOwner = alertOwner;
         this.clock = clock;
+        this.store = store;
         try {
             connection = DriverManager.getConnection("jdbc:h2:file:" + properties.getLogStorePath()
                     + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE;WRITE_DELAY=0", "sa", "");
@@ -107,6 +114,10 @@ public class AgentSecurityService implements AgentAccess {
 
     @Override public boolean writeAllowed(String principal) {
         return permissions(principal).contains(Permission.APPROVE) && !writesStopped();
+    }
+
+    @Override public boolean automatedWriteAllowed() {
+        return !writesStopped() && store != null && store.persistent() && store.durable().healthy();
     }
 
     @Override

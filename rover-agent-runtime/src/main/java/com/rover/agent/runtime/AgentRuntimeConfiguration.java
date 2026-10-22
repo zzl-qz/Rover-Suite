@@ -20,6 +20,7 @@ import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
 import com.rover.agent.core.repository.AlertLifecycleRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
@@ -125,6 +126,11 @@ public class AgentRuntimeConfiguration {
     @Bean
     public AlertLifecycleRepository agentAlertLifecycleRepository(AgentStore agentStore) {
         return agentStore.alertLifecycles();
+    }
+
+    @Bean
+    public AutoExecutionPolicyRepository agentAutoExecutionPolicyRepository(AgentStore agentStore) {
+        return agentStore.autoExecutionPolicies();
     }
 
     @Bean
@@ -391,8 +397,10 @@ public class AgentRuntimeConfiguration {
             @Value("${rover.agent.approvals.policy-id:risk-approval-v1}") String policyId,
             @Value("${rover.agent.approvals.high-impact-percent:25}") double highImpactPercent,
             @Value("${rover.agent.approvals.r2-approvers:1}") int r2Approvers,
-            @Value("${rover.agent.approvals.r3-approvers:2}") int r3Approvers) {
-        return new RiskBasedApprovalPolicy(policyId, highImpactPercent, r2Approvers, r3Approvers);
+            @Value("${rover.agent.approvals.r3-approvers:2}") int r3Approvers,
+            AutoExecutionPolicyRepository autoPolicies, RouteControlPort routeControlPort) {
+        return new RiskBasedApprovalPolicy(policyId, highImpactPercent, r2Approvers, r3Approvers,
+                () -> autoPolicies.list(routeControlPort.resourceNamespace()));
     }
 
     @Bean

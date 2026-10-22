@@ -297,9 +297,25 @@ public final class AgentActionService {
                         provenance == null ? new RemediationPlan.Provenance(null, null, null,
                                 RemediationPlan.POLICY_VERSION, "SERVER_ACTION_PREVIEW") : provenance, riskLevel);
                 if (businessEffectPolicy != null) { plan = businessEffectPolicy.attach(plan); }
+                var preauthorization = access.automatedWriteAllowed()
+                        ? approvalPolicy.preauthorizationFor(action.withPlan(plan), session.targetNamespace(), now) : null;
+                if (preauthorization != null) { plan = plan.withPreauthorization(preauthorization.policyVersion()); }
                 action = action.withPlan(plan);
             }
             action = actions.save(action);
+            if (action.plan() != null
+                    && action.plan().riskAssessment().approvalMode() == RemediationPlan.ApprovalMode.PREAUTHORIZED
+                    && asynchronousExecution && access.automatedWriteAllowed()) {
+                RiskBasedApprovalPolicy.Decision decision = currentPolicy(action);
+                String queuedActionId = action.actionId();
+                commands.enqueue(command(action, ActionExecutionCommand.Phase.APPLY,
+                        "system:preauthorization", decision));
+                action = actions.transition(queuedActionId, ActionStatus.PENDING_APPROVAL,
+                        current -> new ActionDraft(current).approvedBy("system:preauthorization", System.currentTimeMillis())
+                                        .move(ActionStatus.QUEUED, null)
+                                        .toAction(System.currentTimeMillis()))
+                        .orElseGet(() -> latest(queuedActionId));
+            }
         } catch (RuntimeException ex) {
             log.warn("登记待审批变更失败: session={} route={}", sessionId, wantedRoute, ex);
             return ActionProposal.rejected("变更记录暂时无法登记：" + failureText(ex));
@@ -599,7 +615,7 @@ public final class AgentActionService {
 
     private ApprovalProgress approvalProgress(AgentAction action, ActionApproval.Stage stage,
                                               boolean maySeeApprovers) {
-        RiskBasedApprovalPolicy.Decision decision = currentPolicy(action);
+        RiskBasedApprovalPolicy.Decision decision = currentPolicy(action, stage);
         List<ActionApproval> approvals = currentApprovals(action, stage, decision);
         return new ApprovalProgress(action.actionId(), stage, bindingVersion(action), bindingHash(action),
                 decision.riskLevel(), decision.policyVersion(), decision.requiredApprovals(), approvals.size(),
@@ -607,8 +623,12 @@ public final class AgentActionService {
     }
 
     private RiskBasedApprovalPolicy.Decision currentPolicy(AgentAction action) {
+        return currentPolicy(action, ActionApproval.Stage.APPLY);
+    }
+
+    private RiskBasedApprovalPolicy.Decision currentPolicy(AgentAction action, ActionApproval.Stage stage) {
         try {
-            return approvalPolicy.decisionFor(action);
+            return approvalPolicy.decisionFor(action, stage);
         } catch (RiskBasedApprovalPolicy.PolicyChangedException ex) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT, ex.getMessage());
         }
@@ -796,15 +816,32 @@ public final class AgentActionService {
     private AgentAction runApplyCommand(AgentAction action, ActionExecutionCommand command) {
         if (action.status() == ActionStatus.PENDING_APPROVAL) {
             if (!executionAuthorized(action, command, ActionApproval.Stage.APPLY)) {
+                if (action.plan() != null && action.plan().riskAssessment().approvalMode()
+                        == RemediationPlan.ApprovalMode.PREAUTHORIZED) {
+                    return actions.transition(action.actionId(), ActionStatus.PENDING_APPROVAL,
+                                    current -> new ActionDraft(current).move(ActionStatus.PRECONDITION_FAILED,
+                                            "预授权已撤销、过期或写入被停用，未提交 Gateway 写请求")
+                                            .toAction(System.currentTimeMillis()))
+                            .orElseGet(() -> latest(command.actionId()));
+                }
                 return action;
             }
             long now = System.currentTimeMillis();
-            action = actions.transition(action.actionId(), ActionStatus.PENDING_APPROVAL,
+            String queuedActionId = action.actionId();
+            action = actions.transition(queuedActionId, ActionStatus.PENDING_APPROVAL,
                     current -> new ActionDraft(current).approvedBy(command.actor(), now)
                             .move(ActionStatus.QUEUED, null).toAction(now)).orElseGet(() -> latest(command.actionId()));
         }
         if (action.status() == ActionStatus.QUEUED) {
             if (!executionAuthorized(action, command, ActionApproval.Stage.APPLY)) {
+                if (action.plan() != null && action.plan().riskAssessment().approvalMode()
+                        == RemediationPlan.ApprovalMode.PREAUTHORIZED) {
+                    return actions.transition(action.actionId(), ActionStatus.QUEUED,
+                                    current -> new ActionDraft(current).move(ActionStatus.PRECONDITION_FAILED,
+                                            "预授权已撤销、过期或写入被停用，未提交 Gateway 写请求")
+                                            .toAction(System.currentTimeMillis()))
+                            .orElseGet(() -> latest(command.actionId()));
+                }
                 return actions.transition(action.actionId(), ActionStatus.QUEUED,
                                 current -> new ActionDraft(current).move(ActionStatus.PENDING_APPROVAL,
                                         "排队期间审批权限或策略发生变化，请重新检查并批准")
@@ -849,15 +886,15 @@ public final class AgentActionService {
 
     private boolean executionAuthorized(AgentAction action, ActionExecutionCommand command,
                                         ActionApproval.Stage stage) {
-        if (command.actor() == null || !access.writeAllowed(command.actor())) { return false; }
+        if (command.actor() == null) { return false; }
+        boolean preauthorized = stage == ActionApproval.Stage.APPLY
+                && approvalPolicy.matchesPreauthorization(action, command.targetNamespace(), System.currentTimeMillis());
+        if (preauthorized ? !access.automatedWriteAllowed() : !access.writeAllowed(command.actor())) { return false; }
         RiskBasedApprovalPolicy.Decision decision;
-        try {
-            decision = currentPolicy(action);
-        } catch (ActionRequestException ex) {
-            return false;
-        }
+        try { decision = approvalPolicy.decisionFor(action, stage); }
+        catch (RiskBasedApprovalPolicy.PolicyChangedException ex) { return false; }
         return decision.policyVersion().equals(command.policyVersion())
-                && currentApprovals(action, stage, decision).size() >= decision.requiredApprovals();
+                && (preauthorized || currentApprovals(action, stage, decision).size() >= decision.requiredApprovals());
     }
 
     private AgentAction runReconcileCommand(AgentAction action, ActionExecutionCommand command) {
@@ -919,7 +956,7 @@ public final class AgentActionService {
         }
         return actions.transition(action.actionId(), expected,
                 current -> new ActionDraft(current).move(status, reason).toAction(System.currentTimeMillis()))
-                .orElseGet(() -> latest(action.actionId()));
+                        .orElseGet(() -> latest(action.actionId()));
     }
 
     /** 按变更类型选择执行器，不支持的类型直接拒绝。 */
