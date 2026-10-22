@@ -959,6 +959,12 @@
                                     <div class="wb-action-progress" :class="wbActionProgress(action).tone">
                                         {{ wbActionProgress(action).mark }} {{ wbActionProgress(action).text }}
                                     </div>
+                                    <div v-if="wbApprovalProgress[action.actionId]" class="muted wb-action-facts">
+                                        {{ wbApprovalProgress[action.actionId].stage === 'APPLY' ? '执行' : '补偿' }}审批
+                                        {{ wbApprovalProgress[action.actionId].riskLevel }} ·
+                                        {{ wbApprovalProgress[action.actionId].currentApprovals }}/{{ wbApprovalProgress[action.actionId].requiredApprovals }} 人已批准
+                                        <span v-if="wbApprovalProgress[action.actionId].remainingApprovals > 0">· 等待其他审批人</span>
+                                    </div>
                                     <div class="muted wb-action-facts">
                                         <template v-if="action.resourceRef">
                                             {{ action.resourceRef.scope.organizationId }} / {{ action.resourceRef.scope.teamId }} / {{ action.resourceRef.scope.environmentId }}
@@ -1044,13 +1050,13 @@
                                             <button v-if="action.plan && !wbPlanEdits[action.actionId]" class="btn mini" @click="wbEditPlan(action)">修改计划</button>
                                             <button v-if="action.plan" class="btn mini primary" :disabled="wbActionBusy[action.actionId] || wbPlanExpired(action.plan)"
                                                     @click="wbActionCommand(action, 'approve')">
-                                                {{ wbActionBusy[action.actionId] === 'approve' ? '执行中…' : '批准并执行' }}
+                                                {{ wbActionBusy[action.actionId] === 'approve' ? '提交审批…' : (wbApprovalProgress[action.actionId] && wbApprovalProgress[action.actionId].requiredApprovals > 1 ? '批准（需双人）' : '批准并执行') }}
                                             </button>
                                         </template>
                                         <template v-else-if="wbActionIdle(action) && action.status === 'SUCCESS'">
                                             <button class="btn mini danger" :disabled="wbActionBusy[action.actionId]"
                                                     @click="wbActionCommand(action, 'rollback')">
-                                                {{ wbActionBusy[action.actionId] === 'rollback' ? '回滚中…' : '回滚' }}
+                                                {{ wbActionBusy[action.actionId] === 'rollback' ? '提交审批…' : (wbApprovalProgress[action.actionId] && wbApprovalProgress[action.actionId].requiredApprovals > 1 ? '申请回滚（需双人）' : '回滚') }}
                                             </button>
                                         </template>
                                         <template v-else-if="wbActionIdle(action) && action.status === 'UNCERTAIN'">

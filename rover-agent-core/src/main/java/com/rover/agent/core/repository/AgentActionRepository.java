@@ -1,6 +1,7 @@
 package com.rover.agent.core.repository;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.RemediationPlan;
 import java.util.List;
@@ -28,6 +29,15 @@ public interface AgentActionRepository {
 
     default Optional<RemediationPlan> findPlan(String planId, int planVersion) {
         return planVersions(planId).stream().filter(plan -> plan.planVersion() == planVersion).findFirst();
+    }
+
+    /** Persisted, immutable approvals scoped to one exact plan and policy version. */
+    default List<ActionApproval> approvals(String actionId, ActionApproval.Stage stage, int planVersion,
+                                          String planHash, String policyVersion) { return List.of(); }
+
+    /** Atomically records one approver at most once and rejects stale or already-settled actions. */
+    default boolean recordApproval(ActionApproval approval) {
+        throw new UnsupportedOperationException("Approval receipts are not supported by this repository");
     }
 
     /**

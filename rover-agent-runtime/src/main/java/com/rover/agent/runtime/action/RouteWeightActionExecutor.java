@@ -1,6 +1,7 @@
 package com.rover.agent.runtime.action;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.RemediationPlan;
@@ -32,15 +33,22 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
     private final RouteControlPort control;
     private final AgentActionRepository actions;
     private final AgentAccess access;
+    private final RiskBasedApprovalPolicy approvalPolicy;
 
     public RouteWeightActionExecutor(RouteControlPort control, AgentActionRepository actions) {
-        this(control, actions, AgentAccess.local());
+        this(control, actions, AgentAccess.local(), RiskBasedApprovalPolicy.defaults());
     }
 
     public RouteWeightActionExecutor(RouteControlPort control, AgentActionRepository actions, AgentAccess access) {
+        this(control, actions, access, RiskBasedApprovalPolicy.defaults());
+    }
+
+    public RouteWeightActionExecutor(RouteControlPort control, AgentActionRepository actions, AgentAccess access,
+                                     RiskBasedApprovalPolicy approvalPolicy) {
         this.control = control;
         this.actions = actions;
         this.access = access;
+        this.approvalPolicy = approvalPolicy;
     }
 
     @Override
@@ -60,6 +68,10 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         }
         if (!access.writeAllowed(actor)) {
             return settle(action, ActionStatus.PRECONDITION_FAILED, "审批账号已被撤权，未提交写请求");
+        }
+        String approvalFailure = approvalFailure(action, ActionApproval.Stage.APPLY);
+        if (approvalFailure != null) {
+            return settle(action, ActionStatus.PRECONDITION_FAILED, approvalFailure);
         }
         Precondition precondition = check(action);
         if (!precondition.passed()) {
@@ -83,6 +95,10 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
 
         if (!access.writeAllowed(actor)) {
             return settle(submitting, ActionStatus.PRECONDITION_FAILED, "提交前审批权限已失效，未提交写请求");
+        }
+        approvalFailure = approvalFailure(action, ActionApproval.Stage.APPLY);
+        if (approvalFailure != null) {
+            return settle(submitting, ActionStatus.PRECONDITION_FAILED, "提交前" + approvalFailure);
         }
         if (action.plan() != null && (action.plan().expiresAtMillis() <= System.currentTimeMillis()
                 || System.currentTimeMillis() - action.approvedAtMillis() >= action.plan().timeoutMillis())) {
@@ -114,6 +130,10 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         if (planFailure != null) { return backToSuccess(action, planFailure); }
         if (!access.writeAllowed(actor)) {
             return backToSuccess(action, "回滚账号已被撤权，未提交写请求");
+        }
+        String approvalFailure = approvalFailure(action, ActionApproval.Stage.ROLLBACK);
+        if (approvalFailure != null) {
+            return backToSuccess(action, approvalFailure);
         }
         RouteControlState state;
         try {
@@ -150,6 +170,10 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         if (!access.writeAllowed(actor)) {
             return backToSuccess(submitting, "提交前回滚权限已失效，未提交写请求");
         }
+        approvalFailure = approvalFailure(action, ActionApproval.Stage.ROLLBACK);
+        if (approvalFailure != null) {
+            return backToSuccess(submitting, "回滚提交前" + approvalFailure);
+        }
         if (action.plan() != null && System.currentTimeMillis() - action.updatedAtMillis() >= action.plan().timeoutMillis()) {
             return backToSuccess(submitting, "补偿预检已超时，未提交写请求");
         }
@@ -167,6 +191,30 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         }
         return verifyApplied(submitting, result.revision(), action.beforeWeight(),
                 ActionStatus.ROLLING_BACK, ActionStatus.ROLLED_BACK);
+    }
+
+    private String approvalFailure(AgentAction action, ActionApproval.Stage stage) {
+        if (action.plan() == null) {
+            return access.managed() ? "不可变计划审批记录缺失，未提交写请求" : null;
+        }
+        RiskBasedApprovalPolicy.Decision decision;
+        try {
+            decision = approvalPolicy.decisionFor(action);
+        } catch (RiskBasedApprovalPolicy.PolicyChangedException ex) {
+            return ex.getMessage() + "；未提交写请求";
+        }
+        List<ActionApproval> approvals = actions.approvals(action.actionId(), stage, action.plan().planVersion(),
+                action.plan().planHash(), decision.policyVersion()).stream()
+                .filter(approval -> (decision.requesterMayApprove()
+                                || !java.util.Objects.equals(approval.approver(), action.requestedBy()))
+                        && access.permissions(approval.approver()).contains(Permission.APPROVE)
+                        && access.writeAllowed(approval.approver()))
+                .toList();
+        if (approvals.size() < decision.requiredApprovals()) {
+            return "有效审批不足（" + approvals.size() + "/" + decision.requiredApprovals()
+                    + "），计划或策略版本变化、审批人撤权或停写均需重新审批；未提交写请求";
+        }
+        return null;
     }
 
     @Override
@@ -217,7 +265,6 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         if (plan.steps().size() != 1
                 || plan.steps().get(0).actionType() != ActionType.ADJUST_ROUTE_TARGET_WEIGHT
                 || !RemediationPlan.ROUTE_WEIGHT_ADAPTER_VERSION.equals(plan.steps().get(0).adapterVersion())
-                || plan.riskAssessment().level() != RemediationPlan.RiskLevel.R2
                 || !"CONTROL_PLANE_ONLY".equals(plan.verificationSpec().mode().name())
                 || plan.steps().get(0).requiredChecks().stream().anyMatch(check -> switch (check) {
                     case TARGET_IDENTITY, ROUTE_BINDING, EXPECTED_REVISION, EXPECTED_BEFORE_WEIGHT -> false;

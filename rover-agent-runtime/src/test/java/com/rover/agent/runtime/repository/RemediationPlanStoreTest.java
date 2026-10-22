@@ -33,7 +33,7 @@ class RemediationPlanStoreTest {
         try (JdbcAgentStore store = store(path)) {
             first = store.actions().save(planned("a1", "p1", 1, 20));
             second = store.actions().save(planned("a2", "p1", 2, 40));
-            assertEquals(11, store.schemaVersion());
+            assertEquals(12, store.schemaVersion());
             assertEquals(2, store.actions().find("a1").orElseThrow().version());
             assertTrue(store.audit("", 0, 100).stream().anyMatch(a -> a.kind().equals("ACTION_SUPERSEDED")));
         }
@@ -177,13 +177,14 @@ class RemediationPlanStoreTest {
         try (JdbcAgentStore store = store(path)) { store.actions().save(base("legacy", 20)); }
         try (var connection = DriverManager.getConnection("jdbc:h2:file:" + path + ";AUTO_SERVER=TRUE", "sa", "");
              var statement = connection.createStatement()) {
+            statement.execute("DROP TABLE agent_action_approval");
             statement.execute("DROP TABLE agent_remediation_plan");
-            statement.execute("DELETE FROM agent_schema_migrations WHERE version=11");
+            statement.execute("DELETE FROM agent_schema_migrations WHERE version>=11");
         }
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             AgentAction legacy = store.actions().find("legacy").orElseThrow();
             assertNull(legacy.plan());
-            assertEquals(11, store.schemaVersion());
+            assertEquals(12, store.schemaVersion());
             assertTrue(store.actions().planVersions("legacy").isEmpty());
             assertNull(store.actions().transition("legacy", ActionStatus.PENDING_APPROVAL,
                     a -> move(a, ActionStatus.REJECTED)).orElseThrow().plan());

@@ -87,6 +87,8 @@ window.RoverAdminPages.workbench = {
             wbAtBottom: true,
             /** 当前会话的变更记录（新的在前）：待审批、执行结果与回滚都从服务端读回来。 */
             wbActions: [],
+            /** 服务端实时计算的执行/补偿审批进度。 */
+            wbApprovalProgress: {},
             /** 每条变更正在进行的操作（approve / reject / rollback / resolve）：用来禁用按钮，避免连点。 */
             wbActionBusy: {},
             /** 每条变更最近一次操作失败的原因：服务端拒绝（409/404）时显示在卡片里，而不是整页报错。 */
@@ -524,14 +526,41 @@ window.RoverAdminPages.workbench = {
         async wbLoadActions(sessionId) {
             if (!sessionId) {
                 this.wbActions = [];
+                this.wbApprovalProgress = {};
                 return;
             }
             try {
-                const list = await RoverAdminApi.api('/api/agent/actions/sessions/' + encodeURIComponent(sessionId));
+                const base = '/api/agent/actions/sessions/' + encodeURIComponent(sessionId);
+                const [list, progress] = await Promise.all([
+                    RoverAdminApi.api(base),
+                    RoverAdminApi.api(base + '/approval-progress').catch(() => []),
+                ]);
                 if (this.wbActiveSessionId !== sessionId) return;
                 this.wbActions = Array.isArray(list) ? list : [];
+                this.wbApprovalProgress = this.wbApprovalProgressMap(progress);
             } catch (e) {
-                if (this.wbActiveSessionId === sessionId) this.wbActions = [];
+                if (this.wbActiveSessionId === sessionId) {
+                    this.wbActions = [];
+                    this.wbApprovalProgress = {};
+                }
+            }
+        },
+
+        wbApprovalProgressMap(progress) {
+            return Object.fromEntries((Array.isArray(progress) ? progress : [])
+                .map(item => [item.actionId, item]));
+        },
+
+        async wbLoadApprovalProgress(sessionId) {
+            if (!sessionId) return;
+            const path = '/api/agent/actions/sessions/' + encodeURIComponent(sessionId) + '/approval-progress';
+            try {
+                const progress = await RoverAdminApi.api(path);
+                if (this.wbActiveSessionId === sessionId) {
+                    this.wbApprovalProgress = this.wbApprovalProgressMap(progress);
+                }
+            } catch (e) {
+                if (this.wbActiveSessionId === sessionId) this.wbApprovalProgress = {};
             }
         },
 
@@ -549,7 +578,7 @@ window.RoverAdminPages.workbench = {
             this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: '' });
             try {
                 const options = { method: 'POST' };
-                if (command === 'approve' && action.plan) {
+                if ((command === 'approve' || command === 'rollback') && action.plan) {
                     options.headers = { 'Content-Type': 'application/json' };
                     options.body = JSON.stringify({ planVersion: action.plan.planVersion, planHash: action.plan.planHash });
                 }
@@ -557,6 +586,7 @@ window.RoverAdminPages.workbench = {
                     '/api/agent/actions/' + encodeURIComponent(action.actionId) + '/' + command,
                     options);
                 this.wbReplaceAction(updated);
+                await this.wbLoadApprovalProgress(this.wbActiveSessionId);
             } catch (e) {
                 // 被拒（已被处理过、状态不允许）或执行异常：记在卡片上，并重新拉一次真实状态
                 this.wbActionError = Object.assign({}, this.wbActionError,

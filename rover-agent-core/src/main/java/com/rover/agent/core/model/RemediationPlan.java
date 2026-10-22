@@ -104,7 +104,15 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
     public static RemediationPlan forRouteWeight(AgentAction action, String planId, int version,
                                                  long expiresAtMillis, List<String> evidenceRefs,
                                                  Provenance provenance) {
+        return forRouteWeight(action, planId, version, expiresAtMillis, evidenceRefs, provenance, RiskLevel.R2);
+    }
+
+    /** Risk is classified by the server from the frozen impact estimate before the plan hash is calculated. */
+    public static RemediationPlan forRouteWeight(AgentAction action, String planId, int version,
+                                                 long expiresAtMillis, List<String> evidenceRefs,
+                                                 Provenance provenance, RiskLevel riskLevel) {
         Objects.requireNonNull(action, "action");
+        Objects.requireNonNull(riskLevel, "riskLevel");
         ResourceRef ref = Objects.requireNonNull(action.resourceRef(), "计划必须绑定资源 UID");
         RouteWeightStep step = new RouteWeightStep(1, action.type(), ADAPTER_VERSION, ref,
                 action.routeId(), action.businessPrefix(), action.serviceName(), action.group(),
@@ -117,8 +125,10 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
                 action.requestedBy(), ref.scope(), "调整 " + action.targetLabel() + " 的路由权重",
                 List.of("保持当前权重并继续调查", "由人工核对容量与影响后决定是否执行"), evidenceRefs,
                 List.of("尚未建立容量安全证据", "尚未配置业务恢复判据，控制面回读不代表服务恢复"),
-                List.of(step), new RiskAssessment(RiskLevel.R2, ApprovalMode.REQUIRE_APPROVAL, false,
-                        List.of("流量会在同一路由的目标之间重新分配", "剩余容量尚未获得证据确认"),
+                List.of(step), new RiskAssessment(riskLevel, ApprovalMode.REQUIRE_APPROVAL, false,
+                        List.of("流量会在同一路由的目标之间重新分配",
+                                riskLevel == RiskLevel.R3 ? "预计影响达到高影响阈值，要求独立双人审批"
+                                        : "剩余容量尚未获得证据确认"),
                         "指定路由的目标权重及其承接流量"),
                 new ResourceBudget(1, 1, 0, 100),
                 new VerificationSpec(VerificationMode.CONTROL_PLANE_ONLY,

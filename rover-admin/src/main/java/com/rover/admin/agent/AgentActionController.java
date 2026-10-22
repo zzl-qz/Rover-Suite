@@ -1,6 +1,7 @@
 package com.rover.admin.agent;
 
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.runtime.action.ActionRequestException;
 import com.rover.agent.runtime.action.AgentActionService;
 import java.util.LinkedHashMap;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -47,6 +49,18 @@ public class AgentActionController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    @GetMapping("/sessions/{sessionId}/approval-progress")
+    public ResponseEntity<?> approvalProgress(@PathVariable String sessionId, Authentication authentication) {
+        return apply(() -> actions.approvalProgressBySession(sessionId, user(authentication)));
+    }
+
+    @GetMapping("/{actionId}/approval-progress")
+    public ResponseEntity<?> approvalProgress(@PathVariable String actionId,
+                                              @RequestParam(defaultValue = "APPLY") ActionApproval.Stage stage,
+                                              Authentication authentication) {
+        return apply(() -> actions.approvalProgress(actionId, user(authentication), stage));
+    }
+
     /** 查询变更的最新状态。 */
     @GetMapping("/{actionId}")
     public ResponseEntity<AgentAction> find(@PathVariable String actionId, Authentication authentication) {
@@ -73,8 +87,10 @@ public class AgentActionController {
 
     /** 将目标版本的权重恢复为变更前的值。 */
     @PostMapping("/{actionId}/rollback")
-    public ResponseEntity<?> rollback(@PathVariable String actionId, Authentication authentication) {
-        return apply(() -> actions.rollback(actionId, user(authentication)));
+    public ResponseEntity<?> rollback(@PathVariable String actionId, Authentication authentication,
+                                      @RequestBody(required = false) ApprovalRequest request) {
+        return apply(() -> actions.rollback(actionId, user(authentication),
+                request == null ? null : request.planVersion(), request == null ? null : request.planHash()));
     }
 
     /** 按原 operationId 确认结果未知的变更。 */
@@ -83,7 +99,7 @@ public class AgentActionController {
         return apply(() -> actions.resolve(actionId, user(authentication)));
     }
 
-    private static ResponseEntity<?> apply(Supplier<AgentAction> operation) {
+    private static ResponseEntity<?> apply(Supplier<?> operation) {
         try {
             return ResponseEntity.ok(operation.get());
         } catch (ActionRequestException ex) {

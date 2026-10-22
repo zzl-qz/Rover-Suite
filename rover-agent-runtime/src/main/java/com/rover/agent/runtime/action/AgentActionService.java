@@ -1,6 +1,7 @@
 package com.rover.agent.runtime.action;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.RemediationPlan;
@@ -40,6 +41,7 @@ public final class AgentActionService {
     private final RouteControlPort control;
     private final ActionExecutor executor;
     private final AgentAccess access;
+    private final RiskBasedApprovalPolicy approvalPolicy;
 
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutor executor) {
@@ -48,11 +50,18 @@ public final class AgentActionService {
 
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutor executor, AgentAccess access) {
+        this(actions, sessions, control, executor, access, RiskBasedApprovalPolicy.defaults());
+    }
+
+    public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
+                              RouteControlPort control, ActionExecutor executor, AgentAccess access,
+                              RiskBasedApprovalPolicy approvalPolicy) {
         this.actions = actions;
         this.sessions = sessions;
         this.control = control;
         this.executor = executor;
         this.access = access;
+        this.approvalPolicy = approvalPolicy;
     }
 
     // ---------------------------------------------------------------- 提议
@@ -224,12 +233,13 @@ public final class AgentActionService {
                 now, now).withResourceRef(matched.resourceRef());
         try {
             if (action.resourceRef() != null) {
+                RemediationPlan.RiskLevel riskLevel = approvalPolicy.classify(action);
                 action = action.withPlan(RemediationPlan.forRouteWeight(action,
                         previousPlan == null ? action.actionId() : previousPlan.planId(),
                         previousPlan == null ? 1 : Math.addExact(previousPlan.planVersion(), 1),
                         Math.addExact(now, PLAN_LIFETIME_MILLIS), evidenceRefs,
                         provenance == null ? new RemediationPlan.Provenance(null, null, null,
-                                RemediationPlan.POLICY_VERSION, "SERVER_ACTION_PREVIEW") : provenance));
+                                RemediationPlan.POLICY_VERSION, "SERVER_ACTION_PREVIEW") : provenance, riskLevel));
             }
             action = actions.save(action);
         } catch (RuntimeException ex) {
@@ -403,11 +413,30 @@ public final class AgentActionService {
                     "这条变更当前是「" + pending.status().label() + "」，不能再次批准");
         }
         requireApprovablePlan(pending, planVersion, planHash);
+        RiskBasedApprovalPolicy.Decision decision = currentPolicy(pending);
+        requireCanApprove(pending, userId, decision);
+        ActionApproval approval = approval(pending, ActionApproval.Stage.APPLY, decision, userId);
+        try {
+            actions.recordApproval(approval);
+        } catch (ActionUpdateConflictException ex) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                    "计划已变化或已被处理，审批没有登记");
+        }
+        List<ActionApproval> validApprovals = currentApprovals(pending, ActionApproval.Stage.APPLY, decision);
+        if (validApprovals.size() < decision.requiredApprovals()) {
+            return pending;
+        }
         long now = System.currentTimeMillis();
         String approver = normalize(userId);
         AgentAction claimed = actions.transition(actionId, ActionStatus.PENDING_APPROVAL,
                         current -> {
                             requireApprovablePlan(current, planVersion, planHash);
+                            requireSamePolicy(current, decision);
+                            if (currentApprovals(current, ActionApproval.Stage.APPLY, decision).size()
+                                    < decision.requiredApprovals()) {
+                                throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                                        "审批人数或实时授权已变化，尚不能执行");
+                            }
                             return new ActionDraft(current).approvedBy(approver, now)
                                     .move(ActionStatus.EXECUTING, null).toAction(now);
                         })
@@ -444,6 +473,99 @@ public final class AgentActionService {
         }
     }
 
+    /** Current risk and approval rules are recomputed at every approval boundary. */
+    public ApprovalProgress approvalProgress(String actionId, String userId, ActionApproval.Stage stage) {
+        access.require(userId, Permission.APPROVE);
+        AgentAction action = require(actionId, userId);
+        if (stage == ActionApproval.Stage.APPLY && !action.status().awaitingApproval()
+                || stage == ActionApproval.Stage.ROLLBACK && !action.status().reversible()) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                    "该变更当前没有此阶段的待审批操作");
+        }
+        return approvalProgress(action, stage);
+    }
+
+    public List<ApprovalProgress> approvalProgressBySession(String sessionId, String userId) {
+        access.require(userId, Permission.READ);
+        List<AgentAction> sessionActions = bySession(sessionId, userId).orElseThrow(() ->
+                new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "找不到这个会话"));
+        boolean maySeeApprovers = access.permissions(userId).contains(Permission.APPROVE);
+        return sessionActions.stream()
+                .filter(action -> action.status().awaitingApproval() || action.status().reversible())
+                .map(action -> approvalProgress(action, action.status().awaitingApproval()
+                        ? ActionApproval.Stage.APPLY : ActionApproval.Stage.ROLLBACK, maySeeApprovers))
+                .toList();
+    }
+
+    private ApprovalProgress approvalProgress(AgentAction action, ActionApproval.Stage stage) {
+        return approvalProgress(action, stage, true);
+    }
+
+    private ApprovalProgress approvalProgress(AgentAction action, ActionApproval.Stage stage,
+                                              boolean maySeeApprovers) {
+        RiskBasedApprovalPolicy.Decision decision = currentPolicy(action);
+        List<ActionApproval> approvals = currentApprovals(action, stage, decision);
+        return new ApprovalProgress(action.actionId(), stage, bindingVersion(action), bindingHash(action),
+                decision.riskLevel(), decision.policyVersion(), decision.requiredApprovals(), approvals.size(),
+                Math.max(0, decision.requiredApprovals() - approvals.size()), maySeeApprovers ? approvals : List.of());
+    }
+
+    private RiskBasedApprovalPolicy.Decision currentPolicy(AgentAction action) {
+        try {
+            return approvalPolicy.decisionFor(action);
+        } catch (RiskBasedApprovalPolicy.PolicyChangedException ex) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, ex.getMessage());
+        }
+    }
+
+    private void requireSamePolicy(AgentAction action, RiskBasedApprovalPolicy.Decision expected) {
+        RiskBasedApprovalPolicy.Decision current = currentPolicy(action);
+        if (!expected.equals(current)) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                    "风险或审批策略在审批期间发生变化，请重新检查计划");
+        }
+    }
+
+    private void requireCanApprove(AgentAction action, String userId, RiskBasedApprovalPolicy.Decision decision) {
+        String principal = normalize(userId);
+        if (!decision.requesterMayApprove() && Objects.equals(principal, action.requestedBy())) {
+            throw new AgentAccess.Denied("高风险计划要求审批人与提议人分离");
+        }
+        if (!access.writeAllowed(principal)) {
+            throw new AgentAccess.Denied("当前审批身份已撤权，或系统处于停写状态");
+        }
+    }
+
+    private List<ActionApproval> currentApprovals(AgentAction action, ActionApproval.Stage stage,
+                                                   RiskBasedApprovalPolicy.Decision decision) {
+        List<ActionApproval> stored = actions.approvals(action.actionId(), stage, bindingVersion(action),
+                bindingHash(action), decision.policyVersion());
+        return stored.stream().filter(approval -> (decision.requesterMayApprove()
+                        || !Objects.equals(approval.approver(), action.requestedBy()))
+                && access.permissions(approval.approver()).contains(Permission.APPROVE)
+                && access.writeAllowed(approval.approver())).toList();
+    }
+
+    private static ActionApproval approval(AgentAction action, ActionApproval.Stage stage,
+                                           RiskBasedApprovalPolicy.Decision decision, String userId) {
+        return new ActionApproval(action.actionId(), stage, bindingVersion(action), bindingHash(action),
+                decision.policyVersion(), normalize(userId), System.currentTimeMillis());
+    }
+
+    private static int bindingVersion(AgentAction action) {
+        return action.plan() == null ? ActionApproval.LEGACY_PLAN_VERSION : action.plan().planVersion();
+    }
+
+    private static String bindingHash(AgentAction action) {
+        return action.plan() == null ? ActionApproval.LEGACY_PLAN_HASH : action.plan().planHash();
+    }
+
+    public record ApprovalProgress(String actionId, ActionApproval.Stage stage, int planVersion, String planHash,
+                                  RemediationPlan.RiskLevel riskLevel, String policyVersion, int requiredApprovals,
+                                  int currentApprovals, int remainingApprovals, List<ActionApproval> approvals) {
+        public ApprovalProgress { approvals = List.copyOf(approvals); }
+    }
+
     /** 拒绝：不执行，也不会执行。 */
     public AgentAction reject(String actionId, String userId) {
         access.require(userId, Permission.APPROVE);
@@ -462,15 +584,54 @@ public final class AgentActionService {
 
     /** 回滚：把这次改过的那个版本的权重补偿回变更前的值。 */
     public AgentAction rollback(String actionId, String userId) {
+        AgentAction current = require(actionId, userId);
+        return rollback(actionId, userId, current.plan() == null ? null : current.plan().planVersion(),
+                current.plan() == null ? null : current.plan().planHash());
+    }
+
+    /** Compensation approval is separately bound to the exact plan and follows the same risk rules. */
+    public AgentAction rollback(String actionId, String userId, Integer planVersion, String planHash) {
         access.require(userId, Permission.APPROVE);
         AgentAction applied = require(actionId, userId);
         if (!applied.status().reversible()) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
                     "这条变更当前是「" + applied.status().label() + "」，不能回滚");
         }
+        Integer currentPlanVersion = applied.plan() == null ? null : applied.plan().planVersion();
+        String currentPlanHash = applied.plan() == null ? null : applied.plan().planHash();
+        if (!Objects.equals(planVersion, currentPlanVersion)
+                || !Objects.equals(planHash, currentPlanHash)) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                    "回滚审批的计划版本或摘要不一致，请重新查看计划");
+        }
+        RiskBasedApprovalPolicy.Decision decision = currentPolicy(applied);
+        requireCanApprove(applied, userId, decision);
+        try {
+            actions.recordApproval(approval(applied, ActionApproval.Stage.ROLLBACK, decision, userId));
+        } catch (ActionUpdateConflictException ex) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                    "计划已变化或已被处理，回滚审批没有登记");
+        }
+        if (currentApprovals(applied, ActionApproval.Stage.ROLLBACK, decision).size()
+                < decision.requiredApprovals()) {
+            return applied;
+        }
         long now = System.currentTimeMillis();
         AgentAction claimed = actions.transition(actionId, ActionStatus.SUCCESS,
-                        current -> new ActionDraft(current).move(ActionStatus.ROLLING_BACK, null).toAction(now))
+                        current -> {
+                            if (!Objects.equals(current.plan() == null ? null : current.plan().planVersion(), planVersion)
+                                    || !Objects.equals(current.plan() == null ? null : current.plan().planHash(), planHash)) {
+                                throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                                        "回滚计划在审批期间发生变化");
+                            }
+                            requireSamePolicy(current, decision);
+                            if (currentApprovals(current, ActionApproval.Stage.ROLLBACK, decision).size()
+                                    < decision.requiredApprovals()) {
+                                throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                                        "回滚审批人数或实时授权已变化，尚不能执行");
+                            }
+                            return new ActionDraft(current).move(ActionStatus.ROLLING_BACK, null).toAction(now);
+                        })
                 .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.CONFLICT,
                         "这条变更已经被处理过了，不会重复回滚"));
         log.info("变更 {} 开始补偿回滚：{}", actionId, claimed.describe());

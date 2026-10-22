@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.AgentCheckpoint;
@@ -727,6 +728,59 @@ public final class JdbcAgentStore implements AutoCloseable {
         }
 
         @Override
+        public List<ActionApproval> approvals(String actionId, ActionApproval.Stage stage, int planVersion,
+                                              String planHash, String policyVersion) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT * FROM agent_action_approval WHERE action_id=? AND approval_stage=? "
+                                + "AND plan_version=? AND plan_hash=? AND policy_version=? "
+                                + "ORDER BY approved_at, approver",
+                        row -> new ActionApproval(row.getString("action_id"),
+                                ActionApproval.Stage.valueOf(row.getString("approval_stage")),
+                                row.getInt("plan_version"), row.getString("plan_hash"),
+                                row.getString("policy_version"), row.getString("approver"), row.getLong("approved_at")),
+                        actionId, stage.name(), planVersion, planHash, policyVersion);
+            }
+        }
+
+        @Override
+        public boolean recordApproval(ActionApproval approval) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    AgentAction current = actions.find(approval.actionId()).orElseThrow(() ->
+                            new ActionUpdateConflictException(approval.actionId()));
+                    ActionStatus expected = approval.stage() == ActionApproval.Stage.APPLY
+                            ? ActionStatus.PENDING_APPROVAL : ActionStatus.SUCCESS;
+                    int planVersion = current.plan() == null ? ActionApproval.LEGACY_PLAN_VERSION
+                            : current.plan().planVersion();
+                    String planHash = current.plan() == null ? ActionApproval.LEGACY_PLAN_HASH
+                            : current.plan().planHash();
+                    if (current.status() != expected || approval.planVersion() != planVersion
+                            || !approval.planHash().equals(planHash)) {
+                        throw new ActionUpdateConflictException(approval.actionId());
+                    }
+                    try (PreparedStatement statement = connection.prepareStatement(
+                            "INSERT INTO agent_action_approval(action_id,approval_stage,plan_version,plan_hash,"
+                                    + "policy_version,approver,approved_at) VALUES(?,?,?,?,?,?,?)")) {
+                        statement.setString(1, approval.actionId());
+                        statement.setString(2, approval.stage().name());
+                        statement.setInt(3, approval.planVersion());
+                        statement.setString(4, approval.planHash());
+                        statement.setString(5, approval.policyVersion());
+                        statement.setString(6, approval.approver());
+                        statement.setLong(7, approval.approvedAtMillis());
+                        statement.executeUpdate();
+                    } catch (SQLException ex) {
+                        if ("23505".equals(ex.getSQLState())) { return false; }
+                        throw new IllegalStateException("保存审批回执失败", ex);
+                    }
+                    String namespace = sessions.find(current.sessionId()).map(Session::targetNamespace).orElse("");
+                    appendAudit("ACTION_APPROVAL_RECORDED", approval.actionId(), approval.approver(), namespace, approval);
+                    return true;
+                });
+            }
+        }
+
+        @Override
         public Optional<AgentAction> transition(String actionId, ActionStatus expected,
                                                 UnaryOperator<AgentAction> mutation) {
             synchronized (JdbcAgentStore.this) {
@@ -1383,7 +1437,20 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "session_id VARCHAR(64) NOT NULL, plan_hash VARCHAR(64) NOT NULL, "
                                         + "plan_json TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(plan_id,plan_version))",
                                 "CREATE INDEX IF NOT EXISTS idx_remediation_plan_session ON agent_remediation_plan(session_id,created_at)"),
-                        List.of(), List.of()));
+                        List.of(), List.of()),
+                new Migration(12, "immutable plan and policy scoped approvals",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_approval ("
+                                        + "approval_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, "
+                                        + "action_id VARCHAR(64) NOT NULL, approval_stage VARCHAR(16) NOT NULL, "
+                                        + "plan_version INT NOT NULL, plan_hash VARCHAR(64) NOT NULL, "
+                                        + "policy_version VARCHAR(128) NOT NULL, approver VARCHAR(128) NOT NULL, "
+                                        + "approved_at BIGINT NOT NULL, "
+                                        + "CONSTRAINT uq_action_approval UNIQUE(action_id,approval_stage,plan_version,"
+                                        + "plan_hash,policy_version,approver), "
+                                        + "FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)"),
+                        List.of(), List.of(new Index("idx_action_approval_lookup",
+                                "CREATE INDEX idx_action_approval_lookup ON agent_action_approval"
+                                        + "(action_id,approval_stage,plan_version,policy_version)"))));
 
     private void migrate() throws SQLException {
         // applied_at 用毫秒时间戳：与业务表同一口径，也不依赖各驱动对 TIMESTAMP 的绑定细节。
@@ -1469,7 +1536,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         String expected = name.toLowerCase(Locale.ROOT);
         Set<String> found = new HashSet<>();
         for (String table : List.of("agent_message", "agent_incident", "agent_task", "agent_step", "agent_evidence",
-                "agent_checkpoint", "agent_action")) {
+                "agent_checkpoint", "agent_action", "agent_action_approval")) {
             for (String candidate : List.of(table, table.toUpperCase(Locale.ROOT))) {
                 try (ResultSet indexes = metadata.getIndexInfo(null, null, candidate, false, false)) {
                     while (indexes.next()) {

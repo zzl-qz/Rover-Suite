@@ -1,12 +1,16 @@
 package com.rover.agent.runtime.repository;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.RemediationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import java.util.Comparator;
 import java.util.List;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
@@ -16,6 +20,7 @@ public final class InMemoryAgentActionRepository implements AgentActionRepositor
 
     private final BoundedStore<String, AgentAction> actions;
     private final BoundedStore<String, RemediationPlan> plans;
+    private final Map<String, List<ActionApproval>> approvals = new HashMap<>();
     private final int capacity;
 
     public InMemoryAgentActionRepository(int capacity) {
@@ -104,6 +109,39 @@ public final class InMemoryAgentActionRepository implements AgentActionRepositor
     }
 
     @Override
+    public synchronized List<ActionApproval> approvals(String actionId, ActionApproval.Stage stage, int planVersion,
+                                                       String planHash, String policyVersion) {
+        return approvals.getOrDefault(actionId, List.of()).stream()
+                .filter(approval -> approval.stage() == stage && approval.planVersion() == planVersion
+                        && approval.planHash().equals(planHash) && approval.policyVersion().equals(policyVersion))
+                .sorted(Comparator.comparingLong(ActionApproval::approvedAtMillis)
+                        .thenComparing(ActionApproval::approver))
+                .toList();
+    }
+
+    @Override
+    public synchronized boolean recordApproval(ActionApproval approval) {
+        AgentAction action = actions.get(approval.actionId()).orElseThrow(() ->
+                new ActionUpdateConflictException(approval.actionId()));
+        ActionStatus expected = approval.stage() == ActionApproval.Stage.APPLY
+                ? ActionStatus.PENDING_APPROVAL : ActionStatus.SUCCESS;
+        int version = action.plan() == null ? ActionApproval.LEGACY_PLAN_VERSION : action.plan().planVersion();
+        String hash = action.plan() == null ? ActionApproval.LEGACY_PLAN_HASH : action.plan().planHash();
+        if (action.status() != expected || approval.planVersion() != version || !approval.planHash().equals(hash)) {
+            throw new ActionUpdateConflictException(approval.actionId());
+        }
+        List<ActionApproval> rows = approvals.computeIfAbsent(approval.actionId(), ignored -> new ArrayList<>());
+        if (rows.stream().anyMatch(existing -> existing.stage() == approval.stage()
+                && existing.planVersion() == approval.planVersion() && existing.planHash().equals(approval.planHash())
+                && existing.policyVersion().equals(approval.policyVersion())
+                && existing.approver().equals(approval.approver()))) {
+            return false;
+        }
+        rows.add(approval);
+        return true;
+    }
+
+    @Override
     public synchronized Optional<AgentAction> find(String actionId) {
         return actionId == null ? Optional.empty() : actions.get(actionId);
     }
@@ -131,6 +169,10 @@ public final class InMemoryAgentActionRepository implements AgentActionRepositor
 
     @Override
     public synchronized int removeBySession(String sessionId) {
-        return actions.removeMatching(action -> Objects.equals(action.sessionId(), sessionId));
+        List<String> removed = actions.valuesMatching(action -> Objects.equals(action.sessionId(), sessionId)).stream()
+                .map(AgentAction::actionId).toList();
+        int count = actions.removeMatching(action -> Objects.equals(action.sessionId(), sessionId));
+        removed.forEach(approvals::remove);
+        return count;
     }
 }

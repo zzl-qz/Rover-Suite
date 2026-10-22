@@ -28,6 +28,7 @@ import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.runtime.action.ActionExecutor;
 import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.action.RouteWeightActionExecutor;
+import com.rover.agent.runtime.action.RiskBasedApprovalPolicy;
 import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.knowledge.InMemoryKnowledgeStore;
 import com.rover.agent.runtime.llm.ChatModelGateway;
@@ -371,10 +372,21 @@ public class AgentRuntimeConfiguration {
 
     /** 装配依赖路由控制端口和变更仓储的权重执行器。 */
     @Bean
+    public RiskBasedApprovalPolicy agentActionApprovalPolicy(
+            @Value("${rover.agent.approvals.policy-id:risk-approval-v1}") String policyId,
+            @Value("${rover.agent.approvals.high-impact-percent:25}") double highImpactPercent,
+            @Value("${rover.agent.approvals.r2-approvers:1}") int r2Approvers,
+            @Value("${rover.agent.approvals.r3-approvers:2}") int r3Approvers) {
+        return new RiskBasedApprovalPolicy(policyId, highImpactPercent, r2Approvers, r3Approvers);
+    }
+
+    @Bean
     public ActionExecutor agentActionExecutor(RouteControlPort routeControlPort,
                                              AgentActionRepository agentActionRepository,
-                                             ObjectProvider<AgentAccess> access) {
-        return new RouteWeightActionExecutor(routeControlPort, agentActionRepository, access.getIfAvailable(AgentAccess::local));
+                                             ObjectProvider<AgentAccess> access,
+                                             RiskBasedApprovalPolicy approvalPolicy) {
+        return new RouteWeightActionExecutor(routeControlPort, agentActionRepository,
+                access.getIfAvailable(AgentAccess::local), approvalPolicy);
     }
 
     /** 装配受控变更服务；模型仅可调用 propose，人工接口负责审批和后续操作。 */
@@ -382,9 +394,10 @@ public class AgentRuntimeConfiguration {
     public AgentActionService agentActionService(AgentActionRepository agentActionRepository,
                                                  AgentSessionRepository agentSessionRepository,
                                                  RouteControlPort routeControlPort,
-                                                 ActionExecutor agentActionExecutor, ObjectProvider<AgentAccess> access) {
+                                                 ActionExecutor agentActionExecutor, ObjectProvider<AgentAccess> access,
+                                                 RiskBasedApprovalPolicy approvalPolicy) {
         return new AgentActionService(agentActionRepository, agentSessionRepository, routeControlPort,
-                agentActionExecutor, access.getIfAvailable(AgentAccess::local));
+                agentActionExecutor, access.getIfAvailable(AgentAccess::local), approvalPolicy);
     }
 
     /** Agent 应用入口：目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */

@@ -40,6 +40,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -157,6 +158,91 @@ class AgentActionServiceTest {
         assertEquals(ActionStatus.PRECONDITION_FAILED, stopped.status());
         org.mockito.Mockito.verify(guarded, org.mockito.Mockito.never()).adjustTargetWeight(anyString(), anyString(), anyString(),
                 org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(), anyString(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void highImpactApplyAndCompensationRequireDistinctCurrentApprovers() {
+        gateway.resourceRef = planResource();
+        gateway.applyWeight("v2", 50);
+        var access = (com.rover.agent.core.port.AgentAccess) principal -> Set.of(
+                com.rover.agent.core.port.AgentAccess.Permission.READ,
+                com.rover.agent.core.port.AgentAccess.Permission.PROPOSE,
+                com.rover.agent.core.port.AgentAccess.Permission.APPROVE);
+        var policy = new RiskBasedApprovalPolicy("risk-test", 25, 1, 2);
+        service = new AgentActionService(repository, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, repository, access, policy), access, policy);
+
+        AgentAction pending = propose(20);
+        assertEquals(com.rover.agent.core.model.RemediationPlan.RiskLevel.R3, pending.plan().riskAssessment().level());
+        assertThrows(com.rover.agent.core.port.AgentAccess.Denied.class,
+                () -> service.approve(pending.actionId(), OWNER, 1, pending.plan().planHash()));
+
+        AgentAction first = service.approve(pending.actionId(), "reviewer-a", 1, pending.plan().planHash());
+        assertEquals(ActionStatus.PENDING_APPROVAL, first.status());
+        assertEquals(0, gateway.writes);
+        assertEquals(1, service.approvalProgress(pending.actionId(), "reviewer-a",
+                com.rover.agent.core.model.ActionApproval.Stage.APPLY).currentApprovals());
+        assertEquals(ActionStatus.PENDING_APPROVAL,
+                service.approve(pending.actionId(), "reviewer-a", 1, pending.plan().planHash()).status(),
+                "同一人重复点击不能凑够双人审批");
+
+        AgentAction applied = service.approve(pending.actionId(), "reviewer-b", 1, pending.plan().planHash());
+        assertEquals(ActionStatus.SUCCESS, applied.status());
+        assertEquals(1, gateway.writes);
+
+        AgentAction waitingForRollback = service.rollback(applied.actionId(), "reviewer-a", 1,
+                applied.plan().planHash());
+        assertEquals(ActionStatus.SUCCESS, waitingForRollback.status());
+        assertEquals(1, gateway.writes, "补偿同样需要完整的独立审批");
+        assertEquals(1, service.approvalProgress(applied.actionId(), "reviewer-b",
+                com.rover.agent.core.model.ActionApproval.Stage.ROLLBACK).currentApprovals());
+        AgentAction rolledBack = service.rollback(applied.actionId(), "reviewer-b", 1, applied.plan().planHash());
+        assertEquals(ActionStatus.ROLLED_BACK, rolledBack.status());
+        assertEquals(2, gateway.writes);
+    }
+
+    @Test
+    void revokedApproverDoesNotCountAndChangedPolicyInvalidatesOldApprovals() {
+        gateway.resourceRef = planResource();
+        gateway.applyWeight("v2", 50);
+        AtomicReference<Map<String, Set<com.rover.agent.core.port.AgentAccess.Permission>>> current =
+                new AtomicReference<>(Map.of(
+                        OWNER, Set.of(com.rover.agent.core.port.AgentAccess.Permission.values()),
+                        "reviewer-a", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                                com.rover.agent.core.port.AgentAccess.Permission.APPROVE),
+                        "reviewer-b", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                                com.rover.agent.core.port.AgentAccess.Permission.APPROVE),
+                        "reviewer-c", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                                com.rover.agent.core.port.AgentAccess.Permission.APPROVE)));
+        var access = (com.rover.agent.core.port.AgentAccess) principal ->
+                current.get().getOrDefault(principal, Set.of());
+        var firstPolicy = new RiskBasedApprovalPolicy("risk-test", 25, 1, 2);
+        service = new AgentActionService(repository, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, repository, access, firstPolicy), access, firstPolicy);
+        AgentAction pending = propose(20);
+        service.approve(pending.actionId(), "reviewer-a", 1, pending.plan().planHash());
+
+        current.set(Map.of(
+                OWNER, Set.of(com.rover.agent.core.port.AgentAccess.Permission.values()),
+                "reviewer-b", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                        com.rover.agent.core.port.AgentAccess.Permission.APPROVE),
+                "reviewer-c", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                        com.rover.agent.core.port.AgentAccess.Permission.APPROVE)));
+        assertEquals(ActionStatus.PENDING_APPROVAL,
+                service.approve(pending.actionId(), "reviewer-b", 1, pending.plan().planHash()).status());
+        assertEquals(0, gateway.writes);
+
+        var tightenedPolicy = new RiskBasedApprovalPolicy("risk-test", 25, 1, 3);
+        service = new AgentActionService(repository, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, repository, access, tightenedPolicy), access, tightenedPolicy);
+        assertEquals(ActionStatus.PENDING_APPROVAL,
+                service.approve(pending.actionId(), "reviewer-c", 1, pending.plan().planHash()).status(),
+                "策略升级后的审批不能与旧策略下的记录混用");
+        var progress = service.approvalProgress(pending.actionId(), "reviewer-c",
+                com.rover.agent.core.model.ActionApproval.Stage.APPLY);
+        assertEquals(3, progress.requiredApprovals());
+        assertEquals(1, progress.currentApprovals());
+        assertEquals(0, gateway.writes);
     }
 
     @Test
