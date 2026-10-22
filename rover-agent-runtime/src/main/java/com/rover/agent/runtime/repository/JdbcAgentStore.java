@@ -7,6 +7,7 @@ import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.ActionApproval;
+import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.AgentCheckpoint;
@@ -37,6 +38,7 @@ import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
@@ -97,6 +99,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final Tasks tasks = new Tasks();
     private final Checkpoints checkpoints = new Checkpoints();
     private final Actions actions = new Actions();
+    private final ActionCommands actionCommands = new ActionCommands();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -111,6 +114,7 @@ public final class JdbcAgentStore implements AutoCloseable {
             connection = DriverManager.getConnection(jdbcUrl, "sa", "");
             migrate();
             recoverJobs();
+            recoverActionCommands();
             recoverInterrupted();
             recoverInterruptedActions();
         } catch (SQLException ex) {
@@ -143,6 +147,8 @@ public final class JdbcAgentStore implements AutoCloseable {
     public AgentActionRepository actions() {
         return actions;
     }
+
+    public ActionCommandRepository actionCommands() { return actionCommands; }
 
     /** 资源笔记：有已确认根因的调查才会写，按资源键读一条。 */
     public synchronized Optional<ResourceNote> findNote(String resourceKey) {
@@ -234,6 +240,18 @@ public final class JdbcAgentStore implements AutoCloseable {
                 row.getLong("attempt"), row.getString("state"), row.getString("budget_json"), row.getLong("not_before"));
     }
 
+    private static ActionCommandRepository.Job readActionCommandJob(ResultSet row) throws SQLException {
+        var command = new ActionExecutionCommand(row.getString("command_id"), row.getString("action_id"),
+                ActionType.valueOf(row.getString("action_type")),
+                ActionExecutionCommand.Phase.valueOf(row.getString("phase")),
+                fromJson(row.getString("scope_json"), com.rover.agent.core.model.ResourceScope.class),
+                row.getString("control_target_id"), row.getString("target_namespace"), row.getInt("plan_version"),
+                row.getString("plan_hash"), row.getString("policy_version"), row.getString("operation_id"), row.getString("actor"),
+                row.getLong("created_at"));
+        return new ActionCommandRepository.Job(command, row.getLong("attempt"), row.getString("state"),
+                row.getLong("not_before"));
+    }
+
     public synchronized Optional<Job> claimJob(String taskId, long expectedAttempt) {
         return inTransaction(() -> {
             if (run("UPDATE agent_job SET state='RUNNING',attempt=attempt+1 WHERE task_id=? AND state='PENDING' AND attempt=? AND not_before<=?",
@@ -268,6 +286,10 @@ public final class JdbcAgentStore implements AutoCloseable {
         run("UPDATE agent_job SET state='DONE' WHERE state IN ('PENDING','RUNNING') AND task_id IN "
                 + "(SELECT task_id FROM agent_task WHERE status NOT IN ('PENDING','RUNNING'))");
         run("UPDATE agent_job SET state='PENDING' WHERE state='RUNNING'");
+    }
+
+    private void recoverActionCommands() {
+        run("UPDATE agent_action_command SET state='PENDING' WHERE state='RUNNING'");
     }
 
     @Override
@@ -803,6 +825,82 @@ public final class JdbcAgentStore implements AutoCloseable {
         public int removeBySession(String sessionId) {
             synchronized (JdbcAgentStore.this) {
                 return run("DELETE FROM agent_action WHERE session_id = ?", sessionId);
+            }
+        }
+    }
+
+    private final class ActionCommands implements ActionCommandRepository {
+
+        @Override
+        public void enqueue(ActionExecutionCommand command) {
+            synchronized (JdbcAgentStore.this) {
+                inTransaction(() -> {
+                    ActionCommandRepository.Job existing = queryOne("SELECT * FROM agent_action_command WHERE command_id=?",
+                            JdbcAgentStore::readActionCommandJob, command.commandId()).orElse(null);
+                    if (existing != null) {
+                        if ("DONE".equals(existing.state())) {
+                            run("UPDATE agent_action_command SET state='PENDING',actor=?,"
+                                            + "created_at=?,not_before=0,last_error=NULL WHERE command_id=? AND state='DONE'",
+                                    command.actor(), command.createdAtMillis(), command.commandId());
+                            appendAudit("ACTION_COMMAND_REQUEUED", command.actionId(), command.actor(),
+                                    command.targetNamespace(), command);
+                        }
+                        return null;
+                    }
+                    run("INSERT INTO agent_action_command(command_id,action_id,action_type,phase,scope_json,"
+                                    + "control_target_id,target_namespace,plan_version,plan_hash,policy_version,operation_id,actor,"
+                                    + "attempt,state,not_before,created_at,last_error) "
+                                    + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,'PENDING',0,?,NULL)",
+                            command.commandId(), command.actionId(), command.actionType().name(), command.phase().name(),
+                            toJson(command.scope()), command.controlTargetId(), command.targetNamespace(),
+                            command.planVersion(), command.planHash(), command.policyVersion(), command.operationId(), command.actor(),
+                            command.createdAtMillis());
+                    appendAudit("ACTION_COMMAND_QUEUED", command.actionId(), command.actor(),
+                            command.targetNamespace(), command);
+                    return null;
+                });
+            }
+        }
+
+        @Override
+        public List<ActionCommandRepository.Job> pending(long nowMillis, int limit) {
+            if (limit < 1 || limit > 1000) { throw new IllegalArgumentException("command batch limit is invalid"); }
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT * FROM agent_action_command WHERE state='PENDING' AND not_before<=? "
+                                + "ORDER BY created_at,command_id LIMIT ?", JdbcAgentStore::readActionCommandJob,
+                        nowMillis, limit);
+            }
+        }
+
+        @Override
+        public Optional<ActionCommandRepository.Job> claim(String commandId, long expectedAttempt) {
+            synchronized (JdbcAgentStore.this) {
+                int changed = run("UPDATE agent_action_command SET state='RUNNING',attempt=attempt+1 "
+                                + "WHERE command_id=? AND state='PENDING' AND attempt=? AND not_before<=?",
+                        commandId, expectedAttempt, System.currentTimeMillis());
+                return changed == 1 ? queryOne("SELECT * FROM agent_action_command WHERE command_id=?",
+                        JdbcAgentStore::readActionCommandJob, commandId) : Optional.empty();
+            }
+        }
+
+        @Override
+        public void finish(String commandId, long attempt) {
+            synchronized (JdbcAgentStore.this) {
+                if (run("UPDATE agent_action_command SET state='DONE',last_error=NULL "
+                                + "WHERE command_id=? AND state='RUNNING' AND attempt=?", commandId, attempt) != 1) {
+                    throw new IllegalStateException("action command attempt is stale");
+                }
+            }
+        }
+
+        @Override
+        public void retry(String commandId, long attempt, long notBeforeMillis, String reason) {
+            synchronized (JdbcAgentStore.this) {
+                if (run("UPDATE agent_action_command SET state='PENDING',not_before=?,last_error=? "
+                                + "WHERE command_id=? AND state='RUNNING' AND attempt=?",
+                        notBeforeMillis, reason, commandId, attempt) != 1) {
+                    throw new IllegalStateException("action command attempt is stale");
+                }
             }
         }
     }
@@ -1450,7 +1548,21 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)"),
                         List.of(), List.of(new Index("idx_action_approval_lookup",
                                 "CREATE INDEX idx_action_approval_lookup ON agent_action_approval"
-                                        + "(action_id,approval_stage,plan_version,policy_version)"))));
+                                        + "(action_id,approval_stage,plan_version,policy_version)"))),
+                new Migration(13, "typed durable action commands by managed target",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_command ("
+                                        + "command_id VARCHAR(256) PRIMARY KEY, action_id VARCHAR(64) NOT NULL, "
+                                        + "action_type VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL, "
+                                        + "scope_json TEXT, control_target_id VARCHAR(255) NOT NULL, "
+                                        + "target_namespace VARCHAR(255) NOT NULL, plan_version INT NOT NULL, "
+                                        + "plan_hash VARCHAR(64) NOT NULL, policy_version VARCHAR(128) NOT NULL, "
+                                        + "operation_id VARCHAR(64), actor VARCHAR(128), "
+                                        + "attempt BIGINT NOT NULL, state VARCHAR(16) NOT NULL, not_before BIGINT NOT NULL, "
+                                        + "created_at BIGINT NOT NULL, last_error TEXT, "
+                                        + "FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_action_command_due ON agent_action_command(state,not_before,created_at)",
+                                "CREATE INDEX IF NOT EXISTS idx_action_command_target ON agent_action_command(target_namespace,control_target_id,created_at)"),
+                        List.of(), List.of()));
 
     private void migrate() throws SQLException {
         // applied_at 用毫秒时间戳：与业务表同一口径，也不依赖各驱动对 TIMESTAMP 的绑定细节。
@@ -1580,23 +1692,36 @@ public final class JdbcAgentStore implements AutoCloseable {
     private void recoverInterruptedActions() {
         synchronized (this) {
             inTransaction(() -> {
-            List<AgentAction> interrupted = query("SELECT * FROM agent_action WHERE status IN (?,?,?)",
-                    JdbcAgentStore.this::readActionRow, ActionStatus.EXECUTING.name(), ActionStatus.VERIFYING.name(), ActionStatus.ROLLING_BACK.name());
+            List<AgentAction> interrupted = query("SELECT * FROM agent_action WHERE status IN (?,?,?,?)",
+                    JdbcAgentStore.this::readActionRow, ActionStatus.EXECUTING.name(), ActionStatus.VERIFYING.name(),
+                    ActionStatus.ROLLING_BACK.name(), ActionStatus.RECONCILING.name());
             long now = System.currentTimeMillis();
             int unsent = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE status = ? AND apply_operation_id IS NULL",
+                            + "version = version + 1 WHERE status = ? AND apply_operation_id IS NULL "
+                            + "AND NOT EXISTS (SELECT 1 FROM agent_action_command c WHERE c.action_id=agent_action.action_id "
+                            + "AND c.state IN ('PENDING','RUNNING'))",
                     ActionStatus.FAILED.name(), RESTART_NOT_SUBMITTED, now, ActionStatus.EXECUTING.name());
             int unknown = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE status IN (?, ?) AND apply_operation_id IS NOT NULL",
+                            + "version = version + 1 WHERE status IN (?, ?) AND apply_operation_id IS NOT NULL "
+                            + "AND NOT EXISTS (SELECT 1 FROM agent_action_command c WHERE c.action_id=agent_action.action_id "
+                            + "AND c.state IN ('PENDING','RUNNING'))",
                     ActionStatus.UNCERTAIN.name(), RESTART_UNKNOWN, now, ActionStatus.EXECUTING.name(),
                     ActionStatus.VERIFYING.name());
             int rollbackUnsent = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NULL",
+                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NULL "
+                            + "AND NOT EXISTS (SELECT 1 FROM agent_action_command c WHERE c.action_id=agent_action.action_id "
+                            + "AND c.state IN ('PENDING','RUNNING'))",
                     ActionStatus.SUCCESS.name(), RESTART_ROLLBACK_NOT_SUBMITTED, now,
                     ActionStatus.ROLLING_BACK.name());
             int rollbackUnknown = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NOT NULL",
+                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NOT NULL "
+                            + "AND NOT EXISTS (SELECT 1 FROM agent_action_command c WHERE c.action_id=agent_action.action_id "
+                            + "AND c.state IN ('PENDING','RUNNING'))",
                     ActionStatus.UNCERTAIN.name(), RESTART_UNKNOWN, now, ActionStatus.ROLLING_BACK.name());
+            run("UPDATE agent_action SET status=?,error_message=?,updated_at=?,version=version+1 "
+                            + "WHERE status=? AND NOT EXISTS (SELECT 1 FROM agent_action_command c "
+                            + "WHERE c.action_id=agent_action.action_id AND c.state IN ('PENDING','RUNNING'))",
+                    ActionStatus.UNCERTAIN.name(), RESTART_UNKNOWN, now, ActionStatus.RECONCILING.name());
             if (unsent + unknown + rollbackUnsent + rollbackUnknown > 0) {
                 log.warn("重启前有 {} 条变更停在执行中：{} 条未提交（判为失败）、{} 条结果未知（待确认）",
                         unsent + unknown + rollbackUnsent + rollbackUnknown,

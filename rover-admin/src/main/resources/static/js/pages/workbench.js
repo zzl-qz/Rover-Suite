@@ -527,6 +527,7 @@ window.RoverAdminPages.workbench = {
             if (!sessionId) {
                 this.wbActions = [];
                 this.wbApprovalProgress = {};
+                this.wbScheduleActionRefresh('', false);
                 return;
             }
             try {
@@ -538,12 +539,31 @@ window.RoverAdminPages.workbench = {
                 if (this.wbActiveSessionId !== sessionId) return;
                 this.wbActions = Array.isArray(list) ? list : [];
                 this.wbApprovalProgress = this.wbApprovalProgressMap(progress);
+                this.wbScheduleActionRefresh(sessionId, this.wbActions.some(action => this.wbActionInFlight(action)));
             } catch (e) {
                 if (this.wbActiveSessionId === sessionId) {
                     this.wbActions = [];
                     this.wbApprovalProgress = {};
+                    this.wbScheduleActionRefresh(sessionId, false);
                 }
             }
+        },
+
+        wbActionInFlight(action) {
+            return action && ['QUEUED', 'EXECUTING', 'VERIFYING', 'ROLLBACK_QUEUED',
+                'ROLLING_BACK', 'RECONCILING'].includes(action.status);
+        },
+
+        wbScheduleActionRefresh(sessionId, active) {
+            if (this._wbActionTimer) {
+                clearTimeout(this._wbActionTimer);
+                this._wbActionTimer = null;
+            }
+            if (!active || !sessionId || this.wbActiveSessionId !== sessionId) return;
+            this._wbActionTimer = setTimeout(() => {
+                this._wbActionTimer = null;
+                if (this.wbActiveSessionId === sessionId) this.wbLoadActions(sessionId);
+            }, 750);
         },
 
         wbApprovalProgressMap(progress) {
@@ -586,6 +606,8 @@ window.RoverAdminPages.workbench = {
                     '/api/agent/actions/' + encodeURIComponent(action.actionId) + '/' + command,
                     options);
                 this.wbReplaceAction(updated);
+                this.wbScheduleActionRefresh(this.wbActiveSessionId,
+                    this.wbActions.some(item => this.wbActionInFlight(item)));
                 await this.wbLoadApprovalProgress(this.wbActiveSessionId);
             } catch (e) {
                 // 被拒（已被处理过、状态不允许）或执行异常：记在卡片上，并重新拉一次真实状态
@@ -672,15 +694,18 @@ window.RoverAdminPages.workbench = {
         wbActionStatusLabel(status) {
             return {
                 PENDING_APPROVAL: '待审批',
+                QUEUED: '已排队',
                 EXECUTING: '执行中',
                 VERIFYING: '验证中',
                 SUCCESS: '已完成',
                 FAILED: '失败',
                 PRECONDITION_FAILED: '预检未通过',
                 UNCERTAIN: '结果未知',
+                RECONCILING: '确认中',
                 REJECTED: '已拒绝',
                 SUPERSEDED: '已有新版本',
                 ROLLING_BACK: '回滚中',
+                ROLLBACK_QUEUED: '回滚已排队',
                 ROLLED_BACK: '已回滚',
                 ROLLBACK_PRECONDITION_FAILED: '回滚预检未通过',
             }[status] || status || '';
@@ -696,6 +721,9 @@ window.RoverAdminPages.workbench = {
                 ROLLBACK_PRECONDITION_FAILED: 'bad',
                 UNCERTAIN: 'warn',
                 PENDING_APPROVAL: 'warn',
+                QUEUED: 'warn',
+                ROLLBACK_QUEUED: 'warn',
+                RECONCILING: 'warn',
                 REJECTED: 'comp',
                 SUPERSEDED: 'comp',
             }[status] || 'comp';
@@ -794,6 +822,8 @@ window.RoverAdminPages.workbench = {
             switch (action.status) {
                 case 'PENDING_APPROVAL':
                     return { mark: '○', text: '尚未执行，等人工批准', tone: 'idle' };
+                case 'QUEUED':
+                    return { mark: '●', text: '审批已通过，等待 Admin 执行', tone: 'run' };
                 case 'REJECTED':
                     return { mark: '○', text: '已拒绝，未执行', tone: 'idle' };
                 case 'SUPERSEDED':
@@ -804,6 +834,10 @@ window.RoverAdminPages.workbench = {
                     return { mark: '●', text: '已提交，正在回读路由确认结果', tone: 'run' };
                 case 'ROLLING_BACK':
                     return { mark: '●', text: '正在把权重补偿回变更前的值', tone: 'run' };
+                case 'ROLLBACK_QUEUED':
+                    return { mark: '●', text: '补偿审批已通过，等待 Admin 执行', tone: 'run' };
+                case 'RECONCILING':
+                    return { mark: '●', text: '正在使用原操作号确认结果', tone: 'run' };
                 case 'SUCCESS':
                     return { mark: '✓', text: '已提交并回读确认，权重已生效', tone: 'ok' };
                 case 'ROLLED_BACK':

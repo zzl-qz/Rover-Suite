@@ -228,9 +228,10 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(12, store.schemaVersion(),
+            assertEquals(13, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
-                            + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证");
+                            + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
+                            + "v13 保存按管理目标绑定的持久动作命令");
         }
 
         // 模拟"迁移记录丢了但表还在"：MySQL 的 DDL 不能回滚，重跑必须照样通过。
@@ -241,7 +242,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-        assertEquals(12, store.schemaVersion());
+        assertEquals(13, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -286,7 +287,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(12, upgraded.schemaVersion());
+            assertEquals(13, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }

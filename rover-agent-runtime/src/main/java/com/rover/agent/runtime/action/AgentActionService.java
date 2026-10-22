@@ -2,6 +2,7 @@ package com.rover.agent.runtime.action;
 
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.ActionApproval;
+import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.RemediationPlan;
@@ -15,6 +16,7 @@ import com.rover.agent.core.port.RouteControlRoute;
 import com.rover.agent.core.port.RouteControlState;
 import com.rover.agent.core.port.RouteControlTarget;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.util.Texts;
@@ -39,9 +41,11 @@ public final class AgentActionService {
     private final AgentActionRepository actions;
     private final AgentSessionRepository sessions;
     private final RouteControlPort control;
-    private final ActionExecutor executor;
+    private final ActionExecutorRegistry executors;
     private final AgentAccess access;
     private final RiskBasedApprovalPolicy approvalPolicy;
+    private final ActionCommandRepository commands;
+    private final boolean asynchronousExecution;
 
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutor executor) {
@@ -56,12 +60,25 @@ public final class AgentActionService {
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutor executor, AgentAccess access,
                               RiskBasedApprovalPolicy approvalPolicy) {
+        this(actions, sessions, control, new ActionExecutorRegistry(List.of(executor)), access, approvalPolicy,
+                null, false);
+    }
+
+    public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
+                              RouteControlPort control, ActionExecutorRegistry executors, AgentAccess access,
+                              RiskBasedApprovalPolicy approvalPolicy, ActionCommandRepository commands,
+                              boolean asynchronousExecution) {
         this.actions = actions;
         this.sessions = sessions;
         this.control = control;
-        this.executor = executor;
+        this.executors = executors;
         this.access = access;
         this.approvalPolicy = approvalPolicy;
+        this.commands = commands;
+        this.asynchronousExecution = asynchronousExecution;
+        if (asynchronousExecution && commands == null) {
+            throw new IllegalArgumentException("asynchronous action execution requires a command repository");
+        }
     }
 
     // ---------------------------------------------------------------- 提议
@@ -426,6 +443,9 @@ public final class AgentActionService {
         if (validApprovals.size() < decision.requiredApprovals()) {
             return pending;
         }
+        if (asynchronousExecution) {
+            commands.enqueue(command(pending, ActionExecutionCommand.Phase.APPLY, userId, decision));
+        }
         long now = System.currentTimeMillis();
         String approver = normalize(userId);
         AgentAction claimed = actions.transition(actionId, ActionStatus.PENDING_APPROVAL,
@@ -438,10 +458,15 @@ public final class AgentActionService {
                                         "审批人数或实时授权已变化，尚不能执行");
                             }
                             return new ActionDraft(current).approvedBy(approver, now)
-                                    .move(ActionStatus.EXECUTING, null).toAction(now);
+                                    .move(asynchronousExecution ? ActionStatus.QUEUED : ActionStatus.EXECUTING,
+                                            null).toAction(now);
                         })
-                .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.CONFLICT,
-                        "这条变更已经被处理过了，不会重复执行"));
+                .orElseGet(() -> asynchronousExecution ? latest(actionId) : null);
+        if (claimed == null) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                    "这条变更已经被处理过了，不会重复执行");
+        }
+        if (asynchronousExecution) { return claimed; }
         log.info("变更 {} 已批准，开始执行：{}（批准人 {}）", actionId, claimed.describe(), approver);
         return execute(claimed, userId);
     }
@@ -552,6 +577,12 @@ public final class AgentActionService {
                 decision.policyVersion(), normalize(userId), System.currentTimeMillis());
     }
 
+    private ActionExecutionCommand command(AgentAction action, ActionExecutionCommand.Phase phase,
+                                           String actor, RiskBasedApprovalPolicy.Decision decision) {
+        String targetNamespace = sessions.find(action.sessionId()).map(Session::targetNamespace).orElse("");
+        return ActionExecutionCommand.from(action, phase, actor, targetNamespace, decision.policyVersion());
+    }
+
     private static int bindingVersion(AgentAction action) {
         return action.plan() == null ? ActionApproval.LEGACY_PLAN_VERSION : action.plan().planVersion();
     }
@@ -616,6 +647,9 @@ public final class AgentActionService {
                 < decision.requiredApprovals()) {
             return applied;
         }
+        if (asynchronousExecution) {
+            commands.enqueue(command(applied, ActionExecutionCommand.Phase.ROLLBACK, userId, decision));
+        }
         long now = System.currentTimeMillis();
         AgentAction claimed = actions.transition(actionId, ActionStatus.SUCCESS,
                         current -> {
@@ -630,10 +664,15 @@ public final class AgentActionService {
                                 throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
                                         "回滚审批人数或实时授权已变化，尚不能执行");
                             }
-                            return new ActionDraft(current).move(ActionStatus.ROLLING_BACK, null).toAction(now);
+                            return new ActionDraft(current).move(asynchronousExecution
+                                    ? ActionStatus.ROLLBACK_QUEUED : ActionStatus.ROLLING_BACK, null).toAction(now);
                         })
-                .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.CONFLICT,
-                        "这条变更已经被处理过了，不会重复回滚"));
+                .orElseGet(() -> asynchronousExecution ? latest(actionId) : null);
+        if (claimed == null) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
+                    "这条变更已经被处理过了，不会重复回滚");
+        }
+        if (asynchronousExecution) { return claimed; }
         log.info("变更 {} 开始补偿回滚：{}", actionId, claimed.describe());
         return execute(claimed, userId);
     }
@@ -645,13 +684,145 @@ public final class AgentActionService {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
                     "这条变更当前是「" + action.status().label() + "」，不需要确认结果");
         }
+        if (asynchronousExecution) {
+            RiskBasedApprovalPolicy.Decision decision = currentPolicy(action);
+            commands.enqueue(command(action, ActionExecutionCommand.Phase.RECONCILE, userId, decision));
+            return actions.transition(actionId, ActionStatus.UNCERTAIN,
+                            current -> new ActionDraft(current).move(ActionStatus.RECONCILING, null)
+                                    .toAction(System.currentTimeMillis()))
+                    .orElseGet(() -> latest(actionId));
+        }
         // 回查可并行读取；执行器的每次写回均检查行版本，迟到结果不能覆盖执行或回滚的新状态。
         return execute(action, userId);
     }
 
+    /** Runs one persisted command. The command envelope is checked against the immutable action before dispatch. */
+    public AgentAction executeCommand(ActionExecutionCommand command) {
+        AgentAction action = latest(command.actionId());
+        if (command.actionType() != action.type() || command.planVersion() != bindingVersion(action)
+                || !command.planHash().equals(bindingHash(action))
+                || !Objects.equals(command.scope(), action.resourceRef() == null ? null : action.resourceRef().scope())
+                || !Objects.equals(command.controlTargetId(), action.resourceRef() == null
+                        ? "" : action.resourceRef().controlTargetId())
+                || !Objects.equals(command.targetNamespace(),
+                        sessions.find(action.sessionId()).map(Session::targetNamespace).orElse(""))) {
+            return stopMismatchedCommand(action, "持久动作命令与动作的管理目标或计划版本不一致");
+        }
+
+        return switch (command.phase()) {
+            case APPLY -> runApplyCommand(action, command);
+            case ROLLBACK -> runRollbackCommand(action, command);
+            case RECONCILE -> runReconcileCommand(action, command);
+        };
+    }
+
+    private AgentAction runApplyCommand(AgentAction action, ActionExecutionCommand command) {
+        if (action.status() == ActionStatus.PENDING_APPROVAL) {
+            if (!executionAuthorized(action, command, ActionApproval.Stage.APPLY)) {
+                return action;
+            }
+            long now = System.currentTimeMillis();
+            action = actions.transition(action.actionId(), ActionStatus.PENDING_APPROVAL,
+                    current -> new ActionDraft(current).approvedBy(command.actor(), now)
+                            .move(ActionStatus.QUEUED, null).toAction(now)).orElseGet(() -> latest(command.actionId()));
+        }
+        if (action.status() == ActionStatus.QUEUED) {
+            if (!executionAuthorized(action, command, ActionApproval.Stage.APPLY)) {
+                return actions.transition(action.actionId(), ActionStatus.QUEUED,
+                                current -> new ActionDraft(current).move(ActionStatus.PENDING_APPROVAL,
+                                        "排队期间审批权限或策略发生变化，请重新检查并批准")
+                                        .toAction(System.currentTimeMillis()))
+                        .orElseGet(() -> latest(command.actionId()));
+            }
+            action = actions.transition(action.actionId(), ActionStatus.QUEUED,
+                    current -> new ActionDraft(current).move(ActionStatus.EXECUTING, null)
+                            .toAction(System.currentTimeMillis())).orElseGet(() -> latest(command.actionId()));
+        }
+        if (action.status() != ActionStatus.EXECUTING) { return action; }
+        ActionExecutor executor = executors.require(action.type());
+        return action.applyOperationId() == null ? executor.execute(action, command.actor()) : executor.resolve(action);
+    }
+
+    private AgentAction runRollbackCommand(AgentAction action, ActionExecutionCommand command) {
+        if (action.status() == ActionStatus.SUCCESS) {
+            if (!executionAuthorized(action, command, ActionApproval.Stage.ROLLBACK)) {
+                return action;
+            }
+            action = actions.transition(action.actionId(), ActionStatus.SUCCESS,
+                    current -> new ActionDraft(current).move(ActionStatus.ROLLBACK_QUEUED, null)
+                            .toAction(System.currentTimeMillis())).orElseGet(() -> latest(command.actionId()));
+        }
+        if (action.status() == ActionStatus.ROLLBACK_QUEUED) {
+            if (!executionAuthorized(action, command, ActionApproval.Stage.ROLLBACK)) {
+                return actions.transition(action.actionId(), ActionStatus.ROLLBACK_QUEUED,
+                                current -> new ActionDraft(current).move(ActionStatus.SUCCESS,
+                                        "排队期间回滚审批权限或策略发生变化，请重新检查并批准回滚")
+                                        .toAction(System.currentTimeMillis()))
+                        .orElseGet(() -> latest(command.actionId()));
+            }
+            action = actions.transition(action.actionId(), ActionStatus.ROLLBACK_QUEUED,
+                    current -> new ActionDraft(current).move(ActionStatus.ROLLING_BACK, null)
+                            .toAction(System.currentTimeMillis())).orElseGet(() -> latest(command.actionId()));
+        }
+        if (action.status() != ActionStatus.ROLLING_BACK) { return action; }
+        ActionExecutor executor = executors.require(action.type());
+        return action.rollbackOperationId() == null ? executor.rollback(action, command.actor())
+                : executor.resolve(action);
+    }
+
+    private boolean executionAuthorized(AgentAction action, ActionExecutionCommand command,
+                                        ActionApproval.Stage stage) {
+        if (command.actor() == null || !access.writeAllowed(command.actor())) { return false; }
+        RiskBasedApprovalPolicy.Decision decision;
+        try {
+            decision = currentPolicy(action);
+        } catch (ActionRequestException ex) {
+            return false;
+        }
+        return decision.policyVersion().equals(command.policyVersion())
+                && currentApprovals(action, stage, decision).size() >= decision.requiredApprovals();
+    }
+
+    private AgentAction runReconcileCommand(AgentAction action, ActionExecutionCommand command) {
+        String operationId = action.rollbackOperationId() == null
+                ? action.applyOperationId() : action.rollbackOperationId();
+        if (!Objects.equals(command.operationId(), operationId)) { return action; }
+        if (action.status() == ActionStatus.UNCERTAIN) {
+            action = actions.transition(action.actionId(), ActionStatus.UNCERTAIN,
+                    current -> new ActionDraft(current).move(ActionStatus.RECONCILING, null)
+                            .toAction(System.currentTimeMillis())).orElseGet(() -> latest(command.actionId()));
+        }
+        if (action.status() != ActionStatus.RECONCILING) { return action; }
+        ActionStatus phase = action.rollbackOperationId() == null
+                ? ActionStatus.VERIFYING : ActionStatus.ROLLING_BACK;
+        action = actions.transition(action.actionId(), ActionStatus.RECONCILING,
+                current -> new ActionDraft(current).move(phase, null).toAction(System.currentTimeMillis()))
+                .orElseGet(() -> latest(command.actionId()));
+        return executors.require(action.type()).resolve(action);
+    }
+
+    private AgentAction stopMismatchedCommand(AgentAction action, String reason) {
+        ActionStatus status;
+        ActionStatus expected = action.status();
+        if (expected == ActionStatus.EXECUTING || expected == ActionStatus.QUEUED) {
+            status = action.applyOperationId() == null ? ActionStatus.PRECONDITION_FAILED : ActionStatus.UNCERTAIN;
+        } else if (expected == ActionStatus.ROLLING_BACK || expected == ActionStatus.ROLLBACK_QUEUED) {
+            status = action.rollbackOperationId() == null ? ActionStatus.SUCCESS : ActionStatus.UNCERTAIN;
+        } else if (expected == ActionStatus.RECONCILING) {
+            status = ActionStatus.UNCERTAIN;
+        } else {
+            return action;
+        }
+        return actions.transition(action.actionId(), expected,
+                current -> new ActionDraft(current).move(status, reason).toAction(System.currentTimeMillis()))
+                .orElseGet(() -> latest(action.actionId()));
+    }
+
     /** 按变更类型选择执行器，不支持的类型直接拒绝。 */
     private AgentAction execute(AgentAction action, String actor) {
-        if (action.type() != executor.type()) {
+        ActionExecutor executor;
+        try { executor = executors.require(action.type()); }
+        catch (IllegalArgumentException ex) {
             throw new ActionRequestException(ActionRequestException.Code.CONFLICT,
                     "没有可以执行「" + action.type().label() + "」的执行器");
         }

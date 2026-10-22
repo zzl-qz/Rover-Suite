@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 变更查询、审批、拒绝、回滚和结果确认接口；变更由 Agent 提议。
- * 用户身份取自认证上下文，操作委托 {@link AgentActionService} 同步执行。
+ * 用户身份取自认证上下文，审批后由 Admin 持久 Worker 异步执行。
  * 返回最新状态；不存在或无权访问返回 404，状态冲突返回 409。
  */
 @RestController
@@ -69,7 +69,7 @@ public class AgentActionController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** 批准并同步执行；重复批准返回 409。 */
+    /** 记录审批；满足门槛后排入 Admin 持久队列并立即返回。 */
     @PostMapping("/{actionId}/approve")
     public ResponseEntity<?> approve(@PathVariable String actionId, Authentication authentication,
                                      @RequestBody(required = false) ApprovalRequest request) {

@@ -8,11 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.ActionApproval;
+import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.ResourceRef;
+import com.rover.agent.core.model.ResourceScope;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.WeightRequestUnit;
+import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentActionRepository;
 import java.nio.file.Files;
@@ -68,11 +72,50 @@ class AgentActionStoreTest {
             first.actions().save(pendingAction("a1", "s1", ActionStatus.PENDING_APPROVAL, null, null));
             assertTrue(first.actions().recordApproval(approval));
             assertFalse(first.actions().recordApproval(approval), "相同审批人对同一版本不能重复记数");
-            assertEquals(12, first.schemaVersion());
+            assertEquals(13, first.schemaVersion());
         }
         try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
             assertEquals(List.of(approval), reopened.actions().approvals("a1", ActionApproval.Stage.APPLY,
                     ActionApproval.LEGACY_PLAN_VERSION, ActionApproval.LEGACY_PLAN_HASH, "risk-test@abc"));
+        }
+    }
+
+    @Test
+    void typedActionCommandSurvivesRestartAndCanBeRequeuedAfterAuthorizationRefresh() throws Exception {
+        String path = tempPath("rover-action-command-restart");
+        AgentAction action = pendingAction("a-command", "s1", ActionStatus.PENDING_APPROVAL, null, null)
+                .withResourceRef(new ResourceRef(new ResourceScope("org", "ops", "prod"), "gateway-one",
+                        "GATEWAY_ROUTE", "order-api", "uid-one", 1));
+        ActionExecutionCommand command = ActionExecutionCommand.from(action, ActionExecutionCommand.Phase.APPLY,
+                "reviewer-a", "prod", "risk-test@v1");
+
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.sessions().save(session("s1"));
+            first.actions().save(action);
+            first.actionCommands().enqueue(command);
+            ActionCommandRepository.Job queued = first.actionCommands().pending(System.currentTimeMillis(), 10)
+                    .get(0);
+            ActionCommandRepository.Job running = first.actionCommands().claim(command.commandId(), queued.attempt())
+                    .orElseThrow();
+            assertEquals("RUNNING", running.state());
+            assertEquals(1, running.attempt());
+        }
+
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            ActionCommandRepository.Job recovered = reopened.actionCommands()
+                    .pending(System.currentTimeMillis(), 10).get(0);
+            assertEquals(command, recovered.command(), "恢复必须保留操作类型、阶段、目标和计划绑定");
+            assertEquals(1, recovered.attempt());
+            assertEquals("PENDING", recovered.state());
+            reopened.actionCommands().finish(command.commandId(),
+                    reopened.actionCommands().claim(command.commandId(), recovered.attempt()).orElseThrow().attempt());
+
+            reopened.actionCommands().enqueue(command);
+
+            ActionCommandRepository.Job requeued = reopened.actionCommands()
+                    .pending(System.currentTimeMillis(), 10).get(0);
+            assertEquals(command.commandId(), requeued.command().commandId());
+            assertEquals(2, requeued.attempt(), "重新排队不应伪增执行次数");
         }
     }
 

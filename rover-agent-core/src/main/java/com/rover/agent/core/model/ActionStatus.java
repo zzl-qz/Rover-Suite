@@ -9,6 +9,9 @@ public enum ActionStatus {
     /** 仅登记了建议，等待人工批准；Gateway 未被修改，也不会被修改。 */
     PENDING_APPROVAL("待审批"),
 
+    /** 已满足审批条件，已写入持久队列，等待 Admin Worker 领取。 */
+    QUEUED("已排队"),
+
     /** 人已批准，正在做状态预检与提交。 */
     EXECUTING("执行中"),
 
@@ -27,6 +30,9 @@ public enum ActionStatus {
     /** 结果未知：写请求已发出但没拿到响应，且用原 operationId 也回查不到；需要人工确认。 */
     UNCERTAIN("结果未知"),
 
+    /** 已排入持久队列，等待 Worker 用原 operationId 回查，不会重发写请求。 */
+    RECONCILING("确认中"),
+
     /** 人拒绝了这个变更：未执行，也不会执行。 */
     REJECTED("已拒绝"),
 
@@ -35,6 +41,9 @@ public enum ActionStatus {
 
     /** 正在用同一个窄原语把权重补偿回变更前的值。 */
     ROLLING_BACK("回滚中"),
+
+    /** 补偿已满足审批条件并写入持久队列，等待 Admin Worker 领取。 */
+    ROLLBACK_QUEUED("回滚已排队"),
 
     /** 补偿完成且回读一致。 */
     ROLLED_BACK("已回滚"),
@@ -79,7 +88,8 @@ public enum ActionStatus {
 
     /** 是否已经产生过对 Gateway 的写请求（用于判断「这条变更有没有可能已生效」）。 */
     public boolean submitted() {
-        return this == VERIFYING || this == SUCCESS || this == UNCERTAIN || this == ROLLING_BACK
+        return this == VERIFYING || this == SUCCESS || this == UNCERTAIN || this == RECONCILING
+                || this == ROLLING_BACK || this == ROLLBACK_QUEUED
                 || this == ROLLED_BACK;
     }
 }

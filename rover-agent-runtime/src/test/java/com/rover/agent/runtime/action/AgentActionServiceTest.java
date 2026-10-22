@@ -16,6 +16,7 @@ import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.WeightRequestUnit;
+import com.rover.agent.core.port.AgentAccess;
 import com.rover.agent.core.port.RouteChangePreview;
 import com.rover.agent.core.port.RouteChangeResult;
 import com.rover.agent.core.port.RouteControlException;
@@ -27,6 +28,7 @@ import com.rover.agent.core.port.RouteOperation;
 import com.rover.agent.core.port.RouteOperationStatus;
 import com.rover.agent.core.port.SnapshotUnavailableException;
 import com.rover.agent.runtime.repository.InMemoryAgentActionRepository;
+import com.rover.agent.runtime.repository.InMemoryActionCommandRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -141,6 +143,81 @@ class AgentActionServiceTest {
         AgentAction applied = service.approve(pending.actionId(), "reviewer");
         assertEquals(ActionStatus.SUCCESS, applied.status());
         assertEquals("reviewer", applied.approvedBy());
+    }
+
+    @Test
+    void asynchronousApprovalReturnsQueuedAndWorkerExecutesAfterward() throws Exception {
+        gateway.resourceRef = planResource();
+        AgentAccess access = AgentAccess.local();
+        InMemoryActionCommandRepository commands = new InMemoryActionCommandRepository(10);
+        service = asynchronousService(access, commands);
+
+        AgentAction pending = propose(20);
+        AgentAction queued = service.approve(pending.actionId(), OWNER, 1, pending.plan().planHash());
+
+        assertEquals(ActionStatus.QUEUED, queued.status());
+        assertEquals(0, gateway.writes, "HTTP 审批返回时 Worker 尚未写 Gateway");
+        try (ActionCommandRunner runner = new ActionCommandRunner(commands, service, 1, 10, 50)) {
+            runner.start();
+            AgentAction completed = awaitStatus(pending.actionId(), ActionStatus.SUCCESS);
+            assertEquals(ActionStatus.SUCCESS, completed.status());
+        }
+        assertEquals(1, gateway.writes);
+        assertEquals(ActionStatus.SUCCESS, repository.find(pending.actionId()).orElseThrow().status());
+    }
+
+    @Test
+    void workerRechecksApprovalAndRequeuesAfterAuthorizationIsRestored() throws Exception {
+        gateway.resourceRef = planResource();
+        AtomicBoolean authorized = new AtomicBoolean(true);
+        AgentAccess access = new AgentAccess() {
+            @Override
+            public Set<Permission> permissions(String principal) {
+                return authorized.get() ? Set.of(Permission.values()) : Set.of(Permission.READ, Permission.PROPOSE);
+            }
+
+            @Override
+            public boolean writeAllowed(String principal) {
+                return authorized.get();
+            }
+        };
+        InMemoryActionCommandRepository commands = new InMemoryActionCommandRepository(10);
+        service = asynchronousService(access, commands);
+        AgentAction pending = propose(20);
+        AgentAction queued = service.approve(pending.actionId(), OWNER, 1, pending.plan().planHash());
+        authorized.set(false);
+
+        try (ActionCommandRunner runner = new ActionCommandRunner(commands, service, 1, 10, 50)) {
+            runner.start();
+            AgentAction returnedToApproval = awaitStatus(pending.actionId(), ActionStatus.PENDING_APPROVAL);
+            assertTrue(returnedToApproval.errorMessage().contains("排队期间"));
+            assertEquals(0, gateway.writes, "撤权后的持久命令必须在 Gateway 写入之前停下");
+
+            authorized.set(true);
+            AgentAction queuedAgain = service.approve(pending.actionId(), OWNER, 1, pending.plan().planHash());
+            assertEquals(ActionStatus.QUEUED, queuedAgain.status());
+            AgentAction completed = awaitStatus(pending.actionId(), ActionStatus.SUCCESS);
+            assertEquals(ActionStatus.SUCCESS, completed.status());
+        }
+        assertEquals(ActionStatus.QUEUED, queued.status());
+        assertEquals(1, gateway.writes);
+    }
+
+    private AgentActionService asynchronousService(AgentAccess access, InMemoryActionCommandRepository commands) {
+        ActionExecutor executor = new RouteWeightActionExecutor(gateway, repository, access);
+        return new AgentActionService(repository, sessions, gateway, new ActionExecutorRegistry(List.of(executor)),
+                access, RiskBasedApprovalPolicy.defaults(), commands, true);
+    }
+
+    private AgentAction awaitStatus(String actionId, ActionStatus expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        AgentAction latest = repository.find(actionId).orElseThrow();
+        while (latest.status() != expected && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+            latest = repository.find(actionId).orElseThrow();
+        }
+        assertEquals(expected, latest.status(), latest.errorMessage());
+        return latest;
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.rover.agent.runtime.repository;
 
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
@@ -20,6 +21,7 @@ public final class AgentStore implements AutoCloseable {
     private final AgentTaskRepository tasks;
     private final AgentCheckpointRepository checkpoints;
     private final AgentActionRepository actions;
+    private final ActionCommandRepository actionCommands;
     private final OpsJournal journal;
     private final AutoCloseable resource;
     private java.nio.channels.FileChannel processLockChannel;
@@ -28,13 +30,14 @@ public final class AgentStore implements AutoCloseable {
     private AgentStore(AgentSessionRepository sessions, AgentMessageRepository messages,
                        IncidentRepository incidents, AgentTaskRepository tasks,
                        AgentCheckpointRepository checkpoints, AgentActionRepository actions,
-                       OpsJournal journal, AutoCloseable resource) {
+                       ActionCommandRepository actionCommands, OpsJournal journal, AutoCloseable resource) {
         this.sessions = sessions;
         this.messages = messages;
         this.incidents = incidents;
         this.tasks = tasks;
         this.checkpoints = checkpoints;
         this.actions = actions;
+        this.actionCommands = actionCommands;
         this.journal = journal;
         this.resource = resource;
     }
@@ -46,7 +49,8 @@ public final class AgentStore implements AutoCloseable {
                 new InMemoryAgentMessageRepository(messageCapacity),
                 new InMemoryIncidentRepository(incidentCapacity),
                 new InMemoryAgentTaskRepository(taskCapacity), new InMemoryAgentCheckpointRepository(),
-                new InMemoryAgentActionRepository(actionCapacity), OpsJournal.none(), () -> { });
+                new InMemoryAgentActionRepository(actionCapacity), new InMemoryActionCommandRepository(1000),
+                OpsJournal.none(), () -> { });
     }
 
     /** 落库实现：会话、事件、任务、步骤、证据、安全恢复点、变更记录与资源笔记都写进同一个库文件。 */
@@ -61,7 +65,7 @@ public final class AgentStore implements AutoCloseable {
             if (lock == null) { throw new IllegalStateException("当前 H2 已被另一 Admin Agent 使用；当前阶段只允许一个执行进程"); }
             JdbcAgentStore store = new JdbcAgentStore(path);
             AgentStore result = new AgentStore(store.sessions(), store.messages(), store.incidents(), store.tasks(),
-                    store.checkpoints(), store.actions(), OpsJournal.of(store), store);
+                    store.checkpoints(), store.actions(), store.actionCommands(), OpsJournal.of(store), store);
             result.processLockChannel = channel; result.processLock = lock;
             return result;
         } catch (java.io.IOException | RuntimeException ex) {
@@ -95,6 +99,8 @@ public final class AgentStore implements AutoCloseable {
     public AgentActionRepository actions() {
         return actions;
     }
+
+    public ActionCommandRepository actionCommands() { return actionCommands; }
 
     public OpsJournal journal() {
         return journal;

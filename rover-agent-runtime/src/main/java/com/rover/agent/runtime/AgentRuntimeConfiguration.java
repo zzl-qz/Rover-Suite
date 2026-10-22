@@ -20,12 +20,15 @@ import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.runtime.action.ActionExecutor;
+import com.rover.agent.runtime.action.ActionExecutorRegistry;
+import com.rover.agent.runtime.action.ActionCommandRunner;
 import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.action.RouteWeightActionExecutor;
 import com.rover.agent.runtime.action.RiskBasedApprovalPolicy;
@@ -116,6 +119,11 @@ public class AgentRuntimeConfiguration {
     @Bean
     public AgentActionRepository agentActionRepository(AgentStore agentStore) {
         return agentStore.actions();
+    }
+
+    @Bean
+    public ActionCommandRepository agentActionCommandRepository(AgentStore agentStore) {
+        return agentStore.actionCommands();
     }
 
     @Bean
@@ -389,15 +397,34 @@ public class AgentRuntimeConfiguration {
                 access.getIfAvailable(AgentAccess::local), approvalPolicy);
     }
 
+    @Bean
+    public ActionExecutorRegistry agentActionExecutorRegistry(java.util.List<ActionExecutor> executors) {
+        return new ActionExecutorRegistry(executors);
+    }
+
     /** 装配受控变更服务；模型仅可调用 propose，人工接口负责审批和后续操作。 */
     @Bean
     public AgentActionService agentActionService(AgentActionRepository agentActionRepository,
                                                  AgentSessionRepository agentSessionRepository,
                                                  RouteControlPort routeControlPort,
-                                                 ActionExecutor agentActionExecutor, ObjectProvider<AgentAccess> access,
-                                                 RiskBasedApprovalPolicy approvalPolicy) {
+                                                 ActionExecutorRegistry agentActionExecutorRegistry,
+                                                 ObjectProvider<AgentAccess> access,
+                                                 RiskBasedApprovalPolicy approvalPolicy,
+                                                 ActionCommandRepository actionCommandRepository,
+                                                 @Value("${rover.agent.actions.async-execution:true}") boolean asyncExecution) {
         return new AgentActionService(agentActionRepository, agentSessionRepository, routeControlPort,
-                agentActionExecutor, access.getIfAvailable(AgentAccess::local), approvalPolicy);
+                agentActionExecutorRegistry, access.getIfAvailable(AgentAccess::local), approvalPolicy,
+                actionCommandRepository, asyncExecution);
+    }
+
+    @Bean(destroyMethod = "close")
+    public ActionCommandRunner agentActionCommandRunner(ActionCommandRepository actionCommandRepository,
+                                                        AgentActionService agentActionService,
+                                                        @Value("${rover.agent.actions.worker-threads:1}") int workerThreads,
+                                                        @Value("${rover.agent.actions.queue-capacity:64}") int queueCapacity,
+                                                        @Value("${rover.agent.actions.poll-millis:250}") long pollMillis) {
+        return new ActionCommandRunner(actionCommandRepository, agentActionService, workerThreads,
+                queueCapacity, pollMillis);
     }
 
     /** Agent 应用入口：目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */
