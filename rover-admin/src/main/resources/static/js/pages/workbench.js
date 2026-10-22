@@ -87,6 +87,7 @@ window.RoverAdminPages.workbench = {
             wbAtBottom: true,
             /** 当前会话的变更记录（新的在前）：待审批、执行结果与回滚都从服务端读回来。 */
             wbActions: [],
+            wbEffectVerifications: {},
             /** 服务端实时计算的执行/补偿审批进度。 */
             wbApprovalProgress: {},
             /** 每条变更正在进行的操作（approve / reject / rollback / resolve）：用来禁用按钮，避免连点。 */
@@ -339,6 +340,7 @@ window.RoverAdminPages.workbench = {
             this.wbPending = [];
             // 变更记录属于会话：切会话先把上一场的卡片清掉，再拉新会话自己的记录
             this.wbActions = [];
+            this.wbEffectVerifications = {};
             this.wbActionBusy = {};
             this.wbActionError = {};
             this.wbPlanEdits = {};
@@ -526,20 +528,25 @@ window.RoverAdminPages.workbench = {
         async wbLoadActions(sessionId) {
             if (!sessionId) {
                 this.wbActions = [];
+                this.wbEffectVerifications = {};
                 this.wbApprovalProgress = {};
                 this.wbScheduleActionRefresh('', false);
                 return;
             }
             try {
                 const base = '/api/agent/actions/sessions/' + encodeURIComponent(sessionId);
-                const [list, progress] = await Promise.all([
+                const [list, progress, verifications] = await Promise.all([
                     RoverAdminApi.api(base),
                     RoverAdminApi.api(base + '/approval-progress').catch(() => []),
+                    RoverAdminApi.api(base + '/effect-verifications').catch(() => []),
                 ]);
                 if (this.wbActiveSessionId !== sessionId) return;
                 this.wbActions = Array.isArray(list) ? list : [];
+                this.wbEffectVerifications = Object.fromEntries((Array.isArray(verifications) ? verifications : [])
+                    .map(item => [item.actionId + ':' + item.phase, item]));
                 this.wbApprovalProgress = this.wbApprovalProgressMap(progress);
-                this.wbScheduleActionRefresh(sessionId, this.wbActions.some(action => this.wbActionInFlight(action)));
+                this.wbScheduleActionRefresh(sessionId, this.wbActions.some(action => this.wbActionInFlight(action))
+                    || Object.values(this.wbEffectVerifications).some(item => ['PREPARED', 'OBSERVING'].includes(item.state)));
             } catch (e) {
                 if (this.wbActiveSessionId === sessionId) {
                     this.wbActions = [];
@@ -552,6 +559,10 @@ window.RoverAdminPages.workbench = {
         wbActionInFlight(action) {
             return action && ['QUEUED', 'EXECUTING', 'VERIFYING', 'ROLLBACK_QUEUED',
                 'ROLLING_BACK', 'RECONCILING'].includes(action.status);
+        },
+
+        wbEffectInFlight() {
+            return Object.values(this.wbEffectVerifications).some(item => ['PREPARED', 'OBSERVING'].includes(item.state));
         },
 
         wbScheduleActionRefresh(sessionId, active) {
@@ -587,9 +598,7 @@ window.RoverAdminPages.workbench = {
         /**
          * 处置一条变更：批准 / 拒绝 / 回滚 / 确认结果。
          *
-         * 服务端的执行是同步的，因此这里只需等返回值——返回的就是终态。
-         * 前端不做「先乐观改成成功」：变更有没有生效只能由服务端的回读说了算，
-         * 页面上提前变绿就是在替它撒谎。
+         * 执行异步持久运行；返回的是受理后的状态，界面继续从服务端轮询真实进度。
          */
         async wbActionCommand(action, command) {
             if (!action || this.wbActionBusy[action.actionId]) return;
@@ -607,7 +616,7 @@ window.RoverAdminPages.workbench = {
                     options);
                 this.wbReplaceAction(updated);
                 this.wbScheduleActionRefresh(this.wbActiveSessionId,
-                    this.wbActions.some(item => this.wbActionInFlight(item)));
+                    this.wbActions.some(item => this.wbActionInFlight(item)) || this.wbEffectInFlight());
                 await this.wbLoadApprovalProgress(this.wbActiveSessionId);
             } catch (e) {
                 // 被拒（已被处理过、状态不允许）或执行异常：记在卡片上，并重新拉一次真实状态
@@ -684,6 +693,9 @@ window.RoverAdminPages.workbench = {
                 delete busy[action.actionId];
                 this.wbActionBusy = busy;
                 await this.wbLoadActions(sessionId);
+                if (this.wbActiveSessionId === sessionId) {
+                    this.wbScheduleActionRefresh(sessionId, this.wbActions.some(item => this.wbActionInFlight(item)) || this.wbEffectInFlight());
+                }
             }
         },
 
@@ -857,6 +869,23 @@ window.RoverAdminPages.workbench = {
                 default:
                     return { mark: '○', text: '', tone: 'idle' };
             }
+        },
+
+        wbEffect(action, phase) {
+            return this.wbEffectVerifications[action.actionId + ':' + phase] || null;
+        },
+
+        wbEffectLabel(item) {
+            if (!item) return '尚未安排业务效果观察';
+            const labels = {
+                PENDING: '等待效果观察窗口', RECOVERED: '业务指标达到恢复阈值',
+                IMPROVED: '指标有所改善，尚未达到恢复标准', NOT_RECOVERED: '观察期结束，未达到恢复标准',
+                BASELINE_ALREADY_HEALTHY: '变更前业务指标已达标，不能归因于本次动作',
+                WORSENED: '业务指标恶化或触发护栏', INSUFFICIENT_SAMPLE: '样本不足，无法判断',
+                MISSING_DATA: '数据缺失，无法判断', CONTAMINATED: '同期发生其他变更，无法单独归因',
+                NOT_APPLIED: '控制面动作未确认生效',
+            };
+            return labels[item.outcome] || item.outcome || '等待业务效果观察';
         },
 
         /** 卡片角落的署名：谁提的、谁批的、什么时候——变更必须能追到人。 */

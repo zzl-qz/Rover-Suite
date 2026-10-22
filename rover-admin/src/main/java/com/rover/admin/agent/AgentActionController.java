@@ -2,6 +2,7 @@ package com.rover.admin.agent;
 
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.ActionApproval;
+import com.rover.agent.core.model.ActionEffectVerification;
 import com.rover.agent.runtime.action.ActionRequestException;
 import com.rover.agent.runtime.action.AgentActionService;
 import java.util.LinkedHashMap;
@@ -54,6 +55,13 @@ public class AgentActionController {
         return apply(() -> actions.approvalProgressBySession(sessionId, user(authentication)));
     }
 
+    @GetMapping("/sessions/{sessionId}/effect-verifications")
+    public ResponseEntity<?> effectVerifications(@PathVariable String sessionId, Authentication authentication) {
+        return actions.bySession(sessionId, user(authentication)).<ResponseEntity<?>>map(ignored ->
+                ResponseEntity.ok(actions.effectVerifications(sessionId, user(authentication))))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
     @GetMapping("/{actionId}/approval-progress")
     public ResponseEntity<?> approvalProgress(@PathVariable String actionId,
                                               @RequestParam(defaultValue = "APPLY") ActionApproval.Stage stage,
@@ -67,6 +75,20 @@ public class AgentActionController {
         return actions.find(actionId, user(authentication))
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/{actionId}/effect-verification")
+    public ResponseEntity<?> effectVerification(@PathVariable String actionId,
+            @RequestParam(defaultValue = "APPLY") ActionEffectVerification.Phase phase, Authentication authentication) {
+        try {
+            return actions.effectVerification(actionId, user(authentication), phase)
+                    .<ResponseEntity<?>>map(ResponseEntity::ok)
+                    .orElseGet(() -> ResponseEntity.noContent().build());
+        } catch (ActionRequestException ex) {
+            return ResponseEntity.status(ex.code() == ActionRequestException.Code.NOT_FOUND
+                    ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST)
+                    .body(Map.of("code", ex.code().name(), "message", ex.getMessage()));
+        }
     }
 
     /** 记录审批；满足门槛后排入 Admin 持久队列并立即返回。 */

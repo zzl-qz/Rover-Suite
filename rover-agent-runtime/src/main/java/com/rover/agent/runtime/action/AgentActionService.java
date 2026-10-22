@@ -1,6 +1,7 @@
 package com.rover.agent.runtime.action;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionEffectVerification;
 import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionType;
@@ -15,10 +16,14 @@ import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.core.port.RouteControlRoute;
 import com.rover.agent.core.port.RouteControlState;
 import com.rover.agent.core.port.RouteControlTarget;
+import com.rover.agent.core.port.MetricReadPort;
+import com.rover.agent.core.port.TimelineReadPort;
 import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentSessionRepository;
+import com.rover.agent.core.repository.ActionEffectVerificationRepository;
+import com.rover.agent.runtime.verification.ActionEffectVerificationService;
 import com.rover.agent.core.util.Texts;
 import java.util.List;
 import java.util.Objects;
@@ -46,6 +51,8 @@ public final class AgentActionService {
     private final RiskBasedApprovalPolicy approvalPolicy;
     private final ActionCommandRepository commands;
     private final boolean asynchronousExecution;
+    private final ActionEffectVerificationService effectVerification;
+    private final com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy;
 
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutor executor) {
@@ -61,13 +68,29 @@ public final class AgentActionService {
                               RouteControlPort control, ActionExecutor executor, AgentAccess access,
                               RiskBasedApprovalPolicy approvalPolicy) {
         this(actions, sessions, control, new ActionExecutorRegistry(List.of(executor)), access, approvalPolicy,
-                null, false);
+                null, false, null);
     }
 
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutorRegistry executors, AgentAccess access,
                               RiskBasedApprovalPolicy approvalPolicy, ActionCommandRepository commands,
                               boolean asynchronousExecution) {
+        this(actions, sessions, control, executors, access, approvalPolicy, commands, asynchronousExecution, null);
+    }
+
+    public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions, RouteControlPort control,
+                              ActionExecutorRegistry executors, AgentAccess access, RiskBasedApprovalPolicy approvalPolicy,
+                              ActionCommandRepository commands, boolean asynchronousExecution,
+                              ActionEffectVerificationService effectVerification) {
+        this(actions, sessions, control, executors, access, approvalPolicy, commands, asynchronousExecution,
+                effectVerification, null);
+    }
+
+    public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions, RouteControlPort control,
+                              ActionExecutorRegistry executors, AgentAccess access, RiskBasedApprovalPolicy approvalPolicy,
+                              ActionCommandRepository commands, boolean asynchronousExecution,
+                              ActionEffectVerificationService effectVerification,
+                              com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy) {
         this.actions = actions;
         this.sessions = sessions;
         this.control = control;
@@ -76,6 +99,8 @@ public final class AgentActionService {
         this.approvalPolicy = approvalPolicy;
         this.commands = commands;
         this.asynchronousExecution = asynchronousExecution;
+        this.effectVerification = effectVerification;
+        this.businessEffectPolicy = businessEffectPolicy;
         if (asynchronousExecution && commands == null) {
             throw new IllegalArgumentException("asynchronous action execution requires a command repository");
         }
@@ -251,12 +276,14 @@ public final class AgentActionService {
         try {
             if (action.resourceRef() != null) {
                 RemediationPlan.RiskLevel riskLevel = approvalPolicy.classify(action);
-                action = action.withPlan(RemediationPlan.forRouteWeight(action,
+                RemediationPlan plan = RemediationPlan.forRouteWeight(action,
                         previousPlan == null ? action.actionId() : previousPlan.planId(),
                         previousPlan == null ? 1 : Math.addExact(previousPlan.planVersion(), 1),
                         Math.addExact(now, PLAN_LIFETIME_MILLIS), evidenceRefs,
                         provenance == null ? new RemediationPlan.Provenance(null, null, null,
-                                RemediationPlan.POLICY_VERSION, "SERVER_ACTION_PREVIEW") : provenance, riskLevel));
+                                RemediationPlan.POLICY_VERSION, "SERVER_ACTION_PREVIEW") : provenance, riskLevel);
+                if (businessEffectPolicy != null) { plan = businessEffectPolicy.attach(plan); }
+                action = action.withPlan(plan);
             }
             action = actions.save(action);
         } catch (RuntimeException ex) {
@@ -709,11 +736,17 @@ public final class AgentActionService {
             return stopMismatchedCommand(action, "持久动作命令与动作的管理目标或计划版本不一致");
         }
 
-        return switch (command.phase()) {
+        AgentAction result = switch (command.phase()) {
             case APPLY -> runApplyCommand(action, command);
             case ROLLBACK -> runRollbackCommand(action, command);
             case RECONCILE -> runReconcileCommand(action, command);
         };
+        if (command.phase() == ActionExecutionCommand.Phase.APPLY && result.status() == ActionStatus.SUCCESS) {
+            scheduleEffectVerification(result, ActionEffectVerification.Phase.APPLY);
+        } else if (command.phase() == ActionExecutionCommand.Phase.ROLLBACK && result.status() == ActionStatus.ROLLED_BACK) {
+            scheduleEffectVerification(result, ActionEffectVerification.Phase.COMPENSATION);
+        }
+        return result;
     }
 
     private AgentAction runApplyCommand(AgentAction action, ActionExecutionCommand command) {
@@ -801,6 +834,33 @@ public final class AgentActionService {
         return executors.require(action.type()).resolve(action);
     }
 
+    public void scheduleEffectVerification(AgentAction action, ActionEffectVerification.Phase phase) {
+        if (effectVerification != null) { effectVerification.schedule(action, phase, System.currentTimeMillis()); }
+    }
+
+    public void scheduleEffectVerification(String actionId, ActionEffectVerification.Phase phase) {
+        if (effectVerification != null) {
+            AgentAction action = actions.find(actionId).orElseThrow(() -> new IllegalStateException("action disappeared before verification scheduling"));
+            effectVerification.schedule(action, phase, System.currentTimeMillis());
+        }
+    }
+
+    public java.util.Optional<ActionEffectVerification> effectVerification(String actionId, String userId,
+                                                                           ActionEffectVerification.Phase phase) {
+        AgentAction action = require(actionId, userId);
+        ActionEffectVerificationRepository repository = effectVerification == null ? null : effectVerification.repository();
+        return repository == null ? java.util.Optional.empty() : repository.find(action.actionId(), phase);
+    }
+
+    public List<ActionEffectVerification> effectVerifications(String sessionId, String userId) {
+        if (bySession(sessionId, userId).isEmpty()) { return List.of(); }
+        ActionEffectVerificationRepository repository = effectVerification == null ? null : effectVerification.repository();
+        if (repository == null) { return List.of(); }
+        return actions.bySession(sessionId).stream().flatMap(action -> java.util.Arrays.stream(ActionEffectVerification.Phase.values())
+                .map(phase -> repository.find(action.actionId(), phase).orElse(null)))
+                .filter(Objects::nonNull).toList();
+    }
+
     private AgentAction stopMismatchedCommand(AgentAction action, String reason) {
         ActionStatus status;
         ActionStatus expected = action.status();
@@ -827,11 +887,19 @@ public final class AgentActionService {
                     "没有可以执行「" + action.type().label() + "」的执行器");
         }
         try {
-            return switch (action.status()) {
+            AgentAction result = switch (action.status()) {
                 case EXECUTING -> executor.execute(action, actor);
                 case ROLLING_BACK -> executor.rollback(action, actor);
                 default -> executor.resolve(action);
             };
+            if (effectVerification != null && result.status() != action.status()) {
+                if (result.status() == ActionStatus.SUCCESS) {
+                    scheduleEffectVerification(result, ActionEffectVerification.Phase.APPLY);
+                } else if (result.status() == ActionStatus.ROLLED_BACK) {
+                    scheduleEffectVerification(result, ActionEffectVerification.Phase.COMPENSATION);
+                }
+            }
+            return result;
         } catch (ActionUpdateConflictException ex) {
             return latest(action.actionId());
         } catch (RuntimeException ex) {

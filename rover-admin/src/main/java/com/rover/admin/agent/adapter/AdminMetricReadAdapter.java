@@ -76,6 +76,9 @@ public class AdminMetricReadAdapter implements MetricReadPort {
             long observed = window.required("observedAtMillis").asLong();
             if (coverage != null && (coverage.fromMillis() < requested.fromMillis() || coverage.toMillis() > requested.toMillis()
                     || observed < coverage.toMillis())) { throw new IllegalArgumentException("窗口覆盖不一致"); }
+            double coverageRatio = coverage == null || requested.toMillis() <= requested.fromMillis() ? 0.0
+                    : Math.min(1.0, Math.max(0.0, (coverage.toMillis() - coverage.fromMillis())
+                            / (double) (requested.toMillis() - requested.fromMillis())));
             var quality = com.rover.agent.core.model.EvidenceQuality.valueOf(window.required("qualityStatus").asText());
             if (coverage == null && quality != com.rover.agent.core.model.EvidenceQuality.OUT_OF_RANGE) {
                 throw new IllegalArgumentException("缺失覆盖范围不能声明数据可用");
@@ -89,6 +92,7 @@ public class AdminMetricReadAdapter implements MetricReadPort {
             window.path("limitations").forEach(item -> limitations.add(item.asText()));
             Map<String, Object> facts = new com.fasterxml.jackson.databind.ObjectMapper().convertValue(window,
                     new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
+            facts.put("coverageRatio", coverageRatio);
             return new com.rover.agent.core.snapshot.RouteWindowSnapshot(routeId, requested, coverage, observed,
                     quality, total, errors, window.required("samplingMode").asText(), facts, List.copyOf(limitations));
         } catch (SnapshotUnavailableException ex) { throw ex; }

@@ -2,6 +2,7 @@ package com.rover.agent.runtime.repository;
 
 import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
+import com.rover.agent.core.repository.ActionEffectVerificationRepository;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
@@ -22,6 +23,7 @@ public final class AgentStore implements AutoCloseable {
     private final AgentCheckpointRepository checkpoints;
     private final AgentActionRepository actions;
     private final ActionCommandRepository actionCommands;
+    private final ActionEffectVerificationRepository effectVerifications;
     private final OpsJournal journal;
     private final AutoCloseable resource;
     private java.nio.channels.FileChannel processLockChannel;
@@ -38,6 +40,8 @@ public final class AgentStore implements AutoCloseable {
         this.checkpoints = checkpoints;
         this.actions = actions;
         this.actionCommands = actionCommands;
+        this.effectVerifications = resource instanceof JdbcAgentStore jdbc
+                ? jdbc.effectVerifications() : new InMemoryActionEffectVerificationRepository(1000);
         this.journal = journal;
         this.resource = resource;
     }
@@ -101,6 +105,8 @@ public final class AgentStore implements AutoCloseable {
     }
 
     public ActionCommandRepository actionCommands() { return actionCommands; }
+
+    public ActionEffectVerificationRepository effectVerifications() { return effectVerifications; }
 
     public OpsJournal journal() {
         return journal;

@@ -411,10 +411,12 @@ public class AgentRuntimeConfiguration {
                                                  ObjectProvider<AgentAccess> access,
                                                  RiskBasedApprovalPolicy approvalPolicy,
                                                  ActionCommandRepository actionCommandRepository,
+                                                 com.rover.agent.runtime.verification.ActionEffectVerificationService effectVerification,
+                                                 com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
                                                  @Value("${rover.agent.actions.async-execution:true}") boolean asyncExecution) {
         return new AgentActionService(agentActionRepository, agentSessionRepository, routeControlPort,
                 agentActionExecutorRegistry, access.getIfAvailable(AgentAccess::local), approvalPolicy,
-                actionCommandRepository, asyncExecution);
+                actionCommandRepository, asyncExecution, effectVerification, businessEffectPolicy);
     }
 
     @Bean(destroyMethod = "close")
@@ -425,6 +427,38 @@ public class AgentRuntimeConfiguration {
                                                         @Value("${rover.agent.actions.poll-millis:250}") long pollMillis) {
         return new ActionCommandRunner(actionCommandRepository, agentActionService, workerThreads,
                 queueCapacity, pollMillis);
+    }
+
+    @Bean(destroyMethod = "close")
+    public com.rover.agent.runtime.verification.ActionEffectVerificationService agentActionEffectVerificationService(
+            AgentActionRepository actions, AgentSessionRepository sessions, AgentStore store,
+            MetricReadPort metrics, com.rover.agent.runtime.timeline.ChangeTimelineService timeline) {
+        var verifier = new com.rover.agent.runtime.verification.ActionEffectVerificationService(
+                actions, sessions, store.effectVerifications(), metrics, timeline);
+        verifier.start(100, 1_000);
+        store.effectVerifications().due(System.currentTimeMillis(), 100).forEach(item -> {
+            try { verifier.runDue(item, System.currentTimeMillis()); }
+            catch (RuntimeException ignored) { /* retained for the periodic retry */ }
+        });
+        return verifier;
+    }
+
+    @Bean
+    public com.rover.agent.runtime.verification.BusinessEffectPolicy agentBusinessEffectPolicy(
+            @Value("${rover.agent.verification.enabled:false}") boolean enabled,
+            @Value("${rover.agent.verification.baseline-seconds:300}") long baselineSeconds,
+            @Value("${rover.agent.verification.propagation-grace-seconds:5}") long graceSeconds,
+            @Value("${rover.agent.verification.window-seconds:60}") long windowSeconds,
+            @Value("${rover.agent.verification.consecutive-windows:2}") int consecutiveWindows,
+            @Value("${rover.agent.verification.minimum-requests:100}") long minimumRequests,
+            @Value("${rover.agent.verification.minimum-coverage:0.95}") double minimumCoverage,
+            @Value("${rover.agent.verification.maximum-observation-seconds:300}") long maximumSeconds,
+            @Value("${rover.agent.verification.recovery-5xx-rate:0.01}") double recovery5xxRate,
+            @Value("${rover.agent.verification.maximum-p95-millis:2000}") double maximumP95Millis) {
+        return new com.rover.agent.runtime.verification.BusinessEffectPolicy(enabled,
+                Math.multiplyExact(baselineSeconds, 1000), Math.multiplyExact(graceSeconds, 1000),
+                Math.multiplyExact(windowSeconds, 1000), consecutiveWindows, minimumRequests, minimumCoverage,
+                Math.multiplyExact(maximumSeconds, 1000), recovery5xxRate, maximumP95Millis);
     }
 
     /** Agent 应用入口：目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */

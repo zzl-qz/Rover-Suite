@@ -8,6 +8,7 @@ import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.model.ActionStatus;
 import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionExecutionCommand;
+import com.rover.agent.core.model.ActionEffectVerification;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.AgentCheckpoint;
@@ -39,6 +40,7 @@ import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
+import com.rover.agent.core.repository.ActionEffectVerificationRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
@@ -100,6 +102,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final Checkpoints checkpoints = new Checkpoints();
     private final Actions actions = new Actions();
     private final ActionCommands actionCommands = new ActionCommands();
+    private final EffectVerifications effectVerifications = new EffectVerifications();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -149,6 +152,8 @@ public final class JdbcAgentStore implements AutoCloseable {
     }
 
     public ActionCommandRepository actionCommands() { return actionCommands; }
+
+    public ActionEffectVerificationRepository effectVerifications() { return effectVerifications; }
 
     /** 资源笔记：有已确认根因的调查才会写，按资源键读一条。 */
     public synchronized Optional<ResourceNote> findNote(String resourceKey) {
@@ -250,6 +255,53 @@ public final class JdbcAgentStore implements AutoCloseable {
                 row.getLong("created_at"));
         return new ActionCommandRepository.Job(command, row.getLong("attempt"), row.getString("state"),
                 row.getLong("not_before"));
+    }
+
+    private final class EffectVerifications implements ActionEffectVerificationRepository {
+        @Override public Optional<ActionEffectVerification> find(String actionId, ActionEffectVerification.Phase phase) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json,version FROM agent_action_verification WHERE action_id=? AND phase=?",
+                        row -> fromJson(row.getString(1), ActionEffectVerification.class).withVersion(row.getLong(2)),
+                        actionId, phase.name());
+            }
+        }
+
+        @Override public ActionEffectVerification save(ActionEffectVerification item) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    int changed;
+                    if (item.version() == 0) {
+                        changed = run("INSERT INTO agent_action_verification(action_id,phase,plan_version,plan_hash,state,outcome,"
+                                        + "baseline_at,applied_at,next_window_at,deadline_at,windows_seen,recovered_windows,payload_json,version) "
+                                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)", item.actionId(), item.phase().name(),
+                                item.planVersion(), item.planHash(), item.state().name(), item.outcome().name(),
+                                item.baselineAtMillis(), item.appliedAtMillis(), item.nextWindowAtMillis(), item.deadlineAtMillis(),
+                                item.windowsSeen(), item.consecutiveRecoveredWindows(), toJson(item));
+                    } else {
+                        changed = run("UPDATE agent_action_verification SET plan_version=?,plan_hash=?,state=?,outcome=?,"
+                                        + "baseline_at=?,applied_at=?,next_window_at=?,deadline_at=?,windows_seen=?,recovered_windows=?,"
+                                        + "payload_json=?,version=version+1 WHERE action_id=? AND phase=? AND version=?",
+                                item.planVersion(), item.planHash(), item.state().name(), item.outcome().name(),
+                                item.baselineAtMillis(), item.appliedAtMillis(), item.nextWindowAtMillis(), item.deadlineAtMillis(),
+                                item.windowsSeen(), item.consecutiveRecoveredWindows(), toJson(item), item.actionId(),
+                                item.phase().name(), item.version());
+                    }
+                    if (changed != 1) { throw new IllegalStateException("business verification version is stale or duplicate"); }
+                    return item.withVersion(item.version() + 1);
+                });
+            }
+        }
+
+        @Override public List<ActionEffectVerification> due(long nowMillis, int limit) {
+            if (limit < 1 || limit > 1000) { throw new IllegalArgumentException("verification batch limit is invalid"); }
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json,version FROM agent_action_verification WHERE state='PREPARED' "
+                                + "OR (state='OBSERVING' AND next_window_at<=?) ORDER BY CASE WHEN state='PREPARED' "
+                                + "THEN baseline_at ELSE next_window_at END,action_id LIMIT ?",
+                        row -> fromJson(row.getString(1), ActionEffectVerification.class).withVersion(row.getLong(2)),
+                        nowMillis, limit);
+            }
+        }
     }
 
     public synchronized Optional<Job> claimJob(String taskId, long expectedAttempt) {
@@ -1562,6 +1614,17 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)",
                                 "CREATE INDEX IF NOT EXISTS idx_action_command_due ON agent_action_command(state,not_before,created_at)",
                                 "CREATE INDEX IF NOT EXISTS idx_action_command_target ON agent_action_command(target_namespace,control_target_id,created_at)"),
+                        List.of(), List.of()),
+                new Migration(14, "separate action business effect verification history",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_verification ("
+                                        + "action_id VARCHAR(64) NOT NULL, phase VARCHAR(24) NOT NULL, "
+                                        + "plan_version INT NOT NULL, plan_hash VARCHAR(64) NOT NULL, "
+                                        + "state VARCHAR(16) NOT NULL, outcome VARCHAR(32) NOT NULL, "
+                                        + "baseline_at BIGINT NOT NULL, applied_at BIGINT NOT NULL, next_window_at BIGINT NOT NULL, "
+                                        + "deadline_at BIGINT NOT NULL, windows_seen INT NOT NULL, recovered_windows INT NOT NULL, "
+                                        + "payload_json TEXT NOT NULL, version BIGINT NOT NULL, "
+                                        + "PRIMARY KEY(action_id,phase), FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_action_verification_due ON agent_action_verification(state,next_window_at,action_id)"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {

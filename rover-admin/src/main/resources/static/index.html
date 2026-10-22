@@ -959,6 +959,33 @@
                                     <div class="wb-action-progress" :class="wbActionProgress(action).tone">
                                         {{ wbActionProgress(action).mark }} {{ wbActionProgress(action).text }}
                                     </div>
+                                    <div v-if="action.plan && action.plan.verificationSpec && action.plan.verificationSpec.mode === 'BUSINESS_EFFECT'"
+                                         class="muted wb-action-facts">
+                                        <strong>业务效果 · 应用后</strong>
+                                        <span :class="wbEffect(action, 'APPLY') && wbEffect(action, 'APPLY').outcome === 'RECOVERED' ? 'tone-ok' : ''">
+                                            {{ wbEffectLabel(wbEffect(action, 'APPLY')) }}
+                                        </span>
+                                        <template v-if="wbEffect(action, 'APPLY')">
+                                            · 已观察 {{ wbEffect(action, 'APPLY').windowsSeen }} 个窗口
+                                            <span v-if="wbEffect(action, 'APPLY').latestValues && wbEffect(action, 'APPLY').latestValues.final5xxRate != null">
+                                                · 5xx {{ (wbEffect(action, 'APPLY').latestValues.final5xxRate * 100).toFixed(2) }}%
+                                            </span>
+                                            <ul v-if="wbEffect(action, 'APPLY').limitations && wbEffect(action, 'APPLY').limitations.length">
+                                                <li v-for="(reason, index) in wbEffect(action, 'APPLY').limitations" :key="'apply-limit-' + index">{{ reason }}</li>
+                                            </ul>
+                                        </template>
+                                    </div>
+                                    <div v-if="action.plan && action.plan.verificationSpec && action.plan.verificationSpec.mode === 'BUSINESS_EFFECT' && action.status === 'ROLLED_BACK'"
+                                         class="muted wb-action-facts">
+                                        <strong>业务效果 · 补偿后</strong>
+                                        {{ wbEffectLabel(wbEffect(action, 'COMPENSATION')) }}
+                                        <template v-if="wbEffect(action, 'COMPENSATION')">
+                                            · 已观察 {{ wbEffect(action, 'COMPENSATION').windowsSeen }} 个窗口
+                                            <span v-if="wbEffect(action, 'COMPENSATION').latestValues && wbEffect(action, 'COMPENSATION').latestValues.final5xxRate != null">
+                                                · 5xx {{ (wbEffect(action, 'COMPENSATION').latestValues.final5xxRate * 100).toFixed(2) }}%
+                                            </span>
+                                        </template>
+                                    </div>
                                     <div v-if="wbApprovalProgress[action.actionId]" class="muted wb-action-facts">
                                         {{ wbApprovalProgress[action.actionId].stage === 'APPLY' ? '执行' : '补偿' }}审批
                                         {{ wbApprovalProgress[action.actionId].riskLevel }} ·
@@ -988,8 +1015,8 @@
                                             待核实事项
                                             <ul><li v-for="(assumption, index) in action.plan.unresolvedAssumptions" :key="index">{{ assumption }}</li></ul>
                                         </div>
-                                        <div v-if="action.plan.verificationSpec && action.plan.verificationSpec.mode === 'CONTROL_PLANE_ONLY'" class="muted">
-                                            执行后仅核对配置是否生效；错误率、延迟等业务效果尚未验证。
+                                        <div v-if="action.plan.verificationSpec && action.plan.verificationSpec.mode === 'BUSINESS_EFFECT'" class="muted">
+                                            业务阈值：路由最终响应 5xx ≤ {{ (action.plan.verificationSpec.businessEffect.criteria[0].recoveryUpperBound * 100).toFixed(2) }}%，P95 上界 ≤ {{ action.plan.verificationSpec.businessEffect.guardrails[0].maximumValue }} ms；需要连续 {{ action.plan.verificationSpec.businessEffect.consecutiveWindows }} 个窗口达标。缺少基线、样本或有效时间线时不会报告恢复。
                                         </div>
                                         <div v-if="action.plan.compensationSpec" class="muted">
                                             补偿需另行人工批准；仅恢复本次触及的权重，提交前核对资源身份、当前值和生效版本。

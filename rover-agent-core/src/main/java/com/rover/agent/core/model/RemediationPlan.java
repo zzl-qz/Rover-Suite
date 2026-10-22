@@ -144,6 +144,14 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
                 expiresAtMillis, provenance, null);
     }
 
+    /** Bind an explicit service-effect policy to the immutable plan without changing its action parameters. */
+    public RemediationPlan withBusinessEffect(BusinessEffectSpec spec) {
+        return new RemediationPlan(planId, planVersion, sessionId, incidentId, taskId, requestedBy, scope, goal,
+                alternatives, evidenceRefs, unresolvedAssumptions, steps, riskAssessment, resourceBudget,
+                new VerificationSpec(VerificationMode.BUSINESS_EFFECT, verificationSpec.controlChecks(), spec),
+                compensationSpec, timeoutMillis, createdAtMillis, expiresAtMillis, provenance, null);
+    }
+
     /** 防止兼容执行器读取到与批准计划不同的扁平参数；不读取 action.plan。 */
     public void requireMatches(AgentAction action) {
         Objects.requireNonNull(action, "action");
@@ -275,8 +283,11 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
             check(Double.isFinite(minimumCoverage) && minimumCoverage > 0 && minimumCoverage <= 1,
                     "最小覆盖率必须为 (0,1]");
             check(maximumObservationMillis > propagationGraceMillis
+                    && maximumObservationMillis <= 7L * 24 * 3_600_000
+                    && baselineMillis <= 7L * 24 * 3_600_000
                     && windowMillis <= (maximumObservationMillis - propagationGraceMillis) / consecutiveWindows,
                     "最长观察时间不能容纳所需窗口");
+            check(baselineMillis >= windowMillis, "变更前基线时长不能短于一个观察窗口");
             criteria = List.copyOf(Objects.requireNonNull(criteria, "criteria"));
             guardrails = List.copyOf(Objects.requireNonNull(guardrails, "guardrails"));
             check(!criteria.isEmpty() && !guardrails.isEmpty(), "业务效果必须有恢复判据和护栏");

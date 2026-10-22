@@ -265,7 +265,6 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         if (plan.steps().size() != 1
                 || plan.steps().get(0).actionType() != ActionType.ADJUST_ROUTE_TARGET_WEIGHT
                 || !RemediationPlan.ROUTE_WEIGHT_ADAPTER_VERSION.equals(plan.steps().get(0).adapterVersion())
-                || !"CONTROL_PLANE_ONLY".equals(plan.verificationSpec().mode().name())
                 || plan.steps().get(0).requiredChecks().stream().anyMatch(check -> switch (check) {
                     case TARGET_IDENTITY, ROUTE_BINDING, EXPECTED_REVISION, EXPECTED_BEFORE_WEIGHT -> false;
                     default -> true;
