@@ -24,6 +24,9 @@ public interface AgentActionRepository {
     /** 某个会话的全部变更记录，新的在前。 */
     List<AgentAction> bySession(String sessionId);
 
+    /** 当前管理范围内指定状态的变更，newest first. */
+    default List<AgentAction> byStatus(java.util.Set<ActionStatus> statuses, int limit) { return List.of(); }
+
     /** 不可变计划历史，按 planVersion 升序；仅服务端授权后的调用方可暴露这些内容。 */
     default List<RemediationPlan> planVersions(String planId) { return List.of(); }
 

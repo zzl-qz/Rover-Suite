@@ -88,6 +88,11 @@ window.RoverAdminPages.workbench = {
             /** 当前会话的变更记录（新的在前）：待审批、执行结果与回滚都从服务端读回来。 */
             wbActions: [],
             wbEffectVerifications: {},
+            wbOperatorPermissions: [],
+            wbOperationsStatus: null,
+            wbReconciliationQueue: [],
+            wbOperationBusy: false,
+            wbOperationMessage: '',
             /** 服务端实时计算的执行/补偿审批进度。 */
             wbApprovalProgress: {},
             /** 每条变更正在进行的操作（approve / reject / rollback / resolve）：用来禁用按钮，避免连点。 */
@@ -264,6 +269,7 @@ window.RoverAdminPages.workbench = {
     methods: {
         /** 进入工作台时调用：拉会话列表，必要时选中最近的会话。 */
         async wbRefresh() {
+            await this.wbLoadOperatorState();
             await this.wbLoadSessions();
             const current = this.wbSessions.find(s => s.sessionId === this.wbActiveSessionId);
             if (current) {
@@ -294,6 +300,77 @@ window.RoverAdminPages.workbench = {
                 this.wbSessions = (await RoverAdminApi.api('/api/agent/sessions')) || [];
             } catch (e) {
                 this.wbError = '加载会话列表失败：' + e.message;
+            }
+        },
+
+        wbCanManageSystem() {
+            return this.wbOperatorPermissions.includes('MANAGE_SYSTEM');
+        },
+
+        async wbLoadOperatorState(force) {
+            if (!force && Date.now() - (this._wbOperatorRefreshAt || 0) < 5000) return;
+            this._wbOperatorRefreshAt = Date.now();
+            try {
+                const me = await RoverAdminApi.api('/api/agent/security/me');
+                this.wbOperatorPermissions = me && Array.isArray(me.permissions) ? me.permissions : [];
+                if (!this.wbCanManageSystem()) {
+                    this.wbOperationsStatus = null;
+                    this.wbReconciliationQueue = [];
+                    return;
+                }
+                const [statusResult, reconciliationResult] = await Promise.allSettled([
+                    RoverAdminApi.api('/api/agent/operations'),
+                    RoverAdminApi.api('/api/agent/actions/reconciliation?limit=100'),
+                ]);
+                this.wbOperationsStatus = statusResult.status === 'fulfilled'
+                    ? statusResult.value : (statusResult.reason && statusResult.reason.body) || null;
+                this.wbReconciliationQueue = reconciliationResult.status === 'fulfilled'
+                    && Array.isArray(reconciliationResult.value) ? reconciliationResult.value : [];
+                this.wbOperationMessage = this.wbOperationsStatus && !this.wbOperationsStatus.healthy
+                    ? '持久存储异常：保持停写并处理已知结果，不要恢复自动变更' : '';
+            } catch (error) {
+                this.wbOperationsStatus = null;
+                this.wbReconciliationQueue = [];
+                this.wbOperatorPermissions = [];
+                this.wbOperationMessage = error && error.status === 403
+                    ? '当前账号没有系统接管权限' : (error && error.message) || '无法读取运维状态';
+            }
+        },
+
+        async wbToggleWriteStop(stopped) {
+            if (!this.wbCanManageSystem() || this.wbOperationBusy) return;
+            this.wbOperationBusy = true;
+            this.wbOperationMessage = '';
+            try {
+                await RoverAdminApi.api('/api/agent/operations/write-stop', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stopped }),
+                });
+                await this.wbLoadOperatorState(true);
+                this.wbOperationMessage = stopped ? '已停用 Agent 生产写操作' : '生产写操作已恢复；请复核仍待人工审批的计划';
+            } catch (error) {
+                this.wbOperationMessage = error.message || '写入开关操作失败';
+                await this.wbLoadOperatorState(true);
+            } finally {
+                this.wbOperationBusy = false;
+            }
+        },
+
+        async wbReconcileAction(action) {
+            if (!this.wbCanManageSystem() || !action || this.wbOperationBusy) return;
+            this.wbOperationBusy = true;
+            this.wbOperationMessage = '';
+            try {
+                await RoverAdminApi.api('/api/agent/actions/' + encodeURIComponent(action.actionId) + '/reconcile',
+                    { method: 'POST' });
+                await this.wbLoadOperatorState(true);
+                if (action.sessionId === this.wbActiveSessionId) await this.wbLoadActions(action.sessionId);
+                this.wbOperationMessage = '已用原 operationId 发起独立对账；没有重发变更请求';
+            } catch (error) {
+                this.wbOperationMessage = error.message || '发起对账失败';
+                await this.wbLoadOperatorState(true);
+            } finally {
+                this.wbOperationBusy = false;
             }
         },
 
@@ -420,6 +497,7 @@ window.RoverAdminPages.workbench = {
          * 任务状态、步骤与解读都已由任务事件流实时推送，固定 3 秒轮询全部在跑任务只是多余的观察税。
          */
         async wbPollSession() {
+            this.wbLoadOperatorState();
             if (!this.wbActiveSessionId || this._wbStream) return;
             const ids = Object.values(this.wbTasks)
                 .filter(task => task && !this.wbTaskSettled(task.status))

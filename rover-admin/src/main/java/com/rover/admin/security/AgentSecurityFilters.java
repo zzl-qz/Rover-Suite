@@ -103,11 +103,13 @@ final class AgentSecurityFilters {
     static Permission permission(String path, String method) {
         boolean read = "GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method);
         if (path.equals("/api/agent/security/me")) { return Permission.READ; }
+        if (path.equals("/api/agent/actions/reconciliation")) { return Permission.MANAGE_SYSTEM; }
         if (path.startsWith("/api/agent/operations")) { return Permission.MANAGE_SYSTEM; }
         if (path.equals("/api/agent/security/users")) { return Permission.MANAGE_SYSTEM; }
         if (path.startsWith("/api/agent/security/") || path.startsWith("/api/agent/model")) { return Permission.POLICY_ADMIN; }
         if (path.startsWith("/api/agent/actions/sessions/") && path.endsWith("/approval-progress")) { return Permission.READ; }
         if (path.startsWith("/api/agent/actions/") && path.endsWith("/approval-progress")) { return Permission.APPROVE; }
+        if (path.startsWith("/api/agent/actions/") && path.endsWith("/reconcile")) { return Permission.MANAGE_SYSTEM; }
         if (read) { return Permission.READ; }
         if (path.startsWith("/api/agent/actions/")) {
             return path.endsWith("/resolve") ? Permission.READ : Permission.APPROVE;

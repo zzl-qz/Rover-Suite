@@ -41,6 +41,16 @@ public class AgentActionController {
         return actions.pendingApprovals(user(authentication));
     }
 
+    @GetMapping("/reconciliation")
+    public List<AgentAction> reconciliation(@RequestParam(defaultValue = "100") int limit, Authentication authentication) {
+        return actions.reconciliationQueue(user(authentication), limit);
+    }
+
+    @PostMapping("/{actionId}/reconcile")
+    public ResponseEntity<?> reconcile(@PathVariable String actionId, Authentication authentication) {
+        return apply(() -> actions.reconcile(actionId, user(authentication)));
+    }
+
     /** 按会话查询变更记录，按创建时间倒序。 */
     @GetMapping("/sessions/{sessionId}")
     public ResponseEntity<List<AgentAction>> bySession(@PathVariable String sessionId,

@@ -28,28 +28,35 @@ public class AgentOperationsController {
         this.backups = Path.of(properties.getLogStorePath()).toAbsolutePath().getParent().resolve("backups");
     }
     public record WriteStop(boolean stopped) { }
+    public record OperationStatus(boolean persistent, boolean healthy, boolean writesStopped, boolean draining,
+                                  long uncertainActions, int schemaVersion) { }
     @GetMapping public ResponseEntity<?> health(Authentication actor) {
         security.require(actor.getName(), Permission.MANAGE_SYSTEM);
         boolean healthy = store.persistent() && store.durable().healthy();
-        return ResponseEntity.status(healthy ? 200 : 503).body(Map.of("persistent", store.persistent(),
-                "healthy", healthy, "writesStopped", security.writesStopped(), "draining", tasks.draining()));
+        long uncertain = store.actions().byStatus(java.util.Set.of(com.rover.agent.core.model.ActionStatus.UNCERTAIN), 1000)
+                .stream().filter(action -> store.sessions().find(action.sessionId()).map(session -> control.resourceScope() == null
+                        || control.resourceScope().equals(session.scope())
+                        && control.resourceNamespace().equals(session.targetNamespace())).orElse(false)).count();
+        var status = new OperationStatus(store.persistent(), healthy, security.writesStopped(), tasks.draining(),
+                uncertain, store.persistent() ? store.durable().schemaVersion() : 0);
+        return ResponseEntity.status(healthy ? 200 : 503).body(status);
     }
-    @PostMapping("/write-stop") public Object writeStop(@RequestBody WriteStop body, Authentication actor) {
+    @PostMapping("/write-stop") public ResponseEntity<?> writeStop(@RequestBody WriteStop body, Authentication actor) {
         security.stopWrites(actor.getName(), body.stopped());
-        return Map.of("writesStopped", security.writesStopped());
+        return health(actor);
     }
     @PostMapping("/drain") public Object drain(Authentication actor) {
         security.require(actor.getName(), Permission.MANAGE_SYSTEM);
         security.stopWrites(actor.getName(), true);
         tasks.beginDrain();
-        return Map.of("draining", true, "writesStopped", true);
+        return health(actor);
     }
     @PostMapping("/resume") public Object resume(Authentication actor) {
         security.require(actor.getName(), Permission.MANAGE_SYSTEM);
         if (!store.durable().healthy()) { return ResponseEntity.status(503).body(Map.of("message", "存储未就绪")); }
         tasks.resumeAccepting();
         // 恢复接任务与恢复写入分开操作，避免一次点击就重新放开生产变更。
-        return Map.of("draining", false, "writesStopped", security.writesStopped());
+        return health(actor);
     }
     @GetMapping("/audit") public Object audit(@RequestParam(defaultValue="0") long after,
                                               @RequestParam(defaultValue="100") int limit, Authentication actor) {

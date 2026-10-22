@@ -12,6 +12,7 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.spy;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
@@ -455,6 +456,26 @@ class AgentActionServiceTest {
         assertEquals(ActionStatus.SUCCESS, resolved.status());
         assertEquals(1, gateway.writes, "确认结果不是重新执行");
         assertEquals(20, gateway.weightOf("v2"));
+    }
+
+    @Test
+    void systemOperatorCanListAndQueueOnlyInScopeUncertainActionReconciliation() {
+        gateway.resourceRef = planResource();
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(propose(20).actionId(), OWNER);
+        InMemoryActionCommandRepository commands = new InMemoryActionCommandRepository(10);
+        AgentAccess operator = principal -> Set.of(AgentAccess.Permission.READ, AgentAccess.Permission.MANAGE_SYSTEM);
+        AgentActionService managed = new AgentActionService(repository, sessions, gateway,
+                new ActionExecutorRegistry(List.of(new RouteWeightActionExecutor(gateway, repository, operator))),
+                operator, RiskBasedApprovalPolicy.defaults(), commands, true);
+
+        assertEquals(List.of(uncertain.actionId()), managed.reconciliationQueue("ops-user", 10).stream()
+                .map(AgentAction::actionId).toList());
+        AgentAction queued = managed.reconcile(uncertain.actionId(), "ops-user");
+        assertEquals(ActionStatus.RECONCILING, queued.status());
+        assertEquals(ActionExecutionCommand.Phase.RECONCILE, commands.pending(Long.MAX_VALUE, 10).get(0).command().phase());
+        assertEquals(uncertain.applyOperationId(), commands.pending(Long.MAX_VALUE, 10).get(0).command().operationId());
+        assertThrows(ActionRequestException.class, () -> managed.reconcile(uncertain.actionId(), "ops-user"));
     }
 
     @Test

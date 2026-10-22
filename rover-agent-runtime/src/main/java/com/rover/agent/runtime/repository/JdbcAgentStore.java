@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionEffectVerification;
@@ -790,6 +791,21 @@ public final class JdbcAgentStore implements AutoCloseable {
             synchronized (JdbcAgentStore.this) {
                 return query("SELECT * FROM agent_action WHERE session_id = ? ORDER BY created_at DESC, action_id",
                         JdbcAgentStore.this::readActionRow, sessionId);
+            }
+        }
+
+        @Override public List<AgentAction> byStatus(java.util.Set<ActionStatus> statuses, int limit) {
+            if (statuses == null || statuses.isEmpty() || limit < 1 || limit > 1000) {
+                throw new IllegalArgumentException("action status query is invalid");
+            }
+            synchronized (JdbcAgentStore.this) {
+                String marks = String.join(",", java.util.Collections.nCopies(statuses.size(), "?"));
+                Object[] values = new Object[statuses.size() + 1];
+                int index = 0;
+                for (ActionStatus status : statuses) { values[index++] = status.name(); }
+                values[index] = limit;
+                return query("SELECT * FROM agent_action WHERE status IN (" + marks
+                                + ") ORDER BY updated_at DESC, action_id LIMIT ?", JdbcAgentStore.this::readActionRow, values);
             }
         }
 

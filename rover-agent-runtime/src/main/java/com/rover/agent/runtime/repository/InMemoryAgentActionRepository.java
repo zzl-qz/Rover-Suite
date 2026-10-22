@@ -153,6 +153,15 @@ public final class InMemoryAgentActionRepository implements AgentActionRepositor
                 .toList();
     }
 
+    @Override public synchronized List<AgentAction> byStatus(java.util.Set<ActionStatus> statuses, int limit) {
+        if (statuses == null || statuses.isEmpty() || limit < 1 || limit > 1000) {
+            throw new IllegalArgumentException("action status query is invalid");
+        }
+        return actions.values().stream().filter(action -> statuses.contains(action.status()))
+                .sorted(java.util.Comparator.comparingLong(AgentAction::updatedAtMillis).reversed())
+                .limit(limit).toList();
+    }
+
     @Override
     public synchronized Optional<AgentAction> transition(String actionId, ActionStatus expected,
                                                          UnaryOperator<AgentAction> mutation) {

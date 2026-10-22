@@ -394,6 +394,36 @@ public final class AgentActionService {
                 .filter(action -> action.status().awaitingApproval() && ownedBy(action, userId)).toList();
     }
 
+    /** System operators need a bounded reconciliation queue across sessions, scoped to this managed target. */
+    public List<AgentAction> reconciliationQueue(String userId, int limit) {
+        access.require(userId, Permission.MANAGE_SYSTEM);
+        if (limit < 1 || limit > 1000) { throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST,
+                "对账队列条数必须在 1 到 1000 之间"); }
+        return actions.byStatus(java.util.Set.of(ActionStatus.UNCERTAIN), limit).stream()
+                .filter(action -> sessions.find(action.sessionId()).filter(this::inScope).isPresent()).toList();
+    }
+
+    /** System operator requests reconciliation only; RECONCILE uses the recorded original operationId. */
+    public AgentAction reconcile(String actionId, String userId) {
+        access.require(userId, Permission.MANAGE_SYSTEM);
+        AgentAction action = actions.find(actionId).filter(value -> sessions.find(value.sessionId())
+                        .filter(this::inScope).isPresent())
+                .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.NOT_FOUND,
+                        "找不到当前管理范围内的变更"));
+        if (!action.status().resolvable()) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "此变更当前不需要对账");
+        }
+        if (asynchronousExecution) {
+            RiskBasedApprovalPolicy.Decision decision = currentPolicy(action);
+            commands.enqueue(command(action, ActionExecutionCommand.Phase.RECONCILE, userId, decision));
+            return actions.transition(actionId, ActionStatus.UNCERTAIN,
+                            current -> new ActionDraft(current).move(ActionStatus.RECONCILING, null)
+                                    .toAction(System.currentTimeMillis()))
+                    .orElseGet(() -> latest(actionId));
+        }
+        return execute(action, userId);
+    }
+
     /** 历史内容由仓储保留，外部读取仍须通过原会话的当前权限和范围。 */
     public Optional<List<RemediationPlan>> planVersions(String planId, String userId) {
         return find(planId, userId).filter(action -> action.plan() != null
