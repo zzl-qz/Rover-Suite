@@ -135,6 +135,15 @@ public final class IncidentRegistry {
                 incident.taskIds(), incident.triggeredBy())));
     }
 
+    /** Alert recovery is independent of whether its investigation has reached a conclusion. */
+    public void resolveAlert(String incidentId, String summary) {
+        incidents.find(incidentId).ifPresent(incident -> incidents.save(new Incident(
+                incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
+                IncidentStatus.RESOLVED, incident.target(), incident.timeRange(),
+                summary == null ? "" : summary, incident.createdAtMillis(), System.currentTimeMillis(),
+                incident.taskIds(), incident.triggeredBy())));
+    }
+
     public Optional<Incident> incident(String incidentId) {
         return incidents.find(incidentId);
     }

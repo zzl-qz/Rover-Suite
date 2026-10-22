@@ -121,7 +121,7 @@ public final class AgentActionService {
      * @param unit           {@code requestedValue} 的单位；为空表示语义不明，需要先澄清
      * @return 提议结果：产出的待审批变更，或一句「为什么不能提 / 需要先问清楚什么」
      */
-    public ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
+    public synchronized ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
                                   Integer requestedValue, WeightRequestUnit unit) {
         return propose(sessionId, taskId, incidentId, route, group, requestedValue, unit,
                 null, List.of(), false, false, null);
@@ -131,7 +131,7 @@ public final class AgentActionService {
      * 从通过运行时证据门槛的诊断登记人工审批的版本隔离候选。
      * 此入口只允许把目标版本权重降为 0，并要求留下可审计证据引用与正权重替代目标。
      */
-    public ActionProposal proposeEvidenceGatedQuarantine(String sessionId, String taskId, String incidentId,
+    public synchronized ActionProposal proposeEvidenceGatedQuarantine(String sessionId, String taskId, String incidentId,
                                                          String route, String group, List<String> evidenceRefs) {
         if (evidenceRefs == null || evidenceRefs.isEmpty() || evidenceRefs.size() > 100
                 || evidenceRefs.stream().anyMatch(ref -> ref == null || ref.isBlank() || ref.length() > 128)) {
@@ -139,18 +139,32 @@ public final class AgentActionService {
         }
         var provenance = new RemediationPlan.Provenance(null, null, null,
                 "route-weight-evidence-gate-v1", "RULE_EVIDENCE_GATE");
+        ActionProposal duplicate = existingAutomaticProposal(sessionId, incidentId, route, group);
+        if (duplicate != null) { return duplicate; }
         return propose(sessionId, taskId, incidentId, route, group, 0, WeightRequestUnit.RAW_WEIGHT,
                 null, List.copyOf(evidenceRefs), true, true, provenance);
     }
 
-    private ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
+    /** A new investigation task from the same still-open incident must not make another automatic approval card. */
+    private ActionProposal existingAutomaticProposal(String sessionId, String incidentId, String route, String group) {
+        if (sessionId == null || sessionId.isBlank() || route == null || group == null) { return null; }
+        return actions.bySession(sessionId).stream()
+                .filter(action -> Objects.equals(incidentId, action.incidentId()) && action.plan() != null
+                        && "RULE_EVIDENCE_GATE".equals(action.plan().provenance().source())
+                        && route.equals(action.businessPrefix()) && group.equals(action.group())
+                        && action.status() != ActionStatus.SUPERSEDED)
+                .findFirst().map(ActionProposal::created)
+                .orElse(null);
+    }
+
+    private synchronized ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
                                    Integer requestedValue, WeightRequestUnit unit, RemediationPlan previousPlan) {
         return propose(sessionId, taskId, incidentId, route, group, requestedValue, unit, previousPlan,
                 previousPlan == null ? List.of() : previousPlan.evidenceRefs(), false, false,
                 previousPlan == null ? null : previousPlan.provenance());
     }
 
-    private ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
+    private synchronized ActionProposal propose(String sessionId, String taskId, String incidentId, String route, String group,
                                    Integer requestedValue, WeightRequestUnit unit, RemediationPlan previousPlan,
                                    List<String> evidenceRefs, boolean requireAlternativeTarget,
                                    boolean requirePlanResourceIdentity,

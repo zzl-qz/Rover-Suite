@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.mockito.Mockito.when;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertIngestResult;
+import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.runtime.AgentOrchestrator;
 import java.util.Set;
@@ -55,21 +59,46 @@ class AgentAuthorizationWebTest {
 
     @Test void machineTokenIsIngestOnlyRevocableAndDoesNotReplaceBrowserCsrf() throws Exception {
         var issued = security.issue("admin", "prometheus", null);
+        users.saveAccount("prometheus", "connector-test-password", Set.of("OPERATOR"), control.resourceNamespace(), true);
+        when(agent.ingestAlert("connector:prometheus", "delivery-auth-1", "auth-test", AlertEventState.FIRING,
+                "/orders", null, null, null))
+                .thenReturn(new AlertIngestResult("s-alert", "i-alert", "t-alert", TaskStatus.PENDING,
+                        false, false, 1));
         String bearer = "Bearer " + issued.token();
         http.perform(post("/api/agent/events/ingest").header("Authorization", bearer)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"path\":\"/orders\"}"))
+                .header("Idempotency-Key", "delivery-auth-1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"path\":\"/orders\",\"alertKey\":\"auth-test\",\"state\":\"FIRING\"}"))
                 .andExpect(status().isAccepted());
         http.perform(get("/api/agent/security/me").header("Authorization", bearer)).andExpect(status().isForbidden());
         http.perform(post("/api/agent/actions/fake/approve").header("Authorization", bearer))
                 .andExpect(status().isForbidden());
         http.perform(post("/api/agent/events/ingest").with(user("admin"))
-                .contentType(MediaType.APPLICATION_JSON).content("{\"path\":\"/orders\"}"))
+                .header("Idempotency-Key", "delivery-auth-2")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"path\":\"/orders\",\"alertKey\":\"auth-test-2\",\"state\":\"FIRING\"}"))
                 .andExpect(status().isForbidden());
         assertThat(security.machines("admin").toString()).doesNotContain(issued.token());
         security.revoke("admin", issued.id());
         http.perform(post("/api/agent/events/ingest").header("Authorization", bearer)
-                .contentType(MediaType.APPLICATION_JSON).content("{\"path\":\"/orders\"}"))
+                .header("Idempotency-Key", "delivery-auth-3")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"path\":\"/orders\",\"alertKey\":\"auth-test\",\"state\":\"FIRING\"}"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test void alertIngressRejectsMissingIdempotencyAndLifecycleFields() throws Exception {
+        http.perform(post("/api/agent/events/ingest").with(user("admin")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"path\":\"/orders\",\"alertKey\":\"missing-delivery\",\"state\":\"FIRING\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
+        http.perform(post("/api/agent/events/ingest").with(user("admin")).with(csrf())
+                        .header("Idempotency-Key", "delivery-missing-fields")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"path\":\"/orders\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BAD_REQUEST"));
     }
 
     @Test void releasePurposeIsSeparateDurableIdempotentAndRevocable() throws Exception {

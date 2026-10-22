@@ -98,6 +98,21 @@ class AgentActionServiceTest {
     }
 
     @Test
+    void retryForSameTaskDoesNotCreateAnotherAutomaticApprovalCard() {
+        gateway.resourceRef = planResource();
+        ActionProposal first = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1"));
+        ActionProposal retry = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1"));
+
+        assertTrue(first.created());
+        assertTrue(retry.created());
+        assertEquals(first.action().actionId(), retry.action().actionId());
+        assertEquals(1, repository.bySession(SESSION).size());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test
     void evidenceGatedQuarantineCannotRemoveTheLastPositiveTarget() {
         gateway.resourceRef = planResource();
         gateway.removeTarget("v1");

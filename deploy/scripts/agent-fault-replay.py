@@ -656,8 +656,9 @@ class Replay:
                         "timeoutSeconds": 3, "fastBaseUrl": "", "fastModel": ""}
                 self.admin.request(self.urls["admin"] + "/api/model/config", body, self.csrf)
                 task = self.admin.request(self.urls["admin"] + "/api/agent/events/ingest",
-                    {"path": self.fixture["path"], "message": "检查模型供应商不可用时的调查收尾"},
-                    self.csrf, allowed=(202,))[1]
+                    {"path": self.fixture["path"], "message": "检查模型供应商不可用时的调查收尾",
+                     "alertKey": "model-provider-failure", "state": "FIRING"},
+                    {**self.csrf, "Idempotency-Key": uuid.uuid4().hex}, allowed=(202,))[1]
                 task = self.wait_task(task, 60, "provider failure")
                 save(directory / "task.json", task)
                 self.model_metrics(directory, "after")
@@ -678,10 +679,12 @@ class Replay:
         url = self.urls["admin"]
         message = "监控检测到请求失败，请按指定时间窗口核查原因，区分已知事实与待验证假设。" if self.live_model else "回放告警：" + case["id"]
         payload = {"path": self.fixture["path"], "message": message,
-                   "fromMillis": window["fromMillis"], "toMillis": window["toMillis"]}
+                   "fromMillis": window["fromMillis"], "toMillis": window["toMillis"],
+                   "alertKey": f"fixture-{case['id']}-{uuid.uuid4().hex}", "state": "FIRING"}
         save(directory / "alert-input.json", payload)
         before = self.model_metrics(directory, "before") if self.live_model else {}
-        _, task, _ = self.admin.request(url + "/api/agent/events/ingest", payload, self.csrf, allowed=(202,))
+        _, task, _ = self.admin.request(url + "/api/agent/events/ingest", payload,
+                                        {**self.csrf, "Idempotency-Key": uuid.uuid4().hex}, allowed=(202,))
         save(directory / "accepted-task.json", task)
         task = self.wait_task(task, 360 if self.live_model else 60, "investigation " + case["id"])
         save(directory / "task.json", task)
@@ -912,7 +915,10 @@ class Replay:
         bearer = {"Authorization": "Bearer " + issued["token"]}
         machine = Http()
         checks["machineCannotRead"] = machine.request(base + "/api/agent/security/me", headers=bearer, allowed=(403,))[0] == 403
-        task = machine.request(base + "/api/agent/events/ingest", {"path": self.fixture["path"], "message": "fixture machine alert"}, bearer, allowed=(202,))[1]
+        alert_request = {"path": self.fixture["path"], "message": "fixture machine alert",
+                         "alertKey": "fixture-machine-alert", "state": "FIRING"}
+        alert_headers = {**bearer, "Idempotency-Key": uuid.uuid4().hex}
+        task = machine.request(base + "/api/agent/events/ingest", alert_request, alert_headers, allowed=(202,))[1]
         deadline = time.monotonic() + 45
         while task["status"] in ("PENDING", "RUNNING") and time.monotonic() < deadline:
             time.sleep(.2)
@@ -935,7 +941,7 @@ class Replay:
         state = self.admin.request(base + "/api/agent/operations")[1]
         checks["writeStopSurvivesAdminRestart"] = bool(state["healthy"] and state["writesStopped"])
         checks["tokenRevocationSurvivesAdminRestart"] = machine.request(base + "/api/agent/events/ingest",
-            {"path": self.fixture["path"]}, bearer, allowed=(401,))[0] == 401
+            alert_request, alert_headers, allowed=(401,))[0] == 401
         stream = self.admin.request(base + "/api/agent/tasks/" + task["taskId"] + "/events", headers={"Last-Event-ID": "0"}, timeout=15)[1]
         checks["durableEventsAfterAdminRestart"] = "id:" in stream and "TASK_COMPLETED" in stream
         backup = self.admin.request(base + "/api/agent/operations/backups", {}, self.csrf, timeout=30)[1]

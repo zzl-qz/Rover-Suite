@@ -20,6 +20,7 @@ import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.AlertLifecycleRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
@@ -119,6 +120,11 @@ public class AgentRuntimeConfiguration {
     @Bean
     public AgentActionRepository agentActionRepository(AgentStore agentStore) {
         return agentStore.actions();
+    }
+
+    @Bean
+    public AlertLifecycleRepository agentAlertLifecycleRepository(AgentStore agentStore) {
+        return agentStore.alertLifecycles();
     }
 
     @Bean
@@ -342,6 +348,7 @@ public class AgentRuntimeConfiguration {
     @Bean
     public InvestigationService agentInvestigationService(IncidentRegistry agentIncidentRegistry,
                                                           InvestigationTaskRegistry agentTaskRegistry,
+                                                          AlertLifecycleRepository alertLifecycleRepository,
                                                           ModelExplainer agentModelExplainer,
                                                           InvestigationPlanner agentInvestigationPlanner,
                                                           PlanValidator agentPlanValidator,
@@ -353,7 +360,7 @@ public class AgentRuntimeConfiguration {
                                                           String alertOwnerUserId, ObjectProvider<AgentAccess> access) {
         var service = new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
                 agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits,
-                opsJournal, alertOwnerUserId, agentActionService);
+                opsJournal, alertOwnerUserId, agentActionService, alertLifecycleRepository);
         service.access(access.getIfAvailable(AgentAccess::local));
         return service;
     }
@@ -411,6 +418,7 @@ public class AgentRuntimeConfiguration {
                                                  ObjectProvider<AgentAccess> access,
                                                  RiskBasedApprovalPolicy approvalPolicy,
                                                  ActionCommandRepository actionCommandRepository,
+                                                 IncidentRepository incidentRepository,
                                                  com.rover.agent.runtime.verification.ActionEffectVerificationService effectVerification,
                                                  com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
                                                  @Value("${rover.agent.actions.async-execution:true}") boolean asyncExecution) {

@@ -5,6 +5,10 @@ import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.model.AgentStepType;
+import com.rover.agent.core.model.AlertDelivery;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertIngestResult;
+import com.rover.agent.core.model.AlertLifecycle;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
 import com.rover.agent.core.model.InvestigationReport;
@@ -17,6 +21,7 @@ import com.rover.agent.core.planning.InvestigationPlanner;
 import com.rover.agent.core.planning.PlanValidator;
 import com.rover.agent.core.planning.PlanningLimits;
 import com.rover.agent.core.planning.RuleBasedPlanner;
+import com.rover.agent.core.repository.AlertLifecycleRepository;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
@@ -34,6 +39,7 @@ import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTask;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
+import com.rover.agent.runtime.task.AlertDeliveryConflictException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -51,6 +57,7 @@ public final class InvestigationService {
     private static final Logger log = LoggerFactory.getLogger(InvestigationService.class);
     private static final int MAX_PATH_LENGTH = 512;
     private static final int MAX_QUESTION_LENGTH = 1000;
+    private static final long ALERT_DELIVERY_RETENTION_MILLIS = java.time.Duration.ofDays(90).toMillis();
 
     /** 默认能力注册表：纯数据且不可变，默认装配与规划器共用同一份，避免口径分叉。 */
     private static final CapabilityRegistry STANDARD_CAPABILITIES = CapabilityRegistry.standard();
@@ -72,6 +79,7 @@ public final class InvestigationService {
     private final OpsJournal journal;
     private final String alertOwnerUserId;
     private final AgentActionService actions;
+    private final AlertLifecycleRepository alertLifecycles;
 
     /** 默认装配规则规划器、标准能力注册表和规划上限。 */
     public InvestigationService(RouteReadPort routes, InstanceReadPort instances, MetricReadPort metrics,
@@ -123,6 +131,14 @@ public final class InvestigationService {
                                 ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
                                 CapabilityExecutor executor, PlanningLimits limits, OpsJournal journal,
                                 String alertOwnerUserId, AgentActionService actions) {
+        this(incidents, tasks, explainer, planner, validator, executor, limits, journal, alertOwnerUserId, actions, null);
+    }
+
+    public InvestigationService(IncidentRegistry incidents, InvestigationTaskRegistry tasks,
+                                ModelExplainer explainer, InvestigationPlanner planner, PlanValidator validator,
+                                CapabilityExecutor executor, PlanningLimits limits, OpsJournal journal,
+                                String alertOwnerUserId, AgentActionService actions,
+                                AlertLifecycleRepository alertLifecycles) {
         this.incidents = incidents;
         this.tasks = tasks;
         this.explainer = explainer;
@@ -133,6 +149,7 @@ public final class InvestigationService {
         this.journal = journal == null ? OpsJournal.none() : journal;
         this.alertOwnerUserId = identity(alertOwnerUserId);
         this.actions = actions;
+        this.alertLifecycles = alertLifecycles;
         tasks.handler("ALERT", (task, payload) -> {
             try {
                 TimeRange range = new com.fasterxml.jackson.databind.ObjectMapper()
@@ -156,6 +173,150 @@ public final class InvestigationService {
         String question = "告警自动调查："
                 + (alertMessage == null || alertMessage.isBlank() ? "请根据下方路径与窗口排查失败原因" : alertMessage);
         return submit(path, question, IncidentOrigin.ALERT, timeRange, triggeredBy);
+    }
+
+    /** Idempotent alert webhook lifecycle. The source is part of both deduplication keys. */
+    public AlertIngestResult submitAlert(String sourceUserId, String deliveryId, String alertKey,
+                                         AlertEventState state, String path, String alertMessage, TimeRange timeRange) {
+        if (alertLifecycles == null) { throw new IllegalStateException("alert lifecycle repository is unavailable"); }
+        String source = requiredIdentity(sourceUserId, "告警来源身份不能为空");
+        String delivery = bounded(deliveryId, 128, "deliveryId");
+        String key = bounded(alertKey, 256, "alertKey");
+        if (state == null) { throw new IllegalArgumentException("告警状态不能为空"); }
+        String target = validatePath(path);
+        String message = alertMessage == null ? "" : alertMessage.trim();
+        if (message.length() > MAX_QUESTION_LENGTH) { throw new IllegalArgumentException("告警文本过长"); }
+        TimeRange range = timeRange == null ? TimeRange.unspecified() : timeRange;
+        String fingerprint = fingerprint(state.name(), target, message, Long.toString(range.fromMillis()), Long.toString(range.toMillis()));
+        String lifecycleFingerprint = fingerprint(target, Long.toString(range.fromMillis()), Long.toString(range.toMillis()));
+        long now = System.currentTimeMillis();
+        AlertDelivery previous = alertLifecycles.transaction(tx -> tx.delivery(source, delivery).orElse(null));
+        if (previous != null && (!previous.alertKey().equals(key) || !previous.payloadFingerprint().equals(fingerprint))) {
+            throw new AlertDeliveryConflictException("同一 deliveryId 已用于不同的告警内容");
+        }
+        if (previous != null) {
+            access.require(alertOwnerUserId == null ? source : alertOwnerUserId,
+                    com.rover.agent.core.port.AgentAccess.Permission.READ);
+            return result(previous, true);
+        }
+        access.require(alertOwnerUserId == null ? source : alertOwnerUserId,
+                com.rover.agent.core.port.AgentAccess.Permission.INGEST);
+        AlertIngestResult result;
+        synchronized (alertLifecycles) {
+            AlertDelivery latest = alertLifecycles.transaction(tx -> tx.delivery(source, delivery).orElse(null));
+            if (latest == null && previous != null) {
+                throw new AlertDeliveryConflictException("告警投递回执已过期，请按告警生命周期重新生成 delivery ID");
+            }
+            if (latest != null && (!latest.alertKey().equals(key) || !latest.payloadFingerprint().equals(fingerprint))) {
+                throw new AlertDeliveryConflictException("同一 deliveryId 已用于不同的告警内容");
+            }
+            access.require(alertOwnerUserId == null ? source : alertOwnerUserId,
+                    latest == null ? com.rover.agent.core.port.AgentAccess.Permission.INGEST
+                            : com.rover.agent.core.port.AgentAccess.Permission.READ);
+            result = alertLifecycles.transaction(tx -> {
+            tx.pruneDeliveriesBefore(now - ALERT_DELIVERY_RETENTION_MILLIS);
+            AlertDelivery existing = tx.delivery(source, delivery).orElse(null);
+            if (existing != null) {
+                if (!existing.alertKey().equals(key) || !existing.payloadFingerprint().equals(fingerprint)) {
+                    throw new AlertDeliveryConflictException("同一 deliveryId 已用于不同的告警内容");
+                }
+                return result(existing, true);
+            }
+            AlertLifecycle current = tx.lifecycle(source, key).orElse(null);
+            if (state == AlertEventState.RESOLVED && (current == null || !current.active())) {
+                throw new IllegalArgumentException("没有可结束的活动告警轮次");
+            }
+            if (current != null && current.active() && !current.path().equals(target)) {
+                throw new AlertDeliveryConflictException("活动告警键不能更换 path；请先发送 RESOLVED，再开启新一轮");
+            }
+            if (current != null && current.active() && current.lastState() == state
+                    && !current.lastPayloadFingerprint().equals(lifecycleFingerprint)) {
+                throw new AlertDeliveryConflictException("同一活动告警键收到不同内容；请先结束当前告警轮次");
+            }
+            if (current != null && !current.active() && current.lastState() == state
+                    && !current.lastPayloadFingerprint().equals(lifecycleFingerprint)) {
+                throw new AlertDeliveryConflictException("同一已结束告警键收到不同内容；请为新故障轮次使用新的 alertKey");
+            }
+            if (current != null && current.lastState() == state
+                    && current.lastPayloadFingerprint().equals(lifecycleFingerprint)) {
+                AlertDelivery receipt = new AlertDelivery(source, delivery, key, state, fingerprint, current.generation(),
+                        current.sessionId(), current.incidentId(), current.taskId(), now);
+                if (!tx.saveDelivery(receipt)) { throw new AlertDeliveryConflictException("重复告警投递，请重试查询原受理结果"); }
+                return result(receipt, true);
+            }
+            long generation = current == null ? (state == AlertEventState.FIRING ? 1 : 0)
+                    : current.generation() + (state == AlertEventState.FIRING ? 1 : 0);
+            String sessionId = current == null ? null : current.sessionId();
+            String incidentId = current == null ? null : current.incidentId();
+            String taskId = current == null ? null : current.taskId();
+            InvestigationTask createdTask = null;
+            if (state == AlertEventState.FIRING) {
+                String question = "告警自动调查：" + (message.isBlank() ? "请根据下方路径与窗口排查失败原因" : message);
+                Session session = incidents.openSession(alertOwnerUserId == null ? source : alertOwnerUserId);
+                sessionId = session.sessionId();
+                Incident incident = incidents.openIncident(sessionId, IncidentOrigin.ALERT,
+                        ResourceTarget.route(target), range, source);
+                incidentId = incident.incidentId();
+                try {
+                    createdTask = register(sessionId, question);
+                    createdTask.bind(incidentId, target, ResourceTarget.route(target), range);
+                    incidents.attachTask(incidentId, createdTask.taskId());
+                    InvestigationTask queuedTask = createdTask;
+                    tasks.enqueue(queuedTask, "ALERT", range, () -> run(queuedTask));
+                    taskId = createdTask.taskId();
+                } catch (RuntimeException failure) {
+                    if (createdTask != null) { tasks.discard(createdTask.taskId()); }
+                    rollback(incident, session);
+                    throw failure;
+                }
+            } else if (current != null && current.taskId() != null) {
+                TaskView active = tasks.get(current.taskId());
+                if (active != null && active.status().active()) { tasks.resolveAlert(current.taskId()); }
+                if (current.incidentId() != null) {
+                    incidents.resolveAlert(current.incidentId(), "告警已恢复（RESOLVED），原调查轮次已结束");
+                }
+            }
+            AlertLifecycle next = new AlertLifecycle(source, key, state == AlertEventState.FIRING, target, generation,
+                    sessionId, incidentId, taskId, state, lifecycleFingerprint, now);
+            AlertDelivery receipt = new AlertDelivery(source, delivery, key, state, fingerprint, generation,
+                    sessionId, incidentId, state == AlertEventState.RESOLVED ? null : taskId, now);
+            if (!tx.saveDelivery(receipt)) { throw new AlertDeliveryConflictException("重复告警投递，请重试查询原受理结果"); }
+            tx.saveLifecycle(next);
+            return result(receipt, false);
+            });
+        }
+        return result;
+    }
+
+    private AlertIngestResult result(AlertDelivery delivery, boolean duplicate) {
+        TaskView task = delivery.taskId() == null ? null : tasks.get(delivery.taskId());
+        return new AlertIngestResult(delivery.sessionId(), delivery.incidentId(), delivery.taskId(),
+                task == null ? null : task.status(), duplicate, delivery.state() == AlertEventState.RESOLVED,
+                delivery.generation());
+    }
+
+    private static String requiredIdentity(String value, String message) {
+        if (value == null || value.isBlank()) { throw new IllegalArgumentException(message); }
+        return bounded(value, 128, "sourceId");
+    }
+
+    private static String bounded(String value, int max, String field) {
+        if (value == null || value.isBlank() || value.length() > max) {
+            throw new IllegalArgumentException(field + " is invalid");
+        }
+        return value.trim();
+    }
+
+    private static String fingerprint(String... values) {
+        try {
+            var digest = java.security.MessageDigest.getInstance("SHA-256");
+            for (String value : values) {
+                byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                digest.update(java.nio.ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
+                digest.update(bytes);
+            }
+            return java.util.HexFormat.of().formatHex(digest.digest());
+        } catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
     }
 
     private TaskView submit(String path, String question, IncidentOrigin origin, TimeRange timeRange,

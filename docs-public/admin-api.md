@@ -196,11 +196,15 @@ incident, and runs the investigation over exactly the same read path a human que
 
 | Field | Required | Meaning |
 | --- | --- | --- |
+| `Idempotency-Key` header | yes | Source-generated delivery ID; unique per source and reused for retries |
 | `path` | yes | Route prefix to investigate, e.g. `/api/demo/tt`; missing or blank returns `400` |
+| `alertKey` | yes | Alert rule/fingerprint joining firing and resolved updates for one lifecycle |
+| `state` | yes | `FIRING` opens an investigation; `RESOLVED` closes that generation and cancels a running investigation |
 | `message` | no | Alert text (symptoms and suspicion) |
 | `fromMillis` / `toMillis` | no | Observation window (epoch millis); they must come as a pair, supplying only one returns `400` |
 
-- Response is `202` plus a task view (`sessionId`, `taskId`, `status`). Sign-in is required; identity comes from
+- First `FIRING` returns `202` with an acceptance result; retrying the same delivery returns `200` with the original task. Reusing a delivery ID with different content, or conflicting parameters for an active alert key, returns `409`. `RESOLVED` returns `202` without opening another investigation.
+- Delivery receipts are retained for 90 days; lifecycle records remain available. Sign-in is required; identity comes from
   authentication, never from payload fields.
 - Each alert gets an independent session owned by the caller by default. Set `ROVER_AGENT_ALERT_OWNER`
   (`rover.agent.alerts.owner-user-id`) to route new alerts to an existing handler account. `Incident.triggeredBy`
@@ -215,8 +219,8 @@ incident, and runs the investigation over exactly the same read path a human que
   `INSPECTION` incidents) is not implemented, so pushing remains the monitoring system's job.
 
 ```bash
-curl -s -X POST -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
-  -d '{"path":"/api/demo/tt","message":"5xx spiking","fromMillis":1735689600000,"toMillis":1735776000000}' \
+curl -s -X POST -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Idempotency-Key: monitor-delivery-123" -H "Content-Type: application/json" \
+  -d '{"path":"/api/demo/tt","alertKey":"orders-5xx","state":"FIRING","message":"5xx spiking","fromMillis":1735689600000,"toMillis":1735776000000}' \
   "http://127.0.0.1:9090/api/agent/events/ingest"
 ```
 

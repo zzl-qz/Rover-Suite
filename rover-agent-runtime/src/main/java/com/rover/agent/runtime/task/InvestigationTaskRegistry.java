@@ -83,6 +83,11 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
                 try {
                     var job = durable.claimJob(pending.taskId(), pending.attempt()).orElse(null);
                     if (job == null) { return; }
+                    TaskView claimed = records.find(job.taskId()).orElse(null);
+                    if (claimed == null || !claimed.status().active()) {
+                        durable.finishJob(job.taskId(), job.attempt());
+                        return;
+                    }
                     InvestigationTask task = executing.get(job.taskId());
                     if (task == null) {
                         TaskView saved = records.find(job.taskId()).orElse(null);
@@ -91,6 +96,12 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
                                 metrics, checkpoints, runLimits, deadlines);
                         task.restore(saved, records.streamSnapshot(job.taskId()).orElse(null), checkpoints.latest(job.taskId()).orElse(null));
                         executing.put(job.taskId(), task);
+                        TaskView current = records.find(job.taskId()).orElse(null);
+                        if (current == null || !current.status().active()) {
+                            executing.remove(job.taskId(), task);
+                            durable.finishJob(job.taskId(), job.attempt());
+                            return;
+                        }
                     }
                     final long attempt = job.attempt();
                     if (job.budgetJson() != null) { task.restoreBudget(json.readValue(job.budgetJson(), AgentRunBudget.State.class)); }
@@ -230,14 +241,37 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
      */
     public boolean cancel(String taskId) {
         InvestigationTask task = executing.get(taskId);
-        if (task == null) {
-            return false;
-        }
+        if (task == null) { return false; }
         boolean cancelledNow = task.cancel("任务已被用户取消");
-        if (cancelledNow) {
-            task.interruptRunner();
-        }
+        if (cancelledNow) { task.interruptRunner(); }
         return cancelledNow;
+    }
+
+    /** End an alert task regardless of handler ownership; called only for a resolved authenticated source event. */
+    public boolean resolveAlert(String taskId) {
+        InvestigationTask task = executing.get(taskId);
+        if (task != null) {
+            boolean cancelledNow = task.cancel("告警已恢复（RESOLVED），调查任务已结束");
+            if (cancelledNow) { task.interruptRunner(); }
+            return cancelledNow;
+        }
+        if (durable == null) { return false; }
+        TaskView saved = records.find(taskId).orElse(null);
+        if (saved == null || !saved.status().active()) { return false; }
+        java.util.concurrent.atomic.AtomicBoolean registryWon = new java.util.concurrent.atomic.AtomicBoolean();
+        boolean cancelled = durable.cancelUnregisteredJob(taskId, () -> {
+            InvestigationTask restored = new InvestigationTask(saved.taskId(), saved.sessionId(), saved.question(),
+                    records::save, events, metrics, checkpoints, runLimits, deadlines);
+            restored.restore(saved, records.streamSnapshot(taskId).orElse(null), checkpoints.latest(taskId).orElse(null));
+            restored.eventSink(records::saveEvent);
+            restored.transactionalEvents(true);
+            registryWon.set(restored.cancel("告警已恢复（RESOLVED），调查任务已结束"));
+        });
+        if (!cancelled || !registryWon.get()) { return false; }
+        events.open(taskId);
+        durable.tasks().eventsAfter(taskId, -1, 1000).stream()
+                .filter(event -> event.type().terminal()).forEach(events::publish);
+        return true;
     }
 
     public TaskView get(String taskId) {

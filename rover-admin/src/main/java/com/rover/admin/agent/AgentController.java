@@ -8,6 +8,8 @@ import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertIngestResult;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.runtime.AgentOrchestrator;
 import com.rover.agent.runtime.metrics.AgentMetrics;
@@ -163,7 +165,9 @@ public class AgentController {
      * 接口需要登录；来源取认证主体，处理归属由服务端映射，不接受载荷指定账号。
      */
     @PostMapping("/events/ingest")
-    public ResponseEntity<?> ingestEvent(@RequestBody IngestRequest request, Authentication authentication) {
+    public ResponseEntity<?> ingestEvent(@RequestBody IngestRequest request,
+                                         @org.springframework.web.bind.annotation.RequestHeader(value = "Idempotency-Key", required = false) String deliveryId,
+                                         Authentication authentication) {
         String sourceUserId = user(authentication);
         if (sourceUserId == null) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
@@ -175,17 +179,26 @@ public class AgentController {
             return ResponseEntity.badRequest()
                     .body(commandError("BAD_REQUEST", "fromMillis 与 toMillis 需同时提供", null));
         }
+        if (request.alertKey() == null || request.alertKey().isBlank() || request.state() == null) {
+            return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", "alertKey 和 state 必填", null));
+        }
+        if (deliveryId == null || deliveryId.isBlank()) {
+            return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", "缺少 Idempotency-Key 请求头", null));
+        }
         try {
-            TaskView task = agent.ingestAlert(sourceUserId, request.path(), request.message(),
-                    request.fromMillis(), request.toMillis());
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body(task);
+            AlertIngestResult result = agent.ingestAlert(sourceUserId, deliveryId, request.alertKey(), request.state(),
+                    request.path(), request.message(), request.fromMillis(), request.toMillis());
+            return ResponseEntity.status(result.duplicate() ? HttpStatus.OK : HttpStatus.ACCEPTED).body(result);
+        } catch (com.rover.agent.runtime.task.AlertDeliveryConflictException ex) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(commandError("ALERT_IDEMPOTENCY_CONFLICT", ex.getMessage(), null));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", ex.getMessage(), null));
         }
     }
 
     /** 事件接入请求体：路由前缀必填；告警文本与观测窗口可选。 */
-    public record IngestRequest(String path, String message, Long fromMillis, Long toMillis) {
+    public record IngestRequest(String path, String message, Long fromMillis, Long toMillis,
+                                String alertKey, AlertEventState state) {
     }
 
     /**

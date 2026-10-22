@@ -25,6 +25,8 @@ import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.event.TaskSnapshot;
 import com.rover.agent.core.model.AgentMessage;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertIngestResult;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
 import com.rover.agent.core.model.IncidentStatus;
@@ -360,17 +362,42 @@ class AgentControllerWebTest {
     /** 事件接入：告警触发一次自动调查，返回 202 与任务视图，人工会话不会因此被 409 挡住。 */
     @Test
     void ingestAlertCreatesInvestigation() throws Exception {
-        TaskView alert = new TaskView("t3", "s1", "inc-3", TaskStatus.PENDING, null,
-                "/api/demo/tt", ResourceTarget.route("/api/demo/tt"), "告警自动调查：5xx", 1, 0, List.of(), null, null, null);
-        when(agent.ingestAlert(eq("alice"), eq("/api/demo/tt"), any(), any(), any())).thenReturn(alert);
+        AlertIngestResult alert = new AlertIngestResult("s1", "inc-3", "t3", TaskStatus.PENDING, false, false, 1);
+        when(agent.ingestAlert(eq("alice"), eq("delivery-1"), eq("cpu-high"), eq(AlertEventState.FIRING),
+                eq("/api/demo/tt"), any(), any(), any())).thenReturn(alert);
 
-        mockMvc.perform(post("/api/agent/events/ingest").with(user("alice")).with(csrf())
+        mockMvc.perform(post("/api/agent/events/ingest").header("Idempotency-Key", "delivery-1")
+                        .with(user("alice")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"path\":\"/api/demo/tt\",\"message\":\"5xx 告警\","
+                                + "\"alertKey\":\"cpu-high\",\"state\":\"FIRING\","
                                 + "\"userId\":\"admin\",\"triggeredBy\":\"admin\",\"ownerUserId\":\"admin\"}"))
                 .andExpect(status().isAccepted())
                 .andExpect(jsonPath("$.taskId").value("t3"));
-        verify(agent).ingestAlert(eq("alice"), eq("/api/demo/tt"), eq("5xx 告警"), any(), any());
+        verify(agent).ingestAlert(eq("alice"), eq("delivery-1"), eq("cpu-high"), eq(AlertEventState.FIRING),
+                eq("/api/demo/tt"), eq("5xx 告警"), any(), any());
+    }
+
+    @Test
+    void duplicateAlertDeliveryReturnsOkAndDifferentBodyConflicts() throws Exception {
+        AlertIngestResult duplicate = new AlertIngestResult("s1", "inc-3", "t3", TaskStatus.COMPLETED, true, false, 1);
+        when(agent.ingestAlert(eq("alice"), eq("delivery-1"), eq("cpu-high"), eq(AlertEventState.FIRING),
+                eq("/api/demo/tt"), eq("5xx 告警"), any(), any())).thenReturn(duplicate);
+        mockMvc.perform(post("/api/agent/events/ingest").header("Idempotency-Key", "delivery-1")
+                        .with(user("alice")).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"path\":\"/api/demo/tt\",\"message\":\"5xx 告警\",\"alertKey\":\"cpu-high\",\"state\":\"FIRING\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.duplicate").value(true))
+                .andExpect(jsonPath("$.taskId").value("t3"));
+
+        when(agent.ingestAlert(eq("alice"), eq("delivery-1"), eq("cpu-high"), eq(AlertEventState.FIRING),
+                eq("/api/demo/tt"), eq("different body"), any(), any()))
+                .thenThrow(new com.rover.agent.runtime.task.AlertDeliveryConflictException("conflict"));
+        mockMvc.perform(post("/api/agent/events/ingest").header("Idempotency-Key", "delivery-1")
+                        .with(user("alice")).with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"path\":\"/api/demo/tt\",\"message\":\"different body\",\"alertKey\":\"cpu-high\",\"state\":\"FIRING\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ALERT_IDEMPOTENCY_CONFLICT"));
     }
 
     @Test

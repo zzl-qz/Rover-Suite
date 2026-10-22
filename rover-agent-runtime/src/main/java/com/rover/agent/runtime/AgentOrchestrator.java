@@ -8,6 +8,8 @@ import com.rover.agent.core.context.TargetResolver;
 import com.rover.agent.core.event.TaskEventSubscriber;
 import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.model.AgentMessage;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertIngestResult;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
@@ -300,6 +302,15 @@ public final class AgentOrchestrator {
                 ? new TimeRange(fromMillis, toMillis)
                 : TimeRange.unspecified();
         return investigations.submitAlert(user(sourceUserId), path, alertMessage, range);
+    }
+
+    public AlertIngestResult ingestAlert(String sourceUserId, String deliveryId, String alertKey, AlertEventState state,
+                                         String path, String alertMessage, Long fromMillis, Long toMillis) {
+        if ((fromMillis == null) != (toMillis == null)) {
+            throw new IllegalArgumentException("fromMillis 与 toMillis 需同时提供");
+        }
+        TimeRange range = fromMillis == null ? TimeRange.unspecified() : new TimeRange(fromMillis, toMillis);
+        return investigations.submitAlert(user(sourceUserId), deliveryId, alertKey, state, path, alertMessage, range);
     }
 
     /** 尽力识别问题里点到的对象：识别出来就挂到对应事件下（同对象续用、换对象另开），识别不出也不拦。 */

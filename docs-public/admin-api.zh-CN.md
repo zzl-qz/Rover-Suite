@@ -162,11 +162,15 @@ Admin 为它独立开会话、记一笔 `ALERT` 来源的事件，并复用与�
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
+| `Idempotency-Key` 请求头 | 是 | 来源生成的投递 ID；同来源下需唯一，重试必须复用 |
 | `path` | 是 | 要排查的路由前缀，例如 `/api/demo/tt`；缺失或空白回 `400` |
+| `alertKey` | 是 | 告警规则/指纹，标识 firing 与 resolved 属于同一轮生命周期 |
+| `state` | 是 | `FIRING` 创建调查，`RESOLVED` 关闭本轮并取消仍在运行的调查 |
 | `message` | 否 | 告警文本（含现象与怀疑点） |
 | `fromMillis` / `toMillis` | 否 | 观测窗口（毫秒时间戳）；两者必须成对给出，只给一个回 `400` |
 
-- 响应 `202` + 任务视图（`sessionId`、`taskId`、`status`）。需要登录，来源由认证上下文决定；载荷中的身份字段不能改变归属。
+- 首次 `FIRING` 响应 `202` + 受理结果；相同投递重试响应 `200` 并返回原任务。相同 delivery ID 内容不同或活动告警键参数冲突返回 `409`。`RESOLVED` 响应 `202`，不创建新调查。
+- 投递回执保留 90 天；告警生命周期记录持续保留。需要登录，来源由认证上下文决定；载荷中的身份字段不能改变归属。
 - 告警各开独立会话，默认归属认证调用者。`ROVER_AGENT_ALERT_OWNER`（`rover.agent.alerts.owner-user-id`）
   可将新告警映射到一个现有处理账号；`Incident.triggeredBy` 独立保留原来源，工作台展示二者。
   只有处理账号能轮询详情、订阅 SSE、打开工作台和继续提问；配置了不同处理账号时，来源账号仍能提交，读取这些资源返回 `404`。
@@ -176,8 +180,8 @@ Admin 为它独立开会话、记一笔 `ALERT` 来源的事件，并复用与�
 - Agent 不会主动去监控源头拉取：主动巡检（定时自巡检、自建 `INSPECTION` 事件）尚未实现，这一步仍由监控系统推送。
 
 ```bash
-curl -s -X POST -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Content-Type: application/json" \
-  -d '{"path":"/api/demo/tt","message":"5xx 突增多","fromMillis":1735689600000,"toMillis":1735776000000}' \
+curl -s -X POST -b "$jar" -H "X-XSRF-TOKEN: $token" -H "Idempotency-Key: monitor-delivery-123" -H "Content-Type: application/json" \
+  -d '{"path":"/api/demo/tt","alertKey":"orders-5xx","state":"FIRING","message":"5xx 突增多","fromMillis":1735689600000,"toMillis":1735776000000}' \
   "http://127.0.0.1:9090/api/agent/events/ingest"
 ```
 

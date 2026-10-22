@@ -9,6 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNotes;
 import com.rover.agent.core.model.AgentMessage;
+import com.rover.agent.core.model.AlertDelivery;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertLifecycle;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Confidence;
 import com.rover.agent.core.model.Evidence;
@@ -228,7 +231,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(14, store.schemaVersion(),
+            assertEquals(15, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
                             + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
                             + "v13 保存按管理目标绑定的持久动作命令");
@@ -242,7 +245,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-        assertEquals(14, store.schemaVersion());
+        assertEquals(15, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -275,6 +278,35 @@ class JdbcAgentStoreTest {
     }
 
     @Test
+    void alertDeliveryReceiptsAndLifecycleSurviveRestartAndTransactionsRollBack() throws Exception {
+        String path = tempPath("rover-alert-lifecycle");
+        AlertDelivery receipt = new AlertDelivery("monitor-a", "delivery-1", "route-errors",
+                AlertEventState.FIRING, "a".repeat(64), 1, "s1", "i1", "t1", 100L);
+        AlertLifecycle lifecycle = new AlertLifecycle("monitor-a", "route-errors", true, "/api/order",
+                1, "s1", "i1", "t1", AlertEventState.FIRING, "b".repeat(64), 101L);
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.alertLifecycles().transaction(tx -> {
+                assertTrue(tx.saveDelivery(receipt));
+                tx.saveLifecycle(lifecycle);
+                return null;
+            });
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            assertEquals(receipt, reopened.alertLifecycles().transaction(tx ->
+                    tx.delivery("monitor-a", "delivery-1").orElseThrow()));
+            assertEquals(lifecycle, reopened.alertLifecycles().transaction(tx ->
+                    tx.lifecycle("monitor-a", "route-errors").orElseThrow()));
+            assertThrows(IllegalStateException.class, () -> reopened.alertLifecycles().transaction(tx -> {
+                tx.saveLifecycle(new AlertLifecycle("monitor-a", "route-errors", false, "/api/order",
+                        1, "s1", "i1", null, AlertEventState.RESOLVED, "c".repeat(64), 102L));
+                throw new IllegalStateException("rollback");
+            }));
+            assertEquals(lifecycle, reopened.alertLifecycles().transaction(tx ->
+                    tx.lifecycle("monitor-a", "route-errors").orElseThrow()));
+        }
+    }
+
+    @Test
     void schemaFiveUpgradeLeavesUnknownHistoricalSourcesUnset() throws Exception {
         String path = tempPath("rover-alert-upgrade");
         try (JdbcAgentStore first = new JdbcAgentStore(path)) {
@@ -287,7 +319,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(14, upgraded.schemaVersion());
+            assertEquals(15, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }

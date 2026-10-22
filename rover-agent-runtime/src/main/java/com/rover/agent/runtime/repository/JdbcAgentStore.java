@@ -6,6 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.AlertDelivery;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertLifecycle;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionExecutionCommand;
@@ -42,6 +45,7 @@ import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.ActionEffectVerificationRepository;
+import com.rover.agent.core.repository.AlertLifecycleRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
@@ -104,6 +108,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final Actions actions = new Actions();
     private final ActionCommands actionCommands = new ActionCommands();
     private final EffectVerifications effectVerifications = new EffectVerifications();
+    private final AlertLifecycles alertLifecycles = new AlertLifecycles();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -155,6 +160,8 @@ public final class JdbcAgentStore implements AutoCloseable {
     public ActionCommandRepository actionCommands() { return actionCommands; }
 
     public ActionEffectVerificationRepository effectVerifications() { return effectVerifications; }
+
+    public AlertLifecycleRepository alertLifecycles() { return alertLifecycles; }
 
     /** 资源笔记：有已确认根因的调查才会写，按资源键读一条。 */
     public synchronized Optional<ResourceNote> findNote(String resourceKey) {
@@ -258,6 +265,61 @@ public final class JdbcAgentStore implements AutoCloseable {
                 row.getLong("not_before"));
     }
 
+    private final class AlertLifecycles implements AlertLifecycleRepository {
+        @Override public <T> T transaction(java.util.function.Function<AlertLifecycleRepository.Transaction, T> work) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> work.apply(new AlertLifecycleRepository.Transaction() {
+                    @Override public Optional<AlertDelivery> delivery(String sourceId, String deliveryId) {
+                        return queryOne("SELECT * FROM agent_alert_delivery WHERE source_id=? AND delivery_id=?",
+                                row -> new AlertDelivery(row.getString("source_id"), row.getString("delivery_id"),
+                                        row.getString("alert_key"), AlertEventState.valueOf(row.getString("event_state")),
+                                        row.getString("payload_fingerprint"), row.getLong("generation"),
+                                        row.getString("session_id"), row.getString("incident_id"), row.getString("task_id"),
+                                        row.getLong("accepted_at")), sourceId, deliveryId);
+                    }
+
+                    @Override public Optional<AlertLifecycle> lifecycle(String sourceId, String alertKey) {
+                        return queryOne("SELECT * FROM agent_alert_lifecycle WHERE source_id=? AND alert_key=?",
+                                row -> new AlertLifecycle(row.getString("source_id"), row.getString("alert_key"),
+                                        row.getBoolean("active"), row.getString("path"), row.getLong("generation"),
+                                        row.getString("session_id"), row.getString("incident_id"), row.getString("task_id"),
+                                        AlertEventState.valueOf(row.getString("last_state")),
+                                        row.getString("last_fingerprint"), row.getLong("updated_at")), sourceId, alertKey);
+                    }
+
+                    @Override public boolean saveDelivery(AlertDelivery delivery) {
+                        if (queryOne("SELECT delivery_id FROM agent_alert_delivery WHERE source_id=? AND delivery_id=?",
+                                row -> row.getString(1), delivery.sourceId(), delivery.deliveryId()).isPresent()) { return false; }
+                        run("INSERT INTO agent_alert_delivery(source_id,delivery_id,alert_key,event_state,"
+                                        + "payload_fingerprint,generation,session_id,incident_id,task_id,accepted_at) "
+                                        + "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                delivery.sourceId(), delivery.deliveryId(), delivery.alertKey(), delivery.state().name(),
+                                delivery.payloadFingerprint(), delivery.generation(), delivery.sessionId(),
+                                delivery.incidentId(), delivery.taskId(), delivery.acceptedAtMillis());
+                        return true;
+                    }
+
+                    @Override public void saveLifecycle(AlertLifecycle item) {
+                        upsert("UPDATE agent_alert_lifecycle SET active=?,path=?,generation=?,session_id=?,incident_id=?,task_id=?,"
+                                        + "last_state=?,last_fingerprint=?,updated_at=? WHERE source_id=? AND alert_key=?",
+                                "INSERT INTO agent_alert_lifecycle(active,path,generation,session_id,incident_id,task_id,last_state,"
+                                        + "last_fingerprint,updated_at,source_id,alert_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                                new Object[]{item.active(), item.path(), item.generation(), item.sessionId(), item.incidentId(),
+                                        item.taskId(), item.lastState().name(), item.lastPayloadFingerprint(), item.updatedAtMillis(),
+                                        item.sourceId(), item.alertKey()},
+                                new Object[]{item.active(), item.path(), item.generation(), item.sessionId(), item.incidentId(),
+                                        item.taskId(), item.lastState().name(), item.lastPayloadFingerprint(), item.updatedAtMillis(),
+                                        item.sourceId(), item.alertKey()});
+                    }
+
+                    @Override public void pruneDeliveriesBefore(long cutoff) {
+                        run("DELETE FROM agent_alert_delivery WHERE accepted_at<?", cutoff);
+                    }
+                }));
+            }
+        }
+    }
+
     private final class EffectVerifications implements ActionEffectVerificationRepository {
         @Override public Optional<ActionEffectVerification> find(String actionId, ActionEffectVerification.Phase phase) {
             synchronized (JdbcAgentStore.this) {
@@ -315,6 +377,17 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     public synchronized void finishJob(String taskId, long attempt) {
         run("UPDATE agent_job SET state='DONE' WHERE task_id=? AND attempt=? AND state='RUNNING'", taskId, attempt);
+    }
+
+    /** Cancel a job that has not yet reached the task registry and persist its cancellation atomically. */
+    public synchronized boolean cancelUnregisteredJob(String taskId, Runnable cancellation) {
+        return inTransaction(() -> {
+            if (run("UPDATE agent_job SET state='DONE' WHERE task_id=? AND state IN ('PENDING','RUNNING')", taskId) != 1) {
+                return false;
+            }
+            cancellation.run();
+            return true;
+        });
     }
 
     public synchronized void saveBudget(String taskId, long attempt, Object state) {
@@ -1641,6 +1714,21 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "payload_json TEXT NOT NULL, version BIGINT NOT NULL, "
                                         + "PRIMARY KEY(action_id,phase), FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)",
                                 "CREATE INDEX IF NOT EXISTS idx_action_verification_due ON agent_action_verification(state,next_window_at,action_id)"),
+                        List.of(), List.of()),
+                new Migration(15, "alert delivery idempotency receipts and active lifecycle",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_alert_delivery ("
+                                        + "source_id VARCHAR(128) NOT NULL, delivery_id VARCHAR(128) NOT NULL, "
+                                        + "alert_key VARCHAR(256) NOT NULL, event_state VARCHAR(16) NOT NULL, "
+                                        + "payload_fingerprint VARCHAR(64) NOT NULL, generation BIGINT NOT NULL, "
+                                        + "session_id VARCHAR(64), incident_id VARCHAR(64), task_id VARCHAR(64), "
+                                        + "accepted_at BIGINT NOT NULL, PRIMARY KEY(source_id,delivery_id))",
+                                "CREATE TABLE IF NOT EXISTS agent_alert_lifecycle ("
+                                        + "source_id VARCHAR(128) NOT NULL, alert_key VARCHAR(256) NOT NULL, "
+                                        + "active BOOLEAN NOT NULL, path VARCHAR(512) NOT NULL, generation BIGINT NOT NULL, "
+                                        + "session_id VARCHAR(64), incident_id VARCHAR(64), task_id VARCHAR(64), "
+                                        + "last_state VARCHAR(16) NOT NULL, last_fingerprint VARCHAR(64), updated_at BIGINT NOT NULL, "
+                                        + "PRIMARY KEY(source_id,alert_key))",
+                                "CREATE INDEX IF NOT EXISTS idx_alert_delivery_accepted ON agent_alert_delivery(accepted_at)"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {
