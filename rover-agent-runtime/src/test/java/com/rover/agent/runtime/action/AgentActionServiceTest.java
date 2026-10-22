@@ -28,9 +28,11 @@ import com.rover.agent.core.port.RouteControlState;
 import com.rover.agent.core.port.RouteControlTarget;
 import com.rover.agent.core.port.RouteOperation;
 import com.rover.agent.core.port.RouteOperationStatus;
+import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.port.SnapshotUnavailableException;
 import com.rover.agent.runtime.repository.InMemoryAgentActionRepository;
 import com.rover.agent.runtime.repository.InMemoryActionCommandRepository;
+import com.rover.agent.runtime.repository.InMemoryAutonomousActionBudgetRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -173,6 +175,62 @@ class AgentActionServiceTest {
                 com.rover.agent.core.model.ActionApproval.Stage.APPLY,
                 proposal.action().plan().planVersion(), proposal.action().plan().planHash(), approval.policyVersion()).size(),
                 "自动授权必须绑定到明确策略，不伪造人工审批记录");
+    }
+
+    @Test
+    void preauthorizedUnknownResultKeepsLockUntilOriginalOperationIsReconciled() {
+        gateway.resourceRef = planResource();
+        gateway.namespace = "namespace-a";
+        sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
+                .withScope(gateway.resourceRef.scope(), gateway.namespace));
+        var draft = AutoExecutionPolicy.create("route-quarantine", gateway.namespace, gateway.resourceRef,
+                "order-service", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        var policy = draft.revise(true, 5, 5, draft.expiresAtMillis(), "admin", System.currentTimeMillis());
+        var access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean automatedWriteAllowed() { return true; }
+        };
+        var commands = new InMemoryActionCommandRepository(10);
+        var budget = new InMemoryAutonomousActionBudgetRepository();
+        var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, List.of(policy));
+        service = new AgentActionService(repository, sessions, gateway,
+                new ActionExecutorRegistry(List.of(new RouteWeightActionExecutor(gateway, repository, access, approval))),
+                access, approval, commands, true, null,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 10_000,
+                        30_000, 2, 10, 0.9, 120_000, 0.01, 500), budget);
+
+        var proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-unknown", "incident-unknown",
+                "/api/order", "v2", List.of("evidence-1"));
+        assertTrue(proposal.created(), proposal.reason());
+        var applyCommand = commands.pending(Long.MAX_VALUE, 10).stream()
+                .filter(job -> job.command().phase() == ActionExecutionCommand.Phase.APPLY)
+                .findFirst().orElseThrow().command();
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.executeCommand(applyCommand);
+        assertEquals(ActionStatus.UNCERTAIN, uncertain.status());
+        String resourceKey = resourceKey(gateway.resourceRef);
+        assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESOURCE_BUSY,
+                budget.reserve(resourceKey, "another-incident", "other-apply", 1, 10, 86_400_000, 900_000, -1, true, System.currentTimeMillis()));
+
+        gateway.timeoutWithoutApply = false;
+        gateway.operations.put(uncertain.applyOperationId(), RouteOperationStatus.APPLIED);
+        gateway.applyWeight("v2", 0);
+        service.reconcile(uncertain.actionId(), OWNER);
+        var reconcileCommand = commands.pending(Long.MAX_VALUE, 10).stream()
+                .map(ActionCommandRepository.Job::command)
+                .filter(command -> command.phase() == ActionExecutionCommand.Phase.RECONCILE)
+                .findFirst().orElseThrow();
+        AgentAction resolved = service.executeCommand(reconcileCommand);
+        assertEquals(ActionStatus.SUCCESS, resolved.status());
+        assertEquals(uncertain.applyOperationId(), resolved.applyOperationId());
+        assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.COOLDOWN_ACTIVE,
+                budget.reserve(resourceKey, "another-incident", "other-apply-2", 1, 10, 86_400_000, 900_000, 1, true, System.currentTimeMillis()));
+    }
+
+    private static String resourceKey(com.rover.agent.core.model.ResourceRef ref) {
+        return ref.scope().organizationId() + "/" + ref.scope().teamId() + "/" + ref.scope().environmentId()
+                + "/" + ref.controlTargetId() + "/" + ref.kind() + "/" + ref.resourceId()
+                + "/" + ref.resourceUid() + "/" + ref.generation();
     }
 
     @Test

@@ -97,6 +97,7 @@ window.RoverAdminPages.workbench = {
             wbAutoPolicyError: '',
             wbAutoMaxBefore: 5,
             wbAutoMaxShift: 5,
+            wbAutoMaxCumulative: 10,
             wbOperationsStatus: null,
             wbReconciliationQueue: [],
             wbOperationBusy: false,
@@ -383,7 +384,9 @@ window.RoverAdminPages.workbench = {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ policyId: 'quarantine-' + now + '-' + Math.random().toString(36).slice(2, 8),
                         route: this.wbAutoRouteId, serviceName, group, maxBeforeTrafficPercent: Number(this.wbAutoMaxBefore),
-                        maxTrafficShiftPercent: Number(this.wbAutoMaxShift), expiresAtMillis: now + 7 * 86400000 }),
+                        maxTrafficShiftPercent: Number(this.wbAutoMaxShift),
+                        maxCumulativeTrafficShiftPercent: Number(this.wbAutoMaxCumulative),
+                        expiresAtMillis: now + 7 * 86400000 }),
                 });
                 this.wbAutoPolicyError = '策略已创建；仅匹配带证据和业务效果验证的隔离计划';
                 await this.wbLoadAutoPolicies();

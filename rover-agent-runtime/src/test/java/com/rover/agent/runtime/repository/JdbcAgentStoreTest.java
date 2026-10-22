@@ -232,7 +232,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(16, store.schemaVersion(),
+            assertEquals(17, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
                             + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
                             + "v13 保存按管理目标绑定的持久动作命令");
@@ -246,7 +246,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-        assertEquals(16, store.schemaVersion());
+        assertEquals(17, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -333,6 +333,77 @@ class JdbcAgentStoreTest {
     }
 
     @Test
+    void autonomousBudgetKeepsUnknownLocksAcrossRestartAndEnforcesCumulativeLimit() throws Exception {
+        String path = tempPath("rover-action-budget");
+        long day = java.time.Duration.ofHours(24).toMillis();
+        long cooldown = java.time.Duration.ofMinutes(15).toMillis();
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            var budget = first.autonomousActionBudget();
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "action-1", "action-1A", 6, 10, day, cooldown, -1, true, 1_000));
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESOURCE_BUSY,
+                    budget.reserve("resource", "action-2", "action-2A", 1, 10, day, cooldown, -1, true, 1_001));
+            budget.complete("action-1A", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.UNKNOWN, -1, 1_002);
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            var budget = reopened.autonomousActionBudget();
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESOURCE_BUSY,
+                    budget.reserve("resource", "action-2", "action-2A", 1, 10, day, cooldown, -1, true, 1_003),
+                    "未知结果必须在重启后继续锁住资源");
+            budget.complete("action-1A", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, 1_004);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.COOLDOWN_ACTIVE,
+                    budget.reserve("resource", "action-2", "action-2A", 1, 10, day, cooldown, 1, true, 1_005));
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.BUDGET_EXCEEDED,
+                    budget.reserve("resource", "action-2", "action-2A", 5, 10, day, 0, 1, true, 1_000 + cooldown + 10));
+        }
+    }
+
+    @Test
+    void autonomousRollingBudgetDoesNotResetAtWindowBoundary() throws Exception {
+        try (JdbcAgentStore store = new JdbcAgentStore(tempPath("rover-action-rolling-window"))) {
+            var budget = store.autonomousActionBudget();
+            long window = java.time.Duration.ofHours(24).toMillis();
+            long start = 5_000_000L;
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "seed", "seed", 0, 10, window, 0, 0, false, start));
+            budget.complete("seed", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.NOT_APPLIED, 0, start);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "a1", "a1-apply", 7, 10, window, 0, -1, true, start + window * 23 / 24));
+            budget.complete("a1-apply", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, start + window * 23 / 24);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "a2", "a2-apply", 2, 10, window, 0, -1, true, start + window * 23 / 24 + 1));
+            budget.complete("a2-apply", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, start + window * 23 / 24 + 1);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.BUDGET_EXCEEDED,
+                    budget.reserve("resource", "a3", "a3-apply", 2, 10, window, 0, -1, true, start + window + 1),
+                    "滚动窗口边界不应把上一笔尚在 24 小时内的影响清零");
+        }
+    }
+
+    @Test
+    void autonomousBudgetDetectsOscillationAndReleasesUnappliedReservation() throws Exception {
+        try (JdbcAgentStore store = new JdbcAgentStore(tempPath("rover-action-oscillation"))) {
+            var budget = store.autonomousActionBudget();
+            long window = java.time.Duration.ofHours(24).toMillis();
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "a1", "a1", 1, 10, window, 0, -1, true, 1_000));
+            budget.complete("a1", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, 1_001);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "a2", "a2", 1, 10, window, 0, 1, true, 1_002));
+            budget.complete("a2", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, 1, 1_003);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.OSCILLATION_DETECTED,
+                    budget.reserve("resource", "a3", "a3", 1, 10, window, 0, -1, true, 1_004));
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "manual", "manual", 1, 100, window, 0, -1, false, 1_005));
+            budget.complete("manual", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, 1_006);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.OSCILLATION_DETECTED,
+                    budget.reserve("resource", "a3", "a3", 1, 10, window, 0, -1, true, 1_007));
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "after-manual", "after-manual", 1, 10, window, 0, 1, true, 1_008),
+                    "未生效的操作释放锁后，其他方向的自动动作可重新获取");
+        }
+    }
+
+    @Test
     void schemaFiveUpgradeLeavesUnknownHistoricalSourcesUnset() throws Exception {
         String path = tempPath("rover-alert-upgrade");
         try (JdbcAgentStore first = new JdbcAgentStore(path)) {
@@ -345,7 +416,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(16, upgraded.schemaVersion());
+            assertEquals(17, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }

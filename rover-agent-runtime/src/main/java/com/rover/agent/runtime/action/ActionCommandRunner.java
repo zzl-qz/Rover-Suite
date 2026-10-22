@@ -88,7 +88,8 @@ public final class ActionCommandRunner implements AutoCloseable {
             actions.executeCommand(claimed.command());
             commands.finish(commandId, claimed.attempt());
         } catch (RuntimeException failure) {
-            long delaySeconds = Math.min(60, 1L << Math.min(6, pending.attempt() + 1));
+            long delaySeconds = failure instanceof ActionResourceBusyException
+                    ? 1 : Math.min(60, 1L << Math.min(6, pending.attempt() + 1));
             try {
                 commands.retry(commandId, pending.attempt() + 1,
                         System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(delaySeconds),

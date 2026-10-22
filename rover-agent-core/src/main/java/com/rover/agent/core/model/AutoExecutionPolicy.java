@@ -6,6 +6,7 @@ import java.util.Objects;
 public record AutoExecutionPolicy(String policyId, long version, boolean enabled, String targetNamespace,
                                   ResourceRef resource, String serviceName, String group, int desiredWeight,
                                   double maxBeforeTrafficPercent, double maxTrafficShiftPercent,
+                                  double maxCumulativeTrafficShiftPercent, long cooldownMillis, long budgetWindowMillis,
                                   long expiresAtMillis, String createdBy, long createdAtMillis,
                                   String updatedBy, long updatedAtMillis) {
     public AutoExecutionPolicy {
@@ -14,10 +15,22 @@ public record AutoExecutionPolicy(String policyId, long version, boolean enabled
         Objects.requireNonNull(resource, "resource");
         serviceName = required(serviceName, "serviceName", 256);
         group = group == null ? "" : group.trim();
+        // Policies created before schema v17 receive the safe defaults when their old JSON is read.
+        if (maxCumulativeTrafficShiftPercent == 0 && cooldownMillis == 0 && budgetWindowMillis == 0) {
+            maxCumulativeTrafficShiftPercent = 10;
+            cooldownMillis = java.time.Duration.ofMinutes(15).toMillis();
+            budgetWindowMillis = java.time.Duration.ofHours(24).toMillis();
+        }
         if (version < 1 || desiredWeight != 0 || !Double.isFinite(maxBeforeTrafficPercent)
                 || maxBeforeTrafficPercent <= 0 || maxBeforeTrafficPercent > 10
                 || !Double.isFinite(maxTrafficShiftPercent) || maxTrafficShiftPercent <= 0
                 || maxTrafficShiftPercent > 10 || expiresAtMillis <= createdAtMillis
+                || !Double.isFinite(maxCumulativeTrafficShiftPercent)
+                || maxCumulativeTrafficShiftPercent <= 0 || maxCumulativeTrafficShiftPercent > 10
+                || maxCumulativeTrafficShiftPercent < maxTrafficShiftPercent
+                || budgetWindowMillis != java.time.Duration.ofHours(24).toMillis()
+                || cooldownMillis < java.time.Duration.ofMinutes(15).toMillis()
+                || cooldownMillis > java.time.Duration.ofHours(24).toMillis()
                 || enabled && expiresAtMillis <= updatedAtMillis
                 || createdAtMillis <= 0 || updatedAtMillis < createdAtMillis) {
             throw new IllegalArgumentException("preauthorization policy is outside the supported safety bounds");
@@ -56,14 +69,24 @@ public record AutoExecutionPolicy(String policyId, long version, boolean enabled
     public static AutoExecutionPolicy create(String id, String namespace, ResourceRef resource, String service,
                                               String group, double maxBeforePercent, double maxShiftPercent,
                                               long expires, String actor, long now) {
+        return create(id, namespace, resource, service, group, maxBeforePercent, maxShiftPercent,
+                10, java.time.Duration.ofMinutes(15).toMillis(), expires, actor, now);
+    }
+
+    public static AutoExecutionPolicy create(String id, String namespace, ResourceRef resource, String service,
+                                              String group, double maxBeforePercent, double maxShiftPercent,
+                                              double maxCumulativeShiftPercent, long cooldownMillis,
+                                              long expires, String actor, long now) {
         return new AutoExecutionPolicy(id, 1, false, namespace, resource, service, group, 0, maxBeforePercent,
-                maxShiftPercent, expires, actor, now, actor, now);
+                maxShiftPercent, maxCumulativeShiftPercent, cooldownMillis,
+                java.time.Duration.ofHours(24).toMillis(), expires, actor, now, actor, now);
     }
 
     public AutoExecutionPolicy revise(boolean nextEnabled, double maxBeforePercent, double maxShiftPercent,
                                       long expires, String actor, long now) {
         return new AutoExecutionPolicy(policyId, version + 1, nextEnabled, targetNamespace, resource, serviceName,
-                group, desiredWeight, maxBeforePercent, maxShiftPercent, expires, createdBy, createdAtMillis, actor, now);
+                group, desiredWeight, maxBeforePercent, maxShiftPercent, maxCumulativeTrafficShiftPercent,
+                cooldownMillis, budgetWindowMillis, expires, createdBy, createdAtMillis, actor, now);
     }
 
     public boolean currentFor(String namespace, long nowMillis) {

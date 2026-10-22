@@ -426,13 +426,15 @@ public class AgentRuntimeConfiguration {
                                                  ObjectProvider<AgentAccess> access,
                                                  RiskBasedApprovalPolicy approvalPolicy,
                                                  ActionCommandRepository actionCommandRepository,
+                                                 AgentStore store,
                                                  IncidentRepository incidentRepository,
                                                  com.rover.agent.runtime.verification.ActionEffectVerificationService effectVerification,
                                                  com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
                                                  @Value("${rover.agent.actions.async-execution:true}") boolean asyncExecution) {
         return new AgentActionService(agentActionRepository, agentSessionRepository, routeControlPort,
                 agentActionExecutorRegistry, access.getIfAvailable(AgentAccess::local), approvalPolicy,
-                actionCommandRepository, asyncExecution, effectVerification, businessEffectPolicy);
+                actionCommandRepository, asyncExecution, effectVerification, businessEffectPolicy,
+                store.autonomousActionBudget());
     }
 
     @Bean(destroyMethod = "close")

@@ -63,7 +63,8 @@ class AgentAuthorizationWebTest {
         http.perform(post("/api/agent/policies/autonomous").with(user("policy")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON).content("{\"policyId\":\"" + id
                                 + "\",\"route\":\"/api/order\",\"serviceName\":\"order-service\",\"group\":\"v2\","
-                                + "\"maxBeforeTrafficPercent\":5,\"maxTrafficShiftPercent\":5,\"expiresAtMillis\":"
+                                + "\"maxBeforeTrafficPercent\":5,\"maxTrafficShiftPercent\":5,"
+                                + "\"maxCumulativeTrafficShiftPercent\":5,\"expiresAtMillis\":"
                                 + (System.currentTimeMillis() + 60_000) + "}"))
                 .andExpect(status().isBadGateway()); // Gateway 状态读取不可用时必须拒绝创建
         http.perform(post("/api/agent/policies/autonomous").with(user("policy")).with(csrf())

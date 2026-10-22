@@ -47,6 +47,7 @@ import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
 import com.rover.agent.core.repository.ActionEffectVerificationRepository;
+import com.rover.agent.core.repository.AutonomousActionBudgetRepository;
 import com.rover.agent.core.repository.AlertLifecycleRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
@@ -112,6 +113,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final EffectVerifications effectVerifications = new EffectVerifications();
     private final AlertLifecycles alertLifecycles = new AlertLifecycles();
     private final AutoPolicies autoPolicies = new AutoPolicies();
+    private final AutonomousBudget autonomousBudget = new AutonomousBudget();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -167,6 +169,85 @@ public final class JdbcAgentStore implements AutoCloseable {
     public AlertLifecycleRepository alertLifecycles() { return alertLifecycles; }
 
     public AutoExecutionPolicyRepository autoExecutionPolicies() { return autoPolicies; }
+
+    public AutonomousActionBudgetRepository autonomousActionBudget() { return autonomousBudget; }
+
+    private final class AutonomousBudget implements AutonomousActionBudgetRepository {
+        @Override public Reservation reserve(String key, String actionId, String reservationId, double impact, double maximum,
+                long window, long cooldown, int direction, boolean budgeted, long now) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    var current = queryOne("SELECT * FROM agent_action_budget WHERE resource_key=?",
+                            row -> new BudgetRow(row.getString("locked_action"), row.getString("locked_reservation"), row.getLong("cooldown_until"),
+                                    row.getLong("budget_window"), row.getDouble("reserved_percent"),
+                                    row.getLong("reserved_cooldown"), row.getInt("reserved_direction"),
+                                    row.getBoolean("reserved_budgeted")), key).orElse(null);
+                    if (current == null) {
+                        run("INSERT INTO agent_action_budget(resource_key,locked_action,budget_window,cooldown_until,reserved_percent,reserved_cooldown,reserved_direction,reserved_budgeted) "
+                                        + "VALUES(?,NULL,?,0,0,0,0,FALSE)", key, window);
+                        current = new BudgetRow(null, null, 0, window, 0, 0, 0, false);
+                    }
+                    if (actionId.equals(current.lockedAction()) && reservationId.equals(current.lockedReservation())) { return Reservation.ALREADY_RESERVED; }
+                    if (current.lockedAction() != null) { return Reservation.RESOURCE_BUSY; }
+                    long cooldownUntil = current.cooldownUntil();
+                    if (budgeted && now < cooldownUntil) { return Reservation.COOLDOWN_ACTIVE; }
+                    if (budgeted) {
+                        long cutoff = now - window;
+                        run("DELETE FROM agent_action_budget_event WHERE resource_key=? AND applied_at<=?", key, cutoff);
+                        double used = queryOne("SELECT COALESCE(SUM(impact_percent),0) FROM agent_action_budget_event WHERE resource_key=? AND applied_at>?",
+                                row -> row.getDouble(1), key, cutoff).orElse(0.0);
+                        List<Integer> recent = query("SELECT direction FROM agent_action_budget_event WHERE resource_key=? AND applied_at>? ORDER BY event_order DESC LIMIT 2",
+                                row -> row.getInt(1), key, cutoff);
+                        if (recent.size() >= 2 && recent.get(0) != direction && recent.get(1) == direction) {
+                            return Reservation.OSCILLATION_DETECTED;
+                        }
+                        if (used + impact > maximum + 1e-9) { return Reservation.BUDGET_EXCEEDED; }
+                    }
+                    run("UPDATE agent_action_budget SET locked_action=?,locked_reservation=?,budget_window=?,reserved_percent=?,reserved_cooldown=?,reserved_direction=?,reserved_budgeted=? WHERE resource_key=?",
+                            actionId, reservationId, window, impact, cooldown, direction, budgeted, key);
+                    return Reservation.RESERVED;
+                });
+            }
+        }
+
+        @Override public void complete(String reservationId, Outcome outcome, int direction, long now) {
+            synchronized (JdbcAgentStore.this) {
+                inTransaction(() -> {
+                    BudgetRow row = queryOne("SELECT * FROM agent_action_budget WHERE locked_reservation=?",
+                            result -> new BudgetRow(result.getString("locked_action"), result.getString("locked_reservation"), result.getLong("cooldown_until"),
+                                    result.getLong("budget_window"), result.getDouble("reserved_percent"), result.getLong("reserved_cooldown"),
+                                    result.getInt("reserved_direction"), result.getBoolean("reserved_budgeted")), reservationId).orElse(null);
+                    if (row == null || outcome == Outcome.UNKNOWN) { return null; }
+                    if (outcome == Outcome.APPLIED && direction != row.reservedDirection()) {
+                        throw new IllegalStateException("autonomous budget direction binding changed");
+                    }
+                    long cooldownUntil = row.cooldownUntil();
+                    if (outcome == Outcome.APPLIED && row.reservedBudgeted()) {
+                        queryOne("SELECT resource_key FROM agent_action_budget WHERE locked_action=?",
+                                result -> result.getString(1), row.lockedAction()).ifPresent(key -> run("INSERT INTO agent_action_budget_event(resource_key,action_id,reservation_id,applied_at,impact_percent,direction) VALUES(?,?,?,?,?,?)",
+                                key, eventId(reservationId), eventId(reservationId), now, row.reservedPercent(), direction));
+                        cooldownUntil = Math.addExact(now, row.reservedCooldown());
+                    }
+                    run("UPDATE agent_action_budget SET locked_action=NULL,locked_reservation=NULL,cooldown_until=?,reserved_percent=0,reserved_cooldown=0,reserved_direction=0,reserved_budgeted=FALSE WHERE locked_reservation=?",
+                            cooldownUntil, reservationId);
+                    return null;
+                });
+            }
+        }
+    }
+
+    private record BudgetRow(String lockedAction, String lockedReservation, long cooldownUntil, long budgetWindow, double reservedPercent,
+                             long reservedCooldown, int reservedDirection, boolean reservedBudgeted) {
+    }
+
+    private static String eventId(String actionId) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(actionId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is required by the Java runtime", impossible);
+        }
+    }
 
     private final class AutoPolicies implements AutoExecutionPolicyRepository {
         @Override public List<AutoExecutionPolicy> list(String namespace) {
@@ -1793,6 +1874,19 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "payload_json TEXT NOT NULL, updated_at BIGINT NOT NULL, "
                                         + "PRIMARY KEY(policy_id,policy_version))",
                                 "CREATE INDEX IF NOT EXISTS idx_agent_auto_policy_target ON agent_auto_policy(target_namespace,enabled,policy_id,policy_version)"),
+                        List.of(), List.of()),
+                new Migration(17, "autonomous route execution lock and rolling impact budget",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_budget ("
+                                        + "resource_key VARCHAR(512) PRIMARY KEY, locked_action VARCHAR(64), locked_reservation VARCHAR(128), "
+                                        + "budget_window BIGINT NOT NULL, cooldown_until BIGINT NOT NULL, "
+                                        + "reserved_percent DOUBLE NOT NULL, reserved_cooldown BIGINT NOT NULL, "
+                                        + "reserved_direction INT NOT NULL, reserved_budgeted BOOLEAN NOT NULL)",
+                                "CREATE TABLE IF NOT EXISTS agent_action_budget_event ("
+                                        + "resource_key VARCHAR(512) NOT NULL, action_id VARCHAR(64) NOT NULL, reservation_id VARCHAR(64) NOT NULL, "
+                                        + "event_order BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL, applied_at BIGINT NOT NULL, impact_percent DOUBLE NOT NULL, direction INT NOT NULL, "
+                                        + "PRIMARY KEY(resource_key,reservation_id), FOREIGN KEY(resource_key) "
+                                        + "REFERENCES agent_action_budget(resource_key) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_action_budget_recent ON agent_action_budget_event(resource_key,applied_at,event_order)"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {

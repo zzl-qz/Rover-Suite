@@ -23,6 +23,7 @@ import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.ActionEffectVerificationRepository;
+import com.rover.agent.core.repository.AutonomousActionBudgetRepository;
 import com.rover.agent.runtime.verification.ActionEffectVerificationService;
 import com.rover.agent.core.util.Texts;
 import java.util.List;
@@ -53,6 +54,7 @@ public final class AgentActionService {
     private final boolean asynchronousExecution;
     private final ActionEffectVerificationService effectVerification;
     private final com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy;
+    private final AutonomousActionBudgetRepository autonomousBudget;
 
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutor executor) {
@@ -91,6 +93,16 @@ public final class AgentActionService {
                               ActionCommandRepository commands, boolean asynchronousExecution,
                               ActionEffectVerificationService effectVerification,
                               com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy) {
+        this(actions, sessions, control, executors, access, approvalPolicy, commands, asynchronousExecution,
+                effectVerification, businessEffectPolicy, null);
+    }
+
+    public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions, RouteControlPort control,
+                              ActionExecutorRegistry executors, AgentAccess access, RiskBasedApprovalPolicy approvalPolicy,
+                              ActionCommandRepository commands, boolean asynchronousExecution,
+                              ActionEffectVerificationService effectVerification,
+                              com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
+                              AutonomousActionBudgetRepository autonomousBudget) {
         this.actions = actions;
         this.sessions = sessions;
         this.control = control;
@@ -101,6 +113,7 @@ public final class AgentActionService {
         this.asynchronousExecution = asynchronousExecution;
         this.effectVerification = effectVerification;
         this.businessEffectPolicy = businessEffectPolicy;
+        this.autonomousBudget = autonomousBudget;
         if (asynchronousExecution && commands == null) {
             throw new IllegalArgumentException("asynchronous action execution requires a command repository");
         }
@@ -800,17 +813,146 @@ public final class AgentActionService {
             return stopMismatchedCommand(action, "持久动作命令与动作的管理目标或计划版本不一致");
         }
 
-        AgentAction result = switch (command.phase()) {
-            case APPLY -> runApplyCommand(action, command);
-            case ROLLBACK -> runRollbackCommand(action, command);
-            case RECONCILE -> runReconcileCommand(action, command);
-        };
+        BudgetClaim budgetClaim = claimResource(action, command.phase());
+        if (budgetClaim.rejected()) { return rejectBudget(action, command.phase(), budgetClaim.message()); }
+        if (budgetClaim.temporary()) { throw new ActionResourceBusyException(budgetClaim.message()); }
+        AgentAction result;
+        try {
+            result = switch (command.phase()) {
+                case APPLY -> runApplyCommand(action, command);
+                case ROLLBACK -> runRollbackCommand(action, command);
+                case RECONCILE -> runReconcileCommand(action, command);
+            };
+        } catch (RuntimeException failure) {
+            throw failure; // An unclassified failure may have reached Gateway; keep the durable resource lock.
+        }
+        if (command.phase() == ActionExecutionCommand.Phase.RECONCILE) {
+            completeReconciliation(action, result);
+        } else {
+            completeResource(action, command.phase(), result);
+        }
         if (command.phase() == ActionExecutionCommand.Phase.APPLY && result.status() == ActionStatus.SUCCESS) {
             scheduleEffectVerification(result, ActionEffectVerification.Phase.APPLY);
         } else if (command.phase() == ActionExecutionCommand.Phase.ROLLBACK && result.status() == ActionStatus.ROLLED_BACK) {
             scheduleEffectVerification(result, ActionEffectVerification.Phase.COMPENSATION);
         }
         return result;
+    }
+
+    private BudgetClaim claimResource(AgentAction action, ActionExecutionCommand.Phase phase) {
+        if (autonomousBudget == null || phase == ActionExecutionCommand.Phase.RECONCILE
+                || action.resourceRef() == null || action.plan() == null
+                || !java.util.Set.of(ActionStatus.PENDING_APPROVAL, ActionStatus.QUEUED, ActionStatus.UNCERTAIN,
+                        ActionStatus.RECONCILING, ActionStatus.SUCCESS, ActionStatus.ROLLBACK_QUEUED,
+                        ActionStatus.ROLLING_BACK).contains(action.status())) {
+            return BudgetClaim.none();
+        }
+        if (phase == ActionExecutionCommand.Phase.APPLY && action.status() != ActionStatus.PENDING_APPROVAL
+                && action.status() != ActionStatus.QUEUED && action.status() != ActionStatus.UNCERTAIN
+                && action.status() != ActionStatus.RECONCILING) { return BudgetClaim.none(); }
+        if (phase == ActionExecutionCommand.Phase.ROLLBACK && action.status() != ActionStatus.SUCCESS
+                && action.status() != ActionStatus.ROLLBACK_QUEUED && action.status() != ActionStatus.ROLLING_BACK
+                && action.status() != ActionStatus.UNCERTAIN && action.status() != ActionStatus.RECONCILING) {
+            return BudgetClaim.none();
+        }
+        boolean autonomous = phase == ActionExecutionCommand.Phase.APPLY
+                && action.plan().riskAssessment().approvalMode() == RemediationPlan.ApprovalMode.PREAUTHORIZED;
+        var policy = autonomous ? approvalPolicy.boundPreauthorization(action, System.currentTimeMillis()) : null;
+        if (autonomous && policy == null) {
+            return BudgetClaim.rejected("预授权无效；已在 Gateway 写入前停止");
+        }
+        double impact = Math.abs(action.desiredTrafficPercent() - action.beforeTrafficPercent());
+        int direction = Double.compare(action.desiredTrafficPercent(), action.beforeTrafficPercent());
+        if (phase == ActionExecutionCommand.Phase.ROLLBACK) { direction = -direction; }
+        String resourceKey = resourceKey(action.resourceRef());
+        var reservation = autonomousBudget.reserve(resourceKey, action.actionId(), reservationId(action.actionId(), phase), impact,
+                autonomous ? policy.maxCumulativeTrafficShiftPercent() : 100,
+                autonomous ? policy.budgetWindowMillis() : java.time.Duration.ofHours(24).toMillis(),
+                autonomous ? policy.cooldownMillis() : 0, direction, autonomous, System.currentTimeMillis());
+        return switch (reservation) {
+            case RESERVED, ALREADY_RESERVED -> BudgetClaim.acquired(direction);
+            case RESOURCE_BUSY -> BudgetClaim.temporary("同一路由已有处置正在执行或等待结果确认");
+            case COOLDOWN_ACTIVE -> BudgetClaim.rejected("该路由仍处于自动处置冷却期");
+            case BUDGET_EXCEEDED -> BudgetClaim.rejected("该路由 24 小时累计自动影响预算已用尽，不能通过拆分动作绕过");
+            case OSCILLATION_DETECTED -> BudgetClaim.rejected("检测到该路由权重调整方向反复振荡，自动处置已停止");
+        };
+    }
+
+    private void completeResource(AgentAction action, ActionExecutionCommand.Phase phase, AgentAction result) {
+        if (autonomousBudget == null || action.resourceRef() == null || action.plan() == null
+                || phase == ActionExecutionCommand.Phase.RECONCILE) { return; }
+        boolean automatic = phase == ActionExecutionCommand.Phase.APPLY
+                && action.plan().riskAssessment().approvalMode() == RemediationPlan.ApprovalMode.PREAUTHORIZED;
+        if (phase == ActionExecutionCommand.Phase.ROLLBACK) {
+            if (!isInFlight(result.status())) {
+                autonomousBudget.complete(reservationId(action.actionId(), phase), AutonomousActionBudgetRepository.Outcome.NOT_APPLIED,
+                        Integer.signum(action.desiredWeight() - action.beforeWeight()), System.currentTimeMillis());
+            }
+            return;
+        }
+        var outcome = result.status() == ActionStatus.SUCCESS
+                || result.status() == ActionStatus.FAILED && result.appliedRevision() != null
+                ? AutonomousActionBudgetRepository.Outcome.APPLIED
+                : isInFlight(result.status()) ? AutonomousActionBudgetRepository.Outcome.UNKNOWN
+                : AutonomousActionBudgetRepository.Outcome.NOT_APPLIED;
+        if (automatic || outcome == AutonomousActionBudgetRepository.Outcome.UNKNOWN) {
+            autonomousBudget.complete(reservationId(action.actionId(), phase), outcome,
+                    Double.compare(action.desiredTrafficPercent(), action.beforeTrafficPercent()), System.currentTimeMillis());
+        } else {
+            autonomousBudget.complete(reservationId(action.actionId(), phase), AutonomousActionBudgetRepository.Outcome.NOT_APPLIED,
+                    Double.compare(action.desiredTrafficPercent(), action.beforeTrafficPercent()), System.currentTimeMillis());
+        }
+    }
+
+    private static boolean isInFlight(ActionStatus status) {
+        return status == ActionStatus.EXECUTING || status == ActionStatus.VERIFYING
+                || status == ActionStatus.UNCERTAIN || status == ActionStatus.RECONCILING
+                || status == ActionStatus.ROLLBACK_QUEUED || status == ActionStatus.ROLLING_BACK;
+    }
+
+    private AgentAction rejectBudget(AgentAction action, ActionExecutionCommand.Phase phase, String message) {
+        ActionStatus expected = action.status();
+        ActionStatus next = phase == ActionExecutionCommand.Phase.APPLY
+                ? ActionStatus.PRECONDITION_FAILED : ActionStatus.SUCCESS;
+        return actions.transition(action.actionId(), expected,
+                current -> new ActionDraft(current).move(next, message).toAction(System.currentTimeMillis()))
+                .orElseGet(() -> latest(action.actionId()));
+    }
+
+    private void completeReconciliation(AgentAction before, AgentAction after) {
+        if (autonomousBudget == null || before.resourceRef() == null || before.plan() == null
+                || after.status() == ActionStatus.UNCERTAIN || after.status() == ActionStatus.RECONCILING
+                || after.status() == ActionStatus.VERIFYING || after.status() == ActionStatus.ROLLING_BACK) {
+            return;
+        }
+        boolean rollback = before.rollbackOperationId() != null;
+        int direction = Double.compare(before.desiredTrafficPercent(), before.beforeTrafficPercent());
+        ActionExecutionCommand.Phase phase = rollback ? ActionExecutionCommand.Phase.ROLLBACK : ActionExecutionCommand.Phase.APPLY;
+        if (phase == ActionExecutionCommand.Phase.ROLLBACK) { direction = -direction; }
+        boolean applied = after.status() == ActionStatus.SUCCESS || after.status() == ActionStatus.ROLLED_BACK
+                || after.status() == ActionStatus.FAILED && after.appliedRevision() != null;
+        boolean automatic = !rollback
+                && before.plan().riskAssessment().approvalMode() == RemediationPlan.ApprovalMode.PREAUTHORIZED;
+        var outcome = applied && automatic ? AutonomousActionBudgetRepository.Outcome.APPLIED
+                : AutonomousActionBudgetRepository.Outcome.NOT_APPLIED;
+        autonomousBudget.complete(reservationId(before.actionId(), phase), outcome, direction, System.currentTimeMillis());
+    }
+
+    private static String reservationId(String actionId, ActionExecutionCommand.Phase phase) {
+        return actionId + (phase == ActionExecutionCommand.Phase.ROLLBACK ? "R" : "A");
+    }
+
+    private static String resourceKey(com.rover.agent.core.model.ResourceRef ref) {
+        return ref.scope().organizationId() + "/" + ref.scope().teamId() + "/" + ref.scope().environmentId()
+                + "/" + ref.controlTargetId() + "/" + ref.kind() + "/" + ref.resourceId()
+                + "/" + ref.resourceUid() + "/" + ref.generation();
+    }
+
+    private record BudgetClaim(boolean rejected, boolean temporary, int direction, String message) {
+        static BudgetClaim none() { return new BudgetClaim(false, false, 0, ""); }
+        static BudgetClaim acquired(int direction) { return new BudgetClaim(false, false, direction, ""); }
+        static BudgetClaim rejected(String message) { return new BudgetClaim(true, false, 0, message); }
+        static BudgetClaim temporary(String message) { return new BudgetClaim(false, true, 0, message); }
     }
 
     private AgentAction runApplyCommand(AgentAction action, ActionExecutionCommand command) {
@@ -961,6 +1103,13 @@ public final class AgentActionService {
 
     /** 按变更类型选择执行器，不支持的类型直接拒绝。 */
     private AgentAction execute(AgentAction action, String actor) {
+        ActionExecutionCommand.Phase phase = action.status() == ActionStatus.ROLLING_BACK
+                ? ActionExecutionCommand.Phase.ROLLBACK
+                : action.status() == ActionStatus.UNCERTAIN
+                    ? ActionExecutionCommand.Phase.RECONCILE : ActionExecutionCommand.Phase.APPLY;
+        var claim = claimResource(action, phase);
+        if (claim.rejected()) { return rejectBudget(action, phase, claim.message()); }
+        if (claim.temporary()) { throw new ActionResourceBusyException(claim.message()); }
         ActionExecutor executor;
         try { executor = executors.require(action.type()); }
         catch (IllegalArgumentException ex) {
@@ -980,6 +1129,8 @@ public final class AgentActionService {
                     scheduleEffectVerification(result, ActionEffectVerification.Phase.COMPENSATION);
                 }
             }
+            if (phase == ActionExecutionCommand.Phase.RECONCILE) { completeReconciliation(action, result); }
+            else { completeResource(action, phase, result); }
             return result;
         } catch (ActionUpdateConflictException ex) {
             return latest(action.actionId());

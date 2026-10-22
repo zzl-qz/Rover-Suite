@@ -112,6 +112,10 @@ public final class RiskBasedApprovalPolicy {
                 .findFirst().orElse(null);
     }
 
+    public AutoExecutionPolicy boundPreauthorization(AgentAction action, long nowMillis) {
+        return currentPreauthorization(action, nowMillis);
+    }
+
     private AutoExecutionPolicy currentPreauthorization(AgentAction action, long nowMillis) {
         if (action == null || action.plan() == null
                 || action.plan().riskAssessment().approvalMode() != RemediationPlan.ApprovalMode.PREAUTHORIZED) {

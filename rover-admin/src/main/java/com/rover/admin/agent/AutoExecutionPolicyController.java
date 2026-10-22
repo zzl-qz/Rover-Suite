@@ -55,6 +55,9 @@ public class AutoExecutionPolicyController {
                 || !Double.isFinite(body.maxBeforeTrafficPercent()) || body.maxBeforeTrafficPercent() <= 0
                 || body.maxBeforeTrafficPercent() > 10 || !Double.isFinite(body.maxTrafficShiftPercent())
                 || body.maxTrafficShiftPercent() <= 0 || body.maxTrafficShiftPercent() > 10
+                || !Double.isFinite(body.maxCumulativeTrafficShiftPercent())
+                || body.maxCumulativeTrafficShiftPercent() < body.maxTrafficShiftPercent()
+                || body.maxCumulativeTrafficShiftPercent() > 10
                 || body.expiresAtMillis() <= now || body.expiresAtMillis() - now > MAX_LIFETIME) {
             return error(HttpStatus.BAD_REQUEST, "范围、目标、流量上限或有效期不符合预授权边界（最多 7 天、单次影响最多 10%）");
         }
@@ -82,7 +85,8 @@ public class AutoExecutionPolicyController {
         try {
             policy = AutoExecutionPolicy.create(body.policyId(), control.resourceNamespace(), resource,
                     body.serviceName(), body.group(), body.maxBeforeTrafficPercent(),
-                    body.maxTrafficShiftPercent(), body.expiresAtMillis(), actor.getName(), now);
+                    body.maxTrafficShiftPercent(), body.maxCumulativeTrafficShiftPercent(),
+                    Duration.ofMinutes(15).toMillis(), body.expiresAtMillis(), actor.getName(), now);
             return ResponseEntity.status(HttpStatus.CREATED).body(policies.save(policy, 0));
         } catch (IllegalStateException ex) {
             return error(HttpStatus.CONFLICT, "策略已被并发修改或无法持久保存");
@@ -135,7 +139,8 @@ public class AutoExecutionPolicyController {
     }
 
     public record CreateRequest(String policyId, String route, String serviceName, String group,
-            double maxBeforeTrafficPercent, double maxTrafficShiftPercent, long expiresAtMillis) { }
+            double maxBeforeTrafficPercent, double maxTrafficShiftPercent,
+            double maxCumulativeTrafficShiftPercent, long expiresAtMillis) { }
     public record RevokeRequest(long expectedVersion) { }
     public record Candidate(String routeId, String businessPrefix, ResourceRef resource,
             java.util.List<com.rover.agent.core.port.RouteControlTarget> targets) { }
