@@ -134,6 +134,11 @@ public class AgentRuntimeConfiguration {
     }
 
     @Bean
+    public com.rover.agent.core.repository.ActionCertificationRepository agentActionCertificationRepository(AgentStore agentStore) {
+        return agentStore.actionCertifications();
+    }
+
+    @Bean
     public ActionCommandRepository agentActionCommandRepository(AgentStore agentStore) {
         return agentStore.actionCommands();
     }
@@ -430,11 +435,15 @@ public class AgentRuntimeConfiguration {
                                                  IncidentRepository incidentRepository,
                                                  com.rover.agent.runtime.verification.ActionEffectVerificationService effectVerification,
                                                  com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
+                                                 com.rover.agent.core.repository.ActionCertificationRepository certifications,
                                                  @Value("${rover.agent.actions.async-execution:true}") boolean asyncExecution) {
         return new AgentActionService(agentActionRepository, agentSessionRepository, routeControlPort,
                 agentActionExecutorRegistry, access.getIfAvailable(AgentAccess::local), approvalPolicy,
                 actionCommandRepository, asyncExecution, effectVerification, businessEffectPolicy,
-                store.autonomousActionBudget());
+                store.autonomousActionBudget(), certifications, new com.rover.agent.runtime.action.ActionShadowAssessmentService(
+                        store.actions(), routeControlPort, store.actionCertifications(),
+                        () -> store.persistent() && store.durable().healthy()),
+                () -> store.persistent() && store.durable().healthy());
     }
 
     @Bean(destroyMethod = "close")

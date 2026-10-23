@@ -101,6 +101,48 @@ public class AgentActionController {
         }
     }
 
+    @PostMapping("/{actionId}/shadow-assessment")
+    public ResponseEntity<?> shadowAssessment(@PathVariable String actionId, Authentication authentication) {
+        return apply(() -> actions.assessShadow(actionId, user(authentication)));
+    }
+
+    @GetMapping("/certifications")
+    public ResponseEntity<?> certifications(Authentication authentication) {
+        return apply(() -> actions.certifications(user(authentication)));
+    }
+
+    @GetMapping("/shadow-candidates")
+    public ResponseEntity<?> shadowCandidates(Authentication authentication) {
+        return apply(() -> actions.shadowCandidates(user(authentication)));
+    }
+
+    @GetMapping("/certifications/{fingerprint}/shadow-runs")
+    public ResponseEntity<?> shadowRuns(@PathVariable String fingerprint, Authentication authentication) {
+        return apply(() -> actions.shadowRuns(fingerprint, user(authentication)));
+    }
+
+    @PostMapping("/certifications")
+    public ResponseEntity<?> certify(Authentication authentication, @RequestBody CertificationRequest request) {
+        return apply(() -> actions.certify(request.fingerprint(), request.requiredRuns(), request.lifetimeMillis(),
+                request.expectedVersion(), user(authentication)));
+    }
+
+    @PostMapping("/certifications/{fingerprint}/renew")
+    public ResponseEntity<?> renewCertification(@PathVariable String fingerprint, Authentication authentication,
+            @RequestBody CertificationRequest request) {
+        return apply(() -> actions.renewCertification(fingerprint, request.expectedVersion(), request.requiredRuns(),
+                request.lifetimeMillis(), user(authentication)));
+    }
+
+    @PostMapping("/certifications/{fingerprint}/revoke")
+    public ResponseEntity<?> revokeCertification(@PathVariable String fingerprint, Authentication authentication,
+            @RequestBody CertificationRevokeRequest request) {
+        return apply(() -> actions.revokeCertification(fingerprint, request.expectedVersion(), user(authentication)));
+    }
+
+    public record CertificationRequest(String fingerprint, int requiredRuns, long lifetimeMillis, long expectedVersion) { }
+    public record CertificationRevokeRequest(long expectedVersion) { }
+
     /** 记录审批；满足门槛后排入 Admin 持久队列并立即返回。 */
     @PostMapping("/{actionId}/approve")
     public ResponseEntity<?> approve(@PathVariable String actionId, Authentication authentication,

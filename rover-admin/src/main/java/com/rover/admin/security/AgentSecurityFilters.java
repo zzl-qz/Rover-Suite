@@ -104,6 +104,12 @@ final class AgentSecurityFilters {
         boolean read = "GET".equals(method) || "HEAD".equals(method) || "OPTIONS".equals(method);
         if (path.equals("/api/agent/security/me")) { return Permission.READ; }
         if (path.equals("/api/agent/actions/reconciliation")) { return Permission.MANAGE_SYSTEM; }
+        if (path.equals("/api/agent/actions/certifications")
+                || path.startsWith("/api/agent/actions/certifications/")
+                || path.equals("/api/agent/actions/shadow-candidates")
+                || path.startsWith("/api/agent/actions/") && path.endsWith("/shadow-assessment")) {
+            return Permission.POLICY_ADMIN;
+        }
         if (path.startsWith("/api/agent/operations")) { return Permission.MANAGE_SYSTEM; }
         if (path.equals("/api/agent/security/users")) { return Permission.MANAGE_SYSTEM; }
         if (path.startsWith("/api/agent/security/") || path.startsWith("/api/agent/model")) { return Permission.POLICY_ADMIN; }

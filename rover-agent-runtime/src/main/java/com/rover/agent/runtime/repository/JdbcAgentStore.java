@@ -14,6 +14,9 @@ import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionEffectVerification;
+import com.rover.agent.core.model.ActionCertification;
+import com.rover.agent.core.model.ActionCertificationSubject;
+import com.rover.agent.core.model.ActionShadowRun;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.AgentCheckpoint;
@@ -47,6 +50,7 @@ import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
 import com.rover.agent.core.repository.ActionEffectVerificationRepository;
+import com.rover.agent.core.repository.ActionCertificationRepository;
 import com.rover.agent.core.repository.AutonomousActionBudgetRepository;
 import com.rover.agent.core.repository.AlertLifecycleRepository;
 import com.rover.agent.core.repository.ActionUpdateConflictException;
@@ -111,6 +115,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final Actions actions = new Actions();
     private final ActionCommands actionCommands = new ActionCommands();
     private final EffectVerifications effectVerifications = new EffectVerifications();
+    private final Certifications certifications = new Certifications();
     private final AlertLifecycles alertLifecycles = new AlertLifecycles();
     private final AutoPolicies autoPolicies = new AutoPolicies();
     private final AutonomousBudget autonomousBudget = new AutonomousBudget();
@@ -169,6 +174,8 @@ public final class JdbcAgentStore implements AutoCloseable {
     public AlertLifecycleRepository alertLifecycles() { return alertLifecycles; }
 
     public AutoExecutionPolicyRepository autoExecutionPolicies() { return autoPolicies; }
+
+    public ActionCertificationRepository actionCertifications() { return certifications; }
 
     public AutonomousActionBudgetRepository autonomousActionBudget() { return autonomousBudget; }
 
@@ -238,6 +245,80 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     private record BudgetRow(String lockedAction, String lockedReservation, long cooldownUntil, long budgetWindow, double reservedPercent,
                              long reservedCooldown, int reservedDirection, boolean reservedBudgeted) {
+    }
+
+    private final class Certifications implements ActionCertificationRepository {
+        @Override public ActionShadowRun saveShadow(ActionShadowRun run) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    run("INSERT INTO agent_action_shadow_run(run_id,subject_hash,scope_key,observed_at,payload_json) VALUES(?,?,?,?,?)",
+                            run.runId(), run.subject().fingerprint(), scopeKey(run.subject().scope()), run.observedAtMillis(), toJson(run));
+                    appendAudit("ACTION_SHADOW_ASSESSED", run.actionId(), run.assessedBy(), scopeKey(run.subject().scope()), run);
+                    return run;
+                });
+            }
+        }
+        @Override public List<ActionShadowRun> recentShadowRuns(String fingerprint, int limit) {
+            validateLimit(limit);
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json FROM agent_action_shadow_run WHERE subject_hash=? ORDER BY run_order DESC LIMIT ?",
+                        row -> fromJson(row.getString(1), ActionShadowRun.class), fingerprint, limit);
+            }
+        }
+        @Override public List<ActionShadowRun> recentShadowRuns(com.rover.agent.core.model.ResourceScope scope, int limit) {
+            validateLimit(limit);
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json FROM agent_action_shadow_run WHERE scope_key=? ORDER BY run_order DESC LIMIT ?",
+                        row -> fromJson(row.getString(1), ActionShadowRun.class), scopeKey(scope), limit);
+            }
+        }
+        @Override public Optional<ActionCertification> current(String fingerprint) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_action_certification WHERE subject_hash=? ORDER BY certification_version DESC LIMIT 1",
+                        row -> fromJson(row.getString(1), ActionCertification.class), fingerprint);
+            }
+        }
+        @Override public Optional<ActionCertification> atVersion(String fingerprint, long version) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_action_certification WHERE subject_hash=? AND certification_version=?",
+                        row -> fromJson(row.getString(1), ActionCertification.class), fingerprint, version);
+            }
+        }
+        @Override public List<ActionCertification> current(com.rover.agent.core.model.ResourceScope scope) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT c.payload_json FROM agent_action_certification c JOIN (SELECT subject_hash,MAX(certification_version) AS v "
+                                + "FROM agent_action_certification GROUP BY subject_hash) latest "
+                                + "ON c.subject_hash=latest.subject_hash AND c.certification_version=latest.v "
+                                + "WHERE c.scope_key=? ORDER BY c.subject_hash",
+                        row -> fromJson(row.getString(1), ActionCertification.class), scopeKey(scope));
+            }
+        }
+        @Override public ActionCertification save(ActionCertification certification, long expectedVersion) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    long current = queryOne("SELECT MAX(certification_version) FROM agent_action_certification WHERE subject_hash=?",
+                            row -> row.getLong(1), certification.subject().fingerprint()).orElse(0L);
+                    if (current != expectedVersion || certification.version() != expectedVersion + 1) {
+                        throw new IllegalStateException("certification version conflict");
+                    }
+                    run("INSERT INTO agent_action_certification(subject_hash,certification_version,scope_key,updated_at,payload_json) VALUES(?,?,?,?,?)",
+                            certification.subject().fingerprint(), certification.version(), scopeKey(certification.subject().scope()),
+                            certification.updatedAtMillis(), toJson(certification));
+                    appendAudit("ACTION_CERTIFICATION_VERSIONED", certification.subject().fingerprint(),
+                            certification.updatedBy(), scopeKey(certification.subject().scope()), certification);
+                    return certification;
+                });
+            }
+        }
+    }
+
+    private static String scopeKey(com.rover.agent.core.model.ResourceScope scope) {
+        return scope.organizationId().length() + ":" + scope.organizationId() + scope.teamId().length() + ":"
+                + scope.teamId() + scope.environmentId().length() + ":" + scope.environmentId();
+    }
+
+    private static void validateLimit(int limit) {
+        if (limit < 1 || limit > 100) { throw new IllegalArgumentException("limit must be 1..100"); }
     }
 
     private static String eventId(String actionId) {
@@ -1887,6 +1968,17 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "PRIMARY KEY(resource_key,reservation_id), FOREIGN KEY(resource_key) "
                                         + "REFERENCES agent_action_budget(resource_key) ON DELETE CASCADE)",
                                 "CREATE INDEX IF NOT EXISTS idx_action_budget_recent ON agent_action_budget_event(resource_key,applied_at,event_order)"),
+                        List.of(), List.of()),
+                new Migration(18, "shadow action evidence and versioned certification records",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_shadow_run ("
+                                        + "run_id VARCHAR(64) PRIMARY KEY, subject_hash VARCHAR(64) NOT NULL, scope_key VARCHAR(512) NOT NULL, "
+                                        + "observed_at BIGINT NOT NULL, run_order BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL, payload_json TEXT NOT NULL)",
+                                "CREATE INDEX IF NOT EXISTS idx_shadow_run_subject ON agent_action_shadow_run(subject_hash,observed_at)",
+                                "CREATE INDEX IF NOT EXISTS idx_shadow_run_scope ON agent_action_shadow_run(scope_key,observed_at)",
+                                "CREATE TABLE IF NOT EXISTS agent_action_certification ("
+                                        + "subject_hash VARCHAR(64) NOT NULL, certification_version BIGINT NOT NULL, scope_key VARCHAR(512) NOT NULL, "
+                                        + "updated_at BIGINT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(subject_hash,certification_version))",
+                                "CREATE INDEX IF NOT EXISTS idx_action_cert_scope ON agent_action_certification(scope_key,subject_hash,certification_version)"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {

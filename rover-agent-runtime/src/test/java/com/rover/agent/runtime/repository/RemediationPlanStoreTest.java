@@ -33,7 +33,7 @@ class RemediationPlanStoreTest {
         try (JdbcAgentStore store = store(path)) {
             first = store.actions().save(planned("a1", "p1", 1, 20));
             second = store.actions().save(planned("a2", "p1", 2, 40));
-            assertEquals(17, store.schemaVersion());
+            assertEquals(18, store.schemaVersion());
             assertEquals(2, store.actions().find("a1").orElseThrow().version());
             assertTrue(store.audit("", 0, 100).stream().anyMatch(a -> a.kind().equals("ACTION_SUPERSEDED")));
         }
@@ -115,7 +115,10 @@ class RemediationPlanStoreTest {
             assertNotEquals(approvedWon, revisedWon, "审批和修订不能同时获得执行权，也不能都丢失");
             assertEquals(revisedWon ? ActionStatus.SUPERSEDED : ActionStatus.EXECUTING,
                     approveRepo.find("race-1").orElseThrow().status());
-            assertEquals(revisedWon ? 2 : 1, approveRepo.planVersions("race").size());
+            assertEquals(revisedWon ? 2 : 1, approveRepo.planVersions("race").size(),
+                    "revision winner must persist its immutable plan before reporting success; approved="
+                            + approvedWon + ", revised=" + revisedWon + ", parent="
+                            + approveRepo.find("race-1").orElseThrow().status());
         } finally { pool.shutdownNow(); }
     }
 
@@ -184,7 +187,7 @@ class RemediationPlanStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             AgentAction legacy = store.actions().find("legacy").orElseThrow();
             assertNull(legacy.plan());
-            assertEquals(17, store.schemaVersion());
+            assertEquals(18, store.schemaVersion());
             assertTrue(store.actions().planVersions("legacy").isEmpty());
             assertNull(store.actions().transition("legacy", ActionStatus.PENDING_APPROVAL,
                     a -> move(a, ActionStatus.REJECTED)).orElseThrow().plan());

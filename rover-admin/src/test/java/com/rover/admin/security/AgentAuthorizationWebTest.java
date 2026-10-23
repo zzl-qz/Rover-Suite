@@ -54,6 +54,15 @@ class AgentAuthorizationWebTest {
         http.perform(get("/api/agent/policies/autonomous").with(user("operator"))).andExpect(status().isForbidden());
         http.perform(post("/api/agent/policies/autonomous").with(user("operator")).with(csrf())
                 .contentType(MediaType.APPLICATION_JSON).content("{}" )).andExpect(status().isForbidden());
+        http.perform(get("/api/agent/actions/certifications").with(user("operator")))
+                .andExpect(status().isForbidden());
+        http.perform(post("/api/agent/actions/fake/shadow-assessment").with(user("operator")).with(csrf()))
+                .andExpect(status().isForbidden());
+        http.perform(post("/api/agent/actions/certifications").with(user("operator")).with(csrf())
+                .contentType(MediaType.APPLICATION_JSON).content("{}")).andExpect(status().isForbidden());
+        http.perform(post("/api/agent/actions/certifications/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/renew")
+                .with(user("operator")).with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test void autonomousPoliciesRequirePolicyAdminAndAreDurableVersionedAndScoped() throws Exception {

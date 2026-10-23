@@ -55,6 +55,9 @@ public final class AgentActionService {
     private final ActionEffectVerificationService effectVerification;
     private final com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy;
     private final AutonomousActionBudgetRepository autonomousBudget;
+    private final com.rover.agent.core.repository.ActionCertificationRepository certifications;
+    private final ActionShadowAssessmentService shadowAssessments;
+    private final java.util.function.BooleanSupplier durableReady;
 
     public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions,
                               RouteControlPort control, ActionExecutor executor) {
@@ -103,6 +106,30 @@ public final class AgentActionService {
                               ActionEffectVerificationService effectVerification,
                               com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
                               AutonomousActionBudgetRepository autonomousBudget) {
+        this(actions, sessions, control, executors, access, approvalPolicy, commands, asynchronousExecution,
+                effectVerification, businessEffectPolicy, autonomousBudget, null, null, () -> true);
+    }
+
+    public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions, RouteControlPort control,
+                              ActionExecutorRegistry executors, AgentAccess access, RiskBasedApprovalPolicy approvalPolicy,
+                              ActionCommandRepository commands, boolean asynchronousExecution,
+                              ActionEffectVerificationService effectVerification,
+                              com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
+                              AutonomousActionBudgetRepository autonomousBudget,
+                              com.rover.agent.core.repository.ActionCertificationRepository certifications,
+                              ActionShadowAssessmentService shadowAssessments) {
+        this(actions, sessions, control, executors, access, approvalPolicy, commands, asynchronousExecution,
+                effectVerification, businessEffectPolicy, autonomousBudget, certifications, shadowAssessments, () -> true);
+    }
+
+    public AgentActionService(AgentActionRepository actions, AgentSessionRepository sessions, RouteControlPort control,
+                              ActionExecutorRegistry executors, AgentAccess access, RiskBasedApprovalPolicy approvalPolicy,
+                              ActionCommandRepository commands, boolean asynchronousExecution,
+                              ActionEffectVerificationService effectVerification,
+                              com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
+                              AutonomousActionBudgetRepository autonomousBudget,
+                              com.rover.agent.core.repository.ActionCertificationRepository certifications,
+                              ActionShadowAssessmentService shadowAssessments, java.util.function.BooleanSupplier durableReady) {
         this.actions = actions;
         this.sessions = sessions;
         this.control = control;
@@ -114,6 +141,9 @@ public final class AgentActionService {
         this.effectVerification = effectVerification;
         this.businessEffectPolicy = businessEffectPolicy;
         this.autonomousBudget = autonomousBudget;
+        this.certifications = certifications;
+        this.shadowAssessments = shadowAssessments;
+        this.durableReady = durableReady == null ? () -> false : durableReady;
         if (asynchronousExecution && commands == null) {
             throw new IllegalArgumentException("asynchronous action execution requires a command repository");
         }
@@ -1082,6 +1112,210 @@ public final class AgentActionService {
         return actions.bySession(sessionId).stream().flatMap(action -> java.util.Arrays.stream(ActionEffectVerification.Phase.values())
                 .map(phase -> repository.find(action.actionId(), phase).orElse(null)))
                 .filter(Objects::nonNull).toList();
+    }
+
+    public com.rover.agent.core.model.ActionShadowRun assessShadow(String actionId, String actor) {
+        access.require(actor, Permission.POLICY_ADMIN);
+        if (shadowAssessments == null || !shadowAssessments.ready() || !durableReady.getAsBoolean()) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST,
+                    "影子评估要求可用的持久存储");
+        }
+        AgentAction action = actions.find(actionId).filter(candidate -> sessions.find(candidate.sessionId())
+                        .filter(this::inScope).isPresent())
+                .orElseThrow(() -> new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "管理范围内的变更不存在"));
+        if (action.status() != ActionStatus.PENDING_APPROVAL && action.status() != ActionStatus.PRECONDITION_FAILED) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "只允许对未执行或预检失败的候选计划运行影子评估");
+        }
+        return shadowAssessments.assess(actionId, actor);
+    }
+
+    public List<com.rover.agent.core.model.ActionShadowCandidate> shadowCandidates(String actor) {
+        access.require(actor, Permission.POLICY_ADMIN);
+        return sessions.listAll().stream().filter(this::inScope)
+                .flatMap(session -> actions.bySession(session.sessionId()).stream())
+                .filter(action -> action.plan() != null && (action.status() == ActionStatus.PENDING_APPROVAL
+                        || action.status() == ActionStatus.PRECONDITION_FAILED))
+                .filter(action -> "RULE_EVIDENCE_GATE".equals(action.plan().provenance().source()))
+                .filter(action -> action.plan().verificationSpec().mode()
+                        == RemediationPlan.VerificationMode.BUSINESS_EFFECT)
+                .map(action -> {
+                    var subject = com.rover.agent.core.model.ActionCertificationSubject.from(action.plan());
+                    var runs = certifications == null ? List.<com.rover.agent.core.model.ActionShadowRun>of()
+                            : certifications.recentShadowRuns(subject.fingerprint(), 100);
+                    long distinctVersions = runs.stream().filter(run -> run.outcome()
+                                    == com.rover.agent.core.model.ActionShadowRun.Outcome.PASS)
+                            .map(run -> run.planHash() + "@" + run.planVersion()).distinct().count();
+                    boolean eligible = runs.size() >= 3 && runs.stream().limit(3).allMatch(run ->
+                            run.outcome() == com.rover.agent.core.model.ActionShadowRun.Outcome.PASS)
+                            && runs.stream().limit(3).map(run -> run.planHash() + "@" + run.planVersion())
+                                    .distinct().count() >= 2;
+                    return new com.rover.agent.core.model.ActionShadowCandidate(action, subject,
+                            runs.stream().limit(20).toList(), (int) distinctVersions, eligible);
+                })
+                .toList();
+    }
+
+    public List<com.rover.agent.core.model.ActionCertification> certifications(String actor) {
+        access.require(actor, Permission.POLICY_ADMIN);
+        if (certifications == null || !durableReady.getAsBoolean()) { throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "认证持久存储不可用"); }
+        if (control.resourceScope() == null) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "管理范围未配置");
+        }
+        return certifications.current(control.resourceScope()).stream()
+                .filter(cert -> Objects.equals(control.controlTargetId(), cert.subject().controlTargetId()))
+                .toList();
+    }
+
+    public List<com.rover.agent.core.model.ActionShadowRun> shadowRuns(String fingerprint, String actor) {
+        access.require(actor, Permission.POLICY_ADMIN);
+        if (certifications == null || !durableReady.getAsBoolean() || control.resourceScope() == null || fingerprint == null
+                || !fingerprint.matches("[0-9a-f]{64}")) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "认证范围无效");
+        }
+        var runs = certifications.recentShadowRuns(fingerprint, 20);
+        if (runs.stream().anyMatch(run -> !run.subject().scope().equals(control.resourceScope())
+                || !Objects.equals(control.controlTargetId(), run.subject().controlTargetId()))) {
+            throw new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "认证范围不存在");
+        }
+        return runs;
+    }
+
+    public com.rover.agent.core.model.ActionCertification currentCertification(
+            com.rover.agent.core.model.ActionCertificationSubject subject, String actor) {
+        access.require(actor, Permission.POLICY_ADMIN);
+        if (certifications == null || !durableReady.getAsBoolean() || subject == null || control.resourceScope() == null
+                || !control.resourceScope().equals(subject.scope())
+                || !Objects.equals(control.controlTargetId(), subject.controlTargetId())) {
+            throw new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "认证范围不存在");
+        }
+        var current = certifications.current(subject.fingerprint()).orElseThrow(() ->
+                new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "当前版本组合没有有效认证；请重新影子评估"));
+        if (!current.subject().scope().equals(control.resourceScope())
+                || !Objects.equals(control.controlTargetId(), current.subject().controlTargetId())) {
+            throw new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "认证范围不存在");
+        }
+        var latestRuns = certifications.recentShadowRuns(subject.fingerprint(), 100);
+        if (latestRuns.stream().anyMatch(run -> run.outcome() == com.rover.agent.core.model.ActionShadowRun.Outcome.FAIL
+                && run.observedAtMillis() > current.updatedAtMillis())) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "新影子评估已失败，认证暂停，需人工重新评估");
+        }
+        var sampleRuns = latestRuns.stream().filter(run -> run.observedAtMillis() <= current.updatedAtMillis())
+                .limit(current.passingRuns()).map(com.rover.agent.core.model.ActionShadowRun::runId)
+                .sorted().toList();
+        if (sampleRuns.size() != current.passingRuns() || latestRuns.stream()
+                .filter(run -> sampleRuns.contains(run.runId()))
+                .anyMatch(run -> run.outcome() != com.rover.agent.core.model.ActionShadowRun.Outcome.PASS)) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "认证绑定的评估样本已变化，需重新认证");
+        }
+        var sample = String.join("|", sampleRuns);
+        String sampleHash;
+        try { sampleHash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(sample.getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
+        catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+        if (!current.current(subject, System.currentTimeMillis(), sampleHash)) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "认证绑定的评估版本已过期，需重新认证");
+        }
+        return current;
+    }
+
+    public com.rover.agent.core.model.ActionCertification certify(String fingerprint, int requiredRuns,
+            long lifetimeMillis, long expectedVersion, String actor) {
+        access.require(actor, Permission.POLICY_ADMIN);
+        validateCertificationSample(fingerprint, requiredRuns);
+        var runs = certifications.recentShadowRuns(fingerprint, 100).stream().limit(requiredRuns).toList();
+        var subject = runs.get(0).subject();
+        long now = Math.max(System.currentTimeMillis(), runs.stream()
+                .mapToLong(com.rover.agent.core.model.ActionShadowRun::observedAtMillis).max().orElse(0L) + 1);
+        var current = certifications.current(fingerprint).orElse(null);
+        long expected = current == null ? 0 : current.version();
+        if (expected != expectedVersion) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "认证版本已变化，请刷新后重试");
+        }
+        String sampleHash = certificationSampleHash(fingerprint, requiredRuns);
+        var next = new com.rover.agent.core.model.ActionCertification(subject, expected + 1,
+                com.rover.agent.core.model.ActionCertification.State.ACTIVE, runs.size(), sampleHash, actor, now,
+                now + certificationLifetime(lifetimeMillis), actor, now);
+        try { return certifications.save(next, expected); }
+        catch (IllegalStateException conflict) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "认证已被并发更新，请刷新后重试");
+        }
+    }
+
+    public com.rover.agent.core.model.ActionCertification renewCertification(String fingerprint,
+            long expectedVersion, int requiredRuns, long lifetimeMillis, String actor) {
+        access.require(actor, Permission.POLICY_ADMIN);
+        if (certifications == null || !durableReady.getAsBoolean() || fingerprint == null
+                || !fingerprint.matches("[0-9a-f]{64}")) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "认证存储或范围无效");
+        }
+        var current = certifications.current(fingerprint).orElseThrow(() ->
+                new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "认证不存在"));
+        if (!current.subject().scope().equals(control.resourceScope())
+                || !Objects.equals(control.controlTargetId(), current.subject().controlTargetId())
+                || current.version() != expectedVersion) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "认证版本或管理范围已变化");
+        }
+        validateCertificationSample(fingerprint, requiredRuns);
+        long now = Math.max(System.currentTimeMillis(), certifications.recentShadowRuns(fingerprint, 100).stream()
+                .mapToLong(com.rover.agent.core.model.ActionShadowRun::observedAtMillis).max().orElse(0L) + 1);
+        String sampleHash = certificationSampleHash(fingerprint, requiredRuns);
+        var next = new com.rover.agent.core.model.ActionCertification(current.subject(), current.version() + 1,
+                com.rover.agent.core.model.ActionCertification.State.ACTIVE, requiredRuns, sampleHash, current.issuedBy(),
+                current.issuedAtMillis(), now + certificationLifetime(lifetimeMillis), actor, now);
+        try { return certifications.save(next, expectedVersion); }
+        catch (IllegalStateException conflict) { throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "认证已被并发更新"); }
+    }
+
+    private void validateCertificationSample(String fingerprint, int requiredRuns) {
+        if (certifications == null || !durableReady.getAsBoolean() || control.resourceScope() == null
+                || fingerprint == null || !fingerprint.matches("[0-9a-f]{64}") || requiredRuns < 3 || requiredRuns > 100) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "认证门槛或持久存储无效");
+        }
+        var runs = certifications.recentShadowRuns(fingerprint, requiredRuns);
+        if (runs.size() < requiredRuns || runs.stream().anyMatch(run -> run.outcome() != com.rover.agent.core.model.ActionShadowRun.Outcome.PASS)
+                || runs.stream().anyMatch(run -> !run.subject().scope().equals(control.resourceScope()))
+                || runs.stream().anyMatch(run -> !Objects.equals(run.subject().controlTargetId(), control.controlTargetId()))
+                || runs.stream().map(run -> run.planHash() + "@" + run.planVersion()).distinct().count() < 2) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "最近影子评估不足、含失败或计划版本不足，不能认证");
+        }
+    }
+
+    private String certificationSampleHash(String fingerprint, int requiredRuns) {
+        var runs = certifications.recentShadowRuns(fingerprint, requiredRuns);
+        String joined = runs.stream().map(com.rover.agent.core.model.ActionShadowRun::runId).sorted()
+                .collect(java.util.stream.Collectors.joining("|"));
+        try { return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest(joined.getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
+        catch (java.security.NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
+    }
+
+    private static long certificationLifetime(long lifetimeMillis) {
+        if (lifetimeMillis < 60_000 || lifetimeMillis > java.time.Duration.ofDays(30).toMillis()) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "认证有效期必须为 1 分钟到 30 天");
+        }
+        return lifetimeMillis;
+    }
+
+    public com.rover.agent.core.model.ActionCertification revokeCertification(String fingerprint, long expectedVersion, String actor) {
+        access.require(actor, Permission.POLICY_ADMIN);
+        if (certifications == null || !durableReady.getAsBoolean() || control.resourceScope() == null || fingerprint == null || !fingerprint.matches("[0-9a-f]{64}")) {
+            throw new ActionRequestException(ActionRequestException.Code.INVALID_REQUEST, "认证范围无效");
+        }
+        var current = certifications.current(fingerprint).orElseThrow(() ->
+                new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "认证不存在"));
+        if (!current.subject().scope().equals(control.resourceScope())
+                || !Objects.equals(control.controlTargetId(), current.subject().controlTargetId())) {
+            throw new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "认证范围不存在");
+        }
+        if (current.version() != expectedVersion) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "认证版本已变化");
+        }
+        long now = Math.max(System.currentTimeMillis(), certifications.recentShadowRuns(fingerprint, 100).stream()
+                .mapToLong(com.rover.agent.core.model.ActionShadowRun::observedAtMillis).max().orElse(0L) + 1);
+        try { return certifications.save(current.revoke(actor, now), expectedVersion); }
+        catch (IllegalStateException conflict) {
+            throw new ActionRequestException(ActionRequestException.Code.CONFLICT, "认证版本已变化，请刷新后重试");
+        }
     }
 
     private AgentAction stopMismatchedCommand(AgentAction action, String reason) {

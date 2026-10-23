@@ -98,6 +98,10 @@ window.RoverAdminPages.workbench = {
             wbAutoMaxBefore: 5,
             wbAutoMaxShift: 5,
             wbAutoMaxCumulative: 10,
+            wbShadowCandidates: [],
+            wbCertifications: [],
+            wbCertificationBusy: false,
+            wbCertificationError: '',
             wbOperationsStatus: null,
             wbReconciliationQueue: [],
             wbOperationBusy: false,
@@ -329,7 +333,11 @@ window.RoverAdminPages.workbench = {
             try {
                 const me = await RoverAdminApi.api('/api/agent/security/me');
                 this.wbOperatorPermissions = me && Array.isArray(me.permissions) ? me.permissions : [];
-                if (this.wbCanManagePolicies()) await this.wbLoadAutoPolicies();
+                if (this.wbCanManagePolicies()) {
+                    await Promise.all([this.wbLoadAutoPolicies(), this.wbLoadCertifications()]);
+                } else {
+                    this.wbShadowCandidates = []; this.wbCertifications = [];
+                }
                 if (!this.wbCanManageSystem()) {
                     this.wbOperationsStatus = null;
                     this.wbReconciliationQueue = [];
@@ -369,6 +377,80 @@ window.RoverAdminPages.workbench = {
                 }
                 this.wbAutoPolicyError = '';
             } catch (error) { this.wbAutoPolicyError = error.message || '无法读取预授权策略'; }
+        },
+
+        async wbLoadCertifications() {
+            if (!this.wbCanManagePolicies()) return;
+            try {
+                const [candidates, certifications] = await Promise.all([
+                    RoverAdminApi.api('/api/agent/actions/shadow-candidates'),
+                    RoverAdminApi.api('/api/agent/actions/certifications'),
+                ]);
+                this.wbShadowCandidates = Array.isArray(candidates) ? candidates : [];
+                this.wbCertifications = Array.isArray(certifications) ? certifications : [];
+                this.wbCertificationError = '';
+            } catch (error) { this.wbCertificationError = error.message || '无法读取影子评估与认证记录'; }
+        },
+
+        async wbAssessShadow(candidate) {
+            if (!this.wbCanManagePolicies() || !candidate || this.wbCertificationBusy) return;
+            this.wbCertificationBusy = true;
+            try {
+                const action = candidate.action || candidate;
+                const result = await RoverAdminApi.api('/api/agent/actions/' + encodeURIComponent(action.actionId) + '/shadow-assessment', { method: 'POST' });
+                this.wbCertificationError = '影子评估 ' + result.outcome + '：' + result.detail;
+                await this.wbLoadCertifications();
+            } catch (error) { this.wbCertificationError = error.message || '影子评估失败'; }
+            finally { this.wbCertificationBusy = false; }
+        },
+
+        wbCertificationActive(fingerprint) {
+            return this.wbCertifications.some(item => item.subject && item.subject.fingerprint === fingerprint
+                && item.state === 'ACTIVE' && item.expiresAtMillis > Date.now());
+        },
+
+        async wbCertifyCandidate(candidate) {
+            if (!this.wbCanManagePolicies() || !candidate || !candidate.certificationEligible || this.wbCertificationBusy) return;
+            this.wbCertificationBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/actions/certifications', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fingerprint: candidate.subject.fingerprint, requiredRuns: 3,
+                        lifetimeMillis: 7 * 86400000,
+                        expectedVersion: (this.wbCertifications.find(item => item.subject.fingerprint === candidate.subject.fingerprint) || {}).version || 0 }),
+                });
+                this.wbCertificationError = '认证已签发 7 天；新的失败评估会暂停该认证';
+                await this.wbLoadCertifications();
+            } catch (error) { this.wbCertificationError = error.message || '签发认证失败'; }
+            finally { this.wbCertificationBusy = false; }
+        },
+
+        async wbRevokeCertification(certification) {
+            if (!this.wbCanManagePolicies() || !certification || this.wbCertificationBusy) return;
+            this.wbCertificationBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/actions/certifications/' + encodeURIComponent(certification.subject.fingerprint) + '/revoke', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expectedVersion: certification.version }),
+                });
+                await this.wbLoadCertifications();
+            } catch (error) { this.wbCertificationError = error.message || '撤销认证失败'; }
+            finally { this.wbCertificationBusy = false; }
+        },
+
+        async wbRenewCertification(certification) {
+            if (!this.wbCanManagePolicies() || !certification || this.wbCertificationBusy) return;
+            this.wbCertificationBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/actions/certifications/' + encodeURIComponent(certification.subject.fingerprint) + '/renew', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ requiredRuns: Math.max(3, certification.passingRuns), lifetimeMillis: 30 * 86400000,
+                        expectedVersion: certification.version }),
+                });
+                this.wbCertificationError = '认证已基于最新通过的影子评估续期';
+                await this.wbLoadCertifications();
+            } catch (error) { this.wbCertificationError = error.message || '重新认证失败'; }
+            finally { this.wbCertificationBusy = false; }
         },
 
         async wbCreateAutoPolicy() {

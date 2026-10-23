@@ -29,6 +29,7 @@ public record RemediationPlan(String planId, int planVersion, String sessionId, 
     public static final String ADAPTER_VERSION = ROUTE_WEIGHT_ADAPTER_VERSION;
     public static final String POLICY_VERSION = "route-weight-manual-v1";
     public static final String CONTRACT_VERSION = "remediation-plan-v1";
+    public static final String SHADOW_CONTRACT_VERSION = "action-shadow-v1";
 
     public RemediationPlan {
         planId = required(planId, "planId");

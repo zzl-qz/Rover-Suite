@@ -13,6 +13,11 @@ public interface RouteControlPort {
      */
     RouteControlState state();
 
+    /** Preview-only proposal check. It must never call adjustTargetWeight or otherwise write. */
+    default RouteChangePreview shadowPreview(String routeId, String serviceName, String group, int weight) {
+        return preview(routeId, serviceName, group, weight);
+    }
+
     /**
      * 预览权重调整的整表差异，不提交变更；提交时仍需校验 revision。
      *

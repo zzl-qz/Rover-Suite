@@ -232,7 +232,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(17, store.schemaVersion(),
+            assertEquals(18, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
                             + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
                             + "v13 保存按管理目标绑定的持久动作命令");
@@ -246,7 +246,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-        assertEquals(17, store.schemaVersion());
+        assertEquals(18, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -404,6 +404,75 @@ class JdbcAgentStoreTest {
     }
 
     @Test
+    void shadowRunsAndVersionedCertificationsSurviveRestartAndKeepScopeIsolation() throws Exception {
+        String path = tempPath("rover-shadow-certification");
+        var scope = new com.rover.agent.core.model.ResourceScope("org", "team", "staging");
+        var subject = new com.rover.agent.core.model.ActionCertificationSubject(scope,
+                com.rover.agent.core.model.ActionType.ADJUST_ROUTE_TARGET_WEIGHT, "RULE_EVIDENCE_GATE",
+                "route-weight-evidence-gate-v1", "route-weight-v1", "effect-v1", "query-v1", "gateway");
+        var otherScope = new com.rover.agent.core.model.ResourceScope("org", "team", "prod");
+        var otherSubject = new com.rover.agent.core.model.ActionCertificationSubject(otherScope,
+                com.rover.agent.core.model.ActionType.ADJUST_ROUTE_TARGET_WEIGHT, "runbook", "1",
+                "adapter-1", "effect-1", "query-1", "gateway");
+        long otherNow = System.currentTimeMillis();
+        var otherCert = new com.rover.agent.core.model.ActionCertification(otherSubject, 1,
+                com.rover.agent.core.model.ActionCertification.State.ACTIVE, 3, "d".repeat(64), "admin",
+                otherNow, otherNow + 60_000, "admin", otherNow);
+        var run = new com.rover.agent.core.model.ActionShadowRun("shadow-1", subject, "action-1", 1,
+                "a".repeat(64), com.rover.agent.core.model.ActionShadowRun.Outcome.PASS, "ok", 7,
+                "b".repeat(64), System.currentTimeMillis());
+        try (JdbcAgentStore store = new JdbcAgentStore(path)) {
+            store.actionCertifications().saveShadow(run);
+            var cert = new com.rover.agent.core.model.ActionCertification(subject, 1,
+                    com.rover.agent.core.model.ActionCertification.State.ACTIVE, 3, "c".repeat(64), "admin",
+                    System.currentTimeMillis(), System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+            store.actionCertifications().save(cert, 0);
+            store.actionCertifications().save(otherCert, 0);
+            assertEquals(List.of(cert), store.actionCertifications().current(scope),
+                    "scope list must filter in SQL rather than return certifications from other environments");
+            assertTrue(store.audit("3:org4:team7:staging", 0, 100).stream()
+                    .anyMatch(a -> a.kind().equals("ACTION_CERTIFICATION_VERSIONED")));
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            assertEquals(List.of(run), reopened.actionCertifications().recentShadowRuns(subject.fingerprint(), 10));
+            var cert = reopened.actionCertifications().current(subject.fingerprint()).orElseThrow();
+            assertTrue(cert.current(subject, System.currentTimeMillis()));
+            assertEquals(List.of(otherCert), reopened.actionCertifications().current(
+                    otherScope));
+            var revoked = cert.revoke("admin", System.currentTimeMillis());
+            assertEquals(revoked, reopened.actionCertifications().save(revoked, 1));
+        }
+    }
+
+    @Test
+    void schemaV17UpgradesToV18AndCertificationAuditIsAtomicWithRecord() throws Exception {
+        String path = tempPath("rover-shadow-v17-upgrade");
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            assertEquals(18, first.schemaVersion());
+        }
+        try (Connection connection = DriverManager.getConnection(
+                "jdbc:h2:file:" + path + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE", "sa", "");
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version=18");
+        }
+        try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
+            assertEquals(18, upgraded.schemaVersion());
+            assertTrue(upgraded.healthy());
+            var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "staging");
+            var subject = new com.rover.agent.core.model.ActionCertificationSubject(scope,
+                    com.rover.agent.core.model.ActionType.ADJUST_ROUTE_TARGET_WEIGHT, "runbook", "1",
+                    "adapter", "effect", "query", "gateway");
+            long now = System.currentTimeMillis();
+            var cert = new com.rover.agent.core.model.ActionCertification(subject, 1,
+                    com.rover.agent.core.model.ActionCertification.State.ACTIVE, 3, "a".repeat(64),
+                    "operator", now, now + 60_000, "operator", now);
+            upgraded.actionCertifications().save(cert, 0);
+            assertTrue(upgraded.audit("3:org3:ops7:staging", 0, 100).stream()
+                    .anyMatch(item -> item.kind().equals("ACTION_CERTIFICATION_VERSIONED")));
+        }
+    }
+
+    @Test
     void schemaFiveUpgradeLeavesUnknownHistoricalSourcesUnset() throws Exception {
         String path = tempPath("rover-alert-upgrade");
         try (JdbcAgentStore first = new JdbcAgentStore(path)) {
@@ -416,7 +485,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(17, upgraded.schemaVersion());
+            assertEquals(18, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }

@@ -940,6 +940,26 @@
                             <div v-for="policy in wbAutoPolicies" :key="policy.policyId" class="wb-action-facts"><div><code>{{ policy.policyId }}</code> · v{{ policy.version }} · {{ policy.serviceName }}@{{ policy.group }}</div><div class="muted">{{ policy.resource.resourceUid }} · 单次 ≤{{ policy.maxTrafficShiftPercent }}pp · 24h 累计 ≤{{ policy.maxCumulativeTrafficShiftPercent }}pp · 冷却 {{ Math.round(policy.cooldownMillis / 60000) }} 分钟 · {{ policy.enabled && policy.expiresAtMillis > Date.now() ? '有效至 ' + fmtTime(policy.expiresAtMillis) : '已停用或过期' }}</div><button v-if="!policy.enabled && policy.expiresAtMillis > Date.now()" class="btn mini primary" :disabled="wbAutoPolicyBusy" @click="wbEnableAutoPolicy(policy)">显式启用</button><button v-if="policy.enabled" class="btn mini danger" :disabled="wbAutoPolicyBusy" @click="wbRevokeAutoPolicy(policy)">撤销（立即阻止未提交计划）</button></div>
                         </div>
 
+                        <div v-if="wbCanManagePolicies()" class="card wb-action-facts">
+                            <div class="card-head"><h2>影子运行与动作认证</h2><button class="btn mini" :disabled="wbCertificationBusy" @click="wbLoadCertifications">刷新</button></div>
+                            <p class="muted">影子评估只检查路由、证据、版本和写入预览，不会修改 Gateway。每个环境、Gateway、动作、Runbook、适配器与效果规则组合至少需要 3 次通过且覆盖 2 个计划版本；新失败会暂停原认证。</p>
+                            <p v-if="wbCertificationError" class="muted">{{ wbCertificationError }}</p>
+                            <div v-for="candidate in wbShadowCandidates" :key="candidate.action.actionId" class="wb-action-facts">
+                                <div><code>{{ candidate.action.actionId }}</code> · {{ candidate.action.serviceName }}@{{ candidate.action.group }} · {{ candidate.subject.runbookId }} v{{ candidate.subject.runbookVersion }} · {{ candidate.subject.adapterVersion }}</div>
+                                <div class="muted">计划版本 {{ candidate.action.plan.planVersion }} · 近期样本 {{ candidate.recentRuns.length }} · 不同计划版本 {{ candidate.distinctPlanVersions }} · {{ candidate.certificationEligible ? '满足认证样本门槛' : '仍需通过评估' }}</div>
+                                <div v-for="run in candidate.recentRuns.slice(0, 3)" :key="run.runId" class="muted">{{ run.outcome }} · {{ run.actionId }} · 计划 v{{ run.planVersion }} · {{ run.detail }}</div>
+                                <button class="btn mini primary" :disabled="wbCertificationBusy" @click="wbAssessShadow(candidate)">运行影子评估</button>
+                                <button v-if="candidate.certificationEligible && !wbCertificationActive(candidate.subject.fingerprint)" class="btn mini primary" :disabled="wbCertificationBusy" @click="wbCertifyCandidate(candidate)">签发 7 天认证</button>
+                            </div>
+                            <div v-for="cert in wbCertifications" :key="cert.subject.fingerprint" class="wb-action-facts">
+                                <div>{{ cert.subject.scope.environmentId }} · {{ cert.subject.actionType }} · {{ cert.subject.runbookId }} v{{ cert.subject.runbookVersion }} · {{ cert.subject.adapterVersion }}</div>
+                                <div class="muted">{{ cert.state }} · {{ cert.passingRuns }} 次通过 · 版本 {{ cert.version }} · 至 {{ fmtTime(cert.expiresAtMillis) }}</div>
+                                <div class="muted">管理目标 {{ cert.subject.controlTargetId }} · 效果规则 {{ cert.subject.effectRuleVersion }} · 指标查询 {{ cert.subject.metricQueryVersion }} · 样本 {{ cert.sampleHash }}</div>
+                                <button class="btn mini primary" :disabled="wbCertificationBusy" @click="wbRenewCertification(cert)">按最近评估重新认证 30 天</button>
+                                <button v-if="cert.state === 'ACTIVE'" class="btn mini danger" :disabled="wbCertificationBusy" @click="wbRevokeCertification(cert)">撤销认证</button>
+                            </div>
+                        </div>
+
                         <div class="card">
                             <div class="card-head">
                                 <h2>当前事件</h2>
