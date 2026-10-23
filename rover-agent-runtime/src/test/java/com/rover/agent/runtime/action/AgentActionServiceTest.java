@@ -107,6 +107,7 @@ class AgentActionServiceTest {
         var access = new AgentAccess() {
             public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
             public boolean automatedWriteAllowed() { return true; }
+            public boolean managed() { return false; }
         };
         gateway.namespace = "namespace-a";
         sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
@@ -147,6 +148,7 @@ class AgentActionServiceTest {
         var access = new AgentAccess() {
             public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
             public boolean automatedWriteAllowed() { return true; }
+            public boolean managed() { return false; }
         };
         var commands = new InMemoryActionCommandRepository(10);
         var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, List.of(policy));
@@ -189,6 +191,7 @@ class AgentActionServiceTest {
         var access = new AgentAccess() {
             public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
             public boolean automatedWriteAllowed() { return true; }
+            public boolean managed() { return false; }
         };
         var commands = new InMemoryActionCommandRepository(10);
         var budget = new InMemoryAutonomousActionBudgetRepository();

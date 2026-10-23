@@ -11,6 +11,7 @@ import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import com.rover.agent.runtime.repository.InMemoryActionCommandRepository;
 import com.rover.agent.runtime.repository.InMemoryAutonomousActionBudgetRepository;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -142,6 +143,72 @@ class ActionShadowAssessmentServiceTest {
         assertEquals(1, issued.version());
         assertThrows(ActionRequestException.class, () -> managed.certify(subject.fingerprint(), 3,
                 7 * 86400000L, 0, "admin"), "旧版本不能覆盖当前认证");
+    }
+
+    @Test void autonomyGateRequiresLiveRecoveryAndStopsForUncertainSameScopeActions() {
+        var scope = new ResourceScope("org", "ops", "prod");
+        var resource = new ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "orders", "uid-one", 1);
+        var records = new InMemoryActionCertificationRepository();
+        var actions = new InMemoryAgentActionRepository(10);
+        var sessions = new InMemoryAgentSessionRepository(10);
+        sessions.save(new Session("auto-session", "owner", "auto", null, SessionStatus.ACTIVE,
+                1, 1, List.of(), scope, "prod"));
+        sessions.save(new Session("session", "owner", "candidate", null, SessionStatus.ACTIVE,
+                1, 1, List.of(), scope, "prod"));
+        var candidate = action(resource);
+        var autoPolicy = new AutoExecutionPolicy("auto-policy", 1, false, "prod", resource,
+                candidate.serviceName(), candidate.group(), 0, 5, 5, 10, 900_000, 86_400_000,
+                System.currentTimeMillis() + 3_600_000, "admin", System.currentTimeMillis(),
+                "admin", System.currentTimeMillis());
+        candidate = candidate.withPlan(candidate.plan().withPreauthorization(autoPolicy.policyVersion()));
+        var subject = ActionCertificationSubject.from(candidate.plan());
+        long now = System.currentTimeMillis();
+        for (int i = 0; i < 3; i++) records.saveShadow(new ActionShadowRun("gate-pass-" + i, subject,
+                "shadow-action", i + 1, (i == 2 ? "c" : "a").repeat(64), ActionShadowRun.Outcome.PASS,
+                "ok", 7, "b".repeat(64), now + i));
+        String sample;
+        try { sample = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                .digest("gate-pass-0|gate-pass-1|gate-pass-2".getBytes(java.nio.charset.StandardCharsets.UTF_8))); }
+        catch (java.security.NoSuchAlgorithmException impossible) { throw new AssertionError(impossible); }
+        var certification = new ActionCertification(subject, 1, ActionCertification.State.ACTIVE, 3, sample,
+                "admin", now, now + 60_000, "admin", now + 3);
+        records.save(certification, 0);
+        var verifications = new com.rover.agent.runtime.repository.InMemoryActionEffectVerificationRepository(10);
+        var effect = new com.rover.agent.runtime.verification.ActionEffectVerificationService(actions, sessions,
+                verifications, null, null);
+        AgentAccess access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean managed() { return true; }
+        };
+        var control = mock(RouteControlPort.class);
+        when(control.resourceScope()).thenReturn(scope);
+        when(control.resourceNamespace()).thenReturn("prod");
+        when(control.controlTargetId()).thenReturn("gateway-one");
+        var service = new AgentActionService(actions, sessions, control, new ActionExecutorRegistry(List.of()), access,
+                RiskBasedApprovalPolicy.defaults(), new InMemoryActionCommandRepository(10), true, effect,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 5_000, 30_000,
+                        2, 10, 0.9, 120_000, 0.01, 2_000), new InMemoryAutonomousActionBudgetRepository(),
+                records, new ActionShadowAssessmentService(actions, control, records), () -> true);
+        assertTrue(certification.current(subject, System.currentTimeMillis(), sample));
+        assertEquals(scope, candidate.plan().scope());
+        assertEquals("gateway-one", candidate.resourceRef().controlTargetId());
+        assertTrue(service.autonomyHealthAllows(candidate), "有效影子认证允许首次受控试点");
+        actions.save(candidate);
+        var applied = actions.transition(candidate.actionId(), ActionStatus.PENDING_APPROVAL, current ->
+                new ActionDraft(current).applyOperation("apply-op").appliedRevision(8)
+                        .move(ActionStatus.SUCCESS, null).toAction(now)).orElseThrow();
+        assertFalse(service.autonomyHealthAllows(applied), "动作已执行但效果尚未确认时必须暂停自动写入");
+        var storedApplied = actions.find(applied.actionId()).orElseThrow();
+        verifications.save(new ActionEffectVerification(storedApplied.actionId(), ActionEffectVerification.Phase.APPLY,
+                candidate.plan().planVersion(), candidate.plan().planHash(), ActionEffectVerification.State.COMPLETE,
+                ActionEffectVerification.Outcome.RECOVERED, now, now, 0, now + 60_000, 2, 2, Map.of(), Map.of(),
+                List.of(), List.of(), 0));
+        assertEquals(ActionEffectVerification.Outcome.RECOVERED, verifications.find(applied.actionId(),
+                ActionEffectVerification.Phase.APPLY).orElseThrow().outcome());
+        assertTrue(service.autonomyHealthAllows(applied));
+        var uncertain = actions.transition(applied.actionId(), ActionStatus.SUCCESS, current ->
+                new ActionDraft(current).move(ActionStatus.UNCERTAIN, "回执不确定").toAction(now + 1)).orElseThrow();
+        assertFalse(service.autonomyHealthAllows(uncertain));
     }
 
     private static AgentAction action(ResourceRef resource) {

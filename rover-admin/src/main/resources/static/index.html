@@ -931,7 +931,8 @@
                         </div>
 
                         <div v-if="wbCanManagePolicies()" class="card wb-action-facts">
-                            <div class="card-head"><h2>受限自动处置授权</h2><span class="badge warn ml-auto">默认关闭 · 最长 7 天</span></div>
+                            <div class="card-head"><h2>受限自动处置授权</h2><span class="badge ml-auto" :class="wbAutonomyHealth && wbAutonomyHealth.healthy ? 'ok' : 'warn'">{{ wbAutonomyHealth ? wbAutonomyHealth.mode : '状态未知，按人工审批' }}</span></div>
+                            <p class="muted">{{ wbAutonomyHealth ? wbAutonomyHealth.message : '无法读取自动处置健康状态；自动动作按人工审批处理' }}</p>
                             <p class="muted">只授权指定路由和版本在小流量下执行权重归零；必须有证据和业务效果验证。其他计划仍需人工批准。</p>
                             <div class="field"><label>路由</label><select v-model="wbAutoRouteId" :disabled="wbAutoPolicyBusy"><option v-for="item in wbAutoCandidates" :key="item.routeId" :value="item.routeId">{{ item.businessPrefix || item.routeId }}</option></select></div>
                             <div class="field"><label>当前有流量的版本</label><select v-model="wbAutoTargetKey" :disabled="wbAutoPolicyBusy"><option v-for="item in wbAutoTargets()" :key="item.serviceName + ':' + item.group" :value="item.serviceName + ':' + item.group">{{ item.serviceName }}@{{ item.group }}（权重 {{ item.weight }}）</option></select></div>

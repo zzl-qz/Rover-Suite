@@ -22,18 +22,43 @@ public class AutoExecutionPolicyController {
     private final RouteControlPort control;
     private final com.rover.admin.security.AgentSecurityService security;
     private final AgentStore store;
+    private final com.rover.agent.runtime.action.AgentActionService actions;
 
     public AutoExecutionPolicyController(AutoExecutionPolicyRepository policies, RouteControlPort control,
-            com.rover.admin.security.AgentSecurityService security, AgentStore store) {
+            com.rover.admin.security.AgentSecurityService security, AgentStore store,
+            com.rover.agent.runtime.action.AgentActionService actions) {
         this.policies = policies;
         this.control = control;
         this.security = security;
         this.store = store;
+        this.actions = actions;
     }
 
     @GetMapping public Object list(Authentication actor) {
         security.require(actor.getName(), Permission.POLICY_ADMIN);
         return policies.list(control.resourceNamespace());
+    }
+
+    @GetMapping("/health") public Object autonomyHealth(Authentication actor) {
+        security.require(actor.getName(), Permission.POLICY_ADMIN);
+        var enabledPolicies = store.autoExecutionPolicies().list(control.resourceNamespace()).stream()
+                .filter(AutoExecutionPolicy::enabled).toList();
+        boolean healthy = security.writesStopped() == false && store.persistent() && store.durable().healthy()
+                && !enabledPolicies.isEmpty()
+                && enabledPolicies.stream().allMatch(policy -> policy.expiresAtMillis() > System.currentTimeMillis())
+                && store.actions().byStatus(java.util.Set.of(com.rover.agent.core.model.ActionStatus.PENDING_APPROVAL,
+                        com.rover.agent.core.model.ActionStatus.PRECONDITION_FAILED), 1000).stream()
+                    .filter(action -> action.plan() != null
+                            && "RULE_EVIDENCE_GATE".equals(action.plan().provenance().source())
+                            && action.plan().verificationSpec().mode()
+                                == com.rover.agent.core.model.RemediationPlan.VerificationMode.BUSINESS_EFFECT)
+                    .filter(action -> store.sessions().find(action.sessionId()).map(session ->
+                            java.util.Objects.equals(control.resourceScope(), session.scope())
+                                    && java.util.Objects.equals(control.resourceNamespace(), session.targetNamespace())).orElse(false))
+                    .allMatch(actions::autonomyHealthAllows);
+        return Map.of("healthy", healthy,
+                "mode", healthy ? "PREAUTHORIZED" : "REQUIRE_APPROVAL",
+                "message", healthy ? "已认证范围的预授权可用" : "自动处置已降级：后续计划须人工审批，直至认证与效果数据恢复健康");
     }
 
     @GetMapping("/candidates") public Object candidates(Authentication actor) {

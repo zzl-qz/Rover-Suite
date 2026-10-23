@@ -112,3 +112,18 @@ test('system status failure is visible even while the reconciliation list stays 
     assert.equal(state.wbReconciliationQueue.length, 1);
     assert.match(state.wbOperationMessage, /存储异常/);
 });
+
+test('autonomy status fails closed to approval mode when health cannot be read', async () => {
+    const urls = [];
+    const state = workbench(async url => {
+        urls.push(url);
+        if (url === '/api/agent/policies/autonomous') return [];
+        if (url.endsWith('/candidates')) return [];
+        if (url.endsWith('/health')) throw new Error('health unavailable');
+        return {};
+    });
+    await state.wbLoadAutoPolicies();
+    assert.ok(urls.some(url => url.endsWith('/health')));
+    assert.equal(state.wbAutonomyHealth, null);
+    assert.match(state.wbAutoPolicyError, /health unavailable/);
+});

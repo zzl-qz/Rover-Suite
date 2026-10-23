@@ -91,6 +91,7 @@ window.RoverAdminPages.workbench = {
             wbOperatorPermissions: [],
             wbAutoPolicies: [],
             wbAutoCandidates: [],
+            wbAutonomyHealth: null,
             wbAutoRouteId: '',
             wbAutoTargetKey: '',
             wbAutoPolicyBusy: false,
@@ -364,19 +365,21 @@ window.RoverAdminPages.workbench = {
 
         async wbLoadAutoPolicies() {
             try {
-                const [policies, candidates] = await Promise.all([
+                const [policies, candidates, health] = await Promise.all([
                     RoverAdminApi.api('/api/agent/policies/autonomous'),
                     RoverAdminApi.api('/api/agent/policies/autonomous/candidates'),
+                    RoverAdminApi.api('/api/agent/policies/autonomous/health'),
                 ]);
                 this.wbAutoPolicies = Array.isArray(policies) ? policies : [];
                 this.wbAutoCandidates = Array.isArray(candidates) ? candidates : [];
+                this.wbAutonomyHealth = health || null;
                 if (!this.wbAutoRouteId && this.wbAutoCandidates.length) {
                     this.wbAutoRouteId = this.wbAutoCandidates[0].routeId;
                     const target = (this.wbAutoCandidates[0].targets || []).find(item => item.weight > 0);
                     if (target) this.wbAutoTargetKey = target.serviceName + ':' + target.group;
                 }
                 this.wbAutoPolicyError = '';
-            } catch (error) { this.wbAutoPolicyError = error.message || '无法读取预授权策略'; }
+            } catch (error) { this.wbAutonomyHealth = null; this.wbAutoPolicyError = error.message || '无法读取预授权策略'; }
         },
 
         async wbLoadCertifications() {

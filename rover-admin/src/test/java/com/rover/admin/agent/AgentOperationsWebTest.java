@@ -80,6 +80,32 @@ class AgentOperationsWebTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content().json("[]"));
     }
 
+    @Test void autonomyHealthIsVisibleOnlyToPolicyManagers() throws Exception {
+        http.perform(get("/api/agent/policies/autonomous/health").with(user("ops-viewer")))
+                .andExpect(status().isForbidden());
+        http.perform(get("/api/agent/policies/autonomous/health").with(user("ops-admin")))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.healthy").value(false))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.mode").value("REQUIRE_APPROVAL"));
+        long now = System.currentTimeMillis();
+        var resource = new ResourceRef(control.resourceScope(), "gateway-health", "GATEWAY_ROUTE",
+                "orders-health", "uid-health", 1);
+        var draft = AutoExecutionPolicy.create("health-policy", control.resourceNamespace(), resource,
+                "orders-v2", "canary", 5, 5, 10, java.time.Duration.ofMinutes(15).toMillis(),
+                now + 86_400_000, "ops-admin", now);
+        store.autoExecutionPolicies().save(draft, 0);
+        store.autoExecutionPolicies().save(draft.revise(true, 5, 5, draft.expiresAtMillis(), "ops-admin", now + 1),
+                draft.version());
+        http.perform(get("/api/agent/policies/autonomous/health").with(user("ops-admin")))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.healthy").value(true))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.mode").value("PREAUTHORIZED"));
+        security.stopWrites("ops-admin", true);
+        http.perform(get("/api/agent/policies/autonomous/health").with(user("ops-admin")))
+                .andExpect(status().isOk())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.healthy").value(false));
+    }
+
     @Test void resumeApprovalRejectsOutstandingActionsAndUnhealthyStorage() throws Exception {
         long now = System.currentTimeMillis();
         String sessionId = "pending-session-" + NEXT_TEST_SESSION.incrementAndGet();

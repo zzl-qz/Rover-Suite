@@ -340,8 +340,9 @@ public final class AgentActionService {
                         provenance == null ? new RemediationPlan.Provenance(null, null, null,
                                 RemediationPlan.POLICY_VERSION, "SERVER_ACTION_PREVIEW") : provenance, riskLevel);
                 if (businessEffectPolicy != null) { plan = businessEffectPolicy.attach(plan); }
+                var candidate = action.withPlan(plan);
                 var preauthorization = access.automatedWriteAllowed()
-                        ? approvalPolicy.preauthorizationFor(action.withPlan(plan), session.targetNamespace(), now) : null;
+                        ? approvalPolicy.preauthorizationFor(candidate, session.targetNamespace(), now) : null;
                 if (preauthorization != null) { plan = plan.withPreauthorization(preauthorization.policyVersion()); }
                 action = action.withPlan(plan);
             }
@@ -992,7 +993,7 @@ public final class AgentActionService {
                         == RemediationPlan.ApprovalMode.PREAUTHORIZED) {
                     return actions.transition(action.actionId(), ActionStatus.PENDING_APPROVAL,
                                     current -> new ActionDraft(current).move(ActionStatus.PRECONDITION_FAILED,
-                                            "预授权已撤销、过期或写入被停用，未提交 Gateway 写请求")
+                                            "预授权已撤销、过期或自动化健康门未通过，未提交 Gateway 写请求")
                                             .toAction(System.currentTimeMillis()))
                             .orElseGet(() -> latest(command.actionId()));
                 }
@@ -1010,7 +1011,7 @@ public final class AgentActionService {
                         == RemediationPlan.ApprovalMode.PREAUTHORIZED) {
                     return actions.transition(action.actionId(), ActionStatus.QUEUED,
                                     current -> new ActionDraft(current).move(ActionStatus.PRECONDITION_FAILED,
-                                            "预授权已撤销、过期或写入被停用，未提交 Gateway 写请求")
+                                            "预授权已撤销、过期或自动化健康门未通过，未提交 Gateway 写请求")
                                             .toAction(System.currentTimeMillis()))
                             .orElseGet(() -> latest(command.actionId()));
                 }
@@ -1061,7 +1062,8 @@ public final class AgentActionService {
         if (command.actor() == null) { return false; }
         boolean preauthorized = stage == ActionApproval.Stage.APPLY
                 && approvalPolicy.matchesPreauthorization(action, command.targetNamespace(), System.currentTimeMillis());
-        if (preauthorized ? !access.automatedWriteAllowed() : !access.writeAllowed(command.actor())) { return false; }
+        if (preauthorized ? !access.automatedWriteAllowed() || !autonomyHealthAllows(action)
+                : !access.writeAllowed(command.actor())) { return false; }
         RiskBasedApprovalPolicy.Decision decision;
         try { decision = approvalPolicy.decisionFor(action, stage); }
         catch (RiskBasedApprovalPolicy.PolicyChangedException ex) { return false; }
@@ -1164,6 +1166,88 @@ public final class AgentActionService {
         return certifications.current(control.resourceScope()).stream()
                 .filter(cert -> Objects.equals(control.controlTargetId(), cert.subject().controlTargetId()))
                 .toList();
+    }
+
+    /**
+     * Fail closed when the live effect result for this exact certified combination is bad or unavailable.
+     * Shadow-only evidence is still the certification basis; once actions run, their outcomes add a runtime gate.
+     */
+    public boolean autonomyHealthAllows(AgentAction action) {
+        // Legacy unmanaged constructors are retained for deterministic domain tests.
+        if (certifications == null) { return !access.managed(); }
+        if (action == null || action.plan() == null || effectVerification == null
+                || !durableReady.getAsBoolean() || action.resourceRef() == null
+                || action.plan().verificationSpec().mode() != RemediationPlan.VerificationMode.BUSINESS_EFFECT
+                || !"RULE_EVIDENCE_GATE".equals(action.plan().provenance().source())) {
+            return false;
+        }
+        try {
+            var subject = com.rover.agent.core.model.ActionCertificationSubject.from(action.plan());
+            var certification = certifications.current(subject.fingerprint())
+                    .filter(value -> value.current(subject, System.currentTimeMillis())).orElse(null);
+            if (certification == null || !Objects.equals(control.controlTargetId(), subject.controlTargetId())
+                    || !Objects.equals(control.resourceScope(), subject.scope())) { return false; }
+            var latestShadow = certifications.recentShadowRuns(subject.fingerprint(), 100);
+            if (latestShadow.stream().anyMatch(run -> run.outcome() == com.rover.agent.core.model.ActionShadowRun.Outcome.FAIL
+                    && run.observedAtMillis() > certification.updatedAtMillis())) { return false; }
+            var sampledRuns = latestShadow.stream().filter(run -> run.observedAtMillis() <= certification.updatedAtMillis())
+                    .limit(certification.passingRuns()).toList();
+            if (sampledRuns.size() != certification.passingRuns()
+                    || sampledRuns.stream().anyMatch(run -> run.outcome() != com.rover.agent.core.model.ActionShadowRun.Outcome.PASS)) {
+                return false;
+            }
+            String sample = sampledRuns.stream().map(com.rover.agent.core.model.ActionShadowRun::runId).sorted()
+                    .collect(java.util.stream.Collectors.joining("|"));
+            String sampleHash;
+            try {
+                sampleHash = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+                        .digest(sample.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            } catch (java.security.NoSuchAlgorithmException impossible) {
+                throw new IllegalStateException("SHA-256 unavailable", impossible);
+            }
+            if (!certification.current(subject, System.currentTimeMillis(), sampleHash)) { return false; }
+            if (action.status() == ActionStatus.UNCERTAIN || action.status() == ActionStatus.RECONCILING
+                    || action.status() == ActionStatus.VERIFYING || action.status() == ActionStatus.EXECUTING
+                    || action.status() == ActionStatus.QUEUED || action.status() == ActionStatus.ROLLING_BACK
+                    || action.status() == ActionStatus.ROLLBACK_QUEUED) { return false; }
+            for (Session session : sessions.listAll()) {
+                if (!inScope(session)) { continue; }
+                for (AgentAction previous : actions.bySession(session.sessionId())) {
+                    if (previous.actionId().equals(action.actionId()) || previous.plan() == null
+                            || !Objects.equals(previous.resourceRef(), action.resourceRef())
+                            || !Objects.equals(previous.routeId(), action.routeId())
+                            || !Objects.equals(previous.serviceName(), action.serviceName())
+                            || !Objects.equals(previous.group(), action.group())
+                            || !Objects.equals(previous.plan().provenance().policyVersion(), action.plan().provenance().policyVersion())
+                            || previous.plan().riskAssessment().approvalMode() != RemediationPlan.ApprovalMode.PREAUTHORIZED) {
+                        continue;
+                    }
+                    if (previous.status() == ActionStatus.UNCERTAIN || previous.status() == ActionStatus.RECONCILING
+                            || previous.status() == ActionStatus.VERIFYING || previous.status() == ActionStatus.EXECUTING || previous.status() == ActionStatus.QUEUED
+                            || previous.status() == ActionStatus.ROLLING_BACK || previous.status() == ActionStatus.ROLLBACK_QUEUED) {
+                        return false;
+                    }
+                    if (previous.status() == ActionStatus.SUCCESS || previous.status() == ActionStatus.FAILED
+                            && previous.appliedRevision() != null) {
+                        if (!recovered(previous)) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            if ((action.status() == ActionStatus.SUCCESS || action.status() == ActionStatus.FAILED
+                    && action.appliedRevision() != null) && !recovered(action)) { return false; }
+            return true;
+        } catch (RuntimeException unavailable) {
+            return false;
+        }
+    }
+
+    private boolean recovered(AgentAction action) {
+        var verification = effectVerification.repository()
+                .find(action.actionId(), ActionEffectVerification.Phase.APPLY).orElse(null);
+        return verification != null && verification.state() == ActionEffectVerification.State.COMPLETE
+                && verification.outcome() == ActionEffectVerification.Outcome.RECOVERED;
     }
 
     public List<com.rover.agent.core.model.ActionShadowRun> shadowRuns(String fingerprint, String actor) {
