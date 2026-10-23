@@ -507,14 +507,30 @@ window.RoverAdminPages.workbench = {
             this.wbOperationBusy = true;
             this.wbOperationMessage = '';
             try {
-                await RoverAdminApi.api('/api/agent/operations/write-stop', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ stopped }),
-                });
+                await RoverAdminApi.api('/api/agent/operations/write-stop', { method: 'POST' });
                 await this.wbLoadOperatorState(true);
-                this.wbOperationMessage = stopped ? '已停用 Agent 生产写操作' : '生产写操作已恢复；请复核仍待人工审批的计划';
+                this.wbOperationMessage = '已停用 Agent 生产写操作；在途请求仍需按原操作号对账';
             } catch (error) {
                 this.wbOperationMessage = error.message || '写入开关操作失败';
+                await this.wbLoadOperatorState(true);
+            } finally {
+                this.wbOperationBusy = false;
+            }
+        },
+
+        async wbApproveWriteResume() {
+            if (!this.wbCanManageSystem() || this.wbOperationBusy || !this.wbOperationsStatus?.writesStopped) return;
+            this.wbOperationBusy = true;
+            this.wbOperationMessage = '';
+            try {
+                await RoverAdminApi.api('/api/agent/operations/resume-approval', { method: 'POST' });
+                await this.wbLoadOperatorState(true);
+                const state = this.wbOperationsStatus?.writeResume;
+                this.wbOperationMessage = state && !state.stopped
+                    ? '双人审批已完成，Agent 写入已恢复'
+                    : '恢复审批已记录，仍需另一位系统管理员在 15 分钟内审批';
+            } catch (error) {
+                this.wbOperationMessage = error.message || '恢复审批未通过';
                 await this.wbLoadOperatorState(true);
             } finally {
                 this.wbOperationBusy = false;

@@ -5,6 +5,7 @@ import com.rover.agent.core.port.AgentAccess;
 import com.rover.agent.core.port.RouteControlPort;
 import jakarta.annotation.PreDestroy;
 import jakarta.annotation.PostConstruct;
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -19,6 +20,9 @@ import org.springframework.stereotype.Service;
 /** 当前单进程的实时账号授权及仅限告警入口的机器令牌。秘密只在创建时返回一次。 */
 @Service
 public class AgentSecurityService implements AgentAccess {
+    private static final long WRITE_RESUME_APPROVAL_WINDOW_MILLIS = Duration.ofMinutes(15).toMillis();
+    private static final int WRITE_RESUME_REQUIRED_APPROVALS = 2;
+    private static final String WRITE_RESUME_POLICY_VERSION = "write-resume-v1";
     private final AdminUserStore users;
     private final RouteControlPort control;
     private final String alertOwner;
@@ -26,6 +30,8 @@ public class AgentSecurityService implements AgentAccess {
     private final Clock clock;
     private final AdminProperties properties;
     private final com.rover.agent.runtime.repository.AgentStore store;
+    private final java.util.concurrent.locks.ReentrantLock writeGate = new java.util.concurrent.locks.ReentrantLock(true);
+    private final java.util.concurrent.atomic.AtomicInteger admittedWrites = new java.util.concurrent.atomic.AtomicInteger();
     @Value("${rover.agent.production-mode:false}") private boolean productionMode;
     @Value("${rover.agent.start-writes-stopped:false}") private boolean startWritesStopped;
     private volatile boolean closing;
@@ -37,6 +43,10 @@ public class AgentSecurityService implements AgentAccess {
     public record Machine(String id, String principal, String namespace, long expiresAtMillis,
                           boolean revoked, String createdBy, String purpose) { }
     public record IssuedToken(String id, String principal, String token, long expiresAtMillis) { }
+    public record WriteResumeState(boolean stopped, long generation, int approvals, int requiredApprovals,
+                                   List<String> approvers, long expiresAtMillis) {
+        public WriteResumeState { approvers = List.copyOf(approvers); }
+    }
 
     @Autowired
     public AgentSecurityService(AdminProperties properties, AdminUserStore users, RouteControlPort control,
@@ -50,8 +60,8 @@ public class AgentSecurityService implements AgentAccess {
         this(properties, users, control, alertOwner, clock, null);
     }
 
-    private AgentSecurityService(AdminProperties properties, AdminUserStore users, RouteControlPort control,
-                                 String alertOwner, Clock clock, com.rover.agent.runtime.repository.AgentStore store) {
+    AgentSecurityService(AdminProperties properties, AdminUserStore users, RouteControlPort control,
+                         String alertOwner, Clock clock, com.rover.agent.runtime.repository.AgentStore store) {
         this.users = users;
         this.properties = properties;
         this.control = control;
@@ -59,10 +69,15 @@ public class AgentSecurityService implements AgentAccess {
         this.clock = clock;
         this.store = store;
         try {
+            File dbFile = new File(properties.getLogStorePath());
+            if (dbFile.getParentFile() != null) { dbFile.getParentFile().mkdirs(); }
             connection = DriverManager.getConnection("jdbc:h2:file:" + properties.getLogStorePath()
                     + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE;WRITE_DELAY=0", "sa", "");
             try (Statement statement = connection.createStatement()) {
-                statement.execute("CREATE TABLE IF NOT EXISTS admin_agent_control (resource_namespace VARCHAR(64) PRIMARY KEY, stopped BOOLEAN NOT NULL)");
+                statement.execute("CREATE TABLE IF NOT EXISTS admin_agent_control (resource_namespace VARCHAR(64) PRIMARY KEY, stopped BOOLEAN NOT NULL, stop_generation BIGINT NOT NULL DEFAULT 0)");
+                statement.execute("ALTER TABLE admin_agent_control ADD COLUMN IF NOT EXISTS stop_generation BIGINT NOT NULL DEFAULT 0");
+                statement.execute("CREATE TABLE IF NOT EXISTS admin_agent_write_resume (resource_namespace VARCHAR(64) NOT NULL, stop_generation BIGINT NOT NULL, approver VARCHAR(128) NOT NULL, policy_version VARCHAR(32) NOT NULL, approved_at BIGINT NOT NULL, PRIMARY KEY(resource_namespace, stop_generation, approver))");
+                statement.execute("ALTER TABLE admin_agent_write_resume ADD COLUMN IF NOT EXISTS policy_version VARCHAR(32) DEFAULT 'write-resume-v1' NOT NULL");
                 statement.execute("CREATE TABLE IF NOT EXISTS admin_agent_token (token_id VARCHAR(64) PRIMARY KEY, "
                         + "principal VARCHAR(128) NOT NULL, token_hash VARCHAR(64) UNIQUE NOT NULL, "
                         + "resource_namespace VARCHAR(64) NOT NULL, expires_at BIGINT NOT NULL, revoked BOOLEAN NOT NULL, "
@@ -75,12 +90,17 @@ public class AgentSecurityService implements AgentAccess {
     @PostConstruct void validateProduction() {
         if (startWritesStopped) {
             transaction(() -> {
-                try (PreparedStatement statement = connection.prepareStatement("MERGE INTO admin_agent_control KEY(resource_namespace) VALUES(?,TRUE)")) {
-                    statement.setString(1, control.resourceNamespace()); statement.executeUpdate();
+                try { ensureControlRow(); }
+                catch (SQLException ex) { throw new IllegalStateException("启动停写失败", ex); }
+                try {
+                    try (PreparedStatement statement = connection.prepareStatement("UPDATE admin_agent_control SET stopped=TRUE,stop_generation=stop_generation+1 WHERE resource_namespace=?")) {
+                        statement.setString(1, control.resourceNamespace()); statement.executeUpdate();
+                    }
                     audit("STARTUP_WRITE_STOP", control.resourceNamespace(), "system:startup", Map.of("stopped", true));
                     return null;
                 } catch (SQLException ex) { throw new IllegalStateException("启动停写失败", ex); }
-            });
+                });
+            pausePreauthorizations("system:startup");
         }
         if (!productionMode) { return; }
         if (users.usesDefaultPassword()) {
@@ -101,15 +121,144 @@ public class AgentSecurityService implements AgentAccess {
         } catch (SQLException ex) { throw new IllegalStateException("读取写停开关失败，禁止写入", ex); }
     }
 
-    public synchronized void stopWrites(String actor, boolean stopped) {
+    public void stopWrites(String actor, boolean stopped) {
         require(actor, Permission.MANAGE_SYSTEM);
-        transaction(() -> {
-        try (PreparedStatement statement = connection.prepareStatement("MERGE INTO admin_agent_control KEY(resource_namespace) VALUES(?,?)")) {
-            statement.setString(1, control.resourceNamespace()); statement.setBoolean(2, stopped); statement.executeUpdate();
-            audit("WRITE_STOP_CHANGED", control.resourceNamespace(), actor, Map.of("stopped", stopped));
+        if (!stopped) { throw new IllegalStateException("恢复生产写入必须经过两名不同系统管理员审批"); }
+        boolean wasStopped = writesStopped();
+        writeGate.lock();
+        try {
+            transaction(() -> {
+        try {
+            ensureControlRow();
+            try (PreparedStatement statement = connection.prepareStatement("UPDATE admin_agent_control SET stopped=TRUE,stop_generation=stop_generation+1 WHERE resource_namespace=?")) {
+                statement.setString(1, control.resourceNamespace()); statement.executeUpdate();
+            }
+            audit("WRITE_STOP_CHANGED", control.resourceNamespace(), actor, Map.of("stopped", true));
             return null;
         } catch (SQLException ex) { throw new IllegalStateException("保存写停开关失败", ex); }
         });
+        } finally { writeGate.unlock(); }
+        if (!wasStopped) { pausePreauthorizations(actor); }
+    }
+
+    private void pausePreauthorizations(String actor) {
+        if (store == null) { return; }
+        long now = clock.millis();
+        for (var policy : store.autoExecutionPolicies().list(control.resourceNamespace())) {
+            if (!policy.enabled()) { continue; }
+            try {
+                store.autoExecutionPolicies().save(policy.revise(false, policy.maxBeforeTrafficPercent(),
+                        policy.maxTrafficShiftPercent(), policy.expiresAtMillis(), actor, now), policy.version());
+            } catch (RuntimeException failure) {
+                throw new IllegalStateException("停写已生效，但暂停预授权失败；恢复该策略前必须人工核验", failure);
+            }
+        }
+    }
+
+    private void ensureControlRow() throws SQLException {
+        try (PreparedStatement query = connection.prepareStatement("SELECT 1 FROM admin_agent_control WHERE resource_namespace=?")) {
+            query.setString(1, control.resourceNamespace());
+            try (ResultSet rows = query.executeQuery()) { if (rows.next()) { return; } }
+        }
+        try (PreparedStatement insert = connection.prepareStatement("INSERT INTO admin_agent_control(resource_namespace,stopped,stop_generation) VALUES(?,TRUE,0)")) {
+            insert.setString(1, control.resourceNamespace()); insert.executeUpdate();
+        }
+    }
+
+    public synchronized boolean writeResumeApproverAllowed(String principal) {
+        return isCurrentSystemManager(principal);
+    }
+
+    /** Two distinct, currently enabled system managers must approve the same stop generation within 15 minutes. */
+    public WriteResumeState approveWriteResume(String actor, long outstandingActions) {
+        writeGate.lock();
+        try {
+        requireCurrentSystemManager(actor);
+        if (admittedWrites.get() > 0) {
+            throw new IllegalStateException("仍有停写前已获准的 Gateway 请求在途；完成回读或对账后再审批恢复");
+        }
+        if (outstandingActions > 0) {
+            throw new IllegalStateException("仍有 " + outstandingActions + " 条排队、执行中或待对账动作；先完成对账后再审批恢复");
+        }
+        return transaction(() -> {
+            long generation;
+            try (PreparedStatement statement = connection.prepareStatement("SELECT stop_generation FROM admin_agent_control WHERE resource_namespace=? AND stopped=TRUE")) {
+                statement.setString(1, control.resourceNamespace());
+                try (ResultSet rows = statement.executeQuery()) {
+                    if (!rows.next()) { throw new IllegalStateException("当前没有停写状态，无需恢复审批"); }
+                    generation = rows.getLong(1);
+                }
+            } catch (SQLException ex) { throw new IllegalStateException("读取停写代次失败，保持停写", ex); }
+            long now = clock.millis();
+            try (PreparedStatement insert = connection.prepareStatement("MERGE INTO admin_agent_write_resume(resource_namespace,stop_generation,approver,policy_version,approved_at) KEY(resource_namespace,stop_generation,approver) VALUES(?,?,?,?,?)")) {
+                insert.setString(1, control.resourceNamespace()); insert.setLong(2, generation);
+                insert.setString(3, actor); insert.setString(4, WRITE_RESUME_POLICY_VERSION); insert.setLong(5, now);
+                insert.executeUpdate();
+                audit("WRITE_RESUME_APPROVED", control.resourceNamespace(), actor, Map.of("generation", generation));
+            } catch (SQLException ex) { throw new IllegalStateException("恢复审批保存失败，继续保持停写", ex); }
+            WriteResumeState state = readWriteResumeState(generation, now);
+            if (state.approvals() >= WRITE_RESUME_REQUIRED_APPROVALS
+                    && new HashSet<>(state.approvers()).size() >= WRITE_RESUME_REQUIRED_APPROVALS) {
+                try (PreparedStatement update = connection.prepareStatement("UPDATE admin_agent_control SET stopped=FALSE WHERE resource_namespace=? AND stopped=TRUE AND stop_generation=?")) {
+                    update.setString(1, control.resourceNamespace()); update.setLong(2, generation);
+                    if (update.executeUpdate() != 1) { throw new IllegalStateException("停写状态已变化，恢复被拒绝"); }
+                } catch (SQLException ex) { throw new IllegalStateException("恢复写入失败，继续保持停写", ex); }
+                audit("WRITE_RESUME_COMPLETED", control.resourceNamespace(), actor,
+                        Map.of("generation", generation, "approvers", state.approvers()));
+                return new WriteResumeState(false, generation, state.approvals(), state.requiredApprovals(),
+                        state.approvers(), state.expiresAtMillis());
+            }
+            return state;
+        });
+        } finally { writeGate.unlock(); }
+    }
+
+    public synchronized WriteResumeState writeResumeState() {
+        try (PreparedStatement statement = connection.prepareStatement("SELECT stopped,stop_generation FROM admin_agent_control WHERE resource_namespace=?")) {
+            statement.setString(1, control.resourceNamespace());
+            try (ResultSet rows = statement.executeQuery()) {
+                if (!rows.next()) { return new WriteResumeState(false, 0, 0, WRITE_RESUME_REQUIRED_APPROVALS, List.of(), 0); }
+                return readWriteResumeState(rows.getLong(2), clock.millis());
+            }
+        } catch (SQLException ex) { throw new IllegalStateException("读取恢复审批状态失败，保持当前写入策略", ex); }
+    }
+
+    private WriteResumeState readWriteResumeState(long generation, long now) {
+        long cutoff = now - WRITE_RESUME_APPROVAL_WINDOW_MILLIS;
+        List<String> approvers = new ArrayList<>();
+        long expiresAt = Long.MAX_VALUE;
+        try (PreparedStatement statement = connection.prepareStatement("SELECT approver,approved_at FROM admin_agent_write_resume WHERE resource_namespace=? AND stop_generation=? AND policy_version=? AND approved_at>=? ORDER BY approved_at")) {
+            statement.setString(1, control.resourceNamespace()); statement.setLong(2, generation);
+            statement.setString(3, WRITE_RESUME_POLICY_VERSION); statement.setLong(4, cutoff);
+            try (ResultSet rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    String approver = rows.getString(1);
+                    if (!isCurrentSystemManager(approver)) { continue; }
+                    approvers.add(approver);
+                    expiresAt = Math.min(expiresAt, rows.getLong(2) + WRITE_RESUME_APPROVAL_WINDOW_MILLIS);
+                }
+            }
+        } catch (SQLException ex) { throw new IllegalStateException("读取恢复审批失败，保持停写", ex); }
+        long count; boolean stopped;
+        try (PreparedStatement statement = connection.prepareStatement("SELECT stopped FROM admin_agent_control WHERE resource_namespace=? AND stop_generation=?")) {
+            statement.setString(1, control.resourceNamespace()); statement.setLong(2, generation);
+            try (ResultSet rows = statement.executeQuery()) { stopped = rows.next() && rows.getBoolean(1); }
+        } catch (SQLException ex) { throw new IllegalStateException("读取停写状态失败", ex); }
+        count = approvers.size();
+        return new WriteResumeState(stopped, generation, (int) count, WRITE_RESUME_REQUIRED_APPROVALS,
+                approvers, expiresAt == Long.MAX_VALUE ? 0 : expiresAt);
+    }
+
+    private void requireCurrentSystemManager(String principal) {
+        if (!isCurrentSystemManager(principal)) {
+            throw new Denied("恢复写入审批要求当前有效的系统管理员权限");
+        }
+    }
+
+    private boolean isCurrentSystemManager(String principal) {
+        AdminUserStore.Account account = users.account(principal);
+        return account != null && account.enabled() && account.roles().contains("ADMIN")
+                && (Objects.equals(account.namespace(), control.resourceNamespace()) || account.namespace() == null);
     }
 
     @Override public boolean writeAllowed(String principal) {
@@ -118,6 +267,31 @@ public class AgentSecurityService implements AgentAccess {
 
     @Override public boolean automatedWriteAllowed() {
         return !writesStopped() && store != null && store.persistent() && store.durable().healthy();
+    }
+
+    @Override public WritePermit acquireWritePermit(String principal, boolean automated) {
+        return acquirePermit(() -> automated ? automatedWriteAllowed() : writeAllowed(principal));
+    }
+
+    public WritePermit acquirePolicyPermit(String principal) {
+        return acquirePermit(() -> permissions(principal).contains(Permission.POLICY_ADMIN)
+                && !writesStopped() && store != null && store.persistent() && store.durable().healthy());
+    }
+
+    private WritePermit acquirePermit(java.util.function.BooleanSupplier allowed) {
+        writeGate.lock();
+        boolean granted = false;
+        try {
+            if (allowed.getAsBoolean()) {
+                admittedWrites.incrementAndGet();
+                granted = true;
+                return () -> {
+                    admittedWrites.decrementAndGet();
+                    writeGate.unlock();
+                };
+            }
+            return null;
+        } finally { if (!granted) { writeGate.unlock(); } }
     }
 
     @Override

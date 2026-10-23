@@ -45,6 +45,9 @@ public class AutoExecutionPolicyController {
 
     @PostMapping public ResponseEntity<?> create(@RequestBody CreateRequest body, Authentication actor) {
         security.require(actor.getName(), Permission.POLICY_ADMIN);
+        var permit = security.acquirePolicyPermit(actor.getName());
+        if (permit == null) { return error(HttpStatus.CONFLICT, "系統停寫中，不能建立預授權"); }
+        try (permit) {
         long now = System.currentTimeMillis();
         if (!store.persistent() || !store.durable().healthy()) {
             return error(HttpStatus.SERVICE_UNAVAILABLE, "预授权要求健康的持久 H2 存储");
@@ -91,6 +94,7 @@ public class AutoExecutionPolicyController {
         } catch (IllegalStateException ex) {
             return error(HttpStatus.CONFLICT, "策略已被并发修改或无法持久保存");
         }
+        }
     }
 
     @PostMapping("/{policyId}/revoke") public ResponseEntity<?> revoke(@PathVariable String policyId,
@@ -117,6 +121,9 @@ public class AutoExecutionPolicyController {
     @PostMapping("/{policyId}/enable") public ResponseEntity<?> enable(@PathVariable String policyId,
             @RequestBody(required = false) RevokeRequest body, Authentication actor) {
         security.require(actor.getName(), Permission.POLICY_ADMIN);
+        var permit = security.acquirePolicyPermit(actor.getName());
+        if (permit == null) { return error(HttpStatus.CONFLICT, "系统停写中，不能启用预授权"); }
+        try (permit) {
         if (body == null || body.expectedVersion() < 1) {
             return error(HttpStatus.BAD_REQUEST, "expectedVersion 必须是当前策略版本");
         }
@@ -135,6 +142,7 @@ public class AutoExecutionPolicyController {
                     System.currentTimeMillis()), body.expectedVersion()));
         } catch (IllegalStateException ex) {
             return error(HttpStatus.CONFLICT, "策略版本已变化，请刷新后重试");
+        }
         }
     }
 

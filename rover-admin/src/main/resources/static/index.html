@@ -907,14 +907,17 @@
                                     <div><span>Schema</span><b>v{{ wbOperationsStatus.schemaVersion }}</b></div>
                                     <div><span>任务排空</span><b>{{ wbOperationsStatus.draining ? '是' : '否' }}</b></div>
                                     <div><span>未知结果</span><b>{{ wbOperationsStatus.uncertainActions }} 条待对账</b></div>
+                                    <div v-if="wbOperationsStatus.writeResume"><span>恢复审批</span><b>{{ wbOperationsStatus.writeResume.approvals }}/{{ wbOperationsStatus.writeResume.requiredApprovals }} 人（15 分钟内）</b></div>
                                 </div>
                                 <div class="wb-action-foot">
                                     <button v-if="wbOperationsStatus && !wbOperationsStatus.writesStopped" class="btn mini danger"
                                             :disabled="wbOperationBusy" @click="wbToggleWriteStop(true)">紧急停写</button>
                                     <button v-else-if="wbOperationsStatus && wbOperationsStatus.writesStopped" class="btn mini"
-                                            :disabled="wbOperationBusy" @click="wbToggleWriteStop(false)">恢复写入</button>
+                                            :disabled="wbOperationBusy || !wbOperationsStatus.healthy || !wbOperationsStatus.canApproveWriteResume || wbOperationsStatus.uncertainActions > 0"
+                                            @click="wbApproveWriteResume">审批恢复写入</button>
                                     <button class="btn mini" :disabled="wbOperationBusy" @click="wbLoadOperatorState()">刷新接管状态</button>
                                 </div>
+                                <p v-if="wbOperationsStatus && wbOperationsStatus.writesStopped" class="muted">恢复需两名不同系统管理员在 15 分钟内审批；存储不健康或存在未知结果时不可恢复。队列中的在途写入会完成或使用原操作号对账。</p>
                                 <p v-if="wbOperationMessage" class="muted">{{ wbOperationMessage }}</p>
                                 <div v-if="wbReconciliationQueue.length">
                                     <strong>未知结果对账</strong>

@@ -27,29 +27,67 @@ public class AgentOperationsController {
         this.store = store; this.security = security; this.control = control; this.tasks = tasks;
         this.backups = Path.of(properties.getLogStorePath()).toAbsolutePath().getParent().resolve("backups");
     }
-    public record WriteStop(boolean stopped) { }
     public record OperationStatus(boolean persistent, boolean healthy, boolean writesStopped, boolean draining,
-                                  long uncertainActions, int schemaVersion) { }
+                                  long uncertainActions, int schemaVersion,
+                                  AgentSecurityService.WriteResumeState writeResume, boolean canApproveWriteResume) { }
     @GetMapping public ResponseEntity<?> health(Authentication actor) {
         security.require(actor.getName(), Permission.MANAGE_SYSTEM);
         boolean healthy = store.persistent() && store.durable().healthy();
-        long uncertain = store.actions().byStatus(java.util.Set.of(com.rover.agent.core.model.ActionStatus.UNCERTAIN), 1000)
-                .stream().filter(action -> store.sessions().find(action.sessionId()).map(session -> control.resourceScope() == null
-                        || control.resourceScope().equals(session.scope())
-                        && control.resourceNamespace().equals(session.targetNamespace())).orElse(false)).count();
+        var uncertainActions = scopedActions(java.util.Set.of(com.rover.agent.core.model.ActionStatus.UNCERTAIN));
+        long uncertain = uncertainActions.size();
         var status = new OperationStatus(store.persistent(), healthy, security.writesStopped(), tasks.draining(),
-                uncertain, store.persistent() ? store.durable().schemaVersion() : 0);
+                uncertain, store.persistent() ? store.durable().schemaVersion() : 0, security.writeResumeState(),
+                security.writeResumeApproverAllowed(actor.getName()));
         return ResponseEntity.status(healthy ? 200 : 503).body(status);
     }
-    @PostMapping("/write-stop") public ResponseEntity<?> writeStop(@RequestBody WriteStop body, Authentication actor) {
-        security.stopWrites(actor.getName(), body.stopped());
+    @PostMapping("/write-stop") public ResponseEntity<?> writeStop(Authentication actor) {
+        security.stopWrites(actor.getName(), true);
         return health(actor);
+    }
+    @PostMapping("/resume-approval") public ResponseEntity<?> approveResume(Authentication actor) {
+        if (!security.writeResumeApproverAllowed(actor.getName())) {
+            return ResponseEntity.status(403).body(Map.of("message", "恢复审批只允许当前有效的系统管理员"));
+        }
+        if (!store.persistent() || !store.durable().healthy()) {
+            return ResponseEntity.status(503).body(Map.of("message", "持久存储未就绪，保持停写"));
+        }
+        java.util.EnumSet<com.rover.agent.core.model.ActionStatus> outstandingStatuses =
+                java.util.EnumSet.of(com.rover.agent.core.model.ActionStatus.QUEUED,
+                        com.rover.agent.core.model.ActionStatus.EXECUTING, com.rover.agent.core.model.ActionStatus.VERIFYING,
+                        com.rover.agent.core.model.ActionStatus.UNCERTAIN, com.rover.agent.core.model.ActionStatus.RECONCILING,
+                        com.rover.agent.core.model.ActionStatus.ROLLBACK_QUEUED, com.rover.agent.core.model.ActionStatus.ROLLING_BACK);
+        long outstanding = store.sessions().listAll().stream()
+                .filter(session -> java.util.Objects.equals(control.resourceNamespace(), session.targetNamespace())
+                        && (control.resourceScope() == null || java.util.Objects.equals(control.resourceScope(), session.scope())))
+                .flatMap(session -> store.actions().bySession(session.sessionId()).stream())
+                .filter(action -> outstandingStatuses.contains(action.status())).count();
+        if (outstanding > 0) {
+            return ResponseEntity.status(409).body(Map.of("message", "仍有 " + outstanding + " 条待执行或待对账动作；先完成对账后再审批恢复"));
+        }
+        try {
+            security.approveWriteResume(actor.getName(), outstanding);
+            return health(actor);
+        } catch (IllegalStateException blocked) {
+            return ResponseEntity.status(409).body(Map.of("message", blocked.getMessage()));
+        }
     }
     @PostMapping("/drain") public Object drain(Authentication actor) {
         security.require(actor.getName(), Permission.MANAGE_SYSTEM);
         security.stopWrites(actor.getName(), true);
         tasks.beginDrain();
         return health(actor);
+    }
+    private java.util.List<com.rover.agent.core.model.AgentAction> scopedActions(
+            java.util.Set<com.rover.agent.core.model.ActionStatus> statuses) {
+        return store.actions().byStatus(statuses, 1000).stream()
+                .filter(this::inScope).toList();
+    }
+    private boolean inScope(com.rover.agent.core.model.AgentAction action) {
+        return store.sessions().find(action.sessionId()).map(session ->
+                java.util.Objects.equals(control.resourceNamespace(), session.targetNamespace())
+                        && (control.resourceScope() == null
+                        || java.util.Objects.equals(control.resourceScope(), session.scope())))
+                .orElse(false);
     }
     @PostMapping("/resume") public Object resume(Authentication actor) {
         security.require(actor.getName(), Permission.MANAGE_SYSTEM);

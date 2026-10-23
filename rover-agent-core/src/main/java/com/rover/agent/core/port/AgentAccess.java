@@ -30,6 +30,16 @@ public interface AgentAccess {
     /** Only the durable worker may use an explicit, currently matching preauthorization. */
     default boolean automatedWriteAllowed() { return false; }
 
+    /** Atomically admits one bounded external write; implementations may reject after emergency stop. */
+    default WritePermit acquireWritePermit(String principal, boolean automated) {
+        return (automated ? automatedWriteAllowed() : writeAllowed(principal)) ? () -> { } : null;
+    }
+
+    @FunctionalInterface
+    interface WritePermit extends AutoCloseable {
+        @Override void close();
+    }
+
     final class Denied extends RuntimeException {
         public Denied(String message) { super(message); }
     }

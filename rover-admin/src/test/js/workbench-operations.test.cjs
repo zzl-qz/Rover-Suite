@@ -57,7 +57,7 @@ test('operator reconcile sends no body and refreshes authoritative state', async
     assert.match(state.wbOperationMessage, /没有重发变更请求/);
 });
 
-test('write-stop toggle sends an explicit boolean and refreshes state', async () => {
+test('emergency stop sends the one-way endpoint request and refreshes state', async () => {
     const calls = [];
     const state = workbench(async (url, options = {}) => {
         calls.push({ url, options });
@@ -70,8 +70,30 @@ test('write-stop toggle sends an explicit boolean and refreshes state', async ()
     await state.wbToggleWriteStop(true);
     const request = calls.find(call => call.url.endsWith('/write-stop'));
     assert.equal(request.options.method, 'POST');
-    assert.deepEqual(JSON.parse(request.options.body), { stopped: true });
+    assert.equal(request.options.body, undefined);
     assert.equal(state.wbOperationsStatus.writesStopped, true);
+});
+
+test('resume approval waits for authoritative two-person state', async () => {
+    const calls = [];
+    let status = { healthy: true, writesStopped: true, canApproveWriteResume: true, writeResume: { stopped: true, approvals: 1, requiredApprovals: 2 } };
+    const state = workbench(async (url, options = {}) => {
+        calls.push({ url, options });
+        if (url.endsWith('/me')) return { permissions: ['MANAGE_SYSTEM'] };
+        if (url === '/api/agent/operations') return status;
+        if (url.includes('/reconciliation')) return [];
+        if (url.endsWith('/resume-approval')) {
+            assert.equal(options.method, 'POST');
+            status = { ...status, writesStopped: false, writeResume: { stopped: false, approvals: 2, requiredApprovals: 2 } };
+        }
+        return {};
+    });
+    state.wbOperatorPermissions = ['MANAGE_SYSTEM'];
+    state.wbOperationsStatus = status;
+    await state.wbApproveWriteResume();
+    assert.equal(calls.filter(call => call.url.endsWith('/resume-approval')).length, 1);
+    assert.equal(state.wbOperationsStatus.writesStopped, false);
+    assert.match(state.wbOperationMessage, /双人审批已完成/);
 });
 
 test('system status failure is visible even while the reconciliation list stays available', async () => {

@@ -105,6 +105,12 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
             return settle(submitting, ActionStatus.PRECONDITION_FAILED, "提交前计划已过期或预检超时，未提交写请求");
         }
 
+        AgentAccess.WritePermit permit = acquireWritePermit(action, actor);
+        if (permit == null) {
+            return settle(submitting, ActionStatus.PRECONDITION_FAILED, "写入已停用或审批账号已被撤权，未提交写请求");
+        }
+
+        try (permit) {
         RouteChangeResult result;
         try {
             result = control.adjustTargetWeight(action.routeId(), action.serviceName(), action.group(),
@@ -118,6 +124,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         }
         return verifyApplied(submitting, result.revision(), action.desiredWeight(),
                 ActionStatus.VERIFYING, ActionStatus.SUCCESS);
+        }
     }
 
     @Override
@@ -178,6 +185,12 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
             return backToSuccess(submitting, "补偿预检已超时，未提交写请求");
         }
 
+        AgentAccess.WritePermit permit = access.acquireWritePermit(actor, false);
+        if (permit == null) {
+            return backToSuccess(submitting, "写入已停用或回滚账号已被撤权，未提交写请求");
+        }
+
+        try (permit) {
         RouteChangeResult result;
         try {
             // 用「刚刚读到的版本」而不是提议时的版本：回滚面对的是当前世界，不是当初那张卡。
@@ -191,6 +204,7 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         }
         return verifyApplied(submitting, result.revision(), action.beforeWeight(),
                 ActionStatus.ROLLING_BACK, ActionStatus.ROLLED_BACK);
+        }
     }
 
     private String approvalFailure(AgentAction action, ActionApproval.Stage stage) {
@@ -226,6 +240,13 @@ public final class RouteWeightActionExecutor implements ActionExecutor {
         return action.plan() != null && action.plan().riskAssessment().approvalMode() == RemediationPlan.ApprovalMode.PREAUTHORIZED
                 && approvalPolicy.matchesPreauthorization(action, control.resourceNamespace(), System.currentTimeMillis())
                 ? access.automatedWriteAllowed() : access.writeAllowed(actor);
+    }
+
+    private AgentAccess.WritePermit acquireWritePermit(AgentAction action, String actor) {
+        boolean automated = action.plan() != null
+                && action.plan().riskAssessment().approvalMode() == RemediationPlan.ApprovalMode.PREAUTHORIZED
+                && approvalPolicy.matchesPreauthorization(action, control.resourceNamespace(), System.currentTimeMillis());
+        return access.acquireWritePermit(actor, automated);
     }
 
     @Override
