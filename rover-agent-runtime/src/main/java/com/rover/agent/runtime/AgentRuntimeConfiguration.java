@@ -470,9 +470,10 @@ public class AgentRuntimeConfiguration {
 
     @Bean
     public GatewayConfigActionService gatewayConfigActionService(GatewayConfigActionRepository actions,
-            AgentSessionRepository sessions, ConfigReadPort configs, RouteControlPort control,
+            AgentSessionRepository sessions, IncidentRepository incidents, AgentTaskRepository tasks,
+            ConfigReadPort configs, RouteControlPort control,
             ObjectProvider<AgentAccess> access, AgentStore store) {
-        return new GatewayConfigActionService(actions, sessions, configs, control,
+        return new GatewayConfigActionService(actions, sessions, incidents, tasks, configs, control,
                 access.getIfAvailable(AgentAccess::local), true,
                 () -> store.persistent() && store.durable().healthy());
     }

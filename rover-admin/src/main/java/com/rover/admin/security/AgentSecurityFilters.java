@@ -125,6 +125,8 @@ final class AgentSecurityFilters {
         if (path.startsWith("/api/agent/config-actions/")) {
             if (read) return Permission.READ;
             if (path.matches("/api/agent/config-actions/sessions/[^/]+/config-actions")) return Permission.PROPOSE;
+            if (path.matches("/api/agent/config-actions/sessions/[^/]+/compensation-eligibility")) return Permission.READ;
+            if (path.endsWith("/compensate")) return Permission.PROPOSE;
             if (path.endsWith("/reconcile")) return Permission.APPROVE;
             if (path.endsWith("/approve") || path.endsWith("/reject")) return Permission.APPROVE;
             return Permission.PROPOSE;

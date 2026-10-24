@@ -1,16 +1,18 @@
 package com.rover.admin.agent;
 
 import com.rover.agent.core.model.GatewayConfigAction;
+import com.rover.agent.core.port.AgentAccess;
+import com.rover.agent.core.model.ConfigActionStatus;
 import com.rover.agent.runtime.action.ActionRequestException;
 import com.rover.agent.runtime.action.GatewayConfigActionService;
 import java.util.Map;
 import java.util.function.Supplier;
-import com.rover.agent.core.port.AgentAccess;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
 
 /** Web approval and read-only reconciliation interface for narrow Gateway configuration actions. */
 @RestController
@@ -35,6 +37,11 @@ public class GatewayConfigActionController {
     @GetMapping("/sessions/{sessionId}") public ResponseEntity<?> list(@PathVariable String sessionId, Authentication actor) {
         return apply(() -> actions.bySession(sessionId,user(actor)));
     }
+    @GetMapping("/sessions/{sessionId}/compensation-eligibility") public ResponseEntity<?> compensationEligibility(
+            @PathVariable String sessionId, Authentication actor) {
+        String principal = user(actor);
+        return apply(() -> Map.of("actionIds", actions.compensationEligibleActionIds(sessionId, principal)));
+    }
     @GetMapping("/{actionId}") public ResponseEntity<?> find(@PathVariable String actionId, Authentication actor) {
         return actions.find(actionId,user(actor)).<ResponseEntity<?>>map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
@@ -51,6 +58,11 @@ public class GatewayConfigActionController {
     }
     @PostMapping("/{actionId}/compensate") public ResponseEntity<?> compensate(@PathVariable String actionId, Authentication actor) {
         return apply(() -> actions.proposeCompensation(actionId, user(actor)));
+    }
+
+    public boolean canCompensate(GatewayConfigAction action, String actor) {
+        return action != null && action.status() == ConfigActionStatus.APPLIED
+                && actions.compensationEligibleActionIds(action.sessionId(), actor).contains(action.actionId());
     }
     private static ResponseEntity<?> apply(Supplier<?> operation) {
         try { return ResponseEntity.ok(operation.get()); }

@@ -1049,7 +1049,7 @@
                                         </template>
                                         <button v-if="action.status === 'UNKNOWN' && wbActionIdle(action)" class="btn mini"
                                                 @click="wbConfigActionCommand(action, 'reconcile')">用原操作号对账</button>
-                                        <button v-if="action.status === 'APPLIED' && !action.compensatesActionId && wbActionIdle(action)" class="btn mini warn"
+                                        <button v-if="action.status === 'APPLIED' && !action.compensatesActionId && wbCompensationEligible.includes(action.actionId) && wbActionIdle(action)" class="btn mini warn"
                                                 @click="wbConfigActionCommand(action, 'compensate')">创建反向补偿提案</button>
                                         <span v-if="action.compensatesActionId" class="muted">本提案补偿动作 {{ action.compensatesActionId }}</span>
                                         <span class="muted">操作号 {{ action.operationId }}</span>

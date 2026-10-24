@@ -23,6 +23,10 @@ class AgentSecurityFiltersTest {
                 "/api/agent/config-actions/a1/approve", "POST"));
         assertEquals(Permission.APPROVE, AgentSecurityFilters.permission(
                 "/api/agent/config-actions/a1/reconcile", "POST"));
+        assertEquals(Permission.PROPOSE, AgentSecurityFilters.permission(
+                "/api/agent/config-actions/a1/compensate", "POST"));
+        assertEquals(Permission.READ, AgentSecurityFilters.permission(
+                "/api/agent/config-actions/sessions/s1/compensation-eligibility", "GET"));
         assertEquals(Permission.READ, AgentSecurityFilters.permission(
                 "/api/agent/config-actions/sessions/s1", "GET"));
     }

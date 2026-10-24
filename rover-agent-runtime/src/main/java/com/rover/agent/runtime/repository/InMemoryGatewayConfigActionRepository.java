@@ -24,7 +24,13 @@ public final class InMemoryGatewayConfigActionRepository implements GatewayConfi
         if (current == null ? action.version() != 0 : current.version() != action.version())
             throw new ActionUpdateConflictException(action.actionId());
         if (current != null) action.requireSameIntent(current);
-        else if (actions.size() >= capacity) throw new IllegalStateException("配置动作记录已满");
+        else {
+            if (action.compensatesActionId() != null && actions.values().stream()
+                    .anyMatch(existing -> action.compensatesActionId().equals(existing.compensatesActionId()))) {
+                throw new ActionUpdateConflictException(action.compensatesActionId());
+            }
+            if (actions.size() >= capacity) throw new IllegalStateException("配置动作记录已满");
+        }
         GatewayConfigAction saved = action.withVersion(action.version() + 1);
         actions.put(saved.actionId(), saved);
         return saved;

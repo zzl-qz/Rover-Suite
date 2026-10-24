@@ -10,6 +10,8 @@ import com.rover.agent.core.port.AgentAccess.Permission;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.core.repository.AgentSessionRepository;
+import com.rover.agent.core.repository.AgentTaskRepository;
+import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.core.repository.GatewayConfigActionRepository;
 import com.rover.agent.core.snapshot.ConfigEntrySnapshot;
 import java.util.List;
@@ -23,6 +25,8 @@ public final class GatewayConfigActionService {
     private static final long PLAN_TTL_MILLIS = 10 * 60_000L;
     private final GatewayConfigActionRepository actions;
     private final AgentSessionRepository sessions;
+    private final IncidentRepository incidents;
+    private final AgentTaskRepository tasks;
     private final ConfigReadPort configs;
     private final RouteControlPort control;
     private final AgentAccess access;
@@ -32,7 +36,14 @@ public final class GatewayConfigActionService {
     public GatewayConfigActionService(GatewayConfigActionRepository actions, AgentSessionRepository sessions,
             ConfigReadPort configs, RouteControlPort control, AgentAccess access, boolean asynchronous,
             java.util.function.BooleanSupplier durableReady) {
+        this(actions, sessions, null, null, configs, control, access, asynchronous, durableReady);
+    }
+
+    public GatewayConfigActionService(GatewayConfigActionRepository actions, AgentSessionRepository sessions,
+            IncidentRepository incidents, AgentTaskRepository tasks, ConfigReadPort configs, RouteControlPort control,
+            AgentAccess access, boolean asynchronous, java.util.function.BooleanSupplier durableReady) {
         this.actions=actions; this.sessions=sessions; this.configs=configs; this.control=control;
+        this.incidents=incidents; this.tasks=tasks;
         this.access=access; this.asynchronous=asynchronous; this.durableReady=durableReady;
     }
 
@@ -43,6 +54,7 @@ public final class GatewayConfigActionService {
             throw invalid("链路采样率目标值只能是 0 或 1");
         }
         Session session = requireSession(sessionId, actor, false);
+        validateAuditLinks(session, incidentId, taskId);
         if (!durableReady.getAsBoolean() && access.managed())
             throw conflict("持久存储未就绪，不能登记可执行配置计划");
         if (control.resourceScope()==null || control.controlTargetId().isBlank()
@@ -66,6 +78,26 @@ public final class GatewayConfigActionService {
         return actions.save(action);
     }
 
+    private void validateAuditLinks(Session session, String incidentId, String taskId) {
+        // The legacy constructor is retained for isolated domain tests that do not assemble the record stores.
+        if (incidents == null && tasks == null) return;
+        if (incidentId != null && !incidentId.isBlank()) {
+            if (!session.incidentIds().contains(incidentId) || incidents == null
+                    || incidents.find(incidentId).filter(incident -> session.sessionId().equals(incident.sessionId())).isEmpty()) {
+                throw invalid("事件不属于当前会话，不能关联配置动作");
+            }
+        }
+        if (taskId != null && !taskId.isBlank()) {
+            var task = tasks == null ? Optional.<com.rover.agent.core.model.TaskView>empty() : tasks.find(taskId);
+            if (task.filter(view -> session.sessionId().equals(view.sessionId())
+                    && (incidentId == null || incidentId.isBlank()
+                    ? view.incidentId() == null || view.incidentId().isBlank()
+                    : incidentId.equals(view.incidentId()))).isEmpty()) {
+                throw invalid("任务不属于当前会话或与事件不匹配，不能关联配置动作");
+            }
+        }
+    }
+
     /** Agent tool entry: proposer identity comes only from the persisted server-owned session. */
     public GatewayConfigAction proposeFromSession(String sessionId, String incidentId, String taskId, String desiredValue) {
         Session session = sessions.find(sessionId).orElseThrow(() ->
@@ -83,7 +115,7 @@ public final class GatewayConfigActionService {
             throw conflict("持久存储未就绪，不能登记补偿计划");
         GatewayConfigAction original = actions.find(actionId).orElseThrow(() ->
                 new ActionRequestException(ActionRequestException.Code.NOT_FOUND, "找不到配置动作"));
-        requireSession(original.sessionId(), actor, false);
+        requireSession(original.sessionId(), actor, true);
         if (original.status() != ConfigActionStatus.APPLIED || original.compensatesActionId() != null)
             throw conflict("只有已生效的原配置动作可以发起一次补偿");
         if (actions.findCompensation(actionId).isPresent())
@@ -106,7 +138,19 @@ public final class GatewayConfigActionService {
         try { return actions.save(compensation); }
         catch (com.rover.agent.core.repository.ActionUpdateConflictException conflict) {
             throw conflict("补偿计划已被并发创建");
+        } catch (IllegalStateException persistenceFailure) {
+            // JdbcAgentStore wraps SQL exceptions from unique indexes as IllegalStateException.
+            // Do not turn a concurrent duplicate compensation into a 500 or hide other store faults.
+            if (hasUniqueConstraintCause(persistenceFailure)) throw conflict("补偿计划已被并发创建");
+            throw persistenceFailure;
         }
+    }
+
+    private static boolean hasUniqueConstraintCause(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof java.sql.SQLException sql && "23505".equals(sql.getSQLState())) return true;
+        }
+        return false;
     }
 
     private boolean targetsCurrent(GatewayConfigAction action) {
@@ -130,6 +174,25 @@ public final class GatewayConfigActionService {
         access.require(actor, Permission.READ);
         requireSession(sessionId, actor, true);
         return actions.bySession(sessionId);
+    }
+
+    /** Server-authoritative button eligibility; the POST endpoint repeats all checks before creating the proposal. */
+    public List<String> compensationEligibleActionIds(String sessionId, String actor) {
+        access.require(actor, Permission.READ);
+        requireSession(sessionId, actor, true);
+        if (!access.permissions(actor).contains(Permission.PROPOSE)
+                || !durableReady.getAsBoolean() && access.managed()) return List.of();
+        return actions.bySession(sessionId).stream().filter(action -> eligibleForCompensation(action))
+                .map(GatewayConfigAction::actionId).toList();
+    }
+
+    private boolean eligibleForCompensation(GatewayConfigAction action) {
+        if (action.status() != ConfigActionStatus.APPLIED || action.compensatesActionId() != null
+                || actions.findCompensation(action.actionId()).isPresent() || !targetsCurrent(action)) return false;
+        return configs.configs().stream()
+                .filter(c -> ConfigActionIntent.ALLOWED_KEY.equals(c.key()) && "gateway".equals(c.component()))
+                .findFirst().filter(c -> !c.unavailable() && c.value() != null
+                        && sameValue(c.value(), action.intent().desiredValue())).isPresent();
     }
 
     public GatewayConfigAction approve(String actionId, String expectedHash, String actor) {
@@ -176,6 +239,9 @@ public final class GatewayConfigActionService {
     public Optional<GatewayConfigAction> find(String actionId, String actor) {
         access.require(actor, Permission.READ);
         return actions.find(actionId).filter(a -> visible(a, actor));
+    }
+    public boolean canReadManagedActions(String actor) {
+        return access.managed() && access.permissions(actor).contains(Permission.APPROVE);
     }
     private GatewayConfigAction requireAction(String id, String actor) {
         return actions.find(id).filter(a -> visible(a, actor)).orElseThrow(() ->

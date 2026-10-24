@@ -110,6 +110,7 @@ window.RoverAdminPages.workbench = {
             wbOperationMessage: '',
             /** 服务端实时计算的执行/补偿审批进度。 */
             wbApprovalProgress: {},
+            wbCompensationEligible: [],
             /** 每条变更正在进行的操作（approve / reject / rollback / resolve）：用来禁用按钮，避免连点。 */
             wbActionBusy: {},
             /** 每条变更最近一次操作失败的原因：服务端拒绝（409/404）时显示在卡片里，而不是整页报错。 */
@@ -802,16 +803,20 @@ window.RoverAdminPages.workbench = {
             }
             try {
                 const base = '/api/agent/actions/sessions/' + encodeURIComponent(sessionId);
-                const [list, progress, verifications, configActions] = await Promise.all([
+                const [list, progress, verifications, configActions, eligibility] = await Promise.all([
                     RoverAdminApi.api(base),
                     RoverAdminApi.api(base + '/approval-progress').catch(() => []),
                     RoverAdminApi.api(base + '/effect-verifications').catch(() => []),
                     RoverAdminApi.api('/api/agent/config-actions/sessions/' + encodeURIComponent(sessionId)).catch(() => null),
+                    RoverAdminApi.api('/api/agent/config-actions/sessions/' + encodeURIComponent(sessionId)
+                        + '/compensation-eligibility').catch(() => null),
                 ]);
                 if (this.wbActiveSessionId !== sessionId) return;
                 this.wbActions = Array.isArray(list) ? list : [];
                 // A transient read failure must not erase the last known queued action or stop its polling.
                 if (Array.isArray(configActions)) this.wbConfigActions = configActions;
+                this.wbCompensationEligible = eligibility && Array.isArray(eligibility.actionIds)
+                    ? eligibility.actionIds : [];
                 this.wbEffectVerifications = Object.fromEntries((Array.isArray(verifications) ? verifications : [])
                     .map(item => [item.actionId + ':' + item.phase, item]));
                 this.wbApprovalProgress = this.wbApprovalProgressMap(progress);

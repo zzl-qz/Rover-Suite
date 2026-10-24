@@ -123,6 +123,11 @@ public final class AgentOrchestrator {
         return sessions.find(sessionId).filter(session -> ownedBy(session, userId));
     }
 
+    /** Session visible in the configured team scope; used only by controlled operator actions. */
+    public Optional<Session> managedSession(String sessionId) {
+        return sessions.find(sessionId).filter(registry::accepts);
+    }
+
     /** 会话内的消息（最早在前）。 */
     public List<AgentMessage> conversation(String sessionId, String userId) {
         return session(sessionId, userId).map(owned -> messages.bySession(sessionId)).orElse(List.of());
