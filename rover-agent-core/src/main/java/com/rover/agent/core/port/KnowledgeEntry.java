@@ -13,9 +13,16 @@ import java.util.List;
  * @param content  正文内容（回答问题时引用它）
  * @param keywords 命中关键词，用于关键词检索
  */
-public record KnowledgeEntry(String id, String title, String content, List<String> keywords) {
+public record KnowledgeEntry(String id, String title, String content, List<String> keywords,
+                             int version, String sourceVersion) {
+
+    public KnowledgeEntry(String id, String title, String content, List<String> keywords) {
+        this(id, title, content, keywords, 1, "builtin");
+    }
 
     public KnowledgeEntry {
         keywords = keywords == null ? List.of() : List.copyOf(keywords);
+        if (version < 1) { throw new IllegalArgumentException("知识版本必须为正数"); }
+        sourceVersion = sourceVersion == null || sourceVersion.isBlank() ? "unknown" : sourceVersion;
     }
 }

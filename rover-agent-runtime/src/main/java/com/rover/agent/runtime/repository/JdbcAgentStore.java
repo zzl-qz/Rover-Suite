@@ -15,6 +15,7 @@ import com.rover.agent.core.model.ConfigActionApproval;
 import com.rover.agent.core.model.ConfigActionIntent;
 import com.rover.agent.core.model.ConfigActionStatus;
 import com.rover.agent.core.model.GatewayConfigAction;
+import com.rover.agent.core.model.KnowledgeDocumentVersion;
 import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionEffectVerification;
@@ -52,6 +53,7 @@ import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.GatewayConfigActionRepository;
+import com.rover.agent.core.repository.KnowledgeDocumentRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
 import com.rover.agent.core.repository.ActionEffectVerificationRepository;
@@ -125,6 +127,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final AlertLifecycles alertLifecycles = new AlertLifecycles();
     private final AutoPolicies autoPolicies = new AutoPolicies();
     private final AutonomousBudget autonomousBudget = new AutonomousBudget();
+    private final KnowledgeDocuments knowledgeDocuments = new KnowledgeDocuments();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -175,6 +178,7 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     public ActionCommandRepository actionCommands() { return actionCommands; }
     public GatewayConfigActionRepository gatewayConfigActions() { return gatewayConfigActions; }
+    public KnowledgeDocumentRepository knowledgeDocuments() { return knowledgeDocuments; }
 
     public ActionEffectVerificationRepository effectVerifications() { return effectVerifications; }
 
@@ -1296,6 +1300,84 @@ public final class JdbcAgentStore implements AutoCloseable {
         }
     }
 
+    private final class KnowledgeDocuments implements KnowledgeDocumentRepository {
+        @Override public KnowledgeDocumentVersion createDraft(String id, com.rover.agent.core.model.ResourceScope scope,
+                String title, String content, List<String> keywords, String sourceVersion, String actor, long expiresAtMillis) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    var history = queryOne("SELECT payload_json FROM agent_knowledge_document WHERE document_id=? ORDER BY document_version DESC LIMIT 1",
+                            row -> fromJson(row.getString(1), KnowledgeDocumentVersion.class), id).orElse(null);
+                    if (history != null && !history.scope().equals(scope)) {
+                        throw new IllegalStateException("知识文档标识不能跨资源范围复用");
+                    }
+                    long now = System.currentTimeMillis();
+                    if (expiresAtMillis <= now) { throw new IllegalArgumentException("知识版本必须晚于当前时间过期"); }
+                    if (history != null && history.expiresAtMillis() > now
+                            && history.status() == KnowledgeDocumentVersion.Status.DRAFT) {
+                        throw new IllegalStateException("文档当前版本尚未撤销或过期");
+                    }
+                    int version = history == null ? 1 : history.version() + 1;
+                    var draft = new KnowledgeDocumentVersion(id, version, scope, title, content, keywords, sourceVersion,
+                            actor, now, expiresAtMillis, KnowledgeDocumentVersion.Status.DRAFT, null, 0, null, 0);
+                    run("INSERT INTO agent_knowledge_document(document_id,document_version,organization_id,team_id,environment_id,status,created_at,expires_at,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                            id, version, scope.organizationId(), scope.teamId(), scope.environmentId(), draft.status().name(),
+                            now, expiresAtMillis, toJson(draft));
+                    appendAudit("KNOWLEDGE_DRAFT_CREATED", id + ":" + version, actor, scope.environmentId(),
+                            Map.of("title", title, "sourceVersion", sourceVersion, "status", draft.status().name(),
+                                    "expiresAtMillis", expiresAtMillis));
+                    return draft;
+                });
+            }
+        }
+
+        @Override public Optional<KnowledgeDocumentVersion> find(String id, int version) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_knowledge_document WHERE document_id=? AND document_version=?",
+                        row -> fromJson(row.getString(1), KnowledgeDocumentVersion.class), id, version);
+            }
+        }
+        @Override public List<KnowledgeDocumentVersion> list(com.rover.agent.core.model.ResourceScope scope) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json FROM agent_knowledge_document WHERE organization_id=? AND team_id=? AND environment_id=? ORDER BY document_id,document_version",
+                        row -> fromJson(row.getString(1), KnowledgeDocumentVersion.class),
+                        scope.organizationId(), scope.teamId(), scope.environmentId());
+            }
+        }
+        @Override public List<KnowledgeDocumentVersion> approved(com.rover.agent.core.model.ResourceScope scope, long at, int limit) {
+            if (limit < 1 || limit > 1000) throw new IllegalArgumentException("limit must be 1..1000");
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT d.payload_json FROM agent_knowledge_document d WHERE d.organization_id=? AND d.team_id=? AND d.environment_id=? AND d.status='APPROVED' AND d.expires_at>? AND NOT EXISTS (SELECT 1 FROM agent_knowledge_document newer WHERE newer.document_id=d.document_id AND newer.document_version>d.document_version AND (newer.status='APPROVED' OR newer.status='REVOKED')) ORDER BY d.document_id,d.document_version DESC LIMIT ?",
+                        row -> fromJson(row.getString(1), KnowledgeDocumentVersion.class),
+                        scope.organizationId(), scope.teamId(), scope.environmentId(), at, limit);
+            }
+        }
+        @Override public Optional<KnowledgeDocumentVersion> transition(String id, int version,
+                KnowledgeDocumentVersion.Status expected, java.util.function.UnaryOperator<KnowledgeDocumentVersion> mutation) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    var current = find(id, version).filter(v -> v.status() == expected).orElse(null);
+                    if (current == null) return Optional.empty();
+                    if (expected == KnowledgeDocumentVersion.Status.DRAFT && current.expiresAtMillis() <= System.currentTimeMillis()) {
+                        return Optional.empty();
+                    }
+                    var updated = mutation.apply(current);
+                    if (!updated.documentId().equals(id) || updated.version() != version || !updated.scope().equals(current.scope())
+                            || !updated.title().equals(current.title()) || !updated.content().equals(current.content())
+                            || !updated.keywords().equals(current.keywords()) || !updated.sourceVersion().equals(current.sourceVersion())
+                            || !updated.createdBy().equals(current.createdBy()) || updated.createdAtMillis() != current.createdAtMillis()
+                            || updated.expiresAtMillis() != current.expiresAtMillis()) throw new IllegalArgumentException("knowledge version is immutable");
+                    int changed = run("UPDATE agent_knowledge_document SET status=?,payload_json=? WHERE document_id=? AND document_version=? AND status=?",
+                            updated.status().name(), toJson(updated), id, version, expected.name());
+                    if (changed != 1) return Optional.empty();
+                    String actor = updated.status() == KnowledgeDocumentVersion.Status.APPROVED ? updated.reviewedBy() : updated.revokedBy();
+                    appendAudit("KNOWLEDGE_" + updated.status().name(), id + ":" + version, actor,
+                            updated.scope().environmentId(), Map.of("title", updated.title(), "sourceVersion", updated.sourceVersion(), "status", updated.status().name()));
+                    return Optional.of(updated);
+                });
+            }
+        }
+    }
+
     private static GatewayConfigAction readGatewayConfigAction(ResultSet rows) throws SQLException {
         return new GatewayConfigAction(rows.getString("action_id"), rows.getString("session_id"),
                 rows.getString("incident_id"), rows.getString("task_id"), rows.getString("requested_by"),
@@ -2112,6 +2194,13 @@ public final class JdbcAgentStore implements AutoCloseable {
                 new Migration(20, "approved Gateway config compensation linkage",
                         List.of("ALTER TABLE agent_gateway_config_action ADD COLUMN IF NOT EXISTS compensates_action_id VARCHAR(64)",
                                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_gateway_config_action_compensates ON agent_gateway_config_action(compensates_action_id)"),
+                        List.of(), List.of()),
+                new Migration(21, "versioned scoped knowledge documents with review and revocation",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_knowledge_document (document_id VARCHAR(64) NOT NULL, document_version INT NOT NULL, "
+                                        + "organization_id VARCHAR(128) NOT NULL, team_id VARCHAR(128) NOT NULL, environment_id VARCHAR(128) NOT NULL, "
+                                        + "status VARCHAR(16) NOT NULL, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, payload_json TEXT NOT NULL, "
+                                        + "PRIMARY KEY(document_id,document_version))",
+                                "CREATE INDEX IF NOT EXISTS idx_knowledge_scope_status ON agent_knowledge_document(organization_id,team_id,environment_id,status,expires_at)"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {

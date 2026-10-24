@@ -118,6 +118,7 @@ final class AgentSecurityFilters {
         if (path.equals("/api/agent/security/users")) { return Permission.MANAGE_SYSTEM; }
         if (path.startsWith("/api/agent/security/") || path.startsWith("/api/agent/model")) { return Permission.POLICY_ADMIN; }
         if (path.startsWith("/api/agent/policies/autonomous")) { return Permission.POLICY_ADMIN; }
+        if (path.startsWith("/api/agent/knowledge/documents")) { return Permission.POLICY_ADMIN; }
         if (path.startsWith("/api/agent/actions/sessions/") && path.endsWith("/approval-progress")) { return Permission.READ; }
         if (path.startsWith("/api/agent/actions/") && path.endsWith("/approval-progress")) { return Permission.APPROVE; }
         if (path.startsWith("/api/agent/actions/") && path.endsWith("/reconcile")) { return Permission.MANAGE_SYSTEM; }

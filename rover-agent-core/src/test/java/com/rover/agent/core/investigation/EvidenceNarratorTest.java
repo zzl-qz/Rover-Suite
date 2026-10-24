@@ -229,6 +229,10 @@ class EvidenceNarratorTest {
         EvidenceNarration hit = EvidenceNarrator.knowledge(rows, "限流怎么配置");
         assertTrue(hit.detail().contains("怎么配置限流"));
         assertEquals(1, hit.sampleSize());
+        EvidenceNarration sourced = EvidenceNarrator.knowledge(List.of(
+                new KnowledgeEntry("rb-1", "路由故障", "检查上游状态", List.of("路由"), 4, "git:abc123")), "路由故障");
+        assertTrue(sourced.detail().contains("版本 4"));
+        assertTrue(sourced.detail().contains("git:abc123"));
 
         EvidenceNarration miss = EvidenceNarrator.knowledge(List.of(), "没有收录的问题");
         assertTrue(miss.detail().contains("没有"));

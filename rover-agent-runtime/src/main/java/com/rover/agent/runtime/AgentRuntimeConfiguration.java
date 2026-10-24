@@ -39,7 +39,7 @@ import com.rover.agent.runtime.action.GatewayConfigActionCommandRunner;
 import com.rover.agent.runtime.action.RouteWeightActionExecutor;
 import com.rover.agent.runtime.action.RiskBasedApprovalPolicy;
 import com.rover.agent.runtime.journal.OpsJournal;
-import com.rover.agent.runtime.knowledge.InMemoryKnowledgeStore;
+import com.rover.agent.runtime.knowledge.ScopedKnowledgeStore;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ConversationModel;
 import com.rover.agent.runtime.llm.SpringAiConversationModel;
@@ -269,8 +269,8 @@ public class AgentRuntimeConfiguration {
 
     /** 运维知识库：内存 FAQ 种子，回答「怎么配置 / 怎么接入 / 怎么排查」；换落盘或向量检索时替换此实现。 */
     @Bean
-    public KnowledgeReadPort knowledgeReadPort() {
-        return new InMemoryKnowledgeStore(InMemoryKnowledgeStore.seedFaq());
+    public KnowledgeReadPort knowledgeReadPort(AgentStore store, RouteControlPort control) {
+        return new ScopedKnowledgeStore(store.knowledgeDocuments(), control.resourceScope());
     }
 
     /** 只读能力执行器：模型与生产数据之间唯一的执行口，所有取数都经过它。 */

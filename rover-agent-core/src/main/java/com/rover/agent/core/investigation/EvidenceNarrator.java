@@ -431,7 +431,8 @@ public final class EvidenceNarrator {
         }
         List<String> lines = new ArrayList<>();
         for (KnowledgeEntry entry : rows) {
-            lines.add(entry.title() + "：" + truncate(entry.content(), 200));
+            String source = "builtin".equals(entry.sourceVersion()) ? "" : " [文档版本 " + entry.version() + "，来源 " + entry.sourceVersion() + "]";
+            lines.add(entry.title() + source + "：" + truncate(entry.content(), 200));
         }
         return new EvidenceNarration("命中 " + rows.size() + " 条相关知识：" + String.join("；", lines),
                 List.of(), rows.size(), 0);

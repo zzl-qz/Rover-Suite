@@ -13,6 +13,7 @@ import com.rover.agent.core.model.ConfigActionIntent;
 import com.rover.agent.core.model.ConfigActionApproval;
 import com.rover.agent.core.model.ConfigActionStatus;
 import com.rover.agent.core.model.GatewayConfigAction;
+import com.rover.agent.core.model.KnowledgeDocumentVersion;
 import com.rover.agent.core.model.ResourceScope;
 import com.rover.agent.core.model.AlertDelivery;
 import com.rover.agent.core.model.AutoExecutionPolicy;
@@ -105,6 +106,47 @@ class JdbcAgentStoreTest {
             assertTrue(reopened.gatewayConfigActions().hasNonTerminalForSession("s1"));
             assertTrue(reopened.gatewayConfigActions().byStatus(java.util.Set.of(ConfigActionStatus.UNKNOWN), 10)
                     .contains(restored));
+        }
+    }
+
+    @Test
+    void versionedKnowledgeRequiresReviewKeepsScopeAndRevocationAcrossRestart() throws Exception {
+        String path = tempPath("rover-knowledge");
+        ResourceScope dev = new ResourceScope("org", "team", "dev");
+        ResourceScope prod = new ResourceScope("org", "team", "prod");
+        long expiry = System.currentTimeMillis() + 60_000;
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            var repository = first.knowledgeDocuments();
+            var draft = repository.createDraft("runbook", dev, "Route failure", "check gateway route",
+                    List.of("route"), "git:1", "author", expiry);
+            repository.createDraft("runbook-prod", prod, "Production secret", "prod content",
+                    List.of("prod"), "git:secret", "author", expiry);
+            assertTrue(repository.approved(dev, System.currentTimeMillis(), 10).isEmpty());
+            assertEquals(1, repository.list(dev).size());
+            var approved = repository.transition(draft.documentId(), draft.version(), KnowledgeDocumentVersion.Status.DRAFT,
+                    value -> value.approve("reviewer", System.currentTimeMillis())).orElseThrow();
+            assertEquals("reviewer", approved.reviewedBy());
+            assertEquals(1, repository.approved(dev, System.currentTimeMillis(), 10).size());
+            assertTrue(repository.approved(prod, System.currentTimeMillis(), 10).isEmpty());
+            assertThrows(IllegalStateException.class, () -> repository.createDraft("runbook", prod, "cross-scope",
+                    "must not reuse id across scopes", List.of(), "git:other", "author", expiry));
+            assertThrows(IllegalArgumentException.class, () -> repository.createDraft("expired", dev, "expired",
+                    "must not create already-expired draft", List.of(), "git:expired", "author", System.currentTimeMillis()-1));
+            assertThrows(IllegalStateException.class, () -> approved.approve("late-reviewer", approved.expiresAtMillis()));
+            assertEquals(2, repository.createDraft("runbook", dev, "next draft",
+                    "a draft can be prepared while the current approved version remains searchable",
+                    List.of(), "git:2", "author", System.currentTimeMillis()+60_000).version());
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            var repository = reopened.knowledgeDocuments();
+            assertEquals(KnowledgeDocumentVersion.Status.APPROVED, repository.find("runbook", 1).orElseThrow().status());
+            repository.transition("runbook", 1, KnowledgeDocumentVersion.Status.APPROVED,
+                    value -> value.revoke("security", System.currentTimeMillis())).orElseThrow();
+            assertTrue(repository.approved(dev, System.currentTimeMillis(), 10).isEmpty());
+            assertTrue(repository.approved(dev, System.currentTimeMillis(), 10).isEmpty());
+            assertThrows(IllegalStateException.class, () -> repository.createDraft("runbook", prod, "bad",
+                    "cross scope id reuse", List.of(), "git:2", "author", System.currentTimeMillis()+60_000));
+            assertEquals(2, repository.find("runbook", 2).orElseThrow().version());
         }
     }
 
@@ -296,7 +338,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(20, store.schemaVersion(),
+            assertEquals(21, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
                             + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
                             + "v13 保存按管理目标绑定的持久动作命令");
@@ -310,7 +352,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-            assertEquals(20, store.schemaVersion());
+            assertEquals(21, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -512,7 +554,7 @@ class JdbcAgentStoreTest {
     void schemaV17UpgradesToV18AndCertificationAuditIsAtomicWithRecord() throws Exception {
         String path = tempPath("rover-shadow-v17-upgrade");
         try (JdbcAgentStore first = new JdbcAgentStore(path)) {
-            assertEquals(20, first.schemaVersion());
+            assertEquals(21, first.schemaVersion());
         }
         try (Connection connection = DriverManager.getConnection(
                 "jdbc:h2:file:" + path + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE", "sa", "");
@@ -520,7 +562,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version=18");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(20, upgraded.schemaVersion());
+            assertEquals(21, upgraded.schemaVersion());
             assertTrue(upgraded.healthy());
             var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "staging");
             var subject = new com.rover.agent.core.model.ActionCertificationSubject(scope,
@@ -549,7 +591,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(20, upgraded.schemaVersion());
+            assertEquals(21, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }
