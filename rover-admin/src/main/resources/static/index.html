@@ -524,14 +524,15 @@
                                         title="按当前 Nameserver 实例快照隔离一个实例">隔离实例</button>
                                 <button class="btn mini" @click="openRouteDrawer(r)">编辑</button>
                                 <button class="btn mini danger" @click="deleteRoute(r.businessPrefix)">删除</button>
-                                <div v-for="row in routeInstanceIsolations(r)" :key="row.instanceId + ':' + row.host + ':' + row.port"
-                                     class="route-isolation" :class="row.lifecycle === 'EXPIRED_PENDING_REVIEW' ? 'warn' : ''">
-                                    <span><strong>{{ row.lifecycle === 'EXPIRED_PENDING_REVIEW' ? '到期待人工核验' : (row.state === 'ISOLATED' ? '已隔离' : '已恢复') }}</strong>
+                                <template v-for="row in routeInstanceIsolations(r)" :key="row.instanceId + ':' + row.host + ':' + row.port">
+                                  <div v-if="row.state === 'ISOLATED'" class="route-isolation" :class="row.lifecycle === 'EXPIRED_PENDING_REVIEW' ? 'warn' : ''">
+                                    <span><strong>{{ row.lifecycle === 'EXPIRED_PENDING_REVIEW' ? '到期待人工核验' : '已隔离' }}</strong>
                                         {{ row.serviceName }}/{{ row.group || '全部分组' }} · {{ row.instanceId }} · {{ row.host }}:{{ row.port }}
                                         <small>操作人 {{ row.requestedBy }} · 版本 {{ row.version }} · {{ fmtTime(row.expiresAtMillis) }}</small></span>
-                                    <button v-if="row.state === 'ISOLATED'" class="btn mini" @click="restoreInstanceIsolation(r, row)"
+                                    <button class="btn mini" @click="restoreInstanceIsolation(r, row)"
                                             :disabled="!canManageInstanceIsolation">核验并恢复</button>
-                                </div>
+                                  </div>
+                                </template>
                             </td>
                         </tr>
                         </tbody>

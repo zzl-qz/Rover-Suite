@@ -176,6 +176,27 @@ class AgentSecurityServiceTest {
         }
     }
 
+    @Test void emergencyStopWaitsForInstanceIsolationWritePermit() throws Exception {
+        var properties = properties(); var port = control();
+        try (var store = AgentStore.file(properties.getLogStorePath())) {
+            var users = new AdminUserStore(properties, new BCryptPasswordEncoder());
+            var security = new AgentSecurityService(properties, users, port, "admin", Clock.systemUTC(), store);
+            var pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+            try {
+                var permit = security.acquireWritePermit("admin", false);
+                assertNotNull(permit);
+                var started = new java.util.concurrent.CountDownLatch(1);
+                var stop = pool.submit(() -> { started.countDown(); security.stopWrites("admin", true); });
+                assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS));
+                assertFalse(stop.isDone(), "紧急停写应等待实例隔离/恢复的已准入外部写");
+                permit.close();
+                stop.get(2, java.util.concurrent.TimeUnit.SECONDS);
+                assertTrue(security.writesStopped());
+                assertNull(security.acquireWritePermit("admin", false));
+            } finally { pool.shutdownNow(); security.close(); users.close(); }
+        }
+    }
+
     @Test void stopWaitsForAuthorizedWriteToFinishAndThenRequiresFreshResumeApprovals() throws Exception {
         var properties = properties(); var port = control();
         try (var store = AgentStore.file(properties.getLogStorePath())) {

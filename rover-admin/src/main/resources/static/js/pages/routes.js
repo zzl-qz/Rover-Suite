@@ -39,7 +39,7 @@ window.RoverAdminPages.routes = {
     computed: {
         canManageInstanceIsolation() {
             return Boolean(this.auth && this.auth.authenticated && this.auth.permissions
-                && this.auth.permissions.includes('MANAGE_SYSTEM'));
+                && this.auth.permissions.includes('MANAGE_SYSTEM') && !this.auth.writesStopped);
         },
         routeUpstreamOptions() {
             return [
@@ -86,10 +86,9 @@ window.RoverAdminPages.routes = {
         },
         async fetchInstanceIsolationPermissions() {
             try {
-                const result = await RoverAdminApi.api('/api/agent/security/me');
-                this.auth = { ...this.auth, authenticated: true, permissions: result.permissions || [] };
+                this.auth = await RoverAdminApi.api('/api/auth/status');
             } catch (e) {
-                this.auth = { ...this.auth, permissions: [] };
+                this.auth = { ...this.auth, permissions: [], permissionError: e.message };
             }
         },
         async fetchInstanceIsolations(force = false) {
@@ -157,18 +156,19 @@ window.RoverAdminPages.routes = {
                 body.expiresAtMillis = Date.now() + minutes * 60_000;
             } else { body.expectedVersion = row.version; }
             const instances = await RoverAdminApi.api('/api/instances');
+            const isolationSnapshot = await RoverAdminApi.api('/api/routes/instances/isolations');
+            this.instanceIsolations = isolationSnapshot.isolations || [];
             const routeIsolated = this.instanceIsolations.filter(item => item.lifecycle !== 'RESTORED'
                 && item.routeUid === row.routeUid && Number(item.generation) === Number(row.generation)
                 && item.routeId === row.routeId && item.serviceName === row.serviceName
                 && !(operation === 'RESTORE' && item.instanceId === row.instanceId
                     && item.host === row.host && Number(item.port) === Number(row.port)));
-            const healthy = instances.filter(item => item.serviceName === row.serviceName
-                && (operation === 'RESTORE' || item.healthy)
+            const healthy = instances.filter(item => item.serviceName === row.serviceName && item.healthy
                 && (this.routeHasUnrestrictedTarget(row.routeId, row.serviceName) || (item.group || '') === (row.group || '')))
                 .filter(item => {
                     const sameInstance = (item.instanceId || `${item.host}:${item.port}`) === row.instanceId
                         && item.host === row.host && Number(item.port) === Number(row.port);
-                    if (operation === 'ISOLATE' && sameInstance) return false;
+                    if (sameInstance) return operation === 'RESTORE';
                     return !routeIsolated.some(isolated => isolated.instanceId === (item.instanceId || `${item.host}:${item.port}`)
                         && isolated.host === item.host && Number(isolated.port) === Number(item.port));
                 }).length;
@@ -178,13 +178,6 @@ window.RoverAdminPages.routes = {
             }
             body.minimumHealthyAfter = minimum;
             body.capacityEvidence = `人工核对 Nameserver 健康实例数=${healthy}; ${new Date().toISOString()}`;
-            try {
-                const result = await RoverAdminApi.api('/api/agent/security/me');
-                if (!result.permissions || !result.permissions.includes('MANAGE_SYSTEM')) {
-                    this.toast('error', '当前账号没有系统管理权限，不能隔离或恢复实例'); return;
-                }
-                this.auth = { ...this.auth, authenticated: true, permissions: result.permissions };
-            } catch (e) { this.toast('error', '无法确认当前账号权限，已取消实例操作'); return; }
             try {
                 await RoverAdminApi.api('/api/routes/instances/isolations', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),

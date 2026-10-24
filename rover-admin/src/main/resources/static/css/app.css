@@ -308,6 +308,9 @@ code {
 /* 保持 table-cell：设成 flex 会脱离表格布局，行高撑开时这一格的底线就和整行错位 */
 .row-actions { white-space: nowrap; }
 .row-actions .btn + .btn { margin-left: 6px; }
+.route-isolation { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; white-space: normal; color: var(--text); }
+.route-isolation.warn { border-color: var(--warn); background: var(--warn-soft); }
+.route-isolation small { display: block; color: var(--muted); margin-top: 3px; }
 .row-error { background: var(--danger-soft); }
 
 /* ============ 徽标 ============ */

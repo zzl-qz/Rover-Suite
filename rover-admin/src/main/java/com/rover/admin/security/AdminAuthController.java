@@ -18,6 +18,9 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping(AdminApiPaths.PREFIX)
 public class AdminAuthController {
+    private final AgentSecurityService security;
+
+    public AdminAuthController(AgentSecurityService security) { this.security = security; }
 
     /** 当前登录态。匿名令牌不算已登录。 */
     @GetMapping(AdminApiPaths.AUTH_STATUS)
@@ -28,6 +31,9 @@ public class AdminAuthController {
         body.put("authEnabled", true);
         body.put("authenticated", loggedIn);
         body.put("username", loggedIn ? authentication.getName() : "");
+        body.put("permissions", loggedIn ? security.permissions(authentication.getName()).stream()
+                .map(Enum::name).sorted().toList() : java.util.List.of());
+        body.put("writesStopped", security.writesStopped());
         body.put("csrfToken", csrfToken == null ? "" : csrfToken.getToken());
         body.put("csrfHeaderName", csrfToken == null ? "X-XSRF-TOKEN" : csrfToken.getHeaderName());
         body.put("csrfParameterName", csrfToken == null ? "_csrf" : csrfToken.getParameterName());

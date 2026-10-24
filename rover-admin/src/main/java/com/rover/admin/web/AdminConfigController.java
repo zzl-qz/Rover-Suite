@@ -138,9 +138,7 @@ public class AdminConfigController {
     /** 隔离或核验后恢复单个路由实例。 */
     @PostMapping(AdminApiPaths.ROUTE_INSTANCE_ISOLATIONS)
     public Map<String,Object> changeRouteInstanceIsolation(@RequestBody Map<String,Object> body, Authentication actor) {
-        security.requireInstanceIsolationManager(actor.getName());
-        body.put("requestedBy", actor.getName());
-        return configService.changeRouteInstanceIsolation(body);
+        return changeRouteInstanceIsolation(body, actor, false);
     }
 
     @GetMapping(AdminApiPaths.AGENT_ROUTE_INSTANCE_ISOLATIONS)
@@ -148,9 +146,18 @@ public class AdminConfigController {
 
     @PostMapping(AdminApiPaths.AGENT_ROUTE_INSTANCE_ISOLATIONS)
     public Map<String,Object> agentChangeRouteInstanceIsolation(@RequestBody Map<String,Object> body, Authentication actor) {
+        return changeRouteInstanceIsolation(body, actor, true);
+    }
+
+    private Map<String,Object> changeRouteInstanceIsolation(Map<String,Object> body, Authentication actor, boolean automated) {
         security.requireInstanceIsolationManager(actor.getName());
-        body.put("requestedBy", actor.getName()); body.put("source", "AGENT");
-        return configService.changeRouteInstanceIsolation(body);
+        var permit = security.acquireWritePermit(actor.getName(), automated);
+        if (permit == null) { throw new com.rover.agent.core.port.AgentAccess.Denied("生产写入已暂停或持久存储不可用"); }
+        try (permit) {
+            body.put("requestedBy", actor.getName());
+            if (automated) { body.put("source", "AGENT"); }
+            return configService.changeRouteInstanceIsolation(body);
+        }
     }
 
     /** 按 toRevision 和当前 revision 回滚，生成新版本并返回可回查的 operationId。 */

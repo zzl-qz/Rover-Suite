@@ -141,6 +141,7 @@ class AdminConfigControllerWebTest {
         when(configService.routeInstanceIsolations()).thenReturn(Map.of("isolations", List.of(), "durable", true));
         when(configService.changeRouteInstanceIsolation(Map.of("operation", "ISOLATE", "requestedBy", "admin")))
                 .thenReturn(Map.of("status", "ISOLATED"));
+        when(security.acquireWritePermit("admin", false)).thenReturn(() -> { });
 
         mockMvc.perform(get("/api/routes/instances/isolations"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.durable").value(true));
@@ -151,7 +152,17 @@ class AdminConfigControllerWebTest {
                         .content("{\"operation\":\"ISOLATE\"}"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ISOLATED"));
         verify(security).requireInstanceIsolationManager("admin");
+        verify(security).acquireWritePermit("admin", false);
         verify(configService).changeRouteInstanceIsolation(Map.of("operation", "ISOLATE", "requestedBy", "admin"));
+    }
+
+    @Test
+    void rejectsIsolationWhenWritePermitIsUnavailable() throws Exception {
+        when(security.acquireWritePermit("admin", false)).thenReturn(null);
+        mockMvc.perform(post("/api/routes/instances/isolations").principal(org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated("admin", null, List.of()))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"operation\":\"ISOLATE\"}"))
+                .andExpect(status().isForbidden());
+        verify(configService, never()).changeRouteInstanceIsolation(org.mockito.ArgumentMatchers.anyMap());
     }
 
     @Test
