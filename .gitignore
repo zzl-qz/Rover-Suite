@@ -102,6 +102,11 @@ backups/
 node_modules/
 **/node_modules/
 
+# 官网：依赖与构建产物不入库。图片在构建时从 docs-public 拷到 site/public/media
+site/.next/
+site/out/
+site/public/media/
+
 # ===== Java 生成产物 =====
 hs_err_pid*
 replay_pid*
