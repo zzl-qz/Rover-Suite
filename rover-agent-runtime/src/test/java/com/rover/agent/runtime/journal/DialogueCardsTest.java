@@ -23,6 +23,19 @@ import org.junit.jupiter.api.Test;
 
 class DialogueCardsTest {
 
+    @Test void explicitRecallCannotReadSameUsersDifferentEnvironment() {
+        var sessions = new InMemoryAgentSessionRepository(20);
+        var messages = new InMemoryAgentMessageRepository(50);
+        var tasks = new InMemoryAgentTaskRepository(20);
+        save(sessions, messages, tasks, "old", "old question", "archive-secret", 100);
+        Session old = sessions.find("old").orElseThrow();
+        sessions.save(old.withScope(new com.rover.agent.core.model.ResourceScope("org", "ops", "staging"), "gateway-staging"));
+        Session current = session("current", 200).withScope(new com.rover.agent.core.model.ResourceScope("org", "ops", "production"), "gateway-production");
+        var result = new DialogueCards(sessions, messages, tasks, ZONE).recall(current, "", "now", "old", 200);
+        assertFalse(result.text().contains("archive-secret"));
+        assertTrue(result.text().contains("没有找到"));
+    }
+
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
 
     @Test

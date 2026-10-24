@@ -54,7 +54,7 @@ If Gateway starts before Nameserver, discovery may be completed by the next reco
 | `targets[].serviceName` / `group` | Nameserver has healthy instances for this service and group |
 | `targetUrl/targetUrls` | Static upstreams are reachable. Default outbound forwards `http://` only; see section 4.1 for `https://` |
 
-If routes were changed from Admin, `config/routes.overlay.json` overrides the YAML route list.
+Admin-managed routes in `config/routes.overlay.json.state.mv.db` override YAML (legacy JSON is only a migration input). Do not delete the database or witness to unlock writes; see [recovery rules](gateway-operation-receipts.zh-CN.md).
 
 ### 4.1 Startup or hot-reload says only http upstreams are supported
 

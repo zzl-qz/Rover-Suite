@@ -8,6 +8,8 @@
 
 > **文档约定：** 本项目公开文档只描述当前代码已实现的行为。本文中每一节都标注了「已实现 / 规划中」，规划内容不代表现有能力。
 
+单 Admin 已接入资源 UID/范围、实时角色、专用机器告警令牌、H2 Job 与预算恢复、独立审计/outbox、SSE 续读和停写/备份。部署配置、升级归档及验收边界见[单 Admin 运行基础](agent-single-admin-foundation.zh-CN.md)。多进程/PG/HA 继续后置。
+
 ## 1. 它是什么，不是什么
 
 当用户主动发起排障，或监控系统产生告警后，Agent 收集网关路由、服务实例、指标、追踪等证据，完成故障调查、根因推断和处置建议；在权限与审批允许的前提下，进一步执行有限的运维动作并验证结果。
@@ -54,6 +56,12 @@ Detect → Investigate → Correlate → Diagnose → Recommend → Approve → 
 
 Agent 能查询 Route、Instance、Metrics、Trace、Config、Events、Logs（历史日志）、Knowledge（运维知识）等运行态数据，全程只读。
 
+S2-05 增加可选的 Prometheus 应用指标、Loki 应用日志与 Tempo 链路摘要读取。三类能力使用服务端固定的资源映射、环境过滤和查询模板，接入现有调查图、对话、证据持久化与工作台；默认未配置，不会自动访问外部平台。配置、预算、脱敏、分页和覆盖语义见 [外部只读遥测接入](agent-telemetry-connectors.zh-CN.md)。
+
+S2-06 增加任务模型调用账本、按端点/凭证的供应商隔离和十二场景离线回放。工作台区分请求模型、供应商返回身份、传输状态与输出契约状态；调用数、预留输出和原截止时间随 H2 Job 恢复。实现与真实验收范围见 [模型故障隔离与回放](agent-model-resilience.zh-CN.md)。
+
+S3-01 把灰度权重的待审批记录冻结为不可变 `RemediationPlan`：计划摘要、风险、资源/参数、验证和补偿条件必须与审批精确绑定；更改目标值会产生新版本并使旧版失效。当前只回读控制面，不把权重写成功说成服务恢复。实现、API 与边界见[不可变处置计划](agent-remediation-plan.zh-CN.md)。
+
 **状态：已实现。** 当前 `InvestigationService`（`rover-agent-runtime`）由 `AgentOrchestrator` 驱动，采集路由、实例、指标、追踪、配置、注册事件、历史日志、运维知识八类快照，返回结论、证据来源和采集时间。其中指标除全局窗口外，还能按「路由 × 上游实例」取到窗口请求数、状态码、错误率与延迟，用于指出是哪台实例在出错；历史日志按类型 / 目标 / 时间范围过滤（配置变更、回滚、错误、实例上下线、指标采样、慢与错误链路），运维知识回答「怎么配置 / 怎么接入 / 怎么排查」。
 
 ### Level B：Reason（调查 + 推理）
@@ -84,8 +92,8 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
 
 **状态：进行中（第一个动作已打通，见 §7「受控变更闭环」）。** 当前唯一可执行的动作是 `ADJUST_ROUTE_TARGET_WEIGHT`
 （调整某个灰度版本的流量权重）：模型只负责开出待审批变更单，人工批准后才由 `RouteWeightActionExecutor` 做
-「状态预检 → 乐观锁提交 → 回读验证」，补偿回滚走同一个窄原语。Policy、RBAC 与风险分级仍是规划中——
-这一版靠「动作面只开一个、写权限只给执行器、变更必须人工批准」把风险压低，而不是假装治理层已经齐了。
+「状态预检 → 乐观锁提交 → 回读验证」，补偿回滚走同一个窄原语。S3-01 为此动作加入固定 R2 风险、不可变计划摘要、
+有效期和单独补偿批准；通用策略、双人批准和更多动作仍是规划中。当前回读只证明控制面生效，业务恢复验证尚未实现。
 
 ## 5. 两个入口
 
@@ -102,14 +110,14 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
   模型自己决定查什么、查几次、按什么顺序                synthesise
         │                                    （假设：确认 / 排除 / 无法验证 → 结论）
         ↓                                              ↓
-  9 个只读工具 + 1 个提案工具（见 §7）→ 事实 + 依据 + 局限   假设式 Root Cause
+  10 个只读工具 + 1 个提案工具（见 §7）→ 事实 + 依据 + 局限   假设式 Root Cause
         │
         ↓
   边查边答，结论作为一条 Agent 回复写回会话
 ```
 
 两条路径的取数口是同一个 `CapabilityExecutor`：模型与告警都无法越过它直连管理接口。区别在于「谁决定查什么」——
-对话路径交给模型（9 个只读工具 + 1 个提案工具，共用同一份调用预算），调查路径交给规划器（注册表里挑已接入能力，带假设验证）。
+对话路径交给模型（10 个只读工具 + 1 个提案工具，共用同一份调用预算），调查路径交给规划器（注册表里挑已接入能力，带假设验证）。
 提案工具不取数、也不写网关，它只登记一条待人工审批的变更，因此不改变「取数必须经 CapabilityExecutor」这条边界。
 
 会话主路径不再先判「状态查询 / 故障调查 / 能力说明」再各走一套：一句话里问了几件事就查几次，答不了的那件如实说
@@ -119,8 +127,18 @@ Agent 能在授权后执行有限的运维动作，例如摘除异常实例、�
   可在折叠的「高级上下文」里手工指定 route / service / instance 与时间范围；追问沿用当前事件。**已实现。**
 - **事件 / 告警触发（已实现）：** `POST /api/agent/events/ingest` 把一条告警转成「哪条路由 + 什么时间窗 + 怀疑什么」三要素，
   仅为机器调用（需登录，建议服务账号），送出后独立开会话、记一笔 `ALERT` 来源事件，并复用与人工提问完全相同的取数链路开展调查，
-  回 `202` 与任务句柄。会话按事件隔离，不归属人工用户，因此不与人工会话争「单活跃任务」锁。
+  回 `202` 与任务句柄。会话按事件隔离，默认归属认证调用者；可用 `ROVER_AGENT_ALERT_OWNER`
+  （`rover.agent.alerts.owner-user-id`）统一映射到现有值班账号。事件的 `triggeredBy` 独立保留认证来源，
+  工作台展示来源和处理账号；任务详情、SSE、工作台与追问均检查会话归属。请求体不能指定身份。
+  处理归属仍是一个服务端配置账号；已接入角色、机器令牌与同范围审批分权，团队事件队列和动态分派继续后置。
   尚未实现的是**主动**的那半边：定时自巡检、自建 `INSPECTION` 事件。
+
+指定 `fromMillis` / `toMillis` 时必须成对提供，且起止顺序合法。该范围贯穿调查规划、工具、证据和结论；
+日志使用指定窗口，追踪和注册事件只保留窗口内记录。证据元数据附带 `requestedFromMillis`、`requestedToMillis`
+与 `temporalScope`：路由、实例和配置标为 `CURRENT_CONTEXT`，仅是当前参考；日志、追踪和事件标为
+`REQUESTED_WINDOW`，表示筛选范围，不保证采样或缓冲覆盖完整；知识标为 `REFERENCE`。
+实时滚动指标不能回溯绝对窗口，因此返回限制，不读取当前指标冒充历史。当前健康不能排除过去故障，
+没有历史样本也不能证明没有故障。未指定窗口时沿用数据源默认口径。实现与验证见 [S0 交付记录](agent-s0-report.zh-CN.md)。
 
 ## 6. 架构取向
 
@@ -180,9 +198,9 @@ rover-agent-core（纯 Java：领域对象、只读端口、中立快照、诊�
 | | `com.rover.agent.runtime.graph` | DynamicInvestigationGraph：plan / execute / evaluate / clarify / synthesise 节点与循环条件边、结论合成 |
 | | `com.rover.agent.runtime.planning` | LlmInvestigationPlanner：规则打底 + 模型候选，越界步骤由 PlanValidator 丢弃 |
 | | `com.rover.agent.runtime.task` | 任务生命周期、Session / Incident 登记（只走存储接口；容量上限只对内存实现有意义） |
-| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`：会话 / 消息 / 事件 / 任务 / 步骤 / 证据 / 安全恢复点 / 受控变更记录的关系表实现（`agent_*` 八张表，版本化迁移、一次快照一次事务、外键不留孤儿、启动时把半途的变更判成失败或结果未知），`AgentStore` 负责装配；另有线程安全内存实现，作为未配记录库路径时的退路 |
+| | `com.rover.agent.runtime.repository` | `JdbcAgentStore`：会话 / 消息 / 事件 / 任务 / 步骤 / 证据 / 安全恢复点 / 受控变更记录的关系表实现（版本化迁移、持久 Job/预算、独立执行审计、事件 outbox、H2 一致性备份，启动时对半途写操作按原操作号对账），`AgentStore` 负责装配；另有线程安全内存实现，只供非生产宿主显式使用；生产模式禁止内存回退 |
 | | `com.rover.agent.runtime.action` | `AgentActionService`（提议 / 批准 / 拒绝 / 回滚 / 结果确认，状态迁移用 CAS 抢）+ `RouteWeightActionExecutor`（唯一写网关的确定性代码）+ `ActionDraft` / `RouteLocator` |
-| | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型；OpsTools：9 个只读工具 + 1 个提案工具（对话主路径的数据入口与唯一建议入口） |
+| | `com.rover.agent.runtime.tool` | SnapshotTools：把本次已采集的快照暴露给模型；OpsTools：10 个只读工具 + 1 个提案工具（对话主路径的数据入口与唯一建议入口） |
 | | `com.rover.agent.runtime.knowledge` | InMemoryKnowledgeStore + `seedFaq()`：内置运维知识库，`KnowledgeReadPort` 的默认实现 |
 | | `com.rover.agent.runtime.llm` | JsonCompletion / ModelExplainer / ModelTargetInterpreter / SpringAiJsonCompletion / QuickModelCall，对话侧另有 ChatModelGateway / ConversationModel / SpringAiConversationModel / NoopChatModelGateway（模型适配与未配置时的诚实降级） |
 | `rover-admin` | `com.rover.admin.agent.adapter` | 6 个只读适配器：Route / Instance / Metric / Trace / Config / Event → 端口，不触发任何写操作；另有 `AdminRouteControlAdapter`（RouteControlPort 的管理口实现，只服务受控变更链路） |
@@ -331,7 +349,7 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 
 - 对话主路径 `ToolLoopService`（模型自主取数）：一次提问进来后，**由模型自己决定查什么、查几次、按什么顺序查**，
   不存在「先判断这句话属于查询、解释还是调查，再分流」的中间层——那正是已从主链上撤下的旧做法，现在连代码都不在了。每次工具调用都是一次真实取数，
-  工具的共同执行体仍是 `CapabilityExecutor`——模型拿不到管理接口凭证。共 9 个只读工具，
+  工具的共同执行体仍是 `CapabilityExecutor`——模型拿不到管理接口凭证。共 10 个只读工具，
   与能力注册表一一对应：
 
   | 工具 | 读到什么 | 对应能力 |
@@ -343,14 +361,17 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
   | `getConfigs()` | Gateway / Nameserver 当前生效配置 | CONFIG_READ |
   | `listRegistryEvents()` | 最近注册 / 注销 / 剔除 / 健康标记事件 | EVENT_QUERY |
   | `queryLogs(type, target, hours)` | 落盘历史证据：CONFIG_CHANGE / ROLLBACK / ERROR / INSTANCE_EVENT / METRICS_SAMPLE / REQUEST_TRACE | LOG_QUERY |
+  | `getChangeTimeline(targetType, target)` | 发布、配置、路由和实例的持久历史；含源时间、观测区间、采集空档及历史服务关联 | CHANGE_TIMELINE_QUERY |
   | `searchKnowledge(query)` | 内置运维 FAQ：怎么配置、怎么接入、怎么排查 | KNOWLEDGE_RETRIEVAL |
+
+  发布接入、历史服务关联、时间与质量边界、工作台展示及验收入口见[统一变更时间线](agent-change-timeline.zh-CN.md)。
 
   每个工具的 description 都写明「读到什么、什么时候该用、什么时候不该用、拿不到什么」，模型因此不会去向路由快照要流量，
   也不会把「追踪无记录」当成「没有问题」。调用预算由两侧同时兜：`OpsTools.MAX_CALLS`（30）与
   `spring.ai.tools.limits.max-total-tool-calls`（30）保持一致，单工具默认上限 10；模型不可用时不假降级到规则流程，
   而是如实回「当前没有可用的模型，请在模型配置页填好后重试」——这条路径的每次取数与每句结论都出自模型，冒充不了。
 
-  第 10 个工具是唯一的非只读入口，名字就是边界：`proposeTargetWeightChange(route, group, desiredWeight)`
+  第 11 个工具是唯一的非只读入口，名字就是边界：`proposeTargetWeightChange(route, group, desiredWeight)`
   ——「propose」不是「execute」。它读一次路由、核对版本目标与当前权重，然后登记一条 `PENDING_APPROVAL` 变更并返回
   「尚未执行」的说明；<b>它没有任何路径能走到写接口</b>（`OpsToolsProposalTest` 用一个「写方法一被调用就失败」的假网关把这一点固定下来）。
   它也刻意不推进安全恢复点：恢复点的前提是「重做不产生副作用」，而这条调用会写库，重做会多出一张待审批卡。
@@ -359,14 +380,17 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
   - **Observe / Plan**：`proposeTargetWeightChange` 读一次当前路由（含 revision 与各版本权重），登记一条
     `PENDING_APPROVAL` 变更，**Gateway 一个字节都不会被改动**。路由没匹配上、版本不存在、权重已经是目标值，
     都返回一句有依据的「为什么提不了」，不硬凑一张卡出来。
-  - **Approve**：`POST /api/agent/actions/{actionId}/approve|reject|rollback|resolve`。「待审批 → 执行中」是一次
-    原子状态迁移（`AgentActionRepository.transition` 的状态 CAS），因此连点三下只会执行一次；变更归属创建它的会话用户，
-    别人的变更对当前用户按不存在处理（404）。
+   - **Plan / Approve**：S3-01 的 `RemediationPlan` 冻结对象 UID/generation、路由 revision、改前/目标值、风险、
+     未消除假设、控制面验证和补偿条件，并计算服务端可复算的 `planHash`。批准请求精确绑定当前 `planVersion + planHash`；
+     改目标值只会经 `POST /api/agent/v1/plans/{planId}/versions` 重读路由后生成新版本，旧卡变 `SUPERSEDED`，不会原地覆盖。
+     `POST /api/agent/actions/{actionId}/approve|reject|rollback|resolve` 的「待审批 → 执行中」是一次原子状态迁移
+     （`AgentActionRepository.transition` 的状态 CAS），因此连点三下只会执行一次；变更归属创建它的会话用户，别人的变更对当前用户按不存在处理（404）。
   - **Precondition**：重新读整表，核对 revision、目标是否还在、当前权重是否仍等于提议时的值。审批卡可能在人面前放了十分钟，
     这十分钟里别人改过的路由不能被这张卡覆盖——不一致就落 `PRECONDITION_FAILED`，**不发出任何写请求**。
   - **Execute**：预览（候选整表交网关校验并比对差异，不落盘、不生效）→ **先把 `operationId` 落库再发请求** →
     用提议时读到的 revision 提交。
-  - **Verify**：网关返回 200 只代表请求生效，目标是否达成必须自己回读确认；回读不一致就是 `FAILED`——不回读就报成功等于谎报。
+   - **Verify**：网关返回 200 只代表请求生效，目标是否达成必须自己回读确认；回读不一致就是 `FAILED`——不回读就报成功等于谎报。
+     当前计划明确标注为 `CONTROL_PLANE_ONLY`，所以这个结论只表示资源、权重和 revision 一致；错误率、延迟、样本量和业务恢复仍待 S3-05 的独立效果验证器判断。
   - **Rollback**：补偿动作，不是整表回滚。只把这一次改过的那个目标改回 `beforeWeight`，并用**当前** revision 提交；
     整表退回旧版本会把别人在这之后的修改一起抹掉。
 - **`revision` 与 `operationId` 解决的是两个不同的问题**：前者是乐观锁（防止用旧状态覆盖别人的修改，冲突由网关返回 409，
@@ -378,9 +402,9 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
   「写请求已发出、但没拿到响应且回查不可达」既不是成功也不是失败，只能如实说结果未知。
 - **重启恢复**：停在半路的变更按「幂等号有没有落库」处理——没有号说明写请求根本没发出去（判 `FAILED`），
   有号说明可能已经生效（判 `UNCERTAIN`，用同一个号确认）；回滚中断则退回 `SUCCESS`，人还能再点一次回滚。
-- **变更记录（`agent_action`）**：一行记录一次变更的全部依据与结果——对象、两端权重、期望 revision、两个幂等号、
-  生效 revision、提议人 / 批准人、预览差异、失败说明与行版本号（Schema v4）。会话被整组清理时连带删除，
-  任务被淘汰时只把外键置空：变更的审计价值高于它的来路链接。
+   - **变更记录与计划历史**：`agent_action` 记录对象、两端权重、期望 revision、两个幂等号、生效 revision、提议人 /
+     批准人、预览差异、失败说明与行版本号。Schema v11 的 `agent_remediation_plan` 以 `(plan_id, plan_version)` 只追加保存
+     每次计划正文与摘要；执行状态更新不覆盖计划，会话清理也不允许计划 ID 被复用破坏审计。
 - **Workbench「变更与处置」卡片**：逐条展示变更，只在服务端状态允许时才给按钮（待审批 → 批准 / 拒绝；已完成 → 回滚；
   结果未知 → 重新确认）。执行是同步的，返回即终态；前端不做「先乐观变绿」——变更有没有生效只能由服务端的回读说了算。
 - Admin「Agent 工作台」+ 会话式接口：`POST/GET /api/agent/sessions`、`POST /api/agent/sessions/{sessionId}/messages`、`GET /api/agent/sessions/{sessionId}/workspace`、`GET /api/agent/tasks/{taskId}`、`GET /api/agent/tasks/{taskId}/events`（SSE）；
@@ -411,27 +435,27 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 - 模型未配置或不可用时的两种诚实降级：**对话主路径不做假降级**——它的每次取数与每句结论都由模型产出，因此直接回
   「当前没有配置可用的模型，请在模型配置页填好后重试」并用 `LOW` 结掉任务；调查链（Graph）仍会退化为纯规则诊断
   （`aiAnalysis` 为 null），采集与编排不受影响，并明确标注证据不足。
-- 快速模型（可选）：`spring.ai.openai.fast-*` 可以给「目标解析 / 调查规划」这类廉价调用配一个更小的模型，未配置则回退主模型；
-  「AI 解读」与对话主路径始终用主模型，它的超时取模型配置里的值，不受 `quick-timeout-seconds` 影响。
-- 这些「失败也能兜底」的小调用按 `rover.agent.llm.quick-timeout-seconds`（默认 10 秒）收紧等待上限，且只在超时后重试一次：偶发的网络卡顿能自愈，自愈不了就尽快走确定性兜底。
-- 模型参与解释的证据全部来自只读快照，模型不直连管理接口：路由与实例这两份最小依据由运行时预读后写进提示词，指标与追踪按需经只读工具读取（工具由应用执行）。「AI 解读」步骤的结果说明会区分「运行时预读快照」与「模型另调工具」，解释依据可追溯到具体快照。每个只读工具的描述都写明「读到什么、什么时候该用、什么时候不该用、拿不到什么」，模型因此不会对着路由快照找流量，也不会把「追踪无记录」当成「没有故障」。
-- 「AI 解读」边生成边推送：`ModelExplainer` 用流式调用把增量交给任务，Admin 通过 SSE 实时下发；最终全文仍落回任务结果，前端断线由轮询兜底。采集与规则判定是阻塞的 Graph 链路，不参与流式。
-- 结论会作为一条 Agent 回复落进会话，且在任务定型之前写入：客户端收到 `TASK_COMPLETED` 后重新拉取会话，看到的就是答案本身，而不是「已开始 / 已继续调查…」的受理播报。对话路径的结论就是模型的回答全文，置信度如实记为 `MEDIUM`（事实有据可查，推理仍出自模型）；调查路径才会优先取模型解读、没有解读时回落规则结论。结论回调失败只 WARN，不会把已经跑完的任务判成失败。
-- 每次提问都会落到 Session 之下，并尽力把这次任务挂到一个 Incident（解析出对象就按对象归集：同对象沿用、换对象另开；纯闲聊不建事件）。会话、消息、事件、任务、步骤与证据都写进记录库，**重启后仍可查询**，历史会话可以直接打开回看。重启时仍在执行（PENDING / RUNNING）的任务由存储层标成 `INTERRUPTED`（中断，不是失败）：已采集的步骤与证据原样保留，`error` 里写明最近的安全恢复点，「已中断」与「失败」的区别就是前者能接着来；停在澄清点的任务保持原样。
+- 快速模型（可选）：`spring.ai.openai.fast-*` 承接目标识别和诊断事实编号选择，未配置时使用主模型的轻量客户端。调查规划独立使用主模型；对话工具循环使用主客户端。
+- `rover.agent.llm.target-timeout-seconds` 默认 10 秒，并兼容旧 `quick-timeout-seconds`；目标识别超时最多重试一次。规划独立默认 60 秒、2048 输出 token，长调用超时不从头重试；思考开关可独立设置，默认关闭。报告事实选择默认 30 秒、512 输出 token。实际请求不能超过模型宿主配置，所有阶段还共用默认 300 秒的任务总时限与持久 token/调用预算。参数与迁移说明见 [成熟产品对标与调整](agent-product-alignment.zh-CN.md)。
+- 模型参与解释的证据全部来自授权的只读取证；程序生成带编号的事实目录，模型只选择相关编号，程序核验后渲染数字、引用、假设状态和判断边界。模型不直连管理接口，也不能通过文本签发执行授权。每个只读工具说明其数据范围与限制；缺少记录仍不能作为健康或无故障证明。
+- 「AI 解读」的供应商响应在本地缓冲，JSON 与思考不直接下发为诊断正文。引用和完整性校验通过后，经 SSE 一次发布与落库一致的报告；调查步骤和状态继续实时更新，断线可重放或轮询。模型失败保留规则调查结果，不发布未经验证的部分回答。
+- 结论作为一条 Agent 回复在任务定型前写入，`TASK_COMPLETED` 后可从会话读取。已经产生诊断取证的工具对话使用同一份程序校验报告，置信度取规则判断；没有诊断取证的普通对话仍使用模型回答。提案状态来自工具真实结果，不把“待审批”转述为“已执行”。结论回调失败只 WARN，不会把已经跑完的任务判成失败。
+- 会话、消息、事件、任务、步骤与证据持久保存。新版本创建的调查和对话 Job 在单 Admin 重启后可恢复输入、预算、事件序号和既有事实，并重新取证；旧版本没有 Job 输入的活动任务仍标为 INTERRUPTED 供人工复核。等待输入的任务保持静止，不占 Worker。升级前无 scope 的会话保留为管理员可读的未绑定归档，不能自动归入当前环境。
 - **安全恢复点（`agent_checkpoint`）是业务级契约，不是框架状态快照**：恢复点定义成「截至这里，一切已确定，可以安全从这里继续」，落点只有六个——任务开始、计划定稿、每次工具返回、每轮评估完成、结论合成、任务完成。每个工具成功返回后推进一次是核心落点：**工具调用才是 Agent 产生新事实的地方**，只按「每轮规划」记点会让一轮里已经查过的事实重跑一遍。崩在工具调用途中的话恢复点不会前进，恢复时重做这一次只读调用即可（只读工具重做不产生副作用）。
-写操作因此**不靠恢复点**，而靠自己的幂等号：提案工具不推进恢复点（重做会多出一张待审批卡），变更的提交与补偿都先把
+写操作因此**不靠恢复点**，而靠自己的幂等号：提案工具不推进调查恢复点（同一持久 Job 的相同意图复用原审批卡），变更的提交与补偿都先把
 `operationId` 落库再发请求，重启时按「幂等号有没有落库」把半途的变更判成失败或结果未知。
 - **恢复点存高水位，不存清单**：`stage` 只描述业务阶段（`STARTED` / `PLANNED` / `TOOL_COMPLETED` / `ROUND_EVALUATED` / `SYNTHESIS_COMPLETED` / `COMPLETED`），再加轮数、已调用次数、步骤条数与证据条数；具体是哪些步骤与证据按序号从关系表读回来，不在这里复制 ID 列表。图节点名只作诊断字段（`runtime_node`），恢复流程不依赖它——换框架、改节点名都不能影响恢复语义。`resume_state_json` 留给「无法从关系表重建的运行态」，本轮两条路径的运行态都能重建，因此先留空，不写没有来源的内容。
 - **恢复点与事实同一次写入**：任务状态、步骤、证据与恢复点在一个事务里落下，所以不会出现「恢复点说证据 3 条、库里只有 2 条」这种恢复时才暴露的坏状态。证据也因此改成**增量落库**：工具一返回就随恢复点落库，不再等结论合成时一次性补写；任务视图上的 `evidence` 是「本次已取到的全部证据」，结论里的 `result.evidence` 是同一批。
-- **Schema 与迁移约定**：Agent 聚合的表（会话 / 消息 / 事件 / 任务 / 步骤 / 证据 + 安全恢复点 + 受控变更记录）是本项目数据库 Schema 的起点，按 `agent_schema_migrations` 版本化迁移管理（v1 建聚合表、v2 删旧 JSON 快照表、v3 加恢复点、v4 加变更记录）。这一版是唯一允许清库重建的版本；此后只新增迁移、不改已发布的迁移，也不再要求使用者清库。关系是外键而不是约定：会话指向事件、事件指向任务、任务指向步骤与证据与恢复点，变更挂在会话与任务上，删会话连带清掉整条链，因此不存在孤儿与悬空引用。
+- **Schema 与迁移约定**：Agent 聚合的表（会话 / 消息 / 事件 / 任务 / 步骤 / 证据 + 安全恢复点 + 受控变更记录）按 `agent_schema_migrations` 版本化迁移管理：v1 建聚合表、v2 删旧 JSON 快照表、v3 加恢复点、v4 加变更记录、v5 加请求单位与流量预览、v6 加认证告警来源 `triggered_by`、v7 加资源身份和会话范围、v8 加独立审计与事件 outbox、v9 加持久 Job 和预算、v10 加变更时间线、v11 加不可变处置计划。升级只新增迁移，不改已发布迁移、不要求清库；历史事件来源未知时保留空值，不从处理账号反推。关系由外键维护；删会话仍会连带清理记录，独立执行审计已保留，外部不可变归档和长期留存策略仍后置。
+- **变更写回的并发契约**：`AgentAction.version` 是记录行版本，与 Gateway 的路由 revision 分开。仓储新建返回版本 1，后续更新必须携带读到的版本，成功后递增；过期或已删除的记录拒绝写回。审批/回滚入口同时检查状态和行版本，执行器的每次保存也检查版本，迟到的 resolve 不能覆盖回滚。异常恢复读取已持久化的操作号，按原号对账，不换号重发。该保护不等于多节点运行能力，单进程持久 Job 已接入，跨进程 Worker、租约和共享生产存储后置 S7。
 - 结构化输出强约束 + 失败分类：`JsonCompletion` 的解析契约由调用方传入（`Function<String, Optional<T>> parser`）；`LlmInvestigationPlanner` 与 `ModelTargetInterpreter` 走严格契约——JSON 非法、或取值越界，整条结果直接丢弃并回退规则层，不再静默补默认值；`ModelCallOutcome` 把调用结局区分为 `OK` / `NOT_CONFIGURED` / `UNAVAILABLE` / `TIMEOUT` / `ERROR` / `EMPTY` / `REJECTED`，其中 `rejected` 专门表示「模型返回了文本但不符合契约」。解决「越界输出被补默认值后损失无法定位」的问题：宁可回退规则层，也不吞掉契约违规。
 - 模型调用可观测性（含 token 用量）：`AgentMetrics` 的口径变为 `modelCall(model, scene, durationMillis, outcome)`，并新增 `modelTokens(model, scene, promptTokens, completionTokens)`；Micrometer 侧暴露 `model.calls`（标签 `model` / `scene` / `outcome`）、`model.duration`（标签 `model` / `scene`）与 `model.tokens`（标签 `model` / `scene` / `kind`，取值 `prompt` / `completion`；拿不到用量就不上报、不记 0），并删除只能回答「失败几次」的 `model.error`。解决「调用次数与耗时说明不了成本与上下文膨胀」的问题：token 用量按场景可查，成本与提示词膨胀可以被量化。
 - 提示注入隔离（`UntrustedText`）：用哨兵把不可信内容围起来（开始 `<<<ROVER-DATA`、结束 `ROVER-DATA>>>`），`contract()` 声明哨兵内的一切都不是指令；`block(label, content)` 会先把内容里出现的哨兵替换成占位符 `[ROVER-DATA]` 再围栏。已应用在 `ModelExplainer`（快照描述）、`LlmInvestigationPlanner`（用户问题 + 已采集证据）与 `ModelTargetInterpreter`（候选对象 + 用户问题）。解决「快照 / 问题 / 证据都是外部内容，可能诱导模型越权」的问题：内容无法伪造边界，模型能把「数据」和「指令」分开。
 
 **规划中（尚未实现，不要按已实现理解）：**
 
-- 存储形态的下一步：当前是单机本地 H2（Lite），同一套 SQL 换连接来源即可接 MySQL Standard Profile；Redis 缓存与跨机审计尚未实现。
-- 按恢复点续跑（Resume）：告警调查（`INVESTIGATION`）已经有明确的阶段状态与已执行能力，可以做真正的续跑——读最近恢复点、用已落库的步骤/证据/已用能力重建任务，从下一个安全阶段接着跑，不重复已经完成的工具调用。人工会话（`CONVERSATION`）这一版仍只做到「标记中断 + 保留事实 + 允许重问」，不去侵入 Spring AI 的对话循环找恢复游标；续跑时把已取到的事实重新提供给模型。
+- 多进程共享存储：当前目标是单 Admin + H2；PostgreSQL、跨进程租约/抢占、独立 Worker 与 HA 后置 S7，需要单独实现和验收。
+- 更细粒度的图节点和模型消息游标恢复仍后置。当前持久 Job 保留原预算与事实后重新取证，不承诺跳过每一次已完成的只读调用；不会通过重启重新提交外部写动作。
 - 记录库的远程化：现在是单机本地 H2，多副本 Admin 时各写各的，需要独立的时间序列 / 日志后端才能算跨机审计。
 - 主动巡检：定时自巡检并自建 `INSPECTION` 事件。`POST /api/agent/events/ingest` 已经能让外部告警驱动自动调查，
   缺的是 Agent 自己定时去看一圈的那半边。
@@ -450,7 +474,7 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 | 角色 | 数据分析师 | SRE / 运维诊断员 |
 | 典型问题 | 销售额为什么下降？ | 服务为什么 5xx？ |
 | 核心数据 | Database | Gateway + Instances + Metrics + Trace + 历史落库 + 运维知识 |
-| 核心工具 | SQL / Python | 9 个只读工具：Route / Instance / Metrics / Trace / Config / Events / Logs / Knowledge（+1 个待审批变更的提案工具） |
+| 核心工具 | SQL / Python | 10 个只读工具：Route / Instance / Metrics / Trace / Config / Events / Logs / Timeline / Knowledge（+1 个待审批变更的提案工具） |
 | 最终产物 | 数据分析报告 | Incident Diagnosis（+ 待人工审批的处置计划） |
 | Action | 数据分析 | 受控运维处置：当前一个动作——灰度权重调整，人工批准后执行并回读验证（其余规划中） |
 | 风险面 | SQL / 数据 | 生产基础设施 |
@@ -461,6 +485,8 @@ Admin 配置写（变更 / 回滚 / 失败）─┐               ┌→ LogQuer
 产品目标则完全不同。
 
 ## 9. 相关文档
+
+- [假设调查循环](./agent-hypothesis-loop.zh-CN.md)：证据与反证引用、缺口补查、有限重试、H2 恢复及实际验收边界
 
 - [Admin 使用手册](./admin-guide.zh-CN.md)：Agent 工作台使用方式与控制台模型配置
 - [Admin API](./admin-api.zh-CN.md)：会话 / 事件 / 调查任务接口契约

@@ -46,6 +46,89 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     private final ThreadPoolExecutor workers;
     private final ScheduledThreadPoolExecutor deadlines;
     private final AgentRunLimits runLimits;
+    private volatile boolean draining;
+    private com.rover.agent.runtime.repository.JdbcAgentStore durable;
+    private final Map<String, java.util.function.BiConsumer<InvestigationTask,String>> handlers = new ConcurrentHashMap<>();
+    private final java.util.Set<String> scheduled = ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.atomic.AtomicBoolean recoveryStarted = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean stopStarted = new java.util.concurrent.atomic.AtomicBoolean();
+    private final com.fasterxml.jackson.databind.ObjectMapper json = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    public void persistence(com.rover.agent.runtime.repository.JdbcAgentStore store) { durable = store; }
+    public void handler(String kind, java.util.function.BiConsumer<InvestigationTask,String> handler) { handlers.put(kind, handler); }
+
+    /** 启动完成后再恢复，确保认证服务、端口与模型均已装配。 */
+    @org.springframework.context.event.EventListener(org.springframework.context.event.ContextRefreshedEvent.class)
+    public void startRecovery() {
+        if (durable != null && recoveryStarted.compareAndSet(false, true)) {
+            deadlines.scheduleWithFixedDelay(() -> {
+                if (draining || workers.isShutdown()) { return; }
+                try { durable.pendingJobs().forEach(this::schedule); }
+                catch (RuntimeException failure) { log.error("持久任务调度失败，停止接收任务", failure); beginDrain(); }
+            }, 0, 250, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    /** 先持久化可重建的输入，再报告已受理；读 Job 可重放，外部写操作不走此队列。 */
+    public void enqueue(InvestigationTask task, String kind, Object payload, Runnable fallback) {
+        if (durable == null) { execute(fallback); return; }
+        durable.enqueueJob(task.taskId(), kind, payload);
+        durable.pendingJobs().stream().filter(job -> job.taskId().equals(task.taskId())).findFirst().ifPresent(this::schedule);
+    }
+
+    private void schedule(com.rover.agent.runtime.repository.JdbcAgentStore.Job pending) {
+        if (!handlers.containsKey(pending.kind()) || !scheduled.add(pending.taskId())) { return; }
+        try {
+            workers.execute(() -> {
+                try {
+                    var job = durable.claimJob(pending.taskId(), pending.attempt()).orElse(null);
+                    if (job == null) { return; }
+                    TaskView claimed = records.find(job.taskId()).orElse(null);
+                    if (claimed == null || !claimed.status().active()) {
+                        durable.finishJob(job.taskId(), job.attempt());
+                        return;
+                    }
+                    InvestigationTask task = executing.get(job.taskId());
+                    if (task == null) {
+                        TaskView saved = records.find(job.taskId()).orElse(null);
+                        if (saved == null || !saved.status().active()) { durable.finishJob(job.taskId(), job.attempt()); return; }
+                        task = new InvestigationTask(saved.taskId(), saved.sessionId(), saved.question(), records::save, events,
+                                metrics, checkpoints, runLimits, deadlines);
+                        task.restore(saved, records.streamSnapshot(job.taskId()).orElse(null), checkpoints.latest(job.taskId()).orElse(null));
+                        executing.put(job.taskId(), task);
+                        TaskView current = records.find(job.taskId()).orElse(null);
+                        if (current == null || !current.status().active()) {
+                            executing.remove(job.taskId(), task);
+                            durable.finishJob(job.taskId(), job.attempt());
+                            return;
+                        }
+                    }
+                    final long attempt = job.attempt();
+                    if (job.budgetJson() != null) { task.restoreBudget(json.readValue(job.budgetJson(), AgentRunBudget.State.class)); }
+                    task.budget().persistTo(state -> durable.saveBudget(job.taskId(), attempt, state));
+                    task.budget().validateWith(() -> {
+                        if (!durable.currentAttempt(job.taskId(), attempt)) { throw new IllegalStateException("任务 attempt 已失效"); }
+                    });
+                    task.snapshotSink(view -> durable.withCurrentAttempt(job.taskId(), attempt, () -> records.save(view)));
+                    task.eventSink((view, event) -> durable.withCurrentAttempt(job.taskId(), attempt, () -> records.saveEvent(view, event)));
+                    task.transactionalEvents(true);
+                    task.checkpointSink((view, checkpoint) -> durable.withCurrentAttempt(job.taskId(), attempt, () -> checkpoints.save(view, checkpoint)));
+                    events.open(job.taskId());
+                    try (var actor = com.rover.agent.core.util.AuditActor.enter(durable.sessions().find(task.sessionId()).map(com.rover.agent.core.model.Session::userId).orElse(null))) {
+                        handlers.get(job.kind()).accept(task, job.payloadJson());
+                    }
+                    if (!task.view().status().active()) { durable.finishJob(job.taskId(), attempt); }
+                } catch (Exception failure) {
+                    log.error("持久任务执行失败: {}", pending.taskId(), failure);
+                    InvestigationTask task = executing.get(pending.taskId());
+                    if (task != null && !draining) { task.fail("任务恢复或执行失败，请检查持久存储及输入"); }
+                } finally { scheduled.remove(pending.taskId()); }
+            });
+        } catch (RejectedExecutionException busy) { scheduled.remove(pending.taskId()); }
+    }
+    public boolean draining() { return draining; }
+    public void beginDrain() { synchronized (registrationLock) { draining = true; } }
+    public void resumeAccepting() { synchronized (registrationLock) { if (workers.isShutdown()) { throw new IllegalStateException("执行器已关闭"); } draining = false; } }
 
     /** 内存实现与默认执行参数；接入持久化后由组合根注入具体实现。 */
     public InvestigationTaskRegistry() {
@@ -107,6 +190,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
      */
     public InvestigationTask register(String sessionId, String question) {
         synchronized (registrationLock) {
+            if (draining) { throw new RejectedExecutionException("Agent 正在排空，暂不接收新任务"); }
             records.findActiveBySessionId(sessionId).ifPresent(active -> {
                 metrics.taskRejected(REJECT_SESSION_BUSY);
                 throw new SessionTaskRunningException(active.taskId());
@@ -118,6 +202,8 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
             }
             InvestigationTask task = new InvestigationTask(UUID.randomUUID().toString(), sessionId, question,
                     records::save, events, metrics, checkpoints, runLimits, deadlines);
+            task.eventSink(records::saveEvent);
+            task.transactionalEvents(records.durableEvents());
             executing.put(task.taskId(), task);
             records.save(task.view());
             // 通道随登记一起开：全程无人订阅时，终态事件也不会丢，晚连上的订阅者仍能读到并收尾。
@@ -155,14 +241,37 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
      */
     public boolean cancel(String taskId) {
         InvestigationTask task = executing.get(taskId);
-        if (task == null) {
-            return false;
-        }
+        if (task == null) { return false; }
         boolean cancelledNow = task.cancel("任务已被用户取消");
-        if (cancelledNow) {
-            task.interruptRunner();
-        }
+        if (cancelledNow) { task.interruptRunner(); }
         return cancelledNow;
+    }
+
+    /** End an alert task regardless of handler ownership; called only for a resolved authenticated source event. */
+    public boolean resolveAlert(String taskId) {
+        InvestigationTask task = executing.get(taskId);
+        if (task != null) {
+            boolean cancelledNow = task.cancel("告警已恢复（RESOLVED），调查任务已结束");
+            if (cancelledNow) { task.interruptRunner(); }
+            return cancelledNow;
+        }
+        if (durable == null) { return false; }
+        TaskView saved = records.find(taskId).orElse(null);
+        if (saved == null || !saved.status().active()) { return false; }
+        java.util.concurrent.atomic.AtomicBoolean registryWon = new java.util.concurrent.atomic.AtomicBoolean();
+        boolean cancelled = durable.cancelUnregisteredJob(taskId, () -> {
+            InvestigationTask restored = new InvestigationTask(saved.taskId(), saved.sessionId(), saved.question(),
+                    records::save, events, metrics, checkpoints, runLimits, deadlines);
+            restored.restore(saved, records.streamSnapshot(taskId).orElse(null), checkpoints.latest(taskId).orElse(null));
+            restored.eventSink(records::saveEvent);
+            restored.transactionalEvents(true);
+            registryWon.set(restored.cancel("告警已恢复（RESOLVED），调查任务已结束"));
+        });
+        if (!cancelled || !registryWon.get()) { return false; }
+        events.open(taskId);
+        durable.tasks().eventsAfter(taskId, -1, 1000).stream()
+                .filter(event -> event.type().terminal()).forEach(events::publish);
+        return true;
     }
 
     public TaskView get(String taskId) {
@@ -199,9 +308,21 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     }
 
     @PreDestroy
+    @org.springframework.context.event.EventListener(org.springframework.context.event.ContextClosedEvent.class)
     public void stop() {
+        if (!stopStarted.compareAndSet(false, true)) { return; }
+        beginDrain();
+        workers.shutdown();
+        try {
+            if (!workers.awaitTermination(5, TimeUnit.SECONDS)) {
+                executing.values().forEach(task -> {
+                    if (durable != null) { task.suspendForRestart(); }
+                    else { task.cancel("Admin 正在关闭，执行已停止"); }
+                });
+                workers.shutdownNow();
+            }
+        } catch (InterruptedException ex) { Thread.currentThread().interrupt(); workers.shutdownNow(); }
         deadlines.shutdownNow();
-        workers.shutdownNow();
     }
 
     private int retire(List<TaskView> tasks) {

@@ -16,6 +16,8 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.authentication.AnonymousAuthenticationFilter;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 
 /**
@@ -45,8 +47,14 @@ public class AdminSecurityConfiguration {
     }
 
     @Bean
-    public SecurityFilterChain adminSecurityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain adminSecurityFilterChain(HttpSecurity http, AgentSecurityService agentSecurity) throws Exception {
+        http.addFilterBefore(new AgentSecurityFilters.Machine(agentSecurity), CsrfFilter.class);
+        http.addFilterAfter(new AgentSecurityFilters.Permissions(agentSecurity), AnonymousAuthenticationFilter.class);
+        http.addFilterAfter(new AgentSecurityFilters.ReleasePayload(), AgentSecurityFilters.Permissions.class);
         http.csrf(csrf -> csrf
+                .ignoringRequestMatchers(request -> (AgentSecurityFilters.INGEST.equals(AgentSecurityFilters.path(request))
+                        || AgentSecurityFilters.RELEASE_INGEST.equals(AgentSecurityFilters.path(request)))
+                        && "POST".equals(request.getMethod()) && request.getAttribute(AgentSecurityFilters.MACHINE) != null)
                 .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                 .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler()));
 

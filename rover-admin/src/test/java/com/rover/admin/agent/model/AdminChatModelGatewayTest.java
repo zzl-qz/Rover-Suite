@@ -110,13 +110,13 @@ class AdminChatModelGatewayTest {
         AdminChatModelGateway gateway = newGateway();
         gateway.apply(settings(true, "https://api.deepseek.com", "sk-abcdefghijklmnop", "deepseek-chat"));
 
-        // 配置 30 秒：更短的场景上限才另建客户端并复用；0 或不小于配置值的请求都用主客户端
+        // 所有场景调用均关闭思考；超时相等也不能复用主客户端。
         ChatClient main = gateway.chatClient();
         ChatClient quick = gateway.chatClient(10);
         assertNotSame(main, quick);
         assertSame(quick, gateway.chatClient(10));
-        assertSame(main, gateway.chatClient(0));
-        assertSame(main, gateway.chatClient(30));
+        assertNotSame(main, gateway.chatClient(0));
+        assertSame(gateway.chatClient(0), gateway.chatClient(30));
 
         // 配置再次生效：按旧配置建出的场景客户端一律作废
         gateway.apply(settings(true, "http://127.0.0.1:11434/v1", "", "qwen2.5:7b"));

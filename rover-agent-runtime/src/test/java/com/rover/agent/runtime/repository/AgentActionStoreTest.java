@@ -1,15 +1,24 @@
 package com.rover.agent.runtime.repository;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionApproval;
+import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.ResourceRef;
+import com.rover.agent.core.model.ResourceScope;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.WeightRequestUnit;
+import com.rover.agent.core.repository.ActionCommandRepository;
+import com.rover.agent.core.repository.ActionUpdateConflictException;
+import com.rover.agent.core.repository.AgentActionRepository;
 import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -40,7 +49,7 @@ class AgentActionStoreTest {
 
         try (JdbcAgentStore second = new JdbcAgentStore(path)) {
             AgentAction reloaded = second.actions().find("a1").orElseThrow();
-            assertEquals(action, reloaded, "提议依据、幂等号与预览都要能读回来");
+            assertEquals(action.withVersion(1L), reloaded, "提议依据、幂等号与预览都要能读回来");
             assertEquals(18, reloaded.appliedRevision());
             assertEquals(List.of("MODIFIED /api/order：order-service@v2 权重 → 20"), reloaded.preview());
             assertEquals("order-service@v2", reloaded.targetLabel());
@@ -49,6 +58,64 @@ class AgentActionStoreTest {
             assertEquals(WeightRequestUnit.RAW_WEIGHT, reloaded.requestedUnit());
             assertEquals(5.0, reloaded.beforeTrafficPercent(), 0.05);
             assertEquals(17.4, reloaded.desiredTrafficPercent(), 0.05);
+        }
+    }
+
+    @Test
+    void approvalsAreUniquePlanBoundAndSurviveRestart() throws Exception {
+        String path = tempPath("rover-action-approvals");
+        ActionApproval approval = new ActionApproval("a1", ActionApproval.Stage.APPLY,
+                ActionApproval.LEGACY_PLAN_VERSION, ActionApproval.LEGACY_PLAN_HASH,
+                "risk-test@abc", "reviewer-a", 100L);
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.sessions().save(session("s1"));
+            first.actions().save(pendingAction("a1", "s1", ActionStatus.PENDING_APPROVAL, null, null));
+            assertTrue(first.actions().recordApproval(approval));
+            assertFalse(first.actions().recordApproval(approval), "相同审批人对同一版本不能重复记数");
+            assertEquals(18, first.schemaVersion());
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            assertEquals(List.of(approval), reopened.actions().approvals("a1", ActionApproval.Stage.APPLY,
+                    ActionApproval.LEGACY_PLAN_VERSION, ActionApproval.LEGACY_PLAN_HASH, "risk-test@abc"));
+        }
+    }
+
+    @Test
+    void typedActionCommandSurvivesRestartAndCanBeRequeuedAfterAuthorizationRefresh() throws Exception {
+        String path = tempPath("rover-action-command-restart");
+        AgentAction action = pendingAction("a-command", "s1", ActionStatus.PENDING_APPROVAL, null, null)
+                .withResourceRef(new ResourceRef(new ResourceScope("org", "ops", "prod"), "gateway-one",
+                        "GATEWAY_ROUTE", "order-api", "uid-one", 1));
+        ActionExecutionCommand command = ActionExecutionCommand.from(action, ActionExecutionCommand.Phase.APPLY,
+                "reviewer-a", "prod", "risk-test@v1");
+
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.sessions().save(session("s1"));
+            first.actions().save(action);
+            first.actionCommands().enqueue(command);
+            ActionCommandRepository.Job queued = first.actionCommands().pending(System.currentTimeMillis(), 10)
+                    .get(0);
+            ActionCommandRepository.Job running = first.actionCommands().claim(command.commandId(), queued.attempt())
+                    .orElseThrow();
+            assertEquals("RUNNING", running.state());
+            assertEquals(1, running.attempt());
+        }
+
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            ActionCommandRepository.Job recovered = reopened.actionCommands()
+                    .pending(System.currentTimeMillis(), 10).get(0);
+            assertEquals(command, recovered.command(), "恢复必须保留操作类型、阶段、目标和计划绑定");
+            assertEquals(1, recovered.attempt());
+            assertEquals("PENDING", recovered.state());
+            reopened.actionCommands().finish(command.commandId(),
+                    reopened.actionCommands().claim(command.commandId(), recovered.attempt()).orElseThrow().attempt());
+
+            reopened.actionCommands().enqueue(command);
+
+            ActionCommandRepository.Job requeued = reopened.actionCommands()
+                    .pending(System.currentTimeMillis(), 10).get(0);
+            assertEquals(command.commandId(), requeued.command().commandId());
+            assertEquals(2, requeued.attempt(), "重新排队不应伪增执行次数");
         }
     }
 
@@ -69,6 +136,46 @@ class AgentActionStoreTest {
             assertEquals(ActionStatus.EXECUTING, store.actions().find("a1").orElseThrow().status());
             assertTrue(store.actions().transition("missing", ActionStatus.PENDING_APPROVAL,
                     current -> current).isEmpty());
+        }
+    }
+
+    @Test
+    void everyStoreRejectsStaleWritesIncludingSameStateAbaAndDeletedRecords() throws Exception {
+        try (JdbcAgentStore store = new JdbcAgentStore(tempPath("rover-action-version"))) {
+            store.sessions().save(session("s1"));
+            for (AgentActionRepository repository : List.of(new InMemoryAgentActionRepository(10), store.actions())) {
+                AgentAction first = repository.save(pendingAction("versioned", "s1",
+                        ActionStatus.PENDING_APPROVAL, null, null));
+                assertEquals(1L, first.version());
+                AgentAction executing = repository.transition(first.actionId(), ActionStatus.PENDING_APPROVAL,
+                        current -> pendingAction("versioned", "s1", ActionStatus.EXECUTING, "op-1", null))
+                        .orElseThrow();
+                assertEquals(2L, executing.version());
+                AgentAction back = repository.save(pendingAction("versioned", "s1",
+                        ActionStatus.PENDING_APPROVAL, null, null).withVersion(executing.version()));
+                assertEquals(first.withVersion(3L), back, "状态和值回到原样，也不能重用旧行版本");
+                assertThrows(ActionUpdateConflictException.class, () -> repository.save(first));
+                assertThrows(ActionUpdateConflictException.class, () -> repository.save(first.withVersion(0L)));
+                assertEquals(back, repository.find(first.actionId()).orElseThrow());
+                repository.removeBySession("s1");
+                assertThrows(ActionUpdateConflictException.class, () -> repository.save(back), "不能复活已删除记录");
+                assertTrue(repository.find(first.actionId()).isEmpty());
+            }
+        }
+    }
+
+    @Test
+    void separateDatabaseConnectionsCannotOverwriteEachOthersActionUpdates() throws Exception {
+        String path = tempPath("rover-action-connections");
+        try (JdbcAgentStore first = new JdbcAgentStore(path); JdbcAgentStore second = new JdbcAgentStore(path)) {
+            first.sessions().save(session("s1"));
+            AgentAction pending = first.actions().save(pendingAction("a1", "s1",
+                    ActionStatus.PENDING_APPROVAL, null, null));
+            AgentAction claimed = second.actions().transition("a1", ActionStatus.PENDING_APPROVAL,
+                    current -> pendingAction("a1", "s1", ActionStatus.EXECUTING, "op-1", null)).orElseThrow();
+
+            assertThrows(ActionUpdateConflictException.class, () -> first.actions().save(pending));
+            assertEquals(claimed, first.actions().find("a1").orElseThrow());
         }
     }
 

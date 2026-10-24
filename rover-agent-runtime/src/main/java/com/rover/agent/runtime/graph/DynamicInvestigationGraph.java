@@ -15,11 +15,15 @@ import com.rover.agent.core.capability.CapabilityResult;
 import com.rover.agent.core.investigation.Findings;
 import com.rover.agent.core.investigation.FindingsInput;
 import com.rover.agent.core.investigation.InvestigationRules;
+import com.rover.agent.core.investigation.HypothesisAssessment;
+import com.rover.agent.core.planning.CapabilityAttempt;
+import com.rover.agent.core.model.Hypothesis;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.CheckpointStage;
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.StepStatus;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.planning.InvestigationPlanner;
 import com.rover.agent.core.planning.PlanProgress;
@@ -89,6 +93,10 @@ public final class DynamicInvestigationGraph {
     private final List<String> limitations = new ArrayList<>();
     private final Set<AgentCapability> settled = new LinkedHashSet<>();
     private final List<AgentCapability> executedCapabilities = new ArrayList<>();
+    private final List<CapabilityAttempt> attempts = new ArrayList<>();
+    private String stopReason = "";
+    private int nextStepIndex;
+    private boolean resumePending;
 
     private String taskId = "";
     private String path = "";
@@ -106,6 +114,7 @@ public final class DynamicInvestigationGraph {
     private List<RouteUpstreamSnapshot> routeUpstreams;
     private Findings findings;
     private String clarification;
+    private TimeRange timeRange = TimeRange.unspecified();
 
     public DynamicInvestigationGraph(InvestigationPlanner planner, PlanValidator validator,
                                      CapabilityExecutor executor, PlanningLimits limits,
@@ -127,6 +136,12 @@ public final class DynamicInvestigationGraph {
      * @param target   本次请求的目标对象
      */
     public InvestigationOutcome investigate(String taskId, String path, String question, ResourceTarget target) {
+        return investigate(taskId, path, question, target, TimeRange.unspecified());
+    }
+
+    public InvestigationOutcome investigate(String taskId, String path, String question, ResourceTarget target,
+                                             TimeRange timeRange) {
+        this.timeRange = timeRange == null ? TimeRange.unspecified() : timeRange;
         this.taskId = taskId == null ? "" : taskId;
         this.path = path == null ? "" : path.trim();
         this.question = question == null ? "" : question.trim();
@@ -137,8 +152,9 @@ public final class DynamicInvestigationGraph {
             input.put(STATE_TASK_ID, this.taskId);
             input.put(STATE_PATH, this.path);
             input.put(STATE_QUESTION, this.question);
-            input.put(STATE_ROUNDS, 0);
-            input.put(STATE_TOOL_CALLS, 0);
+            restore();
+            input.put(STATE_ROUNDS, rounds);
+            input.put(STATE_TOOL_CALLS, toolCalls);
             input.put(STATE_HAS_PLAN, false);
             input.put(STATE_VERDICT, "");
             state = graph.invoke(input).orElseThrow(() -> new IllegalStateException("调查图未返回状态"));
@@ -201,6 +217,14 @@ public final class DynamicInvestigationGraph {
 
     /** 生成并校验本轮计划，丢弃不可用或越界的能力。 */
     private Map<String, Object> planNode(OverAllState state) {
+        if (resumePending && toolCalls < limits.maxToolCalls() && stopReason.isBlank()) {
+            resumePending = false;
+            return Map.of(STATE_ROUNDS, rounds, STATE_HAS_PLAN, true);
+        }
+        if (rounds >= limits.maxRounds() || toolCalls >= limits.maxToolCalls() || !stopReason.isBlank()) {
+            if (stopReason.isBlank()) { stopReason = LIMIT_REACHED; }
+            return Map.of(STATE_HAS_PLAN, false);
+        }
         int round = state.value(STATE_ROUNDS, 0) + 1;
         this.rounds = round;
         PlanningRequest request = planningRequest();
@@ -217,10 +241,23 @@ public final class DynamicInvestigationGraph {
             candidate = InvestigationPlan.empty();
             limitations.add("调查规划失败，本轮未能产出可执行的只读步骤。");
         }
+        // 重试也是运行时计划：不能由模型漏掉或把“再查一次”扩成无限重读。
+        List<PlannedStep> proposed = new ArrayList<>();
+        for (CapabilityAttempt attempt : attempts) {
+            if (attempt.outcome() == CapabilityAttempt.Outcome.RETRYABLE_FAILURE && !settled.contains(attempt.capability())
+                    && proposed.stream().noneMatch(s -> s.capability() == attempt.capability())) {
+                proposed.add(PlannedStep.required(attempt.capability(), "上次发生瞬态读取失败，进行唯一一次补查", target));
+            }
+        }
+        proposed.addAll(candidate.steps());
+        candidate = new InvestigationPlan(candidate.goal(), candidate.hypotheses(), proposed, candidate.assessments(), candidate.progress());
         InvestigationPlan validated = validator.validate(candidate, request, settled);
         this.plan = validated;
+        nextStepIndex = 0;
+        if (validated.isEmpty()) { stopReason = "没有可执行的新查询，停止无信息重复；未验证的假设保持无法确认"; }
+        saveProgress();
         if (reporter != null) {
-            reporter.reportPlan(validated);
+            reporter.reportPlan(plan);
             reporter.step(AgentStepType.PLANNING, STEP_PLANNING, StepStatus.COMPLETED,
                     validated.isEmpty() ? "第 " + round + " 轮没有可执行的只读步骤" : describePlan(round, validated));
             // 计划已定稿：空计划也算一个安全点，恢复时不必重新问一遍模型「该查什么」。
@@ -231,9 +268,18 @@ public final class DynamicInvestigationGraph {
 
     /** 按序执行未处理能力；无判定价值的步骤跳过并计入已处理。 */
     private Map<String, Object> executeNode(OverAllState state) {
-        for (PlannedStep step : plan.steps()) {
+        while (nextStepIndex < plan.steps().size()) {
+            PlannedStep step = plan.steps().get(nextStepIndex++);
             AgentCapability capability = step.capability();
             if (settled.contains(capability)) {
+                continue;
+            }
+            if (capability == AgentCapability.INSTANCE_QUERY && routeQueried && !routeRead
+                    && !settled.contains(AgentCapability.ROUTE_QUERY)) {
+                if (reporter != null) {
+                    reporter.step(stepType(capability), stepName(capability), StepStatus.FAILED,
+                            "本轮路由读取暂时失败，先补查路由，再决定是否查询目标实例");
+                }
                 continue;
             }
             if (toolCalls >= limits.maxToolCalls()) {
@@ -245,13 +291,15 @@ public final class DynamicInvestigationGraph {
                 }
                 break;
             }
-            settled.add(capability);
             String skip = skipReason(capability);
             if (skip != null) {
+                settled.add(capability);
+                attempts.add(new CapabilityAttempt(capability, CapabilityAttempt.Outcome.SKIPPED, List.of(), "", System.currentTimeMillis()));
                 report(capability);
                 if (reporter != null) {
                     reporter.step(stepType(capability), stepName(capability), StepStatus.COMPLETED, skip);
                 }
+                saveProgress();
                 continue;
             }
             // 取数是真实的 HTTP 调用，先上报「正在查询」：等待期能看见进度，靠的就是这一步。
@@ -259,10 +307,20 @@ public final class DynamicInvestigationGraph {
             if (reporter != null) {
                 reporter.step(stepType(capability), stepName(capability), StepStatus.RUNNING, runningText(capability));
             }
-            CapabilityResult result = executor.execute(capability, step.target(), path, taskId, route);
+            CapabilityResult result = executor.execute(capability, step.target(), path, taskId, route, timeRange);
             if (result.executed()) {
                 toolCalls++;
             }
+            long count = attempts.stream().filter(a -> a.capability() == capability).count() + 1;
+            String fingerprint = result.evidence().stream().map(e -> e.envelope().sourceId() + ":"
+                    + e.envelope().qualityStatus() + ":" + e.envelope().payloadDigest()).sorted()
+                    .collect(java.util.stream.Collectors.joining("|"));
+            boolean retry = result.retryable() && count < 2;
+            if (!retry) { settled.add(capability); }
+            attempts.add(new CapabilityAttempt(capability, retry ? CapabilityAttempt.Outcome.RETRYABLE_FAILURE
+                    : result.readFailed() || result.retryable() ? CapabilityAttempt.Outcome.UNAVAILABLE
+                    : CapabilityAttempt.Outcome.COLLECTED, result.evidence().stream().map(Evidence::evidenceId).toList(),
+                    fingerprint, System.currentTimeMillis()));
             applyFacts(capability, result);
             evidence.addAll(result.evidence());
             // 多个能力会给出同一条边界说明（例如全局指标与按上游观测共用 60 秒窗口口径、
@@ -275,11 +333,12 @@ public final class DynamicInvestigationGraph {
             report(capability);
             if (reporter != null) {
                 reporter.step(result.stepType(), result.stepName(),
-                        result.executed() ? StepStatus.COMPLETED : StepStatus.FAILED,
+                        result.readFailed() || result.retryable() ? StepStatus.FAILED : StepStatus.COMPLETED,
                         result.executed() ? detailOf(result) : limitationOf(result));
                 // 安全恢复点：这次取到的事实（含失败时如实记下的边界）已经确定并落库。
                 // 崩在调用途中的话这里不会执行，恢复时重做这一次只读调用即可。
                 reporter.recordEvidence(result.evidence());
+                saveProgress();
                 reporter.checkpoint(CheckpointStage.TOOL_COMPLETED, rounds, toolCalls, NODE_EXECUTE);
             }
         }
@@ -289,8 +348,12 @@ public final class DynamicInvestigationGraph {
     /** 评估继续、澄清或收尾；达到轮数或调用上限时记录判断边界。 */
     private Map<String, Object> evaluateNode(OverAllState state) {
         PlanningRequest request = planningRequest();
-        PlanProgress progress = PlanProgress.of(rounds, toolCalls, settled, 0);
+        PlanProgress progress = progress();
         PlanningDecision decision = planner.evaluate(request, progress);
+        if (attempts.stream().anyMatch(a -> a.outcome() == CapabilityAttempt.Outcome.RETRYABLE_FAILURE
+                && !settled.contains(a.capability()))) {
+            decision = PlanningDecision.continuePlanning("存在尚未完成有限重试的瞬态失败");
+        }
         String verdict;
         if (decision.shouldClarify()) {
             this.clarification = decision.clarification();
@@ -310,7 +373,9 @@ public final class DynamicInvestigationGraph {
                 }
             }
             verdict = VERDICT_FINISH;
+            stopReason = decision.shouldContinue() ? LIMIT_REACHED : decision.reason();
         }
+        saveProgress();
         if (reporter != null) {
             // 走向已定：恢复时不必重跑评估，直接按这里的轮数与调用次数接着算预算。
             reporter.checkpoint(CheckpointStage.ROUND_EVALUATED, rounds, toolCalls, NODE_EVALUATE);
@@ -330,8 +395,8 @@ public final class DynamicInvestigationGraph {
             reporter.step(AgentStepType.DIAGNOSIS, STEP_SYNTHESIS, StepStatus.RUNNING,
                     "正在按已采集的证据逐条判定候选故障原因");
         }
-        FindingsInput input = new FindingsInput(path, route, routeRead, discovery, instances, traces, routeUpstreams);
-        Findings result = InvestigationRules.evaluate(input);
+        Findings result = assessedFindings();
+        saveProgress();
         if (reporter != null) {
             reporter.step(AgentStepType.DIAGNOSIS, STEP_SYNTHESIS, StepStatus.COMPLETED,
                     InvestigationRules.describeVerdicts(result.hypotheses()));
@@ -386,7 +451,56 @@ public final class DynamicInvestigationGraph {
     }
 
     private PlanningRequest planningRequest() {
-        return new PlanningRequest(question, target, path, List.copyOf(evidence), List.copyOf(limitations));
+        return new PlanningRequest(question, target, path, List.copyOf(evidence), List.copyOf(limitations), timeRange,
+                evidence.isEmpty() ? plan.assessments() : assessedFindings().hypotheses());
+    }
+
+    private FindingsInput facts() {
+        // 判定仅需身份/服务/分组；恢复快照不额外保存静态上游 URL 中可能携带的凭据。
+        RouteSnapshot kept = route == null ? null : new RouteSnapshot(route.routeId(), route.businessPrefix(),
+                route.serviceName(), route.group(), "", "", route.observedAtMillis(), route.resourceUid(), route.generation());
+        return new FindingsInput(path, kept, routeRead, discovery, instances, traces, routeUpstreams, timeRange);
+    }
+
+    private Findings assessedFindings() {
+        Findings result = HypothesisAssessment.evaluate(facts(), evidence);
+        List<Hypothesis> hypotheses = new ArrayList<>(result.hypotheses());
+        plan.assessments().stream().filter(h -> h.id().startsWith("M"))
+                .filter(h -> hypotheses.stream().noneMatch(kept -> kept.id().equals(h.id())))
+                .limit(6).forEach(hypotheses::add);
+        return new Findings(List.copyOf(hypotheses), result.summary(), result.confidence());
+    }
+
+    private PlanProgress progress() {
+        return new PlanProgress(rounds, toolCalls, settled, Math.max(0, plan.steps().size() - nextStepIndex),
+                attempts, facts(), stopReason, limitations);
+    }
+
+    private void saveProgress() {
+        plan = plan.assessed(assessedFindings().hypotheses(), progress());
+        if (reporter != null) { reporter.reportPlan(plan); }
+    }
+
+    private void restore() {
+        if (reporter == null) { return; }
+        plan = reporter.resumePlan();
+        PlanProgress saved = plan.progress();
+        rounds = Math.max(reporter.resumeRounds(), saved.rounds());
+        toolCalls = Math.max(reporter.resumeToolCalls(), saved.toolCalls());
+        evidence.addAll(reporter.resumeEvidence());
+        limitations.addAll(saved.limitations());
+        attempts.addAll(saved.attempts());
+        settled.addAll(saved.settled());
+        attempts.forEach(a -> { if (!executedCapabilities.contains(a.capability())) { executedCapabilities.add(a.capability()); } });
+        stopReason = saved.stopReason();
+        nextStepIndex = Math.max(0, plan.steps().size() - saved.remainingSteps());
+        resumePending = saved.remainingSteps() > 0;
+        FindingsInput input = saved.facts();
+        if (input != null) {
+            route = input.route(); routeRead = input.routeRead(); discovery = input.discoveryMode();
+            instances = input.instances(); traces = input.traces(); routeUpstreams = input.routeUpstreams();
+            routeQueried = attempts.stream().anyMatch(a -> a.capability() == AgentCapability.ROUTE_QUERY);
+        }
     }
 
     private static String describePlan(int round, InvestigationPlan plan) {
@@ -423,6 +537,10 @@ public final class DynamicInvestigationGraph {
             case CONFIG_READ -> AgentStepType.CONFIG_INVESTIGATION;
             case EVENT_QUERY -> AgentStepType.EVENT_INVESTIGATION;
             case LOG_QUERY -> AgentStepType.LOG_INVESTIGATION;
+            case CHANGE_TIMELINE_QUERY -> AgentStepType.EVENT_INVESTIGATION;
+            case APPLICATION_METRICS_QUERY -> AgentStepType.METRIC_INVESTIGATION;
+            case APPLICATION_LOG_QUERY -> AgentStepType.LOG_INVESTIGATION;
+            case APPLICATION_TRACE_QUERY -> AgentStepType.TRACE_INVESTIGATION;
             case KNOWLEDGE_RETRIEVAL -> AgentStepType.KNOWLEDGE_INVESTIGATION;
         };
     }
@@ -437,6 +555,10 @@ public final class DynamicInvestigationGraph {
             case CONFIG_READ -> "读取配置";
             case EVENT_QUERY -> "读取事件";
             case LOG_QUERY -> "读取历史日志";
+            case CHANGE_TIMELINE_QUERY -> "读取变更时间线";
+            case APPLICATION_METRICS_QUERY -> "读取应用指标";
+            case APPLICATION_LOG_QUERY -> "读取应用日志";
+            case APPLICATION_TRACE_QUERY -> "读取应用链路";
             case KNOWLEDGE_RETRIEVAL -> "检索知识";
         };
     }
@@ -455,6 +577,10 @@ public final class DynamicInvestigationGraph {
             case CONFIG_READ -> "正在读取 Gateway 与 NameServer 生效配置";
             case EVENT_QUERY -> "正在读取注册中心近期事件";
             case LOG_QUERY -> "正在读取落盘历史日志";
+            case CHANGE_TIMELINE_QUERY -> "正在核对发布、配置与实例变化时间线";
+            case APPLICATION_METRICS_QUERY -> "正在按授权范围查询应用指标";
+            case APPLICATION_LOG_QUERY -> "正在按授权范围查询应用日志";
+            case APPLICATION_TRACE_QUERY -> "正在按授权范围查询应用链路";
             case KNOWLEDGE_RETRIEVAL -> "正在检索运维知识库";
         };
     }

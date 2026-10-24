@@ -49,6 +49,9 @@ public class AdminChatModelGateway implements ChatModelGateway {
     private final ModelConfigStore store;
     private final ObjectProvider<ToolCallingManager> toolCallingManagers;
     private final AgentRunLimits runLimits;
+    private final com.rover.agent.runtime.llm.ProviderIsolation.Policy isolationPolicy;
+    private volatile com.rover.agent.runtime.llm.ProviderIsolation isolation;
+    private final String isolationSalt=java.util.UUID.randomUUID().toString();
 
     private volatile ModelSettings applied = ModelSettings.none();
     private volatile ChatClient client;
@@ -59,6 +62,8 @@ public class AdminChatModelGateway implements ChatModelGateway {
     private volatile Map<Integer, ChatClient> sceneClients = new ConcurrentHashMap<>();
     /** 快速模型的场景超时客户端缓存。 */
     private volatile Map<Integer, ChatClient> fastSceneClients = new ConcurrentHashMap<>();
+    private record PlanningClientKey(int timeoutSeconds, boolean thinkingEnabled) { }
+    private volatile Map<PlanningClientKey, ChatClient> planningClients = new ConcurrentHashMap<>();
     private final AtomicLong buildSequence = new AtomicLong();
     private volatile long buildId;
     private volatile Instant appliedAt;
@@ -67,12 +72,19 @@ public class AdminChatModelGateway implements ChatModelGateway {
         this(store, toolCallingManagers, AgentRunLimits.defaults());
     }
 
-    @Autowired
     public AdminChatModelGateway(ModelConfigStore store, ObjectProvider<ToolCallingManager> toolCallingManagers,
                                 AgentRunLimits runLimits) {
+        this(store,toolCallingManagers,runLimits,com.rover.agent.runtime.llm.ProviderIsolation.Policy.defaults());
+    }
+
+    @Autowired
+    public AdminChatModelGateway(ModelConfigStore store,ObjectProvider<ToolCallingManager> toolCallingManagers,
+                                 AgentRunLimits runLimits,com.rover.agent.runtime.llm.ProviderIsolation.Policy isolationPolicy) {
         this.store = store;
         this.toolCallingManagers = toolCallingManagers;
         this.runLimits = runLimits;
+        this.isolationPolicy=isolationPolicy;
+        this.isolation=new com.rover.agent.runtime.llm.ProviderIsolation(isolationPolicy);
     }
 
     @PostConstruct
@@ -84,13 +96,14 @@ public class AdminChatModelGateway implements ChatModelGateway {
      * 构建成功后应用配置；失败保留原客户端并记录 lastError。
      * 密钥解密失败时停用客户端，保留已配置状态。
      */
-    public void apply(ModelSettings candidate) {
+    public synchronized void apply(ModelSettings candidate) {
         if (!candidate.configured()) {
             this.applied = candidate;
             this.client = null;
             this.fastClient = null;
             this.sceneClients = new ConcurrentHashMap<>();
             this.fastSceneClients = new ConcurrentHashMap<>();
+            this.planningClients = new ConcurrentHashMap<>();
             this.lastError = null;
             return;
         }
@@ -100,6 +113,7 @@ public class AdminChatModelGateway implements ChatModelGateway {
             this.fastClient = null;
             this.sceneClients = new ConcurrentHashMap<>();
             this.fastSceneClients = new ConcurrentHashMap<>();
+            this.planningClients = new ConcurrentHashMap<>();
             this.lastError = "API 密钥无法解密，请重新填写";
             log.warn("模型 API 密钥无法解密，模型停用");
             return;
@@ -120,9 +134,11 @@ public class AdminChatModelGateway implements ChatModelGateway {
             this.fastClient = fastBuilt;
             this.sceneClients = new ConcurrentHashMap<>();
             this.fastSceneClients = new ConcurrentHashMap<>();
+            this.planningClients = new ConcurrentHashMap<>();
             this.lastError = null;
             this.buildId = buildSequence.incrementAndGet();
             this.appliedAt = Instant.now();
+            this.isolation=new com.rover.agent.runtime.llm.ProviderIsolation(isolationPolicy);
             log.info("模型已生效：{}（buildId={}）", description(), buildId);
         } catch (RuntimeException | LinkageError ex) {
             // LinkageError（类缺失、依赖版本不匹配）也在这里收敛：模型建不起来只是「模型不可用」，
@@ -151,6 +167,29 @@ public class AdminChatModelGateway implements ChatModelGateway {
     }
 
     @Override
+    public synchronized com.rover.agent.runtime.llm.ModelClient select(Purpose purpose,int timeoutSeconds,boolean thinkingEnabled) {
+        ChatClient selected=switch(purpose) {
+            case CONVERSATION -> chatClient();
+            case LIGHTWEIGHT -> chatClient(timeoutSeconds);
+            case PLANNING -> planningClient(timeoutSeconds,thinkingEnabled);
+        };
+        ModelSettings settings=applied;
+        if (purpose==Purpose.LIGHTWEIGHT && settings.fastConfigured() && fastClient!=null) {
+            var fast=settings.fast();
+            settings=new ModelSettings(true,fast.baseUrl(),fast.apiKey(),fast.model(),settings.timeoutSeconds(),settings.source(),ModelSettings.keyStateOf(fast.apiKey()));
+        }
+        int effective=purpose==Purpose.CONVERSATION || timeoutSeconds<=0 ? settings.timeoutSeconds() : Math.min(settings.timeoutSeconds(),timeoutSeconds);
+        effective=ModelSettings.clampTimeout(effective);
+        boolean thinking=purpose==Purpose.CONVERSATION || purpose==Purpose.PLANNING && thinkingEnabled;
+        URI endpoint=URI.create(settings.baseUrl());
+        String endpointId=com.rover.agent.runtime.llm.ModelContracts.digest(endpoint.getScheme(),endpoint.getHost(),Integer.toString(endpoint.getPort()),endpoint.getRawPath());
+        String revision=com.rover.agent.runtime.llm.ModelContracts.digest(endpointId,settings.model(),Integer.toString(effective),Boolean.toString(thinking),Integer.toString(runLimits.maxOutputTokens()));
+        var identity=new com.rover.agent.core.model.ModelIdentity(vendorOf(settings.baseUrl()).name(),settings.model(),endpointId,revision,effective,thinking);
+        String key=com.rover.agent.runtime.llm.ModelContracts.digest(isolationSalt,endpointId,settings.apiKey());
+        return new com.rover.agent.runtime.llm.ModelClient(selected,identity,isolation,key);
+    }
+
+    @Override
     public ChatClient chatClient() {
         ChatClient current = client;
         if (current == null) {
@@ -159,27 +198,37 @@ public class AdminChatModelGateway implements ChatModelGateway {
         return current;
     }
 
-    /** 按场景收紧超时并缓存客户端；请求上限不小于配置值时复用当前客户端。 */
+    /** 目标识别、事实选择等轻量调用：收紧超时，关闭思考，可使用快速模型。 */
     @Override
     public ChatClient chatClient(int timeoutSeconds) {
         ModelSettings settings = applied;
-        // 配置了快速模型：廉价调用（目标/规划）一律路由到快速模型，不再用思考模型硬扛。
+        // 规划有独立入口；快速模型只承接轻量调用。
         if (settings.fastConfigured()) {
             return fastScene(timeoutSeconds);
         }
-        ChatClient current = chatClient();
+        chatClient(); // 保持未就绪时的失败语义。
         int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
-        if (timeoutSeconds <= 0 || timeoutSeconds >= configured) {
-            return current;
-        }
+        int effectiveTimeout = timeoutSeconds <= 0 ? configured : Math.min(timeoutSeconds, configured);
         Map<Integer, ChatClient> cache = sceneClients;
-        ChatClient cached = cache.get(timeoutSeconds);
+        ChatClient cached = cache.get(effectiveTimeout);
         if (cached != null) {
             return cached;
         }
-        ChatClient scene = transientClient(settings, timeoutSeconds);
-        cache.put(timeoutSeconds, scene);
+        // 短调用的语义包含“关闭思考”；超时相等也不能复用允许思考的主客户端。
+        ChatClient scene = transientClient(settings, effectiveTimeout);
+        cache.put(effectiveTimeout, scene);
         return scene;
+    }
+
+    @Override
+    public ChatClient planningClient(int timeoutSeconds, boolean thinkingEnabled) {
+        chatClient();
+        ModelSettings settings = applied;
+        int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
+        int effective = timeoutSeconds <= 0 ? configured : Math.min(configured, ModelSettings.clampTimeout(timeoutSeconds));
+        var key = new PlanningClientKey(effective, thinkingEnabled);
+        return planningClients.computeIfAbsent(key, ignored -> build(new ModelSettings(settings.enabled(), settings.baseUrl(),
+                settings.apiKey(), settings.model(), effective, settings.source(), settings.keyState()), thinkingEnabled));
     }
 
     /** 配置了快速模型时的廉价调用入口：走快速模型；构建失败则回退主模型场景客户端。 */
@@ -249,9 +298,11 @@ public class AdminChatModelGateway implements ChatModelGateway {
      */
     public ChatClient transientClient(ModelSettings settings, int timeoutSeconds) {
         // 场景客户端服务的是「廉价调用」（见 ChatModelGateway#chatClient(int)），因此不开深度思考：
-        // 那些调用上限只有 10 秒，让模型先想一遍既拖慢等待，也更容易撞上超时后回退规则。
+        // 调查规划的主模型与思考策略由 planningClient 单独处理。
+        int configured = ModelSettings.clampTimeout(settings.timeoutSeconds());
+        int effective = timeoutSeconds <= 0 ? configured : Math.min(configured, ModelSettings.clampTimeout(timeoutSeconds));
         return build(new ModelSettings(settings.enabled(), settings.baseUrl(), settings.apiKey(), settings.model(),
-                ModelSettings.clampTimeout(timeoutSeconds), settings.source(), settings.keyState()), false);
+                effective, settings.source(), settings.keyState()), false);
     }
 
     /** 构建客户端；构建不成功必须抛异常，由 {@link #apply(ModelSettings)} 决定是否保留上一个可用客户端。 */
@@ -315,6 +366,13 @@ public class AdminChatModelGateway implements ChatModelGateway {
                 .baseUrl(settings.baseUrl())
                 .apiKey(key(settings))
                 .restClientBuilder(restClient(settings))
+                .responseErrorHandler(new org.springframework.web.client.ResponseErrorHandler() {
+                    @Override public boolean hasError(org.springframework.http.client.ClientHttpResponse response) throws java.io.IOException { return response.getStatusCode().isError(); }
+                    @Override public void handleError(URI uri,org.springframework.http.HttpMethod method,org.springframework.http.client.ClientHttpResponse response) throws java.io.IOException {
+                        int retry=com.rover.agent.runtime.llm.ModelFailures.parseRetryAfter(response.getHeaders().getFirst("Retry-After"));
+                        throw new com.rover.agent.runtime.llm.ModelProviderFailure(response.getStatusCode().value(),retry);
+                    }
+                })
                 .build();
         return DeepSeekChatModel.builder()
                 .deepSeekApi(api)

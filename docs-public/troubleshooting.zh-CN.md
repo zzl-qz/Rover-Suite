@@ -58,7 +58,7 @@ curl -H "X-Rover-Admin-Token: <nameserver-admin-token>" \
 | `targets[].serviceName` / `group` | 是否能在 Nameserver 中找到对应服务与组的健康实例 |
 | `targetUrl/targetUrls` | 静态上游地址是否可访问。默认只转发 `http://`；`https://` 见第 4.1 节 |
 
-如果使用 Admin 修改过路由，`config/routes.overlay.json` 会整体覆盖 YAML 路由。YAML 修改不生效时，优先检查这个 overlay 文件。
+如果使用 Admin 修改过路由，事务库 `config/routes.overlay.json.state.mv.db` 会整体覆盖 YAML 路由；尚未迁移时才读取旧 JSON。不要删除库或见证文件解锁；见[持久回执与恢复](gateway-operation-receipts.zh-CN.md)。
 
 ### 4.1 启动或热更新提示只支持 http 上游
 

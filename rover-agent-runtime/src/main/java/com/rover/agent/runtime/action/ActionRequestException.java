@@ -11,7 +11,9 @@ public class ActionRequestException extends RuntimeException {
         /** 记录不存在，或不属于当前用户。 */
         NOT_FOUND,
         /** 当前状态不允许这个操作（例如已经批准过、还没成功就回滚）。 */
-        CONFLICT
+        CONFLICT,
+        /** 请求缺字段、非法单位或边界值。 */
+        INVALID_REQUEST
     }
 
     private final Code code;

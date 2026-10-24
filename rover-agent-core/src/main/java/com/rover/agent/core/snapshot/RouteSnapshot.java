@@ -6,10 +6,30 @@ package com.rover.agent.core.snapshot;
  * @param routeId          路由 ID
  * @param businessPrefix   业务前缀，参与路径匹配
  * @param serviceName      目标服务名；静态上游时为空
- * @param group            目标服务分组；为空表示不限分组
+ * @param group            目标服务分组；多个版本用逗号分隔，为空表示不限分组
  * @param targetUrl        单个静态上游地址；动态服务时为空
  * @param targetUrls       多个静态上游地址（逗号分隔）；单一地址或动态服务时为空
  * @param observedAtMillis 取证时刻
  */
 public record RouteSnapshot(String routeId, String businessPrefix, String serviceName, String group,
-                            String targetUrl, String targetUrls, long observedAtMillis) { }
+                            String targetUrl, String targetUrls, long observedAtMillis,
+                            String resourceUid, long generation) {
+    public RouteSnapshot(String routeId, String businessPrefix, String serviceName, String group,
+                         String targetUrl, String targetUrls, long observedAtMillis) {
+        this(routeId, businessPrefix, serviceName, group, targetUrl, targetUrls, observedAtMillis, null, 0);
+    }
+
+    /** Admin 的多版本只读视图使用逗号分隔分组，不能把整个列表当成一个分组名。 */
+    public static boolean matchesGroup(String selectedGroups, String instanceGroup) {
+        if (selectedGroups == null || selectedGroups.isBlank()) {
+            return true;
+        }
+        String candidate = instanceGroup == null ? "" : instanceGroup.trim();
+        for (String selected : selectedGroups.split(",")) {
+            if (selected.trim().equals(candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+}

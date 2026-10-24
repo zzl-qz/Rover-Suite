@@ -11,6 +11,10 @@ import java.util.List;
  * 步骤完成、证据交付后才能记录恢复点。
  */
 public interface InvestigationReporter extends StepSink {
+    default int resumeRounds() { return 0; }
+    default int resumeToolCalls() { return 0; }
+    default InvestigationPlan resumePlan() { return InvestigationPlan.empty(); }
+    default List<Evidence> resumeEvidence() { return List.of(); }
 
     /** 本轮调查计划（含每步依据）；计划为空表示本轮没有可执行步骤。 */
     void reportPlan(InvestigationPlan plan);

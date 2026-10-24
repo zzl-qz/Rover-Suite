@@ -26,6 +26,8 @@ public final class IncidentRegistry {
     private final AgentSessionRepository sessions;
     private final IncidentRepository incidents;
     private final WorkspaceRetention retention;
+    private final com.rover.agent.core.model.ResourceScope scope;
+    private final String targetNamespace;
 
     /** 当前阶段的内存实现；接入持久化后由组合根注入具体实现。 */
     public IncidentRegistry() {
@@ -38,9 +40,21 @@ public final class IncidentRegistry {
 
     public IncidentRegistry(AgentSessionRepository sessions, IncidentRepository incidents,
                             WorkspaceRetention retention) {
+        this(sessions, incidents, retention, null, "");
+    }
+
+    public IncidentRegistry(AgentSessionRepository sessions, IncidentRepository incidents,
+                            WorkspaceRetention retention, com.rover.agent.core.model.ResourceScope scope,
+                            String targetNamespace) {
         this.sessions = sessions;
         this.incidents = incidents;
         this.retention = retention;
+        this.scope = scope;
+        this.targetNamespace = targetNamespace;
+    }
+
+    public boolean accepts(Session session) {
+        return scope == null || (scope.equals(session.scope()) && targetNamespace.equals(session.targetNamespace()));
     }
 
     /** 开启一个没有归属用户的会话；仅供尚未接入认证上下文的调用方使用。 */
@@ -52,7 +66,7 @@ public final class IncidentRegistry {
     public Session openSession(String userId) {
         long now = System.currentTimeMillis();
         Session session = new Session(UUID.randomUUID().toString(), userId, null, null, SessionStatus.ACTIVE,
-                now, now, List.of());
+                now, now, List.of()).withScope(scope, targetNamespace);
         admit(session);
         return session;
     }
@@ -64,11 +78,17 @@ public final class IncidentRegistry {
 
     /** 在会话下开启一个带指定时间范围的事件；语义同 {@link #openIncident(String, IncidentOrigin, ResourceTarget)}。 */
     public Incident openIncident(String sessionId, IncidentOrigin origin, ResourceTarget target, TimeRange timeRange) {
+        return openIncident(sessionId, origin, target, timeRange, null);
+    }
+
+    /** 来源主体与会话处理归属分别保存；triggeredBy 只能由认证上下文提供。 */
+    public Incident openIncident(String sessionId, IncidentOrigin origin, ResourceTarget target, TimeRange timeRange,
+                                 String triggeredBy) {
         long now = System.currentTimeMillis();
         Incident incident = new Incident(UUID.randomUUID().toString(), sessionId, origin, target.value(),
                 IncidentStatus.OPEN, target,
                 timeRange == null ? TimeRange.unspecified() : timeRange, "",
-                now, now, List.of());
+                now, now, List.of(), triggeredBy);
         if (retention == null) {
             incidents.save(incident);
         } else {
@@ -87,7 +107,7 @@ public final class IncidentRegistry {
         Incident updated = new Incident(incident.incidentId(), incident.sessionId(), incident.origin(),
                 incident.title(), incident.status(), incident.target(),
                 timeRange == null ? TimeRange.unspecified() : timeRange, incident.summary(),
-                incident.createdAtMillis(), System.currentTimeMillis(), incident.taskIds());
+                incident.createdAtMillis(), System.currentTimeMillis(), incident.taskIds(), incident.triggeredBy());
         incidents.save(updated);
         return updated;
     }
@@ -98,7 +118,7 @@ public final class IncidentRegistry {
                 incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
                 IncidentStatus.INVESTIGATING, incident.target(), incident.timeRange(),
                 incident.summary(), incident.createdAtMillis(), System.currentTimeMillis(),
-                SessionLinks.append(incident.taskIds(), taskId))));
+                SessionLinks.append(incident.taskIds(), taskId), incident.triggeredBy())));
     }
 
     /**
@@ -112,7 +132,16 @@ public final class IncidentRegistry {
                 incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
                 IncidentStatus.RESOLVED, incident.target(), incident.timeRange(),
                 summary == null ? "" : summary, incident.createdAtMillis(), System.currentTimeMillis(),
-                incident.taskIds())));
+                incident.taskIds(), incident.triggeredBy())));
+    }
+
+    /** Alert recovery is independent of whether its investigation has reached a conclusion. */
+    public void resolveAlert(String incidentId, String summary) {
+        incidents.find(incidentId).ifPresent(incident -> incidents.save(new Incident(
+                incident.incidentId(), incident.sessionId(), incident.origin(), incident.title(),
+                IncidentStatus.RESOLVED, incident.target(), incident.timeRange(),
+                summary == null ? "" : summary, incident.createdAtMillis(), System.currentTimeMillis(),
+                incident.taskIds(), incident.triggeredBy())));
     }
 
     public Optional<Incident> incident(String incidentId) {

@@ -25,7 +25,7 @@ public class GatewayApplication {
         List<RouteConfig> routes = config.toRouteConfigs();
 
         // Admin 关闭时只认 YAML，避免历史管理面覆盖干扰部署配置。
-        // loadOrNull 在文件缺失/为空/格式不可解析时返回 null，此时回退 YAML，
+        // 仅没有事务库时，旧 JSON 缺失/为空/不可解析可回退 YAML；已有事务库损坏必须拒绝启动。
         // 而不是把「读不出覆盖文件」当成「路由表是空的」——后者会让网关以零路由启动。
         RouteOverlayStore overlayStore = new RouteOverlayStore();
         RouteOverlayStore.AppliedState applied = config.isAdminEnabled() ? overlayStore.loadOrNull() : null;
@@ -92,6 +92,7 @@ public class GatewayApplication {
         server.restoreRoutesRevision(
                 applied == null ? 0 : applied.revision(),
                 applied == null ? "" : applied.appliedOperationId());
+        if (config.isAdminEnabled()) { server.initializeManagedState(); }
         server.start();
     }
 }

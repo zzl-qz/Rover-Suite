@@ -1,7 +1,9 @@
 package com.rover.agent.core.repository;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.RemediationPlan;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
@@ -9,14 +11,37 @@ import java.util.function.UnaryOperator;
 /** 变更记录存储契约；transition 必须原子完成状态比较与写入。 */
 public interface AgentActionRepository {
 
-    /** 新建或整体覆盖一条变更记录。 */
-    void save(AgentAction action);
+    /**
+     * 新建（version=0）或按行版本条件更新；返回递增版本后的持久化记录。
+     *
+     * @throws ActionUpdateConflictException 记录已被更新、删除或新建 ID 冲突
+     */
+    AgentAction save(AgentAction action);
 
     /** 按 ID 取一条变更记录。 */
     Optional<AgentAction> find(String actionId);
 
     /** 某个会话的全部变更记录，新的在前。 */
     List<AgentAction> bySession(String sessionId);
+
+    /** 当前管理范围内指定状态的变更，newest first. */
+    default List<AgentAction> byStatus(java.util.Set<ActionStatus> statuses, int limit) { return List.of(); }
+
+    /** 不可变计划历史，按 planVersion 升序；仅服务端授权后的调用方可暴露这些内容。 */
+    default List<RemediationPlan> planVersions(String planId) { return List.of(); }
+
+    default Optional<RemediationPlan> findPlan(String planId, int planVersion) {
+        return planVersions(planId).stream().filter(plan -> plan.planVersion() == planVersion).findFirst();
+    }
+
+    /** Persisted, immutable approvals scoped to one exact plan and policy version. */
+    default List<ActionApproval> approvals(String actionId, ActionApproval.Stage stage, int planVersion,
+                                          String planHash, String policyVersion) { return List.of(); }
+
+    /** Atomically records one approver at most once and rejects stale or already-settled actions. */
+    default boolean recordApproval(ActionApproval approval) {
+        throw new UnsupportedOperationException("Approval receipts are not supported by this repository");
+    }
 
     /**
      * 原子状态迁移：当前状态与 {@code expected} 一致时，把 {@code mutation} 的结果落库并返回；

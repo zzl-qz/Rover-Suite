@@ -79,6 +79,17 @@ public class GatewayManageApi extends AbstractManageApi {
             QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
             String routeId = firstQuery(decoder, ManageApiPaths.PARAM_ROUTE_ID);
             int range = ManageApiPaths.clampLiveRange(firstQuery(decoder, ManageApiPaths.PARAM_RANGE));
+            String from = firstQuery(decoder, "fromMillis"), to = firstQuery(decoder, "toMillis");
+            if (from != null || to != null) {
+                try {
+                    if (from == null || to == null || routeId == null || routeId.isBlank()) { throw new IllegalArgumentException(); }
+                    writeJson(ctx, HttpResponseStatus.OK,
+                            runtime.getMetricsRegistry().routeWindowJson(routeId, Long.parseLong(from), Long.parseLong(to)));
+                } catch (IllegalArgumentException ex) {
+                    writeJson(ctx, HttpResponseStatus.BAD_REQUEST, "{\"error\":\"invalid final-response window\"}");
+                }
+                return true;
+            }
             writeJson(ctx, HttpResponseStatus.OK,
                     runtime.getMetricsRegistry().routeMetricsJson(routeId, range));
             return true;
@@ -226,37 +237,10 @@ public class GatewayManageApi extends AbstractManageApi {
             throw new IllegalArgumentException(
                     "weight 必须在 0~" + com.rover.gateway.core.route.RouteTarget.MAX_WEIGHT + " 之间");
         }
-        List<RouteConfig> current = new ArrayList<>(runtime.getRouteMatcher().listRoutes());
-        boolean matched = false;
-        for (int i = 0; i < current.size(); i++) {
-            RouteConfig route = current.get(i);
-            if (!routeKey.equals(route.getId()) && !routeKey.equals(route.getBusinessPrefix())) {
-                continue;
-            }
-            if (route.getTargets() == null || route.getTargets().isEmpty()) {
-                throw new IllegalArgumentException("这条路由没有版本目标，不能用权重接口调整: " + routeKey);
-            }
-            List<com.rover.gateway.core.route.RouteTarget> updated = new ArrayList<>();
-            for (com.rover.gateway.core.route.RouteTarget target : route.getTargets()) {
-                if (target.serviceName().equals(serviceName) && text(target.group()).equals(group)) {
-                    updated.add(new com.rover.gateway.core.route.RouteTarget(
-                            target.serviceName(), target.group(), weight));
-                    matched = true;
-                } else {
-                    updated.add(target);
-                }
-            }
-            // 只在副本上改：listRoutes() 返回的元素是正在接流的活对象，改它会绕过乐观锁与落盘
-            RouteConfig copy = RouteValidator.copyRoute(route);
-            copy.setTargets(updated);
-            current.set(i, copy);
-        }
-        if (!matched) {
-            throw new IllegalArgumentException(
-                    "未找到版本目标: route=" + routeKey + ", service=" + serviceName + ", group=" + group);
-        }
-        GatewayRuntime.RouteChangeResult result = runtime.applyRoutes(
-                requiredRevision(body), operationId(body), current);
+        GatewayRuntime.RouteChangeResult result = runtime.adjustTargetWeight(
+                requiredRevision(body), operationId(body), routeKey, serviceName, group, weight,
+                text(body.get("expectedResourceUid")), body.containsKey("expectedGeneration")
+                        ? intValue(body.get("expectedGeneration")) : 0);
         writeJson(ctx, HttpResponseStatus.OK, changeResponse(result));
     }
 
@@ -294,12 +278,14 @@ public class GatewayManageApi extends AbstractManageApi {
         if (record == null) {
             // 没有记录 != 没执行：可能是操作表已淘汰，也可能是压根没提交过
             resp.put("status", "UNKNOWN");
-            resp.put("message", "没有该操作的记录：可能从未提交，或已超出最近 " + GatewayRuntime.MAX_OPERATIONS + " 条记录窗口");
+            resp.put("message", "没有可证明的持久回执：可能从未提交或来自旧版本；UNKNOWN 不表示没有执行，禁止换号补做");
         } else {
             resp.put("status", record.status().name());
             resp.put("revision", record.revision());
             resp.put("message", record.message());
             resp.put("atMillis", record.atMillis());
+            resp.put("requestHash", record.requestHash());
+            resp.put("expiresAtMillis", record.expiresAtMillis());
         }
         resp.put("currentRevision", runtime.getRevision());
         writeJson(ctx, HttpResponseStatus.OK, JsonCodec.toJson(resp));
@@ -342,15 +328,12 @@ public class GatewayManageApi extends AbstractManageApi {
         return value == null ? "" : String.valueOf(value).trim();
     }
 
-    /** 宽松取整：数字直接取值，字符串解析失败按 0（后续区间校验会拒绝非法值）。 */
+    /** 写入参数必须为精确整数；不能把缺失/非法输入变成合法的停流权重 0。 */
     private static int intValue(Object value) {
-        if (value instanceof Number number) {
-            return number.intValue();
-        }
         try {
-            return Integer.parseInt(text(value));
-        } catch (NumberFormatException ex) {
-            return 0;
+            return new java.math.BigDecimal(text(value)).intValueExact();
+        } catch (NumberFormatException | ArithmeticException ex) {
+            throw new IllegalArgumentException("需要 32 位精确整数: " + text(value));
         }
     }
 
@@ -421,6 +404,10 @@ public class GatewayManageApi extends AbstractManageApi {
         resp.put("sampleRate", runtime.getTraceSettings().getSampleRate());
         resp.put("capacity", runtime.getTraceBuffer().capacity());
         resp.put("count", runtime.getTraceBuffer().size());
+        resp.put("observedAtMillis", System.currentTimeMillis());
+        resp.put("collectionStartedAtMillis", runtime.getTraceBuffer().startedAtMillis());
+        resp.put("overwritten", runtime.getTraceBuffer().overwritten());
+        resp.put("samplingMode", "RANDOM_PLUS_SLOW");
 
         List<Map<String, Object>> rows = new ArrayList<>();
         for (com.rover.gateway.core.trace.RequestTrace trace : runtime.getTraceBuffer().snapshot()) {
@@ -459,6 +446,7 @@ public class GatewayManageApi extends AbstractManageApi {
         row.put("startMillis", trace.getStartMillis());
         row.put("totalCostMs", trace.getTotalCostMs());
         row.put("slow", trace.isSlow());
+        row.put("observation", trace.getObservation());
         List<Map<String, Object>> phases = new ArrayList<>();
         for (com.rover.gateway.core.trace.RequestTrace.Phase phase : trace.getPhases()) {
             Map<String, Object> phaseRow = new LinkedHashMap<>();
@@ -548,13 +536,14 @@ public class GatewayManageApi extends AbstractManageApi {
         resp.put("revision", runtime.getRevision());
         resp.put("appliedOperationId", runtime.getAppliedOperationId());
         resp.put("routeCount", routes.size());
+        resp.put("operationReceiptRetentionMillis", com.rover.gateway.core.route.RouteOperationStore.RECEIPT_RETENTION_MILLIS);
         resp.put("routes", routeMaps(routes));
         return JsonCodec.toJson(resp);
     }
 
     /** 把 RouteConfig 列表转成 Map 行，供 JSON 序列化。 */
     private List<Map<String, Object>> routeMaps(List<RouteConfig> routes) {
-        return RouteOverlayStore.toRows(routes);
+        return RouteOverlayStore.toResourceRows(routes);
     }
 
     /** 取 query 参数第一个值。 */

@@ -7,6 +7,14 @@ import java.util.List;
 /** 只读读取 Gateway 指标。 */
 public interface MetricReadPort {
 
+    default com.rover.agent.core.snapshot.RouteWindowSnapshot routeWindow(String routeId, int windowSeconds) {
+        throw new SnapshotUnavailableException("当前 Gateway 未提供原生最终响应窗口");
+    }
+
+    default com.rover.agent.core.snapshot.RouteWindowSnapshot routeWindow(String routeId, com.rover.agent.core.model.TimeRange range) {
+        throw new SnapshotUnavailableException("当前 Gateway 未提供历史最终响应窗口");
+    }
+
     /**
      * 读取 Gateway 最近 windowSeconds 秒的全局流量与拒绝计数快照。
      * 指标未启用或数据不可用时抛 {@link SnapshotUnavailableException}。
@@ -16,7 +24,8 @@ public interface MetricReadPort {
     /**
      * 读取指定路由下「路由 × 上游实例」的窗口观测：请求数、状态码、错误率与延迟。
      *
-     * 这是把「哪台实例返回了 5xx」落到具体实例的唯一数据源；路由不存在或窗口内没有转发记录时返回空列表，
+     * 该指标定位访问哪台实例时出现 5xx，包含后端响应与网关生成错误，不能单凭它判断响应来源。
+     * 路由不存在或窗口内没有转发记录时返回空列表，
      * 而指标未启用、端点不可达等取数失败抛 {@link SnapshotUnavailableException}——「没有样本」与
      * 「取不到数据」必须分开，否则会拿旧样本或空数据当成结论。
      *

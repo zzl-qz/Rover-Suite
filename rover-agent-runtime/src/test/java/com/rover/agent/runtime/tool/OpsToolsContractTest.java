@@ -21,7 +21,7 @@ import org.springframework.ai.tool.annotation.ToolParam;
  * {@code ScriptedConversationModel} 的说明）。但「描述写得够不够、参数有没有说明、每个能力是否都有暴露」
  * 是模型命中率的静态前提——这些是确定性事实，可以也必须测。
  *
- * <p>它守住的是「模型在 9 个工具里选对那一个」这一步的前提：选错的空间始终存在，而工具本身
+ * <p>它守住的是「模型在已声明的工具里选对那一个」这一步的前提：选错的空间始终存在，而工具本身
  * 必须先是可选、可描述、可执行的。
  */
 class OpsToolsContractTest {
@@ -35,6 +35,7 @@ class OpsToolsContractTest {
             AgentCapability.CONFIG_READ, "getConfigs",
             AgentCapability.EVENT_QUERY, "listRegistryEvents",
             AgentCapability.LOG_QUERY, "queryLogs",
+            AgentCapability.CHANGE_TIMELINE_QUERY, "getChangeTimeline",
             AgentCapability.KNOWLEDGE_RETRIEVAL, "searchKnowledge");
 
     /** 工具描述最短长度：太短的描述装不下「何时用 / 何时不用」的判别信息，模型容易选错。 */
@@ -48,14 +49,14 @@ class OpsToolsContractTest {
     }
 
     /**
-     * 工具总数：8 个只读查询 + 1 个提案工具（{@code proposeTargetWeightChange}）。
+     * 工具总数：13 个只读查询（含路由别名与外部遥测）+ 1 个提案工具（{@code proposeTargetWeightChange}）。
      *
      * <p>提案工具算进来是刻意的：它也在模型的可选集合里，因此它的描述必须和查询工具一样经得起挑选；
-     * 而它与其他 9 个的区别（只有它不读数据、只登记一条待审批变更）必须由测试固定下来。
+     * 而它与其他 10 个的区别（只有它登记待审批变更）必须由测试固定下来。
      */
     @Test
     void toolCountMatchesTheDocumentedSet() {
-        assertEquals(10, toolMethods().size(),
+        assertEquals(14, toolMethods().size(),
                 "对外宣称的工具数量与实际不符：模型看到的工具集变了，文档与能力清单应同步");
     }
 

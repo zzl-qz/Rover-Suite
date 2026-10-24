@@ -6,6 +6,7 @@ window.RoverAdminPages.configs = {
             configs: [],
             configsError: null,
             configBusyKey: null,
+            configsRequest: 0,
         };
     },
 
@@ -22,15 +23,24 @@ window.RoverAdminPages.configs = {
 
     methods: {
         async fetchConfigs() {
+            const request = ++this.configsRequest;
             this.configsError = null;
             try {
                 const rows = await RoverAdminApi.api('/api/configs');
+                // 保存或手动刷新并发时，只应用最后发起的读取，避免旧快照回滚新状态。
+                if (request !== this.configsRequest) return;
+                const previous = new Map(this.configs.map(c => [`${c.component}:${c.key}`, c]));
                 this.configs = (rows || []).map(c => {
-                    c._saved = c.value;
-                    return c;
+                    const old = previous.get(`${c.component}:${c.key}`);
+                    return {
+                        ...c,
+                        // Refresh the saved baseline without discarding edits to other rows.
+                        value: old && this.isDirty(old) ? old.value : c.value,
+                        _saved: c.value,
+                    };
                 });
             } catch (e) {
-                this.configsError = e.message;
+                if (request === this.configsRequest) this.configsError = e.message;
             }
         },
         isDirty(c) {
@@ -115,13 +125,17 @@ window.RoverAdminPages.configs = {
             c.value = c._saved;
         },
         async updateConfig(c) {
-            this.configBusyKey = c.key;
+            if (this.configBusyKey) return;
+            const submittedValue = String(c.value);
+            this.configBusyKey = `${c.component}:${c.key}`;
             try {
                 const result = await RoverAdminApi.api('/api/configs', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ component: c.component, key: c.key, value: String(c.value) }),
+                    body: JSON.stringify({ component: c.component, key: c.key, value: submittedValue }),
                 });
+                // Make this row clean at the submitted value; newer edits made while saving stay dirty.
+                c._saved = submittedValue;
                 this.toast('success', `${c.component}.${c.key} 已更新：${result.message || ''}`);
                 await this.fetchConfigs();
             } catch (e) {

@@ -11,7 +11,32 @@ import java.util.UUID;
  * 「样本不足」的结论必须能从证据本身看出来。
  */
 public record Evidence(String evidenceId, String taskId, EvidenceType type, String source, String title,
-                       String summary, String rawReference, Map<String, String> metadata, long observedAtMillis) {
+                       String summary, String rawReference, Map<String, String> metadata, long observedAtMillis,
+                       EvidenceEnvelope envelope) {
+
+    public Evidence {
+        metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+        envelope = envelope == null ? EvidenceEnvelope.legacy(source, type == null ? "UNKNOWN" : type.name(),
+                rawReference, summary, metadata, observedAtMillis) : envelope;
+    }
+
+    public Evidence(String evidenceId, String taskId, EvidenceType type, String source, String title,
+                    String summary, String rawReference, Map<String, String> metadata, long observedAtMillis) {
+        this(evidenceId, taskId, type, source, title, summary, rawReference, metadata, observedAtMillis, null);
+    }
+
+    public Evidence withEnvelope(EvidenceEnvelope next) {
+        return new Evidence(evidenceId, taskId, type, source, title, summary, rawReference, metadata, observedAtMillis, next);
+    }
+
+    /** 两条模型入口使用同一表述，避免图调查丢掉对话工具已有的质量边界。 */
+    public String modelText() {
+        return "[evidenceId=" + evidenceId + " quality=" + envelope.qualityStatus() + " samples="
+                + envelope.sampleCount() + " sampling=" + envelope.samplingMode() + " collectedAt="
+                + observedAtMillis + " coverage=" + (envelope.coverageRange() == null ? "UNKNOWN"
+                        : envelope.coverageRange().describe()) + "] " + summary
+                + (envelope.limitations().isEmpty() ? "" : "（证据边界：" + String.join("；", envelope.limitations()) + "）");
+    }
 
     /** 产生这条证据的模型工具调用号。规划路径没有工具调用时，这个键不存在。 */
     public static final String KEY_TOOL_CALL_ID = "toolCallId";
@@ -46,6 +71,6 @@ public record Evidence(String evidenceId, String taskId, EvidenceType type, Stri
         Map<String, String> next = new LinkedHashMap<>(metadata);
         next.put(KEY_TOOL_CALL_ID, toolCallId);
         return new Evidence(evidenceId, taskId, type, source, title, summary, rawReference,
-                Map.copyOf(next), observedAtMillis);
+                Map.copyOf(next), observedAtMillis, envelope);
     }
 }

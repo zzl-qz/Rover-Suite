@@ -125,9 +125,9 @@ All Agent endpoints require sign-in, and POST requests require a CSRF token. The
 | POST | `/api/agent/tasks/{taskId}/cancel` | Cooperatively cancel a running task |
 | POST | `/api/agent/events/ingest` | Start a rule/model investigation from an alert |
 
-The alert body is `{"path":"/api","message":"5xx alert"}`; optional `fromMillis` and `toMillis` must be supplied
-together. Alert sessions are independent of human conversations. Cancellation returns 404 for inaccessible tasks,
-409 for tasks that cannot be cancelled, and 200 once local cancellation is requested.
+The alert body is `{"path":"/api","alertKey":"orders-5xx","state":"FIRING","message":"5xx alert"}` and must include an `Idempotency-Key` header reused on delivery retries; optional `fromMillis` and `toMillis` must be supplied
+ together. Duplicate deliveries return the original acceptance result; `RESOLVED` closes the alert generation without opening another investigation. Alert sessions are independent of human conversations. Cancellation returns 404 for inaccessible tasks,
+ 409 for tasks that cannot be cancelled, and 200 once local cancellation is requested.
 
 Human-approved changes use `/api/agent/actions`. See the [Admin API](./admin-api.md) for request fields, approval,
 rejection, rollback, result confirmation, ownership checks, and error semantics.

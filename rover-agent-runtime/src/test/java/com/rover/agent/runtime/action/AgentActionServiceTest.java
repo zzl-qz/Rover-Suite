@@ -6,12 +6,19 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.AutoExecutionPolicy;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.WeightRequestUnit;
+import com.rover.agent.core.port.AgentAccess;
 import com.rover.agent.core.port.RouteChangePreview;
 import com.rover.agent.core.port.RouteChangeResult;
 import com.rover.agent.core.port.RouteControlException;
@@ -21,8 +28,11 @@ import com.rover.agent.core.port.RouteControlState;
 import com.rover.agent.core.port.RouteControlTarget;
 import com.rover.agent.core.port.RouteOperation;
 import com.rover.agent.core.port.RouteOperationStatus;
+import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.port.SnapshotUnavailableException;
 import com.rover.agent.runtime.repository.InMemoryAgentActionRepository;
+import com.rover.agent.runtime.repository.InMemoryActionCommandRepository;
+import com.rover.agent.runtime.repository.InMemoryAutonomousActionBudgetRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -30,6 +40,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -51,19 +68,458 @@ class AgentActionServiceTest {
 
     private FakeRouteControl gateway;
     private InMemoryAgentActionRepository repository;
+    private InMemoryAgentSessionRepository sessions;
     private AgentActionService service;
 
     @BeforeEach
     void setUp() {
         gateway = new FakeRouteControl();
         repository = new InMemoryAgentActionRepository(50);
-        InMemoryAgentSessionRepository sessions = new InMemoryAgentSessionRepository(10);
+        sessions = new InMemoryAgentSessionRepository(10);
         sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of()));
         service = new AgentActionService(repository, sessions, gateway,
                 new RouteWeightActionExecutor(gateway, repository));
     }
 
     // ---------------------------------------------------------------- 1. 正常执行
+
+    @Test
+    void evidenceGatedQuarantineBindsEvidenceAndStillWaitsForApproval() {
+        gateway.resourceRef = planResource();
+
+        ActionProposal proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1", "ev-2"));
+
+        assertTrue(proposal.created(), proposal.reason());
+        AgentAction action = proposal.action();
+        assertEquals(ActionStatus.PENDING_APPROVAL, action.status());
+        assertEquals(0, action.desiredWeight());
+        assertEquals(List.of("ev-1", "ev-2"), action.plan().evidenceRefs());
+        assertEquals("route-weight-evidence-gate-v1", action.plan().provenance().policyVersion());
+        assertEquals("RULE_EVIDENCE_GATE", action.plan().provenance().source());
+        assertEquals(0, gateway.writes, "自动候选只能登记，不能写入 Gateway");
+    }
+
+    @Test
+    void matchingPreauthorizationQueuesButRevocationBeforeWorkerPreventsWrite() throws Exception {
+        gateway.resourceRef = planResource();
+        AtomicReference<List<AutoExecutionPolicy>> current = new AtomicReference<>();
+        var access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean automatedWriteAllowed() { return true; }
+            public boolean managed() { return false; }
+        };
+        gateway.namespace = "namespace-a";
+        sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
+                .withScope(gateway.resourceRef.scope(), gateway.namespace));
+        var commands = new InMemoryActionCommandRepository(10);
+        var draftPolicy = AutoExecutionPolicy.create("route-quarantine", "namespace-a", gateway.resourceRef,
+                "order-service", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        var policy = draftPolicy.revise(true, 5, 5, draftPolicy.expiresAtMillis(), "admin", System.currentTimeMillis());
+        current.set(List.of(policy));
+        var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, current::get);
+        var executor = new RouteWeightActionExecutor(gateway, repository, access, approval);
+        service = new AgentActionService(repository, sessions, gateway, new ActionExecutorRegistry(List.of(executor)),
+                access, approval, commands, true, null,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 10_000,
+                        30_000, 2, 10, 0.9, 120_000, 0.01, 500));
+        var proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-auto", "incident-auto", "/api/order", "v2", List.of("ev-1"));
+        assertTrue(proposal.created(), proposal.reason());
+        assertEquals(ActionStatus.QUEUED, proposal.action().status());
+        assertEquals(policy.policyVersion(), proposal.action().plan().provenance().policyVersion());
+        current.set(List.of(policy.revise(false, 5, 5, policy.expiresAtMillis(), "admin", System.currentTimeMillis())));
+        try (var runner = new com.rover.agent.runtime.action.ActionCommandRunner(commands, service, 1, 10, 50)) {
+            runner.start();
+            AgentAction stopped = awaitStatus(proposal.action().actionId(), ActionStatus.PRECONDITION_FAILED);
+            assertTrue(stopped.errorMessage().contains("预授权"), stopped.errorMessage());
+        }
+        assertEquals(0, gateway.writes, "撤销发生在 Worker 写入前，必须挡住 Gateway 调用");
+    }
+
+    @Test
+    void matchingPreauthorizationExecutesOnlyTheBoundedEvidenceGatedPlan() throws Exception {
+        gateway.resourceRef = planResource();
+        gateway.namespace = "namespace-a";
+        sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
+                .withScope(gateway.resourceRef.scope(), gateway.namespace));
+        var draft = AutoExecutionPolicy.create("route-quarantine", gateway.namespace, gateway.resourceRef,
+                "order-service", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        var policy = draft.revise(true, 5, 5, draft.expiresAtMillis(), "admin", System.currentTimeMillis());
+        var access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean automatedWriteAllowed() { return true; }
+            public boolean managed() { return false; }
+        };
+        var commands = new InMemoryActionCommandRepository(10);
+        var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, List.of(policy));
+        var executor = new RouteWeightActionExecutor(gateway, repository, access, approval);
+        service = new AgentActionService(repository, sessions, gateway, new ActionExecutorRegistry(List.of(executor)),
+                access, approval, commands, true, null,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 10_000,
+                        30_000, 2, 10, 0.9, 120_000, 0.01, 500));
+
+        var proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-auto-success", "incident-auto",
+                "/api/order", "v2", List.of("evidence-1"));
+        assertTrue(proposal.created(), proposal.reason());
+        assertEquals(ActionStatus.QUEUED, proposal.action().status());
+        assertEquals("preauth:route-quarantine@2", proposal.action().plan().provenance().policyVersion());
+        assertFalse(policy.matches(proposal.action(), gateway.namespace, policy.expiresAtMillis()),
+                "策略有效期边界即失效，不允许 Worker 使用过期授权");
+        assertEquals(0, gateway.writes, "提案只入持久队列，Worker 才能写 Gateway");
+
+        try (var runner = new com.rover.agent.runtime.action.ActionCommandRunner(commands, service, 1, 10, 50)) {
+            runner.start();
+            AgentAction completed = awaitStatus(proposal.action().actionId(), ActionStatus.SUCCESS);
+            assertEquals(ActionStatus.SUCCESS, completed.status());
+        }
+        assertEquals(1, gateway.writes);
+        assertEquals(0, repository.approvals(proposal.action().actionId(),
+                com.rover.agent.core.model.ActionApproval.Stage.APPLY,
+                proposal.action().plan().planVersion(), proposal.action().plan().planHash(), approval.policyVersion()).size(),
+                "自动授权必须绑定到明确策略，不伪造人工审批记录");
+    }
+
+    @Test
+    void preauthorizedUnknownResultKeepsLockUntilOriginalOperationIsReconciled() {
+        gateway.resourceRef = planResource();
+        gateway.namespace = "namespace-a";
+        sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
+                .withScope(gateway.resourceRef.scope(), gateway.namespace));
+        var draft = AutoExecutionPolicy.create("route-quarantine", gateway.namespace, gateway.resourceRef,
+                "order-service", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        var policy = draft.revise(true, 5, 5, draft.expiresAtMillis(), "admin", System.currentTimeMillis());
+        var access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean automatedWriteAllowed() { return true; }
+            public boolean managed() { return false; }
+        };
+        var commands = new InMemoryActionCommandRepository(10);
+        var budget = new InMemoryAutonomousActionBudgetRepository();
+        var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, List.of(policy));
+        service = new AgentActionService(repository, sessions, gateway,
+                new ActionExecutorRegistry(List.of(new RouteWeightActionExecutor(gateway, repository, access, approval))),
+                access, approval, commands, true, null,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 10_000,
+                        30_000, 2, 10, 0.9, 120_000, 0.01, 500), budget);
+
+        var proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-unknown", "incident-unknown",
+                "/api/order", "v2", List.of("evidence-1"));
+        assertTrue(proposal.created(), proposal.reason());
+        var applyCommand = commands.pending(Long.MAX_VALUE, 10).stream()
+                .filter(job -> job.command().phase() == ActionExecutionCommand.Phase.APPLY)
+                .findFirst().orElseThrow().command();
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.executeCommand(applyCommand);
+        assertEquals(ActionStatus.UNCERTAIN, uncertain.status());
+        String resourceKey = resourceKey(gateway.resourceRef);
+        assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESOURCE_BUSY,
+                budget.reserve(resourceKey, "another-incident", "other-apply", 1, 10, 86_400_000, 900_000, -1, true, System.currentTimeMillis()));
+
+        gateway.timeoutWithoutApply = false;
+        gateway.operations.put(uncertain.applyOperationId(), RouteOperationStatus.APPLIED);
+        gateway.applyWeight("v2", 0);
+        service.reconcile(uncertain.actionId(), OWNER);
+        var reconcileCommand = commands.pending(Long.MAX_VALUE, 10).stream()
+                .map(ActionCommandRepository.Job::command)
+                .filter(command -> command.phase() == ActionExecutionCommand.Phase.RECONCILE)
+                .findFirst().orElseThrow();
+        AgentAction resolved = service.executeCommand(reconcileCommand);
+        assertEquals(ActionStatus.SUCCESS, resolved.status());
+        assertEquals(uncertain.applyOperationId(), resolved.applyOperationId());
+        assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.COOLDOWN_ACTIVE,
+                budget.reserve(resourceKey, "another-incident", "other-apply-2", 1, 10, 86_400_000, 900_000, 1, true, System.currentTimeMillis()));
+    }
+
+    private static String resourceKey(com.rover.agent.core.model.ResourceRef ref) {
+        return ref.scope().organizationId() + "/" + ref.scope().teamId() + "/" + ref.scope().environmentId()
+                + "/" + ref.controlTargetId() + "/" + ref.kind() + "/" + ref.resourceId()
+                + "/" + ref.resourceUid() + "/" + ref.generation();
+    }
+
+    @Test
+    void automaticProposalOutsidePolicyImpactLimitStillRequiresHumanApproval() {
+        gateway.resourceRef = planResource();
+        gateway.namespace = "namespace-a";
+        sessions.save(new Session(SESSION, OWNER, "订单灰度", null, SessionStatus.ACTIVE, 1L, 1L, List.of())
+                .withScope(gateway.resourceRef.scope(), gateway.namespace));
+        var draft = AutoExecutionPolicy.create("too-narrow", gateway.namespace, gateway.resourceRef,
+                "order-service", "v2", 4, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        var policy = draft.revise(true, 4, 5, draft.expiresAtMillis(), "admin", System.currentTimeMillis());
+        var access = new AgentAccess() {
+            public Set<Permission> permissions(String principal) { return Set.of(Permission.values()); }
+            public boolean automatedWriteAllowed() { return true; }
+        };
+        var commands = new InMemoryActionCommandRepository(10);
+        var approval = new RiskBasedApprovalPolicy("test", 25, 1, 2, List.of(policy));
+        service = new AgentActionService(repository, sessions, gateway,
+                new ActionExecutorRegistry(List.of(new RouteWeightActionExecutor(gateway, repository, access, approval))),
+                access, approval, commands, true, null,
+                new com.rover.agent.runtime.verification.BusinessEffectPolicy(true, 60_000, 10_000,
+                        30_000, 2, 10, 0.9, 120_000, 0.01, 500));
+
+        var proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-auto-bound", "incident-auto",
+                "/api/order", "v2", List.of("evidence-1"));
+
+        assertTrue(proposal.created(), proposal.reason());
+        assertEquals(ActionStatus.PENDING_APPROVAL, proposal.action().status());
+        assertEquals(com.rover.agent.core.model.RemediationPlan.ApprovalMode.REQUIRE_APPROVAL,
+                proposal.action().plan().riskAssessment().approvalMode());
+        assertEquals(0, commands.pending(Long.MAX_VALUE, 10).size());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test
+    void preauthorizationRejectsPlansWithoutBusinessEffectEvidenceOrBoundedImpact() {
+        gateway.resourceRef = planResource();
+        var policy = AutoExecutionPolicy.create("bounded", "namespace-a", gateway.resourceRef,
+                "orders", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        assertFalse(policy.enabled(), "新策略创建时必须默认关闭");
+        AgentAction action = propose(20);
+        assertFalse(policy.matches(action, "namespace-a", System.currentTimeMillis()),
+                "普通人工计划不能被事后套上自动授权");
+        assertFalse(policy.matches(action, "other-namespace", System.currentTimeMillis()));
+    }
+
+    @Test
+    void retryForSameTaskDoesNotCreateAnotherAutomaticApprovalCard() {
+        gateway.resourceRef = planResource();
+        ActionProposal first = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1"));
+        ActionProposal retry = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1"));
+
+        assertTrue(first.created());
+        assertTrue(retry.created());
+        assertEquals(first.action().actionId(), retry.action().actionId());
+        assertEquals(1, repository.bySession(SESSION).size());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test
+    void evidenceGatedQuarantineCannotRemoveTheLastPositiveTarget() {
+        gateway.resourceRef = planResource();
+        gateway.removeTarget("v1");
+
+        ActionProposal proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1"));
+
+        assertFalse(proposal.created());
+        assertTrue(proposal.reason().contains("没有正权重目标"), proposal.reason());
+        assertEquals(0, repository.bySession(SESSION).size());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test
+    void evidenceGatedQuarantineRequiresIdentitySoEvidenceCanBeFrozenIntoAPlan() {
+        ActionProposal proposal = service.proposeEvidenceGatedQuarantine(SESSION, "task-1", "incident-1",
+                "/api/order", "v2", List.of("ev-1"));
+
+        assertFalse(proposal.created());
+        assertTrue(proposal.reason().contains("可信资源 UID"), proposal.reason());
+        assertTrue(repository.bySession(SESSION).isEmpty());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test void approvedDeterministicExecutionStillWorksWhileProviderCircuitIsOpen() {
+        var isolation=new com.rover.agent.runtime.llm.ProviderIsolation(new com.rover.agent.runtime.llm.ProviderIsolation.Policy(1,30,1));
+        isolation.acquire("model").failure(new com.rover.agent.runtime.llm.ModelProviderFailure(503,0));
+        assertThrows(com.rover.agent.runtime.llm.ProviderIsolation.Rejected.class,()->isolation.acquire("model"));
+        AgentAction pending=propose(20);
+        AgentAction result=service.approve(pending.actionId(),OWNER);
+        assertEquals(ActionStatus.SUCCESS,result.status());
+    }
+
+    @Test
+    void anotherAuthorizedApproverCanApproveWithoutSharingPrivateChats() {
+        gateway.resourceRef = planResource();
+        com.rover.agent.core.port.AgentAccess access = principal -> "reviewer".equals(principal)
+                ? Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ, com.rover.agent.core.port.AgentAccess.Permission.APPROVE)
+                : Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ, com.rover.agent.core.port.AgentAccess.Permission.PROPOSE);
+        service = new AgentActionService(repository, sessions, gateway, new RouteWeightActionExecutor(gateway, repository, access), access);
+        AgentAction pending = propose(20);
+        assertThrows(com.rover.agent.core.port.AgentAccess.Denied.class, () -> service.approve(pending.actionId(), OWNER));
+        assertEquals(1, service.pendingApprovals("reviewer").size());
+        AgentAction applied = service.approve(pending.actionId(), "reviewer");
+        assertEquals(ActionStatus.SUCCESS, applied.status());
+        assertEquals("reviewer", applied.approvedBy());
+    }
+
+    @Test
+    void asynchronousApprovalReturnsQueuedAndWorkerExecutesAfterward() throws Exception {
+        gateway.resourceRef = planResource();
+        AgentAccess access = AgentAccess.local();
+        InMemoryActionCommandRepository commands = new InMemoryActionCommandRepository(10);
+        service = asynchronousService(access, commands);
+
+        AgentAction pending = propose(20);
+        AgentAction queued = service.approve(pending.actionId(), OWNER, 1, pending.plan().planHash());
+
+        assertEquals(ActionStatus.QUEUED, queued.status());
+        assertEquals(0, gateway.writes, "HTTP 审批返回时 Worker 尚未写 Gateway");
+        try (ActionCommandRunner runner = new ActionCommandRunner(commands, service, 1, 10, 50)) {
+            runner.start();
+            AgentAction completed = awaitStatus(pending.actionId(), ActionStatus.SUCCESS);
+            assertEquals(ActionStatus.SUCCESS, completed.status());
+        }
+        assertEquals(1, gateway.writes);
+        assertEquals(ActionStatus.SUCCESS, repository.find(pending.actionId()).orElseThrow().status());
+    }
+
+    @Test
+    void workerRechecksApprovalAndRequeuesAfterAuthorizationIsRestored() throws Exception {
+        gateway.resourceRef = planResource();
+        AtomicBoolean authorized = new AtomicBoolean(true);
+        AgentAccess access = new AgentAccess() {
+            @Override
+            public Set<Permission> permissions(String principal) {
+                return authorized.get() ? Set.of(Permission.values()) : Set.of(Permission.READ, Permission.PROPOSE);
+            }
+
+            @Override
+            public boolean writeAllowed(String principal) {
+                return authorized.get();
+            }
+        };
+        InMemoryActionCommandRepository commands = new InMemoryActionCommandRepository(10);
+        service = asynchronousService(access, commands);
+        AgentAction pending = propose(20);
+        AgentAction queued = service.approve(pending.actionId(), OWNER, 1, pending.plan().planHash());
+        authorized.set(false);
+
+        try (ActionCommandRunner runner = new ActionCommandRunner(commands, service, 1, 10, 50)) {
+            runner.start();
+            AgentAction returnedToApproval = awaitStatus(pending.actionId(), ActionStatus.PENDING_APPROVAL);
+            assertTrue(returnedToApproval.errorMessage().contains("排队期间"));
+            assertEquals(0, gateway.writes, "撤权后的持久命令必须在 Gateway 写入之前停下");
+
+            authorized.set(true);
+            AgentAction queuedAgain = service.approve(pending.actionId(), OWNER, 1, pending.plan().planHash());
+            assertEquals(ActionStatus.QUEUED, queuedAgain.status());
+            AgentAction completed = awaitStatus(pending.actionId(), ActionStatus.SUCCESS);
+            assertEquals(ActionStatus.SUCCESS, completed.status());
+        }
+        assertEquals(ActionStatus.QUEUED, queued.status());
+        assertEquals(1, gateway.writes);
+    }
+
+    private AgentActionService asynchronousService(AgentAccess access, InMemoryActionCommandRepository commands) {
+        ActionExecutor executor = new RouteWeightActionExecutor(gateway, repository, access);
+        return new AgentActionService(repository, sessions, gateway, new ActionExecutorRegistry(List.of(executor)),
+                access, RiskBasedApprovalPolicy.defaults(), commands, true);
+    }
+
+    private AgentAction awaitStatus(String actionId, ActionStatus expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        AgentAction latest = repository.find(actionId).orElseThrow();
+        while (latest.status() != expected && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+            latest = repository.find(actionId).orElseThrow();
+        }
+        assertEquals(expected, latest.status(), latest.errorMessage());
+        return latest;
+    }
+
+    @Test
+    void permissionRevokedDuringPreviewPreventsTheActualWrite() {
+        gateway.resourceRef = planResource();
+        AtomicBoolean allowed = new AtomicBoolean(true);
+        com.rover.agent.core.port.AgentAccess access = principal -> allowed.get()
+                ? Set.of(com.rover.agent.core.port.AgentAccess.Permission.values()) : Set.of();
+        RouteControlPort guarded = spy(gateway);
+        service = new AgentActionService(repository, sessions, guarded, new RouteWeightActionExecutor(guarded, repository, access), access);
+        AgentAction pending = propose(20);
+        doAnswer(invocation -> { allowed.set(false); return invocation.callRealMethod(); })
+                .when(guarded).preview(anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt());
+        AgentAction stopped = service.approve(pending.actionId(), OWNER);
+        assertEquals(ActionStatus.PRECONDITION_FAILED, stopped.status());
+        org.mockito.Mockito.verify(guarded, org.mockito.Mockito.never()).adjustTargetWeight(anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(), anyString(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void highImpactApplyAndCompensationRequireDistinctCurrentApprovers() {
+        gateway.resourceRef = planResource();
+        gateway.applyWeight("v2", 50);
+        var access = (com.rover.agent.core.port.AgentAccess) principal -> Set.of(
+                com.rover.agent.core.port.AgentAccess.Permission.READ,
+                com.rover.agent.core.port.AgentAccess.Permission.PROPOSE,
+                com.rover.agent.core.port.AgentAccess.Permission.APPROVE);
+        var policy = new RiskBasedApprovalPolicy("risk-test", 25, 1, 2);
+        service = new AgentActionService(repository, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, repository, access, policy), access, policy);
+
+        AgentAction pending = propose(20);
+        assertEquals(com.rover.agent.core.model.RemediationPlan.RiskLevel.R3, pending.plan().riskAssessment().level());
+        assertThrows(com.rover.agent.core.port.AgentAccess.Denied.class,
+                () -> service.approve(pending.actionId(), OWNER, 1, pending.plan().planHash()));
+
+        AgentAction first = service.approve(pending.actionId(), "reviewer-a", 1, pending.plan().planHash());
+        assertEquals(ActionStatus.PENDING_APPROVAL, first.status());
+        assertEquals(0, gateway.writes);
+        assertEquals(1, service.approvalProgress(pending.actionId(), "reviewer-a",
+                com.rover.agent.core.model.ActionApproval.Stage.APPLY).currentApprovals());
+        assertEquals(ActionStatus.PENDING_APPROVAL,
+                service.approve(pending.actionId(), "reviewer-a", 1, pending.plan().planHash()).status(),
+                "同一人重复点击不能凑够双人审批");
+
+        AgentAction applied = service.approve(pending.actionId(), "reviewer-b", 1, pending.plan().planHash());
+        assertEquals(ActionStatus.SUCCESS, applied.status());
+        assertEquals(1, gateway.writes);
+
+        AgentAction waitingForRollback = service.rollback(applied.actionId(), "reviewer-a", 1,
+                applied.plan().planHash());
+        assertEquals(ActionStatus.SUCCESS, waitingForRollback.status());
+        assertEquals(1, gateway.writes, "补偿同样需要完整的独立审批");
+        assertEquals(1, service.approvalProgress(applied.actionId(), "reviewer-b",
+                com.rover.agent.core.model.ActionApproval.Stage.ROLLBACK).currentApprovals());
+        AgentAction rolledBack = service.rollback(applied.actionId(), "reviewer-b", 1, applied.plan().planHash());
+        assertEquals(ActionStatus.ROLLED_BACK, rolledBack.status());
+        assertEquals(2, gateway.writes);
+    }
+
+    @Test
+    void revokedApproverDoesNotCountAndChangedPolicyInvalidatesOldApprovals() {
+        gateway.resourceRef = planResource();
+        gateway.applyWeight("v2", 50);
+        AtomicReference<Map<String, Set<com.rover.agent.core.port.AgentAccess.Permission>>> current =
+                new AtomicReference<>(Map.of(
+                        OWNER, Set.of(com.rover.agent.core.port.AgentAccess.Permission.values()),
+                        "reviewer-a", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                                com.rover.agent.core.port.AgentAccess.Permission.APPROVE),
+                        "reviewer-b", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                                com.rover.agent.core.port.AgentAccess.Permission.APPROVE),
+                        "reviewer-c", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                                com.rover.agent.core.port.AgentAccess.Permission.APPROVE)));
+        var access = (com.rover.agent.core.port.AgentAccess) principal ->
+                current.get().getOrDefault(principal, Set.of());
+        var firstPolicy = new RiskBasedApprovalPolicy("risk-test", 25, 1, 2);
+        service = new AgentActionService(repository, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, repository, access, firstPolicy), access, firstPolicy);
+        AgentAction pending = propose(20);
+        service.approve(pending.actionId(), "reviewer-a", 1, pending.plan().planHash());
+
+        current.set(Map.of(
+                OWNER, Set.of(com.rover.agent.core.port.AgentAccess.Permission.values()),
+                "reviewer-b", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                        com.rover.agent.core.port.AgentAccess.Permission.APPROVE),
+                "reviewer-c", Set.of(com.rover.agent.core.port.AgentAccess.Permission.READ,
+                        com.rover.agent.core.port.AgentAccess.Permission.APPROVE)));
+        assertEquals(ActionStatus.PENDING_APPROVAL,
+                service.approve(pending.actionId(), "reviewer-b", 1, pending.plan().planHash()).status());
+        assertEquals(0, gateway.writes);
+
+        var tightenedPolicy = new RiskBasedApprovalPolicy("risk-test", 25, 1, 3);
+        service = new AgentActionService(repository, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, repository, access, tightenedPolicy), access, tightenedPolicy);
+        assertEquals(ActionStatus.PENDING_APPROVAL,
+                service.approve(pending.actionId(), "reviewer-c", 1, pending.plan().planHash()).status(),
+                "策略升级后的审批不能与旧策略下的记录混用");
+        var progress = service.approvalProgress(pending.actionId(), "reviewer-c",
+                com.rover.agent.core.model.ActionApproval.Stage.APPLY);
+        assertEquals(3, progress.requiredApprovals());
+        assertEquals(1, progress.currentApprovals());
+        assertEquals(0, gateway.writes);
+    }
 
     @Test
     void proposeThenApproveThenVerify() {
@@ -200,7 +656,156 @@ class AgentActionServiceTest {
         assertEquals(20, gateway.weightOf("v2"));
     }
 
+    @Test
+    void systemOperatorCanListAndQueueOnlyInScopeUncertainActionReconciliation() {
+        gateway.resourceRef = planResource();
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(propose(20).actionId(), OWNER);
+        InMemoryActionCommandRepository commands = new InMemoryActionCommandRepository(10);
+        AgentAccess operator = principal -> Set.of(AgentAccess.Permission.READ, AgentAccess.Permission.MANAGE_SYSTEM);
+        AgentActionService managed = new AgentActionService(repository, sessions, gateway,
+                new ActionExecutorRegistry(List.of(new RouteWeightActionExecutor(gateway, repository, operator))),
+                operator, RiskBasedApprovalPolicy.defaults(), commands, true);
+
+        assertEquals(List.of(uncertain.actionId()), managed.reconciliationQueue("ops-user", 10).stream()
+                .map(AgentAction::actionId).toList());
+        AgentAction queued = managed.reconcile(uncertain.actionId(), "ops-user");
+        assertEquals(ActionStatus.RECONCILING, queued.status());
+        assertEquals(ActionExecutionCommand.Phase.RECONCILE, commands.pending(Long.MAX_VALUE, 10).get(0).command().phase());
+        assertEquals(uncertain.applyOperationId(), commands.pending(Long.MAX_VALUE, 10).get(0).command().operationId());
+        assertThrows(ActionRequestException.class, () -> managed.reconcile(uncertain.actionId(), "ops-user"));
+    }
+
+    @Test
+    void expiredReceiptKeepsOriginalOperationAndNeverRetries() {
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(propose(20).actionId(), OWNER);
+        gateway.operations.put(uncertain.applyOperationId(), RouteOperationStatus.EXPIRED);
+        AgentAction resolved = service.resolve(uncertain.actionId(), OWNER);
+        assertEquals(ActionStatus.UNCERTAIN, resolved.status());
+        assertEquals(uncertain.applyOperationId(), resolved.applyOperationId());
+        assertTrue(resolved.errorMessage().contains("过期"));
+        assertEquals(1, gateway.writes);
+    }
+
     // ---------------------------------------------------------------- 6. 回读不一致
+
+    @Test
+    void delayedResolveCannotOverwriteCompletedRollback() throws Exception {
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(propose(20).actionId(), OWNER);
+        gateway.timeoutWithoutApply = false;
+        gateway.applyWeight("v2", 20);
+        gateway.operations.put(uncertain.applyOperationId(), RouteOperationStatus.APPLIED);
+
+        FakeRouteControl observedGateway = spy(gateway);
+        CountDownLatch queryEntered = new CountDownLatch(1);
+        CountDownLatch releaseQuery = new CountDownLatch(1);
+        AtomicInteger queries = new AtomicInteger();
+        doAnswer(invocation -> {
+            if (queries.getAndIncrement() == 0) {
+                queryEntered.countDown();
+                assertTrue(releaseQuery.await(5, TimeUnit.SECONDS));
+            }
+            return invocation.callRealMethod();
+        }).when(observedGateway).operation(anyString());
+        AgentActionService concurrent = new AgentActionService(repository, sessions, observedGateway,
+                new RouteWeightActionExecutor(observedGateway, repository));
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            var delayed = worker.submit(() -> concurrent.resolve(uncertain.actionId(), OWNER));
+            assertTrue(queryEntered.await(5, TimeUnit.SECONDS), "慢回查必须已经读到旧快照");
+            AgentAction resolved = concurrent.resolve(uncertain.actionId(), OWNER);
+            AgentAction rolledBack = concurrent.rollback(resolved.actionId(), OWNER);
+            assertEquals(ActionStatus.ROLLED_BACK, rolledBack.status());
+            releaseQuery.countDown();
+
+            AgentAction lateResult = delayed.get(5, TimeUnit.SECONDS);
+            AgentAction stored = repository.find(uncertain.actionId()).orElseThrow();
+            assertEquals(ActionStatus.ROLLED_BACK, lateResult.status());
+            assertEquals(rolledBack, stored, "迟到回查不能覆盖回滚状态或回滚操作号");
+            assertNotNull(stored.rollbackOperationId());
+            assertEquals(2, observedGateway.writes, "一条执行与一条补偿，不因回查产生额外写入");
+        } finally {
+            releaseQuery.countDown();
+            worker.shutdownNow();
+            assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void persistenceFailureAfterSubmissionPreservesOperationForReconciliation() {
+        InMemoryAgentActionRepository interrupted = spy(repository);
+        AtomicBoolean failedOnce = new AtomicBoolean();
+        doAnswer(invocation -> {
+            AgentAction candidate = invocation.getArgument(0);
+            if (candidate.status() == ActionStatus.VERIFYING && failedOnce.compareAndSet(false, true)) {
+                throw new IllegalStateException("模拟：网关提交后，本地验证状态落库失败一次");
+            }
+            return invocation.callRealMethod();
+        }).when(interrupted).save(any(AgentAction.class));
+        AgentActionService resilient = new AgentActionService(interrupted, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, interrupted));
+
+        AgentAction uncertain = resilient.approve(propose(20).actionId(), OWNER);
+
+        assertTrue(failedOnce.get());
+        assertEquals(ActionStatus.UNCERTAIN, uncertain.status());
+        assertNotNull(uncertain.applyOperationId(), "异常兜底不能用提交前快照抹掉已持久化的操作号");
+        assertEquals(gateway.lastOperationId, uncertain.applyOperationId());
+        AgentAction resolved = resilient.resolve(uncertain.actionId(), OWNER);
+        assertEquals(ActionStatus.SUCCESS, resolved.status());
+        assertEquals(1, gateway.writes, "恢复只能按原号对账，不能重新提交");
+    }
+
+    @Test
+    void rollbackPersistenceFailurePreservesBothOperationIds() {
+        AgentAction applied = service.approve(propose(20).actionId(), OWNER);
+        InMemoryAgentActionRepository interrupted = spy(repository);
+        AtomicBoolean failedOnce = new AtomicBoolean();
+        doAnswer(invocation -> {
+            AgentAction candidate = invocation.getArgument(0);
+            if (candidate.status() == ActionStatus.ROLLING_BACK && candidate.rollbackOperationId() != null
+                    && candidate.appliedRevision() > applied.appliedRevision()
+                    && failedOnce.compareAndSet(false, true)) {
+                throw new IllegalStateException("模拟：补偿已提交，本地验证状态落库失败一次");
+            }
+            return invocation.callRealMethod();
+        }).when(interrupted).save(any(AgentAction.class));
+        AgentActionService resilient = new AgentActionService(interrupted, sessions, gateway,
+                new RouteWeightActionExecutor(gateway, interrupted));
+
+        AgentAction uncertain = resilient.rollback(applied.actionId(), OWNER);
+
+        assertTrue(failedOnce.get());
+        assertEquals(ActionStatus.UNCERTAIN, uncertain.status());
+        assertEquals(applied.applyOperationId(), uncertain.applyOperationId());
+        assertEquals(gateway.lastOperationId, uncertain.rollbackOperationId());
+        assertEquals(ActionStatus.ROLLED_BACK, resilient.resolve(applied.actionId(), OWNER).status());
+        assertEquals(2, gateway.writes, "补偿结果确认也不能重新提交");
+    }
+
+    @Test
+    void lateResolveExceptionCannotDemoteANewerRollback() {
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(propose(20).actionId(), OWNER);
+        RouteWeightActionExecutor delayed = spy(new RouteWeightActionExecutor(gateway, repository));
+        doAnswer(invocation -> {
+            AgentAction resolved = repository.transition(uncertain.actionId(), ActionStatus.UNCERTAIN,
+                    current -> new ActionDraft(current).move(ActionStatus.SUCCESS, null).toAction(2L)).orElseThrow();
+            repository.transition(resolved.actionId(), ActionStatus.SUCCESS,
+                    current -> new ActionDraft(current).rollbackOperation("newer-rollback")
+                            .move(ActionStatus.ROLLING_BACK, null).toAction(3L)).orElseThrow();
+            throw new IllegalStateException("旧回查发生意外异常");
+        }).when(delayed).resolve(any(AgentAction.class));
+        AgentActionService concurrent = new AgentActionService(repository, sessions, gateway, delayed);
+
+        AgentAction latest = concurrent.resolve(uncertain.actionId(), OWNER);
+
+        assertEquals(ActionStatus.ROLLING_BACK, latest.status());
+        assertEquals("newer-rollback", latest.rollbackOperationId());
+        assertEquals(latest, repository.find(uncertain.actionId()).orElseThrow());
+    }
 
     @Test
     void readBackMismatchFailsInsteadOfClaimingSuccess() {
@@ -402,7 +1007,165 @@ class AgentActionServiceTest {
         assertEquals(0, gateway.writes);
     }
 
+    @Test
+    void recreatedResourceCannotUseOldApprovalEvenWhenNameAndRevisionLookUnchanged() {
+        var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "prod");
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-one", 1);
+        AgentAction pending = propose(20);
+        assertEquals(gateway.resourceRef, pending.resourceRef());
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-two", 1);
+        AgentAction refused = service.approve(pending.actionId(), OWNER);
+        assertEquals(ActionStatus.PRECONDITION_FAILED, refused.status());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test
+    void compensationCannotModifyRecreatedResource() {
+        var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "prod");
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-one", 1);
+        AgentAction applied = service.approve(propose(20).actionId(), OWNER);
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(scope, "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-two", 1);
+        AgentAction refused = service.rollback(applied.actionId(), OWNER);
+        assertFalse(refused.status() == ActionStatus.ROLLED_BACK);
+        assertEquals(1, gateway.writes);
+        assertTrue(refused.errorMessage().contains("UID"));
+    }
+
     // ---------------------------------------------------------------- 工具与假网关
+
+    @Test void planRevisionCreatesNewApprovalAndKeepsTheOldSnapshot() {
+        gateway.resourceRef = planResource();
+        AgentAction first = propose(20);
+        var original = first.plan();
+        assertNotNull(original);
+        AgentAction second = service.revisePlan(original.planId(), 1, original.planHash(), 30,
+                WeightRequestUnit.RAW_WEIGHT, OWNER);
+        assertEquals(2, second.plan().planVersion());
+        assertEquals(original, repository.findPlan(original.planId(), 1).orElseThrow());
+        assertEquals(ActionStatus.SUPERSEDED, repository.find(first.actionId()).orElseThrow().status());
+        assertEquals(ActionStatus.PENDING_APPROVAL, second.status());
+        assertNull(second.approvedBy());
+        assertNull(second.applyOperationId());
+        assertEquals(2, service.planVersions(original.planId(), OWNER).orElseThrow().size());
+        assertTrue(service.planVersions(original.planId(), "mallory").isEmpty());
+        assertThrows(ActionRequestException.class, () -> service.approve(first.actionId(), OWNER));
+        assertThrows(ActionRequestException.class, () -> service.approve(second.actionId(), OWNER, 1, original.planHash()));
+        assertEquals(0, gateway.writes);
+        assertEquals(ActionStatus.SUCCESS, service.approve(second.actionId(), OWNER, 2, second.plan().planHash()).status());
+        assertEquals(30, gateway.weightOf("v2"));
+        assertEquals(1, gateway.writes);
+    }
+
+    @Test void planRevisionChecksInputSnapshotAndResourceIdentity() {
+        gateway.resourceRef = planResource();
+        AgentAction first = propose(20);
+        var plan = first.plan();
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, "0".repeat(64), 30, WeightRequestUnit.RAW_WEIGHT, OWNER));
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, plan.planHash(), 101, WeightRequestUnit.TRAFFIC_PERCENT, OWNER));
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, plan.planHash(), 30, null, OWNER));
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, plan.planHash(), 20, WeightRequestUnit.RAW_WEIGHT, OWNER));
+        gateway.resourceRef = new com.rover.agent.core.model.ResourceRef(plan.scope(), "gateway-one", "GATEWAY_ROUTE", "order-api", "recreated", 2);
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(plan.planId(), 1, plan.planHash(), 30, WeightRequestUnit.RAW_WEIGHT, OWNER));
+        assertEquals(ActionStatus.PENDING_APPROVAL, repository.find(first.actionId()).orElseThrow().status());
+        assertEquals(1, repository.planVersions(plan.planId()).size());
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test void approvalRequiresTheExactPreviewAndCannotReviseAnApprovedPlan() {
+        gateway.resourceRef = planResource();
+        AgentAction action = propose(20);
+        assertThrows(ActionRequestException.class, () -> service.approve(action.actionId(), OWNER, null, null));
+        assertThrows(ActionRequestException.class, () -> service.approve(action.actionId(), OWNER, 1, "0".repeat(64)));
+        assertEquals(0, gateway.writes);
+        service.approve(action.actionId(), OWNER, 1, action.plan().planHash());
+        assertThrows(ActionRequestException.class, () -> service.revisePlan(action.plan().planId(), 1,
+                action.plan().planHash(), 30, WeightRequestUnit.RAW_WEIGHT, OWNER));
+        assertEquals(1, repository.planVersions(action.plan().planId()).size());
+    }
+
+    @Test void planCompensationRejectsSameValueAfterInterveningChanges() {
+        gateway.resourceRef = planResource();
+        AgentAction applied = service.approve(propose(20).actionId(), OWNER);
+        gateway.applyWeight("v2", 40);
+        gateway.applyWeight("v2", 20);
+        AgentAction refused = service.rollback(applied.actionId(), OWNER);
+        assertEquals(ActionStatus.ROLLBACK_PRECONDITION_FAILED, refused.status());
+        assertEquals(20, gateway.weightOf("v2"));
+        assertEquals(1, gateway.writes);
+    }
+
+    @Test void planCompensationWorksWhenTheOriginalRevisionStillOwnsTheValue() {
+        gateway.resourceRef = planResource();
+        AgentAction applied = service.approve(propose(20).actionId(), OWNER);
+        AgentAction rolledBack = service.rollback(applied.actionId(), OWNER);
+        assertEquals(ActionStatus.ROLLED_BACK, rolledBack.status());
+        assertEquals(applied.plan(), rolledBack.plan());
+        assertEquals(5, gateway.weightOf("v2"));
+        assertEquals(2, gateway.writes);
+    }
+
+    @Test void managedHostRefusesLegacyApprovalButKeepsOriginalOperationReconciliation() {
+        AgentAction pending = propose(20);
+        gateway.timeoutWithoutApply = true;
+        AgentAction uncertain = service.approve(pending.actionId(), OWNER);
+        assertEquals(ActionStatus.UNCERTAIN, uncertain.status());
+        AgentAction legacyPending = propose(30);
+        com.rover.agent.core.port.AgentAccess managed = principal -> Set.of(com.rover.agent.core.port.AgentAccess.Permission.values());
+        service = new AgentActionService(repository, sessions, gateway, new RouteWeightActionExecutor(gateway, repository, managed), managed);
+        assertThrows(ActionRequestException.class, () -> service.approve(legacyPending.actionId(), OWNER));
+        AgentAction reconciled = service.resolve(uncertain.actionId(), OWNER);
+        assertEquals(uncertain.applyOperationId(), reconciled.applyOperationId());
+        assertEquals(ActionStatus.UNCERTAIN, reconciled.status());
+        assertEquals(1, gateway.writes);
+    }
+
+    @Test void expiredPlanCannotBeApprovedOrSubmitted() {
+        gateway.resourceRef = planResource();
+        long created = System.currentTimeMillis() - 120_000;
+        AgentAction expired = new AgentAction("expired", SESSION, null, null,
+                com.rover.agent.core.model.ActionType.ADJUST_ROUTE_TARGET_WEIGHT, ActionStatus.PENDING_APPROVAL,
+                "order-api", "/api/order", "order-service", "v2", 5, 20, 20, WeightRequestUnit.RAW_WEIGHT,
+                5, 17.4, PROPOSED_REVISION, null, null, null, OWNER, null, 0, List.of(), "test", null,
+                created, created).withResourceRef(gateway.resourceRef);
+        expired = expired.withPlan(com.rover.agent.core.model.RemediationPlan.forRouteWeight(expired, "expired", 1, created + 60_000));
+        AgentAction saved = repository.save(expired);
+        assertThrows(ActionRequestException.class, () -> service.approve(saved.actionId(), OWNER));
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test void unsupportedAdapterAndChecksCannotReachTheGateway() {
+        gateway.resourceRef = planResource();
+        AgentAction pending = propose(20);
+        var p = pending.plan();
+        var s = p.steps().get(0);
+        var unsupported = new com.rover.agent.core.model.RemediationPlan.RouteWeightStep(s.sequence(), s.actionType(),
+                "unregistered-v99", s.resourceRef(), s.routeId(), s.businessPrefix(), s.serviceName(), s.group(),
+                s.beforeWeight(), s.desiredWeight(), s.requestedValue(), s.requestedUnit(), s.beforeTrafficPercent(),
+                s.desiredTrafficPercent(), s.expectedRevision(), s.requiredChecks(), s.expectedEffect());
+        var changed = new com.rover.agent.core.model.RemediationPlan(p.planId(), p.planVersion(), p.sessionId(),
+                p.incidentId(), p.taskId(), p.requestedBy(), p.scope(), p.goal(), p.alternatives(), p.evidenceRefs(),
+                p.unresolvedAssumptions(), List.of(unsupported), p.riskAssessment(), p.resourceBudget(),
+                p.verificationSpec(), p.compensationSpec(), p.timeoutMillis(), p.createdAtMillis(), p.expiresAtMillis(),
+                p.provenance(), null);
+        assertThrows(IllegalArgumentException.class, () -> RouteWeightActionExecutor.requireSupportedPlan(pending.withPlan(changed)));
+        assertEquals(0, gateway.writes);
+    }
+
+    @Test void replayDoesNotReturnASupersededApprovalCard() {
+        gateway.resourceRef = planResource();
+        AgentAction first = propose(20);
+        service.revisePlan(first.plan().planId(), 1, first.plan().planHash(), 30, WeightRequestUnit.RAW_WEIGHT, OWNER);
+        AgentAction replay = propose(20);
+        assertFalse(replay.actionId().equals(first.actionId()));
+        assertEquals(ActionStatus.PENDING_APPROVAL, replay.status());
+        assertEquals(0, gateway.writes);
+    }
+
+    private static com.rover.agent.core.model.ResourceRef planResource() {
+        return new com.rover.agent.core.model.ResourceRef(
+                new com.rover.agent.core.model.ResourceScope("org", "ops", "prod"),
+                "gateway-one", "GATEWAY_ROUTE", "order-api", "uid-one", 1);
+    }
 
     private AgentAction propose(int weight) {
         return propose(weight, WeightRequestUnit.RAW_WEIGHT);
@@ -431,6 +1194,8 @@ class AgentActionServiceTest {
     private static final class FakeRouteControl implements RouteControlPort {
 
         private int revision = PROPOSED_REVISION;
+        private com.rover.agent.core.model.ResourceRef resourceRef;
+        private String namespace = "";
         private final Map<String, Integer> weights = new HashMap<>(Map.of("v1", 95, "v2", 5));
         private final Set<String> removed = new HashSet<>();
         private final Map<String, RouteOperationStatus> operations = new HashMap<>();
@@ -449,13 +1214,17 @@ class AgentActionServiceTest {
         /** 写完之后读不到路由。 */
         private boolean unreachableAfterWrite;
 
+        @Override public String resourceNamespace() { return namespace; }
+        @Override public com.rover.agent.core.model.ResourceScope resourceScope() { return null; }
+        @Override public String controlTargetId() { return resourceRef == null ? "" : resourceRef.controlTargetId(); }
+
         @Override
         public RouteControlState state() {
             if (unreachableAfterWrite && writes > 0) {
                 throw new SnapshotUnavailableException("假网关：读不到路由");
             }
             return new RouteControlState(revision, "", List.of(new RouteControlRoute("order-api", "/api/order", "",
-                    targets())));
+                    targets(), resourceRef)));
         }
 
         @Override

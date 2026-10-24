@@ -23,6 +23,7 @@ public class RequestTrace {
     private final long totalCostMs;
     private final boolean slow;
     private final List<Phase> phases;
+    private final ResponseObservation observation;
 
     public RequestTrace(
             String traceId,
@@ -35,6 +36,13 @@ public class RequestTrace {
             long totalCostMs,
             boolean slow,
             List<Phase> phases) {
+        this(traceId, method, path, routeId, targetUrl, statusCode, startMillis, totalCostMs, slow, phases, null);
+    }
+
+    public RequestTrace(String traceId, String method, String path, String routeId, String targetUrl,
+                        int statusCode, long startMillis, long totalCostMs, boolean slow, List<Phase> phases,
+                        ResponseObservation observation) {
+        this.observation = observation;
         this.traceId = traceId;
         this.method = method;
         this.path = path;

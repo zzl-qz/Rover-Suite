@@ -17,6 +17,10 @@
 
 ## Admin 启动配置
 
+Agent 外部遥测使用 `rover.agent.telemetry.sources`（默认空）与 `rover.agent.telemetry.limits`，重启生效。范围、读取预算和标签要求见 [S2-05 接入说明](agent-telemetry-connectors.zh-CN.md)，可用配置见 [追加配置示例](../deploy/production/agent-telemetry.example.yml)。它与 Admin 指标导出的 Prometheus 开关是两条独立链路。
+
+模型任务隔离使用 `rover.agent.llm.isolation.failure-threshold`（3）、`cooldown-seconds`（30）、`max-concurrent`（4），重启生效；按端点与凭证分组，半开仅允许一个探测，不排队等待并发槽。冷却与调用超时是不同参数。配置与预算账本语义见 [S2-06 说明](agent-model-resilience.zh-CN.md)。
+
 | 配置 | 默认值 | 说明 | 生效方式 |
 | --- | --- | --- | --- |
 | `server.port` | `9090` | Admin HTTP 端口 | 重启 |
@@ -67,6 +71,7 @@
 | `rover.agent.execution.queue-capacity` | `16` | 执行队列容量（1~1000）；队列满时提交回 `429`，不使用无界队列 | 重启 |
 | `rover.agent.execution.task-capacity` | `200` | 任务登记容量（1~10000）；已结束的任务可被保留策略淘汰，执行中的任务不会被丢 | 重启 |
 | `rover.agent.context.recent-message-limit` | `8` | 追问时带上的最近消息条数 | 重启 |
+| `rover.agent.alerts.owner-user-id` | 空 | 新告警的处理账号；空时归属认证调用者。填已有值班账号可统一接管；事件 `triggeredBy` 仍保存来源。环境变量 `ROVER_AGENT_ALERT_OWNER`，仅影响新会话，团队授权尚未实现 | 重启 |
 | `rover.agent.planning.max-rounds` | `3` | 单次动态调查最多规划轮数（>0）；触顶后停止采集并如实记录判断边界 | 重启 |
 | `rover.agent.planning.max-tool-calls` | `10` | 单次调查最多只读能力调用次数（>0）；触顶后不再发起任何调用，未执行的步骤如实上报 | 重启 |
 | `rover.agent.planning.max-plan-steps` | `6` | 单轮计划最多步骤数（>0）；超出部分由计划校验截断，未登记的写能力一律被丢弃 | 重启 |
@@ -154,7 +159,7 @@
 换台重试默认关闭，和熔断分开。打开后只在「连接失败、请求还没发出去、旁边还有另一台」时再打一枪。上游 5xx、请求超时、已经写出响应头、POST body 已经流走，都不换台。最多换 1 次。客户端业务重试仍然要自己做。换台次数在 `/_manage/metrics` 的 `resources.retries.connect` 和 Prometheus `rover_gateway_retries_total{reason="connect"}`。
 
 `rover.gateway.adminEnabled: false` 适合不部署 Rover-Admin、只把 YAML 当作配置事实来源的环境。它会跳过
-`config/routes.overlay.json` 和 `config/gateway-runtime.overlay.json`，并使 `/_manage/**` 返回 `404`；不会影响 Gateway
+路由事务库、旧 `config/routes.overlay.json` 和 `config/gateway-runtime.overlay.json`，并使 `/_manage/**` 返回 `404`；不会影响 Gateway
 连接 Nameserver、订阅服务或转发业务请求。已有 overlay 文件不会被删除，重新设为 `true` 后仍会继续生效。
 
 Gateway 回 503 时会带响应头 `X-Rover-Reject-Reason`：`INFLIGHT_LIMIT`（在途闸门满，默认 `max(64, CPU×8)`，可用
@@ -209,7 +214,7 @@ routes:
 
 默认 `outbound=netty` 时上游必须是 `http://`。写入 `https://` 会在启动或热更新时被拒绝，避免配置通过、
 请求才失败；若上游确实是 HTTPS，先把 `proxy.outbound` 设为 `jdk` 再重启。Admin 保存的路由会写入
-`config/routes.overlay.json`（文件同时带 `revision` 与 `appliedOperationId`），并整体替换启动 YAML 中的
+`config/routes.overlay.json.state.mv.db`（与操作回执同事务；配套见证文件检查代次/高水位），并整体替换启动 YAML 中的
 路由列表。Nacos 整机示例见 `deploy/docker/config/rover-gateway-nacos.yml`。
 
 ## Gateway 运行时配置
@@ -254,7 +259,7 @@ Gateway 进程内独立计数，不是分布式全局配额。
 `adminEnabled: true` 时，启动顺序为 **YAML 基线 → Gateway overlay**。如果曾在 Admin 保存过配置，overlay 中同名值会
 在下次启动时覆盖 YAML；Admin 不会因“仅打开页面”而写入该文件。当前 overlay 是全量快照，所以一次保存可能同时保留其他
 键当时的旧值。修改 YAML 后未生效时，优先检查 `config/gateway-runtime.overlay.json`；路由问题则检查
-`config/routes.overlay.json`（它会整体替代 YAML 路由）。
+`config/routes.overlay.json.state.mv.db`（尚无事务库时才读取旧 JSON；见[备份与恢复](gateway-operation-receipts.zh-CN.md)）。
 
 `gateway.loadbalance.strategy` 不通过 Admin 修改，也不会写入 `config/gateway-runtime.overlay.json`。自定义 LoadBalancer 请在
 `rover-gateway.yml` 中配置 SPI `name()` / 实现类全名并重启 Gateway，避免 Admin 覆盖插件装配策略。

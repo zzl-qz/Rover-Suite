@@ -30,6 +30,7 @@ nohup.out
 # 这些是本机运行数据，含历史日志/证据，不应进入版本库
 rover-logs/
 *.mv.db
+*.admin-agent.lock
 *.trace.db
 
 # ===== 敏感信息 / 凭据 =====
@@ -118,4 +119,6 @@ rover-gateway-test/plugin-demo/demo-config/plugins/*.jar
 
 # Eval / 测试产物（含 H2 库、录制日志与脱敏快照，不入库）
 artifacts/
+__pycache__/
+*.pyc
 

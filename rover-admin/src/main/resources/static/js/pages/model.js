@@ -19,6 +19,7 @@ window.RoverAdminPages.model = {
             modelSaving: false,
             modelTesting: false,
             modelVerifying: false,
+            modelConfigRequest: 0,
             modelTestResult: null,
             modelVerifyResult: null,
         };
@@ -66,7 +67,7 @@ window.RoverAdminPages.model = {
         modelThinkingHint() {
             if (this.isCustom) return '自定义模型走 OpenAI 兼容协议，是否产出思考内容取决于模型本身。';
             if (this.modelVendor === 'zhipu') {
-                return '主模型用于对话和解读；快速模型用于目标解析和调查规划，具体模型名以后台映射为准。';
+                return '主模型用于对话和调查规划；快速模型用于目标识别和诊断事实选择，具体模型名以后台映射为准。';
             }
             if (this.modelVendor === 'deepseek') {
                 return 'deepseek-chat 不产出思考内容。';
@@ -92,13 +93,17 @@ window.RoverAdminPages.model = {
 
     methods: {
         async fetchModelConfig() {
+            const request = ++this.modelConfigRequest;
             this.modelError = null;
             try {
                 const config = await RoverAdminApi.api('/api/model/config');
+                if (request !== this.modelConfigRequest) return;
+                // Refresh status without discarding a form the operator is currently editing.
+                const preserveEdits = this.modelDirty;
                 this.modelConfig = config;
-                this.syncModelForm(config);
+                if (!preserveEdits) this.syncModelForm(config);
             } catch (e) {
-                this.modelError = e.message;
+                if (request === this.modelConfigRequest) this.modelError = e.message;
             }
         },
         /** 用服务端状态重置表单：密钥永远留空，避免把掩码当成真密钥发回去。 */

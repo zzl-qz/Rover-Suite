@@ -10,6 +10,7 @@ public class MetricsSettings {
 
     /** 指标采集总开关，异常时可一键降级关闭。 */
     private volatile boolean enabled = true;
+    private volatile long collectionEpoch;
 
     /** 滑动窗口时长（秒），按秒聚合，默认保留最近 5 分钟。 */
     private volatile int windowSeconds = GatewayDefaults.METRICS_WINDOW_SECONDS;
@@ -18,9 +19,12 @@ public class MetricsSettings {
         return enabled;
     }
 
-    public void setEnabled(boolean enabled) {
+    public synchronized void setEnabled(boolean enabled) {
+        if (enabled && !this.enabled) { collectionEpoch++; }
         this.enabled = enabled;
     }
+
+    public long getCollectionEpoch() { return collectionEpoch; }
 
     public int getWindowSeconds() {
         return windowSeconds;

@@ -83,7 +83,7 @@ class AgentExecutionLimitsTest {
                     () -> new SpringAiConversationModel(gateway).converse("system", "user", tools, null, null));
             assertTrue(task.budget().stopReason().contains("模型调用次数"), failure.toString());
             assertEquals(2, calls.get(), "第三次模型请求必须在发送前被阻止");
-            assertEquals(2, reads.get());
+            assertEquals(1, reads.get(), "第二次相同只读请求复用已取得的证据，不重新取数");
         } finally {
             registry.stop();
         }
@@ -113,6 +113,29 @@ class AgentExecutionLimitsTest {
             registry.stop();
         }
         assertNull(AgentRunBudget.current(), "线程复用前必须清除任务预算");
+    }
+
+    @Test
+    void longerPlanningCannotResetTheSharedCallOutputOrDeadlineBudget() {
+        AtomicInteger calls = new AtomicInteger();
+        Gateway gateway = new Gateway(prompt -> {
+            calls.incrementAndGet();
+            assertTrue(prompt.getOptions().getMaxTokens() <= 64);
+            return Flux.just(answer("ok"));
+        });
+        InvestigationTaskRegistry registry = registry(limits(2,64,10000,Duration.ofSeconds(5)));
+        InvestigationTask task = registry.register("planning-budget", "调查");
+        task.start(); task.markRunning();
+        try {
+            long deadline = task.budget().snapshot().deadlineAtMillis();
+            QuickModelCall.content(gateway,10,"目标解析",client->client.prompt().user("target").call().content());
+            var completion = SpringAiJsonCompletion.investigation(gateway,AgentMetrics.NOOP,60,2048,false);
+            assertTrue(completion.complete("system","evidence",java.util.Optional::of).isPresent());
+            assertTrue(completion.complete("system","evidence",java.util.Optional::of).isEmpty());
+            assertEquals(2,calls.get());
+            assertEquals(deadline,task.budget().snapshot().deadlineAtMillis());
+            assertTrue(task.budget().stopReason().contains("模型调用次数"));
+        } finally { task.clearRunning(); registry.stop(); }
     }
 
     @Test
@@ -395,6 +418,7 @@ class AgentExecutionLimitsTest {
         @Override public boolean available() { return true; }
         @Override public ChatClient chatClient() { return client; }
         @Override public ChatClient chatClient(int timeoutSeconds) { return client; }
+        @Override public ChatClient planningClient(int timeoutSeconds, boolean thinkingEnabled) { return client; }
         @Override public String description() { return "scripted"; }
         @Override public String reasoningDelta(ChatResponse response) {
             return response.getResult() == null ? ""

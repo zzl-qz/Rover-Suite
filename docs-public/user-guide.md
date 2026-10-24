@@ -42,9 +42,10 @@ After YAML is loaded, supported runtime keys may be overlaid by:
 - `config/nameserver-runtime.overlay.json`
 - `config/gateway-runtime.overlay.json`
 - `config/routes.overlay.json`
+- `config/routes.overlay.json.state.mv.db` and its `routes.overlay.json.state.fence.json` witness (transactional routes/receipts)
 
-If `routes.overlay.json` exists, it replaces the YAML route list. Delete or update a stale overlay when a route
-change in YAML appears to have no effect. Listener ports, bind hosts, tokens, discovery type, HTTP Registration API
+The route transaction store takes precedence over legacy JSON and YAML. JSON is only a migration input before a transaction store exists.
+Do not delete state files to reset receipts; see [recovery rules](gateway-operation-receipts.zh-CN.md). Listener ports, bind hosts, tokens, discovery type, HTTP Registration API
 enablement, plugin paths, and CORS are startup settings and require a restart.
 
 When Admin is not deployed, set `rover.gateway.adminEnabled: false`. Gateway then skips its route/runtime overlays
@@ -337,7 +338,7 @@ for strict removal consistency, group isolation, streaming protocols, or an inte
 | HTTP Registrar receives `404 NOT_FOUND` | `clientApiEnabled` is false, the path is wrong, or the HTTP listener is disabled. Enable the Registration API and restart. |
 | HTTP Registrar receives `409 STALE_SESSION` | Another process registered the same `serviceName + instanceId`. Give replicas unique IDs and one owner per endpoint. |
 | Provider is visible but unreachable | The registered host/port is not reachable from Gateway. |
-| YAML route is ignored | `config/routes.overlay.json` is replacing the YAML route list. |
+| YAML route is ignored | The transaction store (or unmigrated legacy JSON) replaces the YAML route list. |
 | Startup or hot-reload says only http upstreams are supported | Default Netty outbound does not forward `https://`. Use `http://`, or set `proxy.outbound: jdk`. |
 | Confirm the current I/O implementation | Read `ioTransport=` in the startup log. In a Docker Linux container, `auto` is usually epoll. Host `java -jar` on macOS selects kqueue. |
 | A custom LB is missing from Admin | Normal. `gateway.loadbalance.strategy` is a startup/plugin-mounting setting. Put the built-in strategy, SPI `name()`, or implementation FQCN in `rover-gateway.yml` and restart Gateway; Admin no longer edits it. |

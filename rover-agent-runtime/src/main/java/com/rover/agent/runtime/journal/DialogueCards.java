@@ -89,7 +89,7 @@ public final class DialogueCards {
             return Outcome.none();
         }
         if (forcedSessionId != null && !forcedSessionId.isBlank()) {
-            return answerOf(current.userId(), forcedSessionId, currentTaskId);
+            return answerOf(current, forcedSessionId, currentTaskId);
         }
         return switch (DialogueCue.scope(question)) {
             case NONE -> Outcome.none();
@@ -114,6 +114,7 @@ public final class DialogueCards {
         LocalDate day = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().minusDays(1);
         List<Hit> hits = new ArrayList<>();
         for (Session session : sessions.findByUserId(current.userId())) {
+            if (!sameScope(current, session)) { continue; }
             AgentMessage first = firstOn(session.sessionId(), day);
             if (first == null) {
                 continue;
@@ -140,9 +141,9 @@ public final class DialogueCards {
         return Outcome.choose(text, choices);
     }
 
-    private Outcome answerOf(String userId, String sessionId, String currentTaskId) {
+    private Outcome answerOf(Session current, String sessionId, String currentTaskId) {
         Session session = sessions.find(sessionId).orElse(null);
-        if (session == null || (userId != null && !userId.equals(session.userId()))) {
+        if (session == null || !java.util.Objects.equals(current.userId(), session.userId()) || !sameScope(current, session)) {
             return Outcome.answer("没有找到这场对话。");
         }
         AgentMessage first = firstTopic(sessionId);
@@ -150,6 +151,11 @@ public final class DialogueCards {
             return Outcome.answer("这场对话里没有具体问题，开头只是寒暄。");
         }
         return Outcome.answer(card(sessionId, first, currentTaskId));
+    }
+
+    private static boolean sameScope(Session current, Session candidate) {
+        return java.util.Objects.equals(current.scope(), candidate.scope())
+                && java.util.Objects.equals(current.targetNamespace(), candidate.targetNamespace());
     }
 
     private String card(String sessionId, AgentMessage first, String currentTaskId) {

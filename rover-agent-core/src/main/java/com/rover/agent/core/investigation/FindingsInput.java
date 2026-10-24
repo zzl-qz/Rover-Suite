@@ -5,6 +5,7 @@ import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
 import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
+import com.rover.agent.core.model.TimeRange;
 import java.util.List;
 
 /**
@@ -20,4 +21,15 @@ import java.util.List;
  */
 public record FindingsInput(String path, RouteSnapshot route, boolean routeRead, DiscoveryMode discoveryMode,
                             List<InstanceSnapshot> instances, TraceSnapshot traces,
-                            List<RouteUpstreamSnapshot> routeUpstreams) { }
+                            List<RouteUpstreamSnapshot> routeUpstreams, TimeRange timeRange) {
+
+    public FindingsInput {
+        timeRange = timeRange == null ? TimeRange.unspecified() : timeRange;
+    }
+
+    public FindingsInput(String path, RouteSnapshot route, boolean routeRead, DiscoveryMode discoveryMode,
+                          List<InstanceSnapshot> instances, TraceSnapshot traces,
+                          List<RouteUpstreamSnapshot> routeUpstreams) {
+        this(path, route, routeRead, discoveryMode, instances, traces, routeUpstreams, TimeRange.unspecified());
+    }
+}

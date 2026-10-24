@@ -7,6 +7,18 @@ final class AdminValues {
 
     private AdminValues() { }
 
+    static com.rover.agent.core.port.SnapshotUnavailableException unavailable(String message, Exception error) {
+        boolean retryable = false;
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof com.rover.admin.client.ManageApiCallException http) {
+                int status = http.statusCode();
+                retryable = status == 408 || status == 429 || status == 502 || status == 503 || status == 504;
+                break;
+            }
+        }
+        return new com.rover.agent.core.port.SnapshotUnavailableException(message, error, retryable);
+    }
+
     static String text(Object value) {
         return Objects.toString(value, "").trim();
     }

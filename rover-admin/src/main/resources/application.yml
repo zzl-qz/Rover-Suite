@@ -44,6 +44,22 @@ spring:
 # Admin 只调组件管理口，自己不持有真实配置
 rover:
   agent:
+    production-mode: ${ROVER_AGENT_PRODUCTION_MODE:false}
+    start-writes-stopped: ${ROVER_AGENT_START_WRITES_STOPPED:false}
+    approvals:
+      # 同一策略摘要与审批凭证一起持久化；任何阈值/人数变化都会使旧批准失效。
+      policy-id: ${ROVER_AGENT_APPROVAL_POLICY_ID:risk-approval-v1}
+      high-impact-percent: ${ROVER_AGENT_R3_IMPACT_PERCENT:25}
+      r2-approvers: ${ROVER_AGENT_R2_APPROVERS:1}
+      r3-approvers: ${ROVER_AGENT_R3_APPROVERS:2}
+    actions:
+      async-execution: ${ROVER_AGENT_ACTIONS_ASYNC_EXECUTION:true}
+      worker-threads: ${ROVER_AGENT_ACTION_WORKER_THREADS:1}
+      queue-capacity: ${ROVER_AGENT_ACTION_QUEUE_CAPACITY:64}
+      poll-millis: ${ROVER_AGENT_ACTION_POLL_MILLIS:250}
+    alerts:
+      # 留空时由认证来源账号处理；指定账号时交给该处理人，来源保存在 Incident.triggeredBy。
+      owner-user-id: ${ROVER_AGENT_ALERT_OWNER:}
     limits:
       # 每个任务共用：目标解析、重试、调查规划和工具循环都不重置预算。
       max-model-calls: 20
@@ -51,12 +67,29 @@ rover:
       # 服务商未返回 usage 时按本地 tokenizer 估算；累计包含输入、输出和思考。
       max-total-tokens: 100000
       # 从 Worker 开始执行计时，持续输出不会延长时限。
-      task-timeout-seconds: 180
+      task-timeout-seconds: 300
       max-repeated-tool-results: 3
+    llm:
+      # 轻量目标识别沿用旧 quick 超时作为兼容值；规划不再共用短超时。
+      target-timeout-seconds: ${ROVER_AGENT_TARGET_TIMEOUT_SECONDS:${rover.agent.llm.quick-timeout-seconds:10}}
+      planning-timeout-seconds: ${ROVER_AGENT_PLANNING_TIMEOUT_SECONDS:60}
+      planning-max-output-tokens: ${ROVER_AGENT_PLANNING_OUTPUT_TOKENS:2048}
+      planning-thinking-enabled: ${ROVER_AGENT_PLANNING_THINKING:false}
+      planning-evidence-context-chars: ${ROVER_AGENT_PLANNING_CONTEXT_CHARS:24000}
+      report-timeout-seconds: ${ROVER_AGENT_REPORT_TIMEOUT_SECONDS:30}
+      isolation:
+        failure-threshold: 3
+        cooldown-seconds: 30
+        max-concurrent: 4
     context:
       # 上下文窗口：每次提问最多带上最近多少条会话消息；历史不会被无限制发给模型
       recent-message-limit: ${ROVER_AGENT_CONTEXT_MESSAGE_LIMIT:8}
   admin:
+    bootstrap-password: ${ROVER_ADMIN_BOOTSTRAP_PASSWORD:}
+    agent-organization-id: ${ROVER_AGENT_ORGANIZATION:local}
+    agent-team-id: ${ROVER_AGENT_TEAM:operators}
+    agent-environment-id: ${ROVER_AGENT_ENVIRONMENT:local}
+    gateway-control-target-id: ${ROVER_GATEWAY_TARGET_ID:}
     gateway-url: http://127.0.0.1:80
     nameserver-manage-url: http://127.0.0.1:8889
     # 管理口鉴权 token：非空时，Admin 调用 Gateway/Nameserver 管理口会带上 X-Rover-Admin-Token

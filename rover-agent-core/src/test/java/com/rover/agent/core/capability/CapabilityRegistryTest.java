@@ -16,10 +16,10 @@ class CapabilityRegistryTest {
     void onlyConnectedReadOnlyCapabilitiesAreSelectable() {
         assertEquals(List.of(AgentCapability.ROUTE_QUERY, AgentCapability.INSTANCE_QUERY,
                 AgentCapability.GATEWAY_METRICS_QUERY, AgentCapability.TRACE_QUERY, AgentCapability.CONFIG_READ,
-                AgentCapability.EVENT_QUERY, AgentCapability.LOG_QUERY, AgentCapability.KNOWLEDGE_RETRIEVAL),
+                AgentCapability.EVENT_QUERY, AgentCapability.LOG_QUERY, AgentCapability.CHANGE_TIMELINE_QUERY, AgentCapability.KNOWLEDGE_RETRIEVAL),
                 registry.selectable().stream().map(CapabilityDescriptor::id).toList());
         assertTrue(registry.selectable().stream().allMatch(item -> item.risk() == CapabilityRisk.READ_ONLY));
-        assertEquals(8, registry.all().size());
+        assertEquals(9, registry.all().size());
     }
 
     @Test

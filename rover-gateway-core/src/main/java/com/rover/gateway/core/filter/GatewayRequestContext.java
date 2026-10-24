@@ -46,6 +46,7 @@ public class GatewayRequestContext implements RequestContext {
 
     /** 请求开始处理的纳秒时间，用于统计耗时。 */
     private final long startNanos;
+    private final long startMillis;
 
     /** 过滤器之间共享的自定义属性，比如鉴权结果、traceId 等。 */
     private final Map<String, Object> attributes = new HashMap<>();
@@ -104,8 +105,49 @@ public class GatewayRequestContext implements RequestContext {
     }
 
     /** 命中的路由规则，路由匹配后才会有值。 */
-    @Setter
     private RouteConfig route;
+    private String routeUid;
+    private long routeGeneration;
+    private String responseOrigin = "UNKNOWN";
+    private String failurePhase = "UNKNOWN";
+    private String rejectReason;
+    private boolean responseComplete = true;
+    private final java.util.List<com.rover.gateway.core.trace.ResponseObservation.Attempt> attempts = new ArrayList<>();
+    private final AtomicBoolean metricsRecorded = new AtomicBoolean();
+
+    public void setRoute(RouteConfig value) {
+        route = value;
+        routeUid = value == null ? null : value.getResourceUid();
+        routeGeneration = value == null ? 0 : value.getGeneration();
+    }
+
+    public synchronized void recordAttempt(String hostPort, RouteTarget target,
+                                           com.rover.gateway.core.proxy.HttpProxyClient.ProxyResult result) {
+        attempts.add(new com.rover.gateway.core.trace.ResponseObservation.Attempt(hostPort,
+                target == null ? null : target.serviceName(),
+                target == null ? null : target.group(), result.statusCode(),
+                result.responseOrigin(), result.failurePhase(), result.upstreamCostMillis(), result.responseComplete()));
+    }
+
+    public synchronized void completeProxy(com.rover.gateway.core.proxy.HttpProxyClient.ProxyResult result) {
+        if (completed.get()) { return; } // 本地 413 等已结束请求时不能被代理回调覆盖。
+        statusCode = result.statusCode(); responseOrigin = result.responseOrigin();
+        failurePhase = result.failurePhase(); responseComplete = result.responseComplete();
+        completed.set(true);
+    }
+
+    public synchronized com.rover.gateway.core.trace.ResponseObservation responseObservation() {
+        boolean internalError = statusCode == null;
+        return new com.rover.gateway.core.trace.ResponseObservation(route == null ? "__unmatched__" : route.getId(),
+                routeUid, routeGeneration,
+                routeTarget == null ? null : routeTarget.serviceName(),
+                routeTarget == null ? null : routeTarget.group(),
+                upstreamHostPort, internalError ? "GATEWAY" : responseOrigin,
+                internalError ? "INTERNAL" : failurePhase, rejectReason, responseComplete, attempts);
+    }
+
+    public boolean markMetricsRecorded() { return metricsRecorded.compareAndSet(false, true); }
+
 
     /** 灰度选中的版本目标；静态路由或未命中版本时为 null。 */
     @Setter
@@ -156,6 +198,7 @@ public class GatewayRequestContext implements RequestContext {
         this.requestPath = requestPath;
         this.bodyPipe = new InboundBodyPipe(maxBodyBytes);
         this.startNanos = System.nanoTime();
+        this.startMillis = System.currentTimeMillis();
     }
 
     /** @param key 属性名 @return 属性值，不存在时 null */
@@ -211,7 +254,7 @@ public class GatewayRequestContext implements RequestContext {
     }
 
     /** closeConnection=true 写完就关，413 这种半截请求别留着复用。 */
-    public void writeText(
+    public synchronized void writeText(
             HttpResponseStatus status,
             String responseBody,
             String rejectReason,
@@ -219,6 +262,13 @@ public class GatewayRequestContext implements RequestContext {
         if (!completed.compareAndSet(false, true)) {
             return;
         }
+        this.responseOrigin = "GATEWAY";
+        this.failurePhase = "ROUTE_UNMATCHED".equals(rejectReason) ? "ROUTE"
+                : HttpConstants.REJECT_NO_UPSTREAM.equals(rejectReason) ? "DISCOVERY"
+                : HttpConstants.REJECT_CIRCUIT_OPEN.equals(rejectReason) ? "CIRCUIT_BREAKER"
+                : status.code() == 500 ? "INTERNAL" : "FILTER";
+        this.rejectReason = rejectReason;
+        this.statusCode = status.code();
         byte[] body = responseBody.getBytes(StandardCharsets.UTF_8);
         FullHttpResponse response = new DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1,

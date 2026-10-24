@@ -92,6 +92,18 @@ class ConversationFlowTest {
         assertTrue(task.result().summary().contains("Rover Ops Agent"));
     }
 
+    @Test
+    void groundedDiagnosticReplacesUnsupportedModelClaimsBeforePublishing() throws Exception {
+        AgentOrchestrator agent = build(tools -> {
+            tools.getRoute("/api/demo/tt"); tools.listInstances("demo-service");
+            return "根因已确认，v2错误率100%，已经回滚并恢复";
+        });
+        TaskView task = submitAndAwait(agent,agent.startSession("admin"),"排查 /api/demo/tt 为什么失败");
+        assertTrue(task.result().summary().contains("根因尚未确认"));
+        assertTrue(task.result().summary().contains("evidenceId="));
+        assertFalse(task.result().summary().contains("已经回滚并恢复"));
+    }
+
     /** 工具是真取数：调用要落到只读能力上，取回的事实要随结论落库，结论才可复核。 */
     @Test
     void toolCallReachesRealDataAndLandsAsEvidence() throws Exception {
@@ -159,7 +171,8 @@ class ConversationFlowTest {
         assertEquals(TaskStatus.FAILED, task.status());
         assertTrue(task.error().contains("已取数 1 次"),
                 "失败要说清已经取到什么（这些数据仍然可查），实际为 " + task.error());
-        assertTrue(task.error().contains("上游连接被重置"), "原始失败原因要保留");
+        assertTrue(task.error().contains("ERROR"), "保留安全分类，未知错误不能靠文案猜状态码");
+        assertFalse(task.error().contains("上游连接被重置"), "供应商异常正文不得直接发布到任务或页面");
     }
 
     /**

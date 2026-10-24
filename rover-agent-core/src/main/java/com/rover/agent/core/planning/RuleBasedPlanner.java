@@ -44,13 +44,37 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         if (hasPath) {
             add(steps, AgentCapability.ROUTE_QUERY, REASON_ROUTE, target, true);
             add(steps, AgentCapability.INSTANCE_QUERY, REASON_INSTANCE, target, true);
-            add(steps, AgentCapability.GATEWAY_METRICS_QUERY, REASON_METRIC, target, false);
+            if (context.timeRange().isUnspecified()) {
+                add(steps, AgentCapability.GATEWAY_METRICS_QUERY, REASON_METRIC, target, false);
+            }
             add(steps, AgentCapability.TRACE_QUERY, REASON_TRACE, target, true);
         } else {
             // 没有请求路径时不规划路由与追踪：这两类能力都以路径为取数口径，强行执行只会产出噪声。
             add(steps, AgentCapability.INSTANCE_QUERY, REASON_INSTANCE, target, true);
         }
+        if (!context.timeRange().isUnspecified()) {
+            add(steps, AgentCapability.LOG_QUERY, "按指定调查时间范围查询落盘证据", target, true);
+        }
+        if (needsTimeline(context)) {
+            add(steps, AgentCapability.CHANGE_TIMELINE_QUERY, "核对故障前后的发布、配置与实例变化；相关性不等于根因", target, true);
+        }
         addQuestionDrivenSteps(steps, context, target);
+        for (AgentCapability capability : telemetryCapabilities()) {
+            add(steps, capability, "补充同范围应用遥测；缺失数据不能用于排除故障", target, true);
+        }
+        for (var hypothesis : context.assessments()) {
+            if (hypothesis.status() == com.rover.agent.core.model.Verdict.UNKNOWN) {
+                for (AgentCapability capability : hypothesis.nextCapabilities()) {
+                    int existing=java.util.stream.IntStream.range(0,steps.size()).filter(i->steps.get(i).capability()==capability).findFirst().orElse(-1);
+                    if (existing<0) {
+                        add(steps, capability, "补查 " + hypothesis.id() + "：" + hypothesis.statement(), target, true);
+                    } else if (!steps.get(existing).required()) {
+                        var optional=steps.get(existing);
+                        steps.set(existing,new PlannedStep(capability,"补查 "+hypothesis.id()+"："+hypothesis.statement(),optional.target(),true));
+                    }
+                }
+            }
+        }
         return new InvestigationPlan(goal(context, target, hasPath), hypotheses(hasPath), steps);
     }
 
@@ -73,7 +97,9 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         Set<AgentCapability> missing = new LinkedHashSet<>(requiredCapabilities(context));
         missing.removeAll(state.settled());
         if (missing.isEmpty()) {
-            return PlanningDecision.finish("关键事实已采集完毕，进入结论综合");
+            boolean unknown = context.assessments().stream().anyMatch(h -> h.status() == com.rover.agent.core.model.Verdict.UNKNOWN);
+            return PlanningDecision.finish(unknown ? "可用只读查询已完成，仍有证据缺口，保留无法确认的假设并交人工复核"
+                    : "关键假设已有证据验证，进入结论综合");
         }
         if (missing.stream().noneMatch(registry::selectable)) {
             return PlanningDecision.finish("还缺少的能力尚未接入，无法继续采集");
@@ -86,6 +112,12 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         PlanningRequest context = request == null
                 ? new PlanningRequest("", ResourceTarget.unknown(), "", List.of(), List.of()) : request;
         Set<AgentCapability> required = new LinkedHashSet<>();
+        context.assessments().stream().filter(h -> h.status() == com.rover.agent.core.model.Verdict.UNKNOWN)
+                .forEach(h -> required.addAll(h.nextCapabilities()));
+        if (!context.timeRange().isUnspecified()) {
+            required.add(AgentCapability.LOG_QUERY);
+        }
+        if (needsTimeline(context)) { required.add(AgentCapability.CHANGE_TIMELINE_QUERY); }
         if (!context.path().isBlank()) {
             required.add(AgentCapability.ROUTE_QUERY);
             required.add(AgentCapability.INSTANCE_QUERY);
@@ -93,7 +125,13 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         } else if (PlanValidator.requestTarget(context).type() != TargetType.UNKNOWN) {
             required.add(AgentCapability.INSTANCE_QUERY);
         }
+        required.addAll(telemetryCapabilities());
         return required;
+    }
+
+    private List<AgentCapability> telemetryCapabilities() {
+        return List.of(AgentCapability.APPLICATION_METRICS_QUERY, AgentCapability.APPLICATION_LOG_QUERY,
+                AgentCapability.APPLICATION_TRACE_QUERY).stream().filter(registry::selectable).toList();
     }
 
     private void add(List<PlannedStep> steps, AgentCapability capability, String reason, ResourceTarget target,
@@ -104,6 +142,10 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         }
     }
 
+    private static boolean needsTimeline(PlanningRequest request) {
+        return !request.timeRange().isUnspecified() || request.question().matches("(?is).*(发布|变更|上线|下线|回滚|时间线|deploy|release|timeline).*" );
+    }
+
     private static List<String> hypotheses(boolean hasPath) {
         List<String> hypotheses = new ArrayList<>();
         if (hasPath) {
@@ -112,7 +154,7 @@ public final class RuleBasedPlanner implements InvestigationPlanner {
         hypotheses.add("目标服务没有匹配的注册实例");
         hypotheses.add("匹配实例均不健康");
         if (hasPath) {
-            hypotheses.add("该路由的某个上游实例返回了 5xx");
+            hypotheses.add("该路由访问某个上游实例时出现 5xx");
             hypotheses.add("该路径近期返回 503");
         }
         return List.copyOf(hypotheses);

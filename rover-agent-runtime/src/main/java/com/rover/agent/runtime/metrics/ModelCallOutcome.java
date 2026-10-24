@@ -18,7 +18,9 @@ public enum ModelCallOutcome {
     /** 调用成功但没有内容。 */
     EMPTY,
     /** 有内容但不符合输出契约（越界取值、缺必需字段），已整条丢弃。 */
-    REJECTED;
+    REJECTED,
+    /** 供应商熔断或并发满，本次没有发出模型请求。 */
+    ISOLATED;
 
     /** 是否拿到了可用结果；只有 {@link #OK} 为真。 */
     public boolean ok() {

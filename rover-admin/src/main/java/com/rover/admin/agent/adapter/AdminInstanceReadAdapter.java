@@ -23,7 +23,7 @@ public class AdminInstanceReadAdapter implements InstanceReadPort {
         try {
             return admin.listInstances().stream().map(AdminInstanceReadAdapter::toSnapshot).toList();
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取 Nameserver 实例失败", ex);
+            throw AdminValues.unavailable("读取 Nameserver 实例失败", ex);
         }
     }
 

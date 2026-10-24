@@ -1,6 +1,8 @@
 package com.rover.admin.agent;
 
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.ActionApproval;
+import com.rover.agent.core.model.ActionEffectVerification;
 import com.rover.agent.runtime.action.ActionRequestException;
 import com.rover.agent.runtime.action.AgentActionService;
 import java.util.LinkedHashMap;
@@ -15,11 +17,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 变更查询、审批、拒绝、回滚和结果确认接口；变更由 Agent 提议。
- * 用户身份取自认证上下文，操作委托 {@link AgentActionService} 同步执行。
+ * 用户身份取自认证上下文，审批后由 Admin 持久 Worker 异步执行。
  * 返回最新状态；不存在或无权访问返回 404，状态冲突返回 409。
  */
 @RestController
@@ -32,6 +36,21 @@ public class AgentActionController {
         this.actions = actions;
     }
 
+    @GetMapping("/pending")
+    public List<AgentAction> pending(Authentication authentication) {
+        return actions.pendingApprovals(user(authentication));
+    }
+
+    @GetMapping("/reconciliation")
+    public List<AgentAction> reconciliation(@RequestParam(defaultValue = "100") int limit, Authentication authentication) {
+        return actions.reconciliationQueue(user(authentication), limit);
+    }
+
+    @PostMapping("/{actionId}/reconcile")
+    public ResponseEntity<?> reconcile(@PathVariable String actionId, Authentication authentication) {
+        return apply(() -> actions.reconcile(actionId, user(authentication)));
+    }
+
     /** 按会话查询变更记录，按创建时间倒序。 */
     @GetMapping("/sessions/{sessionId}")
     public ResponseEntity<List<AgentAction>> bySession(@PathVariable String sessionId,
@@ -39,6 +58,25 @@ public class AgentActionController {
         return actions.bySession(sessionId, user(authentication))
                 .map(ResponseEntity::ok)
                 .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/sessions/{sessionId}/approval-progress")
+    public ResponseEntity<?> approvalProgress(@PathVariable String sessionId, Authentication authentication) {
+        return apply(() -> actions.approvalProgressBySession(sessionId, user(authentication)));
+    }
+
+    @GetMapping("/sessions/{sessionId}/effect-verifications")
+    public ResponseEntity<?> effectVerifications(@PathVariable String sessionId, Authentication authentication) {
+        return actions.bySession(sessionId, user(authentication)).<ResponseEntity<?>>map(ignored ->
+                ResponseEntity.ok(actions.effectVerifications(sessionId, user(authentication))))
+                .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @GetMapping("/{actionId}/approval-progress")
+    public ResponseEntity<?> approvalProgress(@PathVariable String actionId,
+                                              @RequestParam(defaultValue = "APPLY") ActionApproval.Stage stage,
+                                              Authentication authentication) {
+        return apply(() -> actions.approvalProgress(actionId, user(authentication), stage));
     }
 
     /** 查询变更的最新状态。 */
@@ -49,11 +87,71 @@ public class AgentActionController {
                 .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
-    /** 批准并同步执行；重复批准返回 409。 */
-    @PostMapping("/{actionId}/approve")
-    public ResponseEntity<?> approve(@PathVariable String actionId, Authentication authentication) {
-        return apply(() -> actions.approve(actionId, user(authentication)));
+    @GetMapping("/{actionId}/effect-verification")
+    public ResponseEntity<?> effectVerification(@PathVariable String actionId,
+            @RequestParam(defaultValue = "APPLY") ActionEffectVerification.Phase phase, Authentication authentication) {
+        try {
+            return actions.effectVerification(actionId, user(authentication), phase)
+                    .<ResponseEntity<?>>map(ResponseEntity::ok)
+                    .orElseGet(() -> ResponseEntity.noContent().build());
+        } catch (ActionRequestException ex) {
+            return ResponseEntity.status(ex.code() == ActionRequestException.Code.NOT_FOUND
+                    ? HttpStatus.NOT_FOUND : HttpStatus.BAD_REQUEST)
+                    .body(Map.of("code", ex.code().name(), "message", ex.getMessage()));
+        }
     }
+
+    @PostMapping("/{actionId}/shadow-assessment")
+    public ResponseEntity<?> shadowAssessment(@PathVariable String actionId, Authentication authentication) {
+        return apply(() -> actions.assessShadow(actionId, user(authentication)));
+    }
+
+    @GetMapping("/certifications")
+    public ResponseEntity<?> certifications(Authentication authentication) {
+        return apply(() -> actions.certifications(user(authentication)));
+    }
+
+    @GetMapping("/shadow-candidates")
+    public ResponseEntity<?> shadowCandidates(Authentication authentication) {
+        return apply(() -> actions.shadowCandidates(user(authentication)));
+    }
+
+    @GetMapping("/certifications/{fingerprint}/shadow-runs")
+    public ResponseEntity<?> shadowRuns(@PathVariable String fingerprint, Authentication authentication) {
+        return apply(() -> actions.shadowRuns(fingerprint, user(authentication)));
+    }
+
+    @PostMapping("/certifications")
+    public ResponseEntity<?> certify(Authentication authentication, @RequestBody CertificationRequest request) {
+        return apply(() -> actions.certify(request.fingerprint(), request.requiredRuns(), request.lifetimeMillis(),
+                request.expectedVersion(), user(authentication)));
+    }
+
+    @PostMapping("/certifications/{fingerprint}/renew")
+    public ResponseEntity<?> renewCertification(@PathVariable String fingerprint, Authentication authentication,
+            @RequestBody CertificationRequest request) {
+        return apply(() -> actions.renewCertification(fingerprint, request.expectedVersion(), request.requiredRuns(),
+                request.lifetimeMillis(), user(authentication)));
+    }
+
+    @PostMapping("/certifications/{fingerprint}/revoke")
+    public ResponseEntity<?> revokeCertification(@PathVariable String fingerprint, Authentication authentication,
+            @RequestBody CertificationRevokeRequest request) {
+        return apply(() -> actions.revokeCertification(fingerprint, request.expectedVersion(), user(authentication)));
+    }
+
+    public record CertificationRequest(String fingerprint, int requiredRuns, long lifetimeMillis, long expectedVersion) { }
+    public record CertificationRevokeRequest(long expectedVersion) { }
+
+    /** 记录审批；满足门槛后排入 Admin 持久队列并立即返回。 */
+    @PostMapping("/{actionId}/approve")
+    public ResponseEntity<?> approve(@PathVariable String actionId, Authentication authentication,
+                                     @RequestBody(required = false) ApprovalRequest request) {
+        return apply(() -> actions.approve(actionId, user(authentication),
+                request == null ? null : request.planVersion(), request == null ? null : request.planHash()));
+    }
+
+    public record ApprovalRequest(Integer planVersion, String planHash) { }
 
     /** 拒绝待审批变更。 */
     @PostMapping("/{actionId}/reject")
@@ -63,8 +161,10 @@ public class AgentActionController {
 
     /** 将目标版本的权重恢复为变更前的值。 */
     @PostMapping("/{actionId}/rollback")
-    public ResponseEntity<?> rollback(@PathVariable String actionId, Authentication authentication) {
-        return apply(() -> actions.rollback(actionId, user(authentication)));
+    public ResponseEntity<?> rollback(@PathVariable String actionId, Authentication authentication,
+                                      @RequestBody(required = false) ApprovalRequest request) {
+        return apply(() -> actions.rollback(actionId, user(authentication),
+                request == null ? null : request.planVersion(), request == null ? null : request.planHash()));
     }
 
     /** 按原 operationId 确认结果未知的变更。 */
@@ -73,12 +173,15 @@ public class AgentActionController {
         return apply(() -> actions.resolve(actionId, user(authentication)));
     }
 
-    private static ResponseEntity<?> apply(Supplier<AgentAction> operation) {
+    private static ResponseEntity<?> apply(Supplier<?> operation) {
         try {
             return ResponseEntity.ok(operation.get());
         } catch (ActionRequestException ex) {
-            HttpStatus status = ex.code() == ActionRequestException.Code.NOT_FOUND
-                    ? HttpStatus.NOT_FOUND : HttpStatus.CONFLICT;
+            HttpStatus status = switch (ex.code()) {
+                case NOT_FOUND -> HttpStatus.NOT_FOUND;
+                case CONFLICT -> HttpStatus.CONFLICT;
+                case INVALID_REQUEST -> HttpStatus.BAD_REQUEST;
+            };
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("code", ex.code().name());
             body.put("message", ex.getMessage());

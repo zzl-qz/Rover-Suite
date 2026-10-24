@@ -23,7 +23,7 @@ public class AdminEventReadAdapter implements EventReadPort {
         try {
             return admin.loadEvents().stream().map(AdminEventReadAdapter::toSnapshot).toList();
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取注册事件失败", ex);
+            throw AdminValues.unavailable("读取注册事件失败", ex);
         }
     }
 

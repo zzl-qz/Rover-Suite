@@ -15,6 +15,6 @@ public record AgentRunLimits(int maxModelCalls, int maxOutputTokens, long maxTot
     }
 
     public static AgentRunLimits defaults() {
-        return new AgentRunLimits(20, 4096, 100_000, Duration.ofSeconds(180), 3);
+        return new AgentRunLimits(20, 4096, 100_000, Duration.ofSeconds(300), 3);
     }
 }

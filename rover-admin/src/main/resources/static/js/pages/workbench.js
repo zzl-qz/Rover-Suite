@@ -5,7 +5,7 @@
  * 数据来源分两条：会话的展示数据一次取自聚合接口 workspace（会话 + 对话 + 事件 + 最近任务），
  * 任务卡上的步骤、状态与解读由「任务事件流」实时推送——轮询只做断线、刷新与后台恢复时的兜底。
  *
- * 用户身份由后端认证上下文决定，这里不提交也不展示 userId。
+ * 用户身份由后端认证上下文决定；告警上下文只展示服务端返回的来源与处理账号。
  */
 
 /** 聚合接口一次取回的任务条数：更早的历史任务不在时间线里，避免把整个会话搬进页面。 */
@@ -87,10 +87,34 @@ window.RoverAdminPages.workbench = {
             wbAtBottom: true,
             /** 当前会话的变更记录（新的在前）：待审批、执行结果与回滚都从服务端读回来。 */
             wbActions: [],
+            wbEffectVerifications: {},
+            wbOperatorPermissions: [],
+            wbAutoPolicies: [],
+            wbAutoCandidates: [],
+            wbAutonomyHealth: null,
+            wbAutoRouteId: '',
+            wbAutoTargetKey: '',
+            wbAutoPolicyBusy: false,
+            wbAutoPolicyError: '',
+            wbAutoMaxBefore: 5,
+            wbAutoMaxShift: 5,
+            wbAutoMaxCumulative: 10,
+            wbShadowCandidates: [],
+            wbCertifications: [],
+            wbCertificationBusy: false,
+            wbCertificationError: '',
+            wbOperationsStatus: null,
+            wbReconciliationQueue: [],
+            wbOperationBusy: false,
+            wbOperationMessage: '',
+            /** 服务端实时计算的执行/补偿审批进度。 */
+            wbApprovalProgress: {},
             /** 每条变更正在进行的操作（approve / reject / rollback / resolve）：用来禁用按钮，避免连点。 */
             wbActionBusy: {},
             /** 每条变更最近一次操作失败的原因：服务端拒绝（409/404）时显示在卡片里，而不是整页报错。 */
             wbActionError: {},
+            /** 修改仅登记新版本，旧计划继续作为历史记录展示。 */
+            wbPlanEdits: {},
         };
     },
 
@@ -259,6 +283,7 @@ window.RoverAdminPages.workbench = {
     methods: {
         /** 进入工作台时调用：拉会话列表，必要时选中最近的会话。 */
         async wbRefresh() {
+            await this.wbLoadOperatorState();
             await this.wbLoadSessions();
             const current = this.wbSessions.find(s => s.sessionId === this.wbActiveSessionId);
             if (current) {
@@ -289,6 +314,247 @@ window.RoverAdminPages.workbench = {
                 this.wbSessions = (await RoverAdminApi.api('/api/agent/sessions')) || [];
             } catch (e) {
                 this.wbError = '加载会话列表失败：' + e.message;
+            }
+        },
+
+        wbCanManageSystem() {
+            return this.wbOperatorPermissions.includes('MANAGE_SYSTEM');
+        },
+
+        wbCanManagePolicies() { return this.wbOperatorPermissions.includes('POLICY_ADMIN'); },
+
+        wbAutoTargets() {
+            const candidate = this.wbAutoCandidates.find(item => item.routeId === this.wbAutoRouteId);
+            return candidate ? (candidate.targets || []).filter(target => target.weight > 0) : [];
+        },
+
+        async wbLoadOperatorState(force) {
+            if (!force && Date.now() - (this._wbOperatorRefreshAt || 0) < 5000) return;
+            this._wbOperatorRefreshAt = Date.now();
+            try {
+                const me = await RoverAdminApi.api('/api/agent/security/me');
+                this.wbOperatorPermissions = me && Array.isArray(me.permissions) ? me.permissions : [];
+                if (this.wbCanManagePolicies()) {
+                    await Promise.all([this.wbLoadAutoPolicies(), this.wbLoadCertifications()]);
+                } else {
+                    this.wbShadowCandidates = []; this.wbCertifications = [];
+                }
+                if (!this.wbCanManageSystem()) {
+                    this.wbOperationsStatus = null;
+                    this.wbReconciliationQueue = [];
+                    return;
+                }
+                const [statusResult, reconciliationResult] = await Promise.allSettled([
+                    RoverAdminApi.api('/api/agent/operations'),
+                    RoverAdminApi.api('/api/agent/actions/reconciliation?limit=100'),
+                ]);
+                this.wbOperationsStatus = statusResult.status === 'fulfilled'
+                    ? statusResult.value : (statusResult.reason && statusResult.reason.body) || null;
+                this.wbReconciliationQueue = reconciliationResult.status === 'fulfilled'
+                    && Array.isArray(reconciliationResult.value) ? reconciliationResult.value : [];
+                this.wbOperationMessage = this.wbOperationsStatus && !this.wbOperationsStatus.healthy
+                    ? '持久存储异常：保持停写并处理已知结果，不要恢复自动变更' : '';
+            } catch (error) {
+                this.wbOperationsStatus = null;
+                this.wbReconciliationQueue = [];
+                this.wbOperatorPermissions = [];
+                this.wbOperationMessage = error && error.status === 403
+                    ? '当前账号没有系统接管权限' : (error && error.message) || '无法读取运维状态';
+            }
+        },
+
+        async wbLoadAutoPolicies() {
+            try {
+                const [policies, candidates, health] = await Promise.all([
+                    RoverAdminApi.api('/api/agent/policies/autonomous'),
+                    RoverAdminApi.api('/api/agent/policies/autonomous/candidates'),
+                    RoverAdminApi.api('/api/agent/policies/autonomous/health'),
+                ]);
+                this.wbAutoPolicies = Array.isArray(policies) ? policies : [];
+                this.wbAutoCandidates = Array.isArray(candidates) ? candidates : [];
+                this.wbAutonomyHealth = health || null;
+                if (!this.wbAutoRouteId && this.wbAutoCandidates.length) {
+                    this.wbAutoRouteId = this.wbAutoCandidates[0].routeId;
+                    const target = (this.wbAutoCandidates[0].targets || []).find(item => item.weight > 0);
+                    if (target) this.wbAutoTargetKey = target.serviceName + ':' + target.group;
+                }
+                this.wbAutoPolicyError = '';
+            } catch (error) { this.wbAutonomyHealth = null; this.wbAutoPolicyError = error.message || '无法读取预授权策略'; }
+        },
+
+        async wbLoadCertifications() {
+            if (!this.wbCanManagePolicies()) return;
+            try {
+                const [candidates, certifications] = await Promise.all([
+                    RoverAdminApi.api('/api/agent/actions/shadow-candidates'),
+                    RoverAdminApi.api('/api/agent/actions/certifications'),
+                ]);
+                this.wbShadowCandidates = Array.isArray(candidates) ? candidates : [];
+                this.wbCertifications = Array.isArray(certifications) ? certifications : [];
+                this.wbCertificationError = '';
+            } catch (error) { this.wbCertificationError = error.message || '无法读取影子评估与认证记录'; }
+        },
+
+        async wbAssessShadow(candidate) {
+            if (!this.wbCanManagePolicies() || !candidate || this.wbCertificationBusy) return;
+            this.wbCertificationBusy = true;
+            try {
+                const action = candidate.action || candidate;
+                const result = await RoverAdminApi.api('/api/agent/actions/' + encodeURIComponent(action.actionId) + '/shadow-assessment', { method: 'POST' });
+                this.wbCertificationError = '影子评估 ' + result.outcome + '：' + result.detail;
+                await this.wbLoadCertifications();
+            } catch (error) { this.wbCertificationError = error.message || '影子评估失败'; }
+            finally { this.wbCertificationBusy = false; }
+        },
+
+        wbCertificationActive(fingerprint) {
+            return this.wbCertifications.some(item => item.subject && item.subject.fingerprint === fingerprint
+                && item.state === 'ACTIVE' && item.expiresAtMillis > Date.now());
+        },
+
+        async wbCertifyCandidate(candidate) {
+            if (!this.wbCanManagePolicies() || !candidate || !candidate.certificationEligible || this.wbCertificationBusy) return;
+            this.wbCertificationBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/actions/certifications', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fingerprint: candidate.subject.fingerprint, requiredRuns: 3,
+                        lifetimeMillis: 7 * 86400000,
+                        expectedVersion: (this.wbCertifications.find(item => item.subject.fingerprint === candidate.subject.fingerprint) || {}).version || 0 }),
+                });
+                this.wbCertificationError = '认证已签发 7 天；新的失败评估会暂停该认证';
+                await this.wbLoadCertifications();
+            } catch (error) { this.wbCertificationError = error.message || '签发认证失败'; }
+            finally { this.wbCertificationBusy = false; }
+        },
+
+        async wbRevokeCertification(certification) {
+            if (!this.wbCanManagePolicies() || !certification || this.wbCertificationBusy) return;
+            this.wbCertificationBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/actions/certifications/' + encodeURIComponent(certification.subject.fingerprint) + '/revoke', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expectedVersion: certification.version }),
+                });
+                await this.wbLoadCertifications();
+            } catch (error) { this.wbCertificationError = error.message || '撤销认证失败'; }
+            finally { this.wbCertificationBusy = false; }
+        },
+
+        async wbRenewCertification(certification) {
+            if (!this.wbCanManagePolicies() || !certification || this.wbCertificationBusy) return;
+            this.wbCertificationBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/actions/certifications/' + encodeURIComponent(certification.subject.fingerprint) + '/renew', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ requiredRuns: Math.max(3, certification.passingRuns), lifetimeMillis: 30 * 86400000,
+                        expectedVersion: certification.version }),
+                });
+                this.wbCertificationError = '认证已基于最新通过的影子评估续期';
+                await this.wbLoadCertifications();
+            } catch (error) { this.wbCertificationError = error.message || '重新认证失败'; }
+            finally { this.wbCertificationBusy = false; }
+        },
+
+        async wbCreateAutoPolicy() {
+            if (!this.wbCanManagePolicies() || this.wbAutoPolicyBusy) return;
+            const parts = String(this.wbAutoTargetKey).split(':');
+            const serviceName = parts.shift();
+            const group = parts.join(':');
+            if (!this.wbAutoRouteId || !serviceName || !group) { this.wbAutoPolicyError = '请选择路由和当前有流量的版本'; return; }
+            this.wbAutoPolicyBusy = true;
+            try {
+                const now = Date.now();
+                await RoverAdminApi.api('/api/agent/policies/autonomous', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ policyId: 'quarantine-' + now + '-' + Math.random().toString(36).slice(2, 8),
+                        route: this.wbAutoRouteId, serviceName, group, maxBeforeTrafficPercent: Number(this.wbAutoMaxBefore),
+                        maxTrafficShiftPercent: Number(this.wbAutoMaxShift),
+                        maxCumulativeTrafficShiftPercent: Number(this.wbAutoMaxCumulative),
+                        expiresAtMillis: now + 7 * 86400000 }),
+                });
+                this.wbAutoPolicyError = '策略已创建；仅匹配带证据和业务效果验证的隔离计划';
+                await this.wbLoadAutoPolicies();
+            } catch (error) { this.wbAutoPolicyError = error.message || '创建预授权策略失败'; }
+            finally { this.wbAutoPolicyBusy = false; }
+        },
+
+        async wbRevokeAutoPolicy(policy) {
+            if (!this.wbCanManagePolicies() || !policy || !policy.enabled || this.wbAutoPolicyBusy) return;
+            this.wbAutoPolicyBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/policies/autonomous/' + encodeURIComponent(policy.policyId) + '/revoke', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expectedVersion: policy.version }),
+                });
+                await this.wbLoadAutoPolicies();
+            } catch (error) { this.wbAutoPolicyError = error.message || '撤销策略失败'; }
+            finally { this.wbAutoPolicyBusy = false; }
+        },
+
+        async wbEnableAutoPolicy(policy) {
+            if (!this.wbCanManagePolicies() || !policy || policy.enabled || this.wbAutoPolicyBusy) return;
+            this.wbAutoPolicyBusy = true;
+            try {
+                await RoverAdminApi.api('/api/agent/policies/autonomous/' + encodeURIComponent(policy.policyId) + '/enable', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expectedVersion: policy.version }),
+                });
+                await this.wbLoadAutoPolicies();
+            } catch (error) { this.wbAutoPolicyError = error.message || '启用策略失败'; }
+            finally { this.wbAutoPolicyBusy = false; }
+        },
+
+        async wbToggleWriteStop(stopped) {
+            if (!this.wbCanManageSystem() || this.wbOperationBusy) return;
+            this.wbOperationBusy = true;
+            this.wbOperationMessage = '';
+            try {
+                await RoverAdminApi.api('/api/agent/operations/write-stop', { method: 'POST' });
+                await this.wbLoadOperatorState(true);
+                this.wbOperationMessage = '已停用 Agent 生产写操作；在途请求仍需按原操作号对账';
+            } catch (error) {
+                this.wbOperationMessage = error.message || '写入开关操作失败';
+                await this.wbLoadOperatorState(true);
+            } finally {
+                this.wbOperationBusy = false;
+            }
+        },
+
+        async wbApproveWriteResume() {
+            if (!this.wbCanManageSystem() || this.wbOperationBusy || !this.wbOperationsStatus?.writesStopped) return;
+            this.wbOperationBusy = true;
+            this.wbOperationMessage = '';
+            try {
+                await RoverAdminApi.api('/api/agent/operations/resume-approval', { method: 'POST' });
+                await this.wbLoadOperatorState(true);
+                const state = this.wbOperationsStatus?.writeResume;
+                this.wbOperationMessage = state && !state.stopped
+                    ? '双人审批已完成，Agent 写入已恢复'
+                    : '恢复审批已记录，仍需另一位系统管理员在 15 分钟内审批';
+            } catch (error) {
+                this.wbOperationMessage = error.message || '恢复审批未通过';
+                await this.wbLoadOperatorState(true);
+            } finally {
+                this.wbOperationBusy = false;
+            }
+        },
+
+        async wbReconcileAction(action) {
+            if (!this.wbCanManageSystem() || !action || this.wbOperationBusy) return;
+            this.wbOperationBusy = true;
+            this.wbOperationMessage = '';
+            try {
+                await RoverAdminApi.api('/api/agent/actions/' + encodeURIComponent(action.actionId) + '/reconcile',
+                    { method: 'POST' });
+                await this.wbLoadOperatorState(true);
+                if (action.sessionId === this.wbActiveSessionId) await this.wbLoadActions(action.sessionId);
+                this.wbOperationMessage = '已用原 operationId 发起独立对账；没有重发变更请求';
+            } catch (error) {
+                this.wbOperationMessage = error.message || '发起对账失败';
+                await this.wbLoadOperatorState(true);
+            } finally {
+                this.wbOperationBusy = false;
             }
         },
 
@@ -335,8 +601,10 @@ window.RoverAdminPages.workbench = {
             this.wbPending = [];
             // 变更记录属于会话：切会话先把上一场的卡片清掉，再拉新会话自己的记录
             this.wbActions = [];
+            this.wbEffectVerifications = {};
             this.wbActionBusy = {};
             this.wbActionError = {};
+            this.wbPlanEdits = {};
             this._wbLoadedSessionId = '';
             this.wbDetailOpen = {};
             this.wbError = null;
@@ -413,6 +681,7 @@ window.RoverAdminPages.workbench = {
          * 任务状态、步骤与解读都已由任务事件流实时推送，固定 3 秒轮询全部在跑任务只是多余的观察税。
          */
         async wbPollSession() {
+            this.wbLoadOperatorState();
             if (!this.wbActiveSessionId || this._wbStream) return;
             const ids = Object.values(this.wbTasks)
                 .filter(task => task && !this.wbTaskSettled(task.status))
@@ -521,33 +790,96 @@ window.RoverAdminPages.workbench = {
         async wbLoadActions(sessionId) {
             if (!sessionId) {
                 this.wbActions = [];
+                this.wbEffectVerifications = {};
+                this.wbApprovalProgress = {};
+                this.wbScheduleActionRefresh('', false);
                 return;
             }
             try {
-                const list = await RoverAdminApi.api('/api/agent/actions/sessions/' + encodeURIComponent(sessionId));
+                const base = '/api/agent/actions/sessions/' + encodeURIComponent(sessionId);
+                const [list, progress, verifications] = await Promise.all([
+                    RoverAdminApi.api(base),
+                    RoverAdminApi.api(base + '/approval-progress').catch(() => []),
+                    RoverAdminApi.api(base + '/effect-verifications').catch(() => []),
+                ]);
                 if (this.wbActiveSessionId !== sessionId) return;
                 this.wbActions = Array.isArray(list) ? list : [];
+                this.wbEffectVerifications = Object.fromEntries((Array.isArray(verifications) ? verifications : [])
+                    .map(item => [item.actionId + ':' + item.phase, item]));
+                this.wbApprovalProgress = this.wbApprovalProgressMap(progress);
+                this.wbScheduleActionRefresh(sessionId, this.wbActions.some(action => this.wbActionInFlight(action))
+                    || Object.values(this.wbEffectVerifications).some(item => ['PREPARED', 'OBSERVING'].includes(item.state)));
             } catch (e) {
-                if (this.wbActiveSessionId === sessionId) this.wbActions = [];
+                if (this.wbActiveSessionId === sessionId) {
+                    this.wbActions = [];
+                    this.wbApprovalProgress = {};
+                    this.wbScheduleActionRefresh(sessionId, false);
+                }
+            }
+        },
+
+        wbActionInFlight(action) {
+            return action && ['QUEUED', 'EXECUTING', 'VERIFYING', 'ROLLBACK_QUEUED',
+                'ROLLING_BACK', 'RECONCILING'].includes(action.status);
+        },
+
+        wbEffectInFlight() {
+            return Object.values(this.wbEffectVerifications).some(item => ['PREPARED', 'OBSERVING'].includes(item.state));
+        },
+
+        wbScheduleActionRefresh(sessionId, active) {
+            if (this._wbActionTimer) {
+                clearTimeout(this._wbActionTimer);
+                this._wbActionTimer = null;
+            }
+            if (!active || !sessionId || this.wbActiveSessionId !== sessionId) return;
+            this._wbActionTimer = setTimeout(() => {
+                this._wbActionTimer = null;
+                if (this.wbActiveSessionId === sessionId) this.wbLoadActions(sessionId);
+            }, 750);
+        },
+
+        wbApprovalProgressMap(progress) {
+            return Object.fromEntries((Array.isArray(progress) ? progress : [])
+                .map(item => [item.actionId, item]));
+        },
+
+        async wbLoadApprovalProgress(sessionId) {
+            if (!sessionId) return;
+            const path = '/api/agent/actions/sessions/' + encodeURIComponent(sessionId) + '/approval-progress';
+            try {
+                const progress = await RoverAdminApi.api(path);
+                if (this.wbActiveSessionId === sessionId) {
+                    this.wbApprovalProgress = this.wbApprovalProgressMap(progress);
+                }
+            } catch (e) {
+                if (this.wbActiveSessionId === sessionId) this.wbApprovalProgress = {};
             }
         },
 
         /**
          * 处置一条变更：批准 / 拒绝 / 回滚 / 确认结果。
          *
-         * 服务端的执行是同步的，因此这里只需等返回值——返回的就是终态。
-         * 前端不做「先乐观改成成功」：变更有没有生效只能由服务端的回读说了算，
-         * 页面上提前变绿就是在替它撒谎。
+         * 执行异步持久运行；返回的是受理后的状态，界面继续从服务端轮询真实进度。
          */
         async wbActionCommand(action, command) {
             if (!action || this.wbActionBusy[action.actionId]) return;
+            if (command === 'approve' && (!action.plan || this.wbPlanExpired(action.plan))) return;
             this.wbActionBusy = Object.assign({}, this.wbActionBusy, { [action.actionId]: command });
             this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: '' });
             try {
+                const options = { method: 'POST' };
+                if ((command === 'approve' || command === 'rollback') && action.plan) {
+                    options.headers = { 'Content-Type': 'application/json' };
+                    options.body = JSON.stringify({ planVersion: action.plan.planVersion, planHash: action.plan.planHash });
+                }
                 const updated = await RoverAdminApi.api(
                     '/api/agent/actions/' + encodeURIComponent(action.actionId) + '/' + command,
-                    { method: 'POST' });
+                    options);
                 this.wbReplaceAction(updated);
+                this.wbScheduleActionRefresh(this.wbActiveSessionId,
+                    this.wbActions.some(item => this.wbActionInFlight(item)) || this.wbEffectInFlight());
+                await this.wbLoadApprovalProgress(this.wbActiveSessionId);
             } catch (e) {
                 // 被拒（已被处理过、状态不允许）或执行异常：记在卡片上，并重新拉一次真实状态
                 this.wbActionError = Object.assign({}, this.wbActionError,
@@ -563,6 +895,7 @@ window.RoverAdminPages.workbench = {
         /** 就地替换一条变更：不整表重取，避免列表顺序与正在看的卡片跳动。 */
         wbReplaceAction(updated) {
             if (!updated || !updated.actionId) return;
+            if (updated.sessionId && updated.sessionId !== this.wbActiveSessionId) return;
             const exists = this.wbActions.some(item => item.actionId === updated.actionId);
             this.wbActions = exists
                 ? this.wbActions.map(item => (item.actionId === updated.actionId ? updated : item))
@@ -574,6 +907,60 @@ window.RoverAdminPages.workbench = {
             return action && !this.wbActionBusy[action.actionId];
         },
 
+        wbPlanExpired(plan) {
+            return plan && plan.expiresAtMillis <= (this.wbNow || Date.now());
+        },
+
+        wbEditPlan(action) {
+            if (!action || !action.plan || action.status !== 'PENDING_APPROVAL' || !this.wbActionIdle(action)) return;
+            this.wbPlanEdits = Object.assign({}, this.wbPlanEdits, { [action.actionId]: {
+                requestedValue: action.requestedValue,
+                requestedUnit: action.requestedUnit,
+            } });
+        },
+
+        wbCancelPlanEdit(action) {
+            const edits = Object.assign({}, this.wbPlanEdits);
+            delete edits[action.actionId];
+            this.wbPlanEdits = edits;
+        },
+
+        async wbSavePlanRevision(action) {
+            const edit = action && this.wbPlanEdits[action.actionId];
+            if (!edit || !action.plan || action.status !== 'PENDING_APPROVAL' || !this.wbActionIdle(action)) return;
+            const value = Number(edit.requestedValue);
+            if (String(edit.requestedValue).trim() === '' || !Number.isInteger(value)
+                || !['RAW_WEIGHT', 'TRAFFIC_PERCENT'].includes(edit.requestedUnit)
+                || value < 0 || value > (edit.requestedUnit === 'RAW_WEIGHT' ? 10000 : 100)) {
+                this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: '请明确单位并填写范围内的整数目标值' });
+                return;
+            }
+            const sessionId = this.wbActiveSessionId;
+            this.wbActionBusy = Object.assign({}, this.wbActionBusy, { [action.actionId]: 'revise' });
+            this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: '' });
+            try {
+                await RoverAdminApi.api('/api/agent/v1/plans/' + encodeURIComponent(action.plan.planId) + '/versions', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expectedVersion: action.plan.planVersion, expectedPlanHash: action.plan.planHash,
+                        requestedValue: value, requestedUnit: edit.requestedUnit }),
+                });
+                this.wbCancelPlanEdit(action);
+            } catch (e) {
+                if (this.wbActiveSessionId === sessionId) {
+                    this.wbActionError = Object.assign({}, this.wbActionError,
+                        { [action.actionId]: (e && e.message) ? e.message : '新版本登记失败' });
+                }
+            } finally {
+                const busy = Object.assign({}, this.wbActionBusy);
+                delete busy[action.actionId];
+                this.wbActionBusy = busy;
+                await this.wbLoadActions(sessionId);
+                if (this.wbActiveSessionId === sessionId) {
+                    this.wbScheduleActionRefresh(sessionId, this.wbActions.some(item => this.wbActionInFlight(item)) || this.wbEffectInFlight());
+                }
+            }
+        },
+
         wbActionTypeLabel(type) {
             return { ADJUST_ROUTE_TARGET_WEIGHT: '灰度权重调整' }[type] || type || '变更';
         },
@@ -581,14 +968,18 @@ window.RoverAdminPages.workbench = {
         wbActionStatusLabel(status) {
             return {
                 PENDING_APPROVAL: '待审批',
+                QUEUED: '已排队',
                 EXECUTING: '执行中',
                 VERIFYING: '验证中',
                 SUCCESS: '已完成',
                 FAILED: '失败',
                 PRECONDITION_FAILED: '预检未通过',
                 UNCERTAIN: '结果未知',
+                RECONCILING: '确认中',
                 REJECTED: '已拒绝',
+                SUPERSEDED: '已有新版本',
                 ROLLING_BACK: '回滚中',
+                ROLLBACK_QUEUED: '回滚已排队',
                 ROLLED_BACK: '已回滚',
                 ROLLBACK_PRECONDITION_FAILED: '回滚预检未通过',
             }[status] || status || '';
@@ -604,7 +995,11 @@ window.RoverAdminPages.workbench = {
                 ROLLBACK_PRECONDITION_FAILED: 'bad',
                 UNCERTAIN: 'warn',
                 PENDING_APPROVAL: 'warn',
+                QUEUED: 'warn',
+                ROLLBACK_QUEUED: 'warn',
+                RECONCILING: 'warn',
                 REJECTED: 'comp',
+                SUPERSEDED: 'comp',
             }[status] || 'comp';
         },
 
@@ -701,14 +1096,22 @@ window.RoverAdminPages.workbench = {
             switch (action.status) {
                 case 'PENDING_APPROVAL':
                     return { mark: '○', text: '尚未执行，等人工批准', tone: 'idle' };
+                case 'QUEUED':
+                    return { mark: '●', text: '审批已通过，等待 Admin 执行', tone: 'run' };
                 case 'REJECTED':
                     return { mark: '○', text: '已拒绝，未执行', tone: 'idle' };
+                case 'SUPERSEDED':
+                    return { mark: '○', text: '已由新版本替代，原版本未执行且不能再批准', tone: 'idle' };
                 case 'EXECUTING':
                     return { mark: '●', text: '已批准，正在校验当前状态并提交', tone: 'run' };
                 case 'VERIFYING':
                     return { mark: '●', text: '已提交，正在回读路由确认结果', tone: 'run' };
                 case 'ROLLING_BACK':
                     return { mark: '●', text: '正在把权重补偿回变更前的值', tone: 'run' };
+                case 'ROLLBACK_QUEUED':
+                    return { mark: '●', text: '补偿审批已通过，等待 Admin 执行', tone: 'run' };
+                case 'RECONCILING':
+                    return { mark: '●', text: '正在使用原操作号确认结果', tone: 'run' };
                 case 'SUCCESS':
                     return { mark: '✓', text: '已提交并回读确认，权重已生效', tone: 'ok' };
                 case 'ROLLED_BACK':
@@ -728,6 +1131,23 @@ window.RoverAdminPages.workbench = {
                 default:
                     return { mark: '○', text: '', tone: 'idle' };
             }
+        },
+
+        wbEffect(action, phase) {
+            return this.wbEffectVerifications[action.actionId + ':' + phase] || null;
+        },
+
+        wbEffectLabel(item) {
+            if (!item) return '尚未安排业务效果观察';
+            const labels = {
+                PENDING: '等待效果观察窗口', RECOVERED: '业务指标达到恢复阈值',
+                IMPROVED: '指标有所改善，尚未达到恢复标准', NOT_RECOVERED: '观察期结束，未达到恢复标准',
+                BASELINE_ALREADY_HEALTHY: '变更前业务指标已达标，不能归因于本次动作',
+                WORSENED: '业务指标恶化或触发护栏', INSUFFICIENT_SAMPLE: '样本不足，无法判断',
+                MISSING_DATA: '数据缺失，无法判断', CONTAMINATED: '同期发生其他变更，无法单独归因',
+                NOT_APPLIED: '控制面动作未确认生效',
+            };
+            return labels[item.outcome] || item.outcome || '等待业务效果观察';
         },
 
         /** 卡片角落的署名：谁提的、谁批的、什么时候——变更必须能追到人。 */
@@ -1426,16 +1846,54 @@ window.RoverAdminPages.workbench = {
          */
         wbEvidenceScope(item) {
             const meta = (item && item.metadata) || {};
+            const envelope = item && item.envelope;
             const parts = [];
+            if (envelope) {
+                parts.push(this.wbEvidenceQualityLabel(envelope.qualityStatus));
+                parts.push('样本 ' + envelope.sampleCount);
+                parts.push('覆盖 ' + (envelope.coverageRange ? this.wbTimeRangeText(envelope.coverageRange) : '未声明'));
+                if (envelope.requestedRange && envelope.requestedRange.toMillis) {
+                    parts.push('请求时段 ' + this.wbTimeRangeText(envelope.requestedRange));
+                }
+                const refs = envelope.resourceRefs || [];
+                refs.slice(0, 3).forEach(ref => parts.push(ref.resourceId + ' UID=' + ref.resourceUid + ' 代次=' + ref.generation));
+                if (refs.length > 3) parts.push('另有 ' + (refs.length - 3) + ' 个资源身份，见详情');
+            }
             const windowSeconds = Number(meta.windowSeconds);
             if (windowSeconds > 0) parts.push('窗口 ' + windowSeconds + 's');
-            else if (windowSeconds === 0) parts.push('时点快照');
+            else if (windowSeconds === 0 && !envelope) parts.push('时点快照');
             const sampleSize = Number(meta.sampleSize);
-            if (Number.isFinite(sampleSize) && sampleSize > 0) parts.push('样本 ' + sampleSize);
+            if (!envelope && Number.isFinite(sampleSize) && sampleSize >= 0) parts.push('样本 ' + sampleSize);
             if (meta.routeId) parts.push('路由 ' + meta.routeId);
             if (meta.hostPort) parts.push('上游 ' + meta.hostPort);
             if (meta.component) parts.push('组件 ' + meta.component);
             return parts.join(' · ');
+        },
+
+        wbEvidenceQualityLabel(quality) {
+            return { AVAILABLE: '可用', EMPTY: '无样本', PARTIAL: '覆盖不完整', UNAVAILABLE: '数据不可用',
+                STALE: '已过期', OUT_OF_RANGE: '不覆盖该时段' }[quality] || '质量未知';
+        },
+
+        wbTimelineEvents(item) {
+            return item && item.envelope && item.envelope.sourceId === 'rover.change-timeline'
+                && Array.isArray(item.envelope.facts.events) ? item.envelope.facts.events : [];
+        },
+
+        wbTimelineTime(event) {
+            const utc = value => Number.isFinite(Number(value)) && Number(value) > 0 ? new Date(Number(value)).toISOString() : '未知';
+            if (event.occurredAtMillis) return '源时间 ' + utc(event.occurredAtMillis) + '（源时钟未校准）';
+            const range = event.occurrenceRange || {};
+            return '观测区间 ' + utc(range.fromMillis) + ' ~ ' + utc(range.toMillis) + '（实际变更时刻未知）';
+        },
+
+        wbTimelineDescription(event) {
+            const subject = event.subject || {};
+            const facts = event.facts || {};
+            const identity = [subject.routeId, subject.routeUid && ('UID=' + subject.routeUid + ' 代次=' + subject.generation),
+                (subject.services || []).join(', '), subject.group, subject.hostPort, subject.component].filter(Boolean).join(' · ');
+            return identity + (facts.releaseId ? ' · 发布 ' + facts.releaseId + ' · 制品 ' + facts.artifact + ' · ' + facts.status
+                : ' · ' + JSON.stringify({ before: facts.before, after: facts.after }));
         },
 
         wbTimeRangeText(range) {
@@ -1451,6 +1909,9 @@ window.RoverAdminPages.workbench = {
             return { CONFIRMED: '确认', REJECTED: '排除', UNKNOWN: '无法验证' }[status] || status || '未验证';
         },
 
+        wbHypotheses(task) {
+            return (task && task.result && task.result.hypotheses) || (task && task.plan && task.plan.assessments) || [];
+        },
         wbHypothesisBadge(status) {
             return { CONFIRMED: 'bad', REJECTED: 'ok', UNKNOWN: 'warn' }[status] || 'comp';
         },

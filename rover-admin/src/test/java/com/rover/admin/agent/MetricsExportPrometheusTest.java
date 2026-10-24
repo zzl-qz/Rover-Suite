@@ -24,6 +24,7 @@ import org.springframework.beans.factory.annotation.Autowired;
         "management.metrics.export.prometheus.enabled=true",
         "management.endpoints.web.exposure.include=health,info,prometheus"
 })
+@org.springframework.test.context.TestPropertySource(properties="rover.admin.log-store-path=./target/test-data/MetricsExportPrometheusTest/rover")
 @AutoConfigureMockMvc
 class MetricsExportPrometheusTest {
 

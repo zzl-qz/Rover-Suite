@@ -302,6 +302,8 @@ public class GatewayHttpServer {
         runtime.restoreRoutesRevision(revision, operationId);
     }
 
+    public void initializeManagedState() { runtime.initializeManagedState(); }
+
     /**
      * 启动服务发现、Netty 服务端并开始监听。
      */

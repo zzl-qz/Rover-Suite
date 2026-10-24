@@ -22,6 +22,16 @@ class InvestigationRulesTest {
     private static final String PATH = "/api/demo/tt";
 
     @Test
+    void multipleVersionRouteDoesNotInventMissingInstances() {
+        Findings findings = evaluate(route("/api/demo/tt", "demo", "v1,v2"), true, DiscoveryMode.NAMESERVER,
+                List.of(new InstanceSnapshot("demo", "v1", "v1", "127.0.0.1", 8081, true, 100, true, 0L),
+                        new InstanceSnapshot("demo", "v2", "v2", "127.0.0.1", 8082, true, 100, true, 0L)), null);
+        assertEquals(Verdict.REJECTED, hypothesis(findings, "H3").status());
+        assertEquals(Verdict.REJECTED, hypothesis(findings, "H4").status());
+        assertTrue(findings.summary().contains("2 个匹配的健康实例"), findings.summary());
+    }
+
+    @Test
     void confirmedRouteMissIsHighConfidence() {
         Findings findings = evaluate(null, true, DiscoveryMode.NAMESERVER, null, null);
 
@@ -197,6 +207,20 @@ class InvestigationRulesTest {
         assertTrue(h6.detail().contains("order-2"), "确认时必须点名异常实例，实际为 " + h6.detail());
         assertTrue(h6.detail().contains("42"), "确认时必须给出 5xx 计数，实际为 " + h6.detail());
         assertTrue(findings.summary().contains("order-2"), "结论同样要点名异常实例");
+    }
+
+    @Test
+    void gatewayTimeoutCountersConfirmForwardingFailuresWithoutClaimingBackendResponses() {
+        var row = new RouteUpstreamSnapshot("order-route","order-2",RouteUpstreamSnapshot.NO_GROUP,60,
+                35,35,0,35,250,250,System.currentTimeMillis());
+        Findings findings=evaluateWithUpstreams(route("/api/order","order-service",""),true,
+                DiscoveryMode.NAMESERVER,List.of(),null,List.of(row));
+        Hypothesis h6=hypothesis(findings,"H6");
+        assertEquals(Verdict.CONFIRMED,h6.status());
+        assertTrue(h6.statement().contains("访问"));
+        assertFalse(h6.statement().contains("返回"));
+        assertTrue(h6.detail().contains("不能据此确认响应来源或业务根因"));
+        assertFalse(findings.summary().contains("返回了 5xx"));
     }
 
     /**

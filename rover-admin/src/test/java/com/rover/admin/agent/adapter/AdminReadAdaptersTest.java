@@ -186,6 +186,44 @@ class AdminReadAdaptersTest {
         return route;
     }
 
+    @Test
+    void nativeWindowPreservesQualityAndRejectsInventedCountsOrLegacyFallback() {
+        var payload = read("""
+                {"routeWindow":{"schemaVersion":1,"routeId":"r","finalRequests":4,"final5xx":2,
+                  "upstream5xx":2,"gateway5xx":0,"incompleteResponses":0,"attemptCount":4,"latencySamples":4,
+                  "p95Method":"HISTOGRAM_UPPER_BOUND","latencyBucketCounts":[4],"latencyBucketUpperBoundsMillis":[8],
+                  "requestedFromMillis":1000,"requestedToMillis":3000,"coverageFromMillis":2000,"coverageToMillis":2999,
+                  "observedAtMillis":4000,"qualityStatus":"PARTIAL","samplingMode":"ALL_FINAL_REQUESTS",
+                  "dimensions":[{"resourceUid":"old","generation":2,"group":"v2","upstream5xx":2}],
+                  "limitations":["boundary second excluded"]}}
+                """);
+        when(admin.loadRouteUpstreams("r", 60)).thenReturn(payload);
+        var window = new AdminMetricReadAdapter(admin).routeWindow("r", 60);
+        assertEquals(com.rover.agent.core.model.EvidenceQuality.PARTIAL, window.qualityStatus());
+        assertEquals(4, window.finalRequests()); assertEquals(2000, window.coverageRange().fromMillis());
+        ((com.fasterxml.jackson.databind.node.ObjectNode) payload.path("routeWindow")).put("final5xx", 5);
+        assertThrows(SnapshotUnavailableException.class, () -> new AdminMetricReadAdapter(admin).routeWindow("r", 60));
+        when(admin.loadRouteUpstreams("r", 60)).thenReturn(read("{\"rows\":[],\"enabled\":true}"));
+        assertThrows(SnapshotUnavailableException.class, () -> new AdminMetricReadAdapter(admin).routeWindow("r", 60));
+    }
+
+    @Test
+    void traceObservationKeepsRealVersionOriginAndAttemptFacts() {
+        when(admin.loadTraces(any())).thenReturn(read("""
+                {"enabled":true,"sampleRate":1,"observedAtMillis":1000,"collectionStartedAtMillis":100,"overwritten":3,
+                  "samplingMode":"RANDOM_PLUS_SLOW","traces":[{"path":"/p","traceId":"t","statusCode":503,"startMillis":500,
+                  "observation":{"routeId":"r","resourceUid":"old","generation":2,"serviceName":"svc","group":"v2",
+                  "hostPort":"h:80","responseOrigin":"UPSTREAM","failurePhase":"NONE","responseComplete":true,
+                  "attempts":[{"hostPort":"h:80","serviceName":"svc","group":"v2","statusCode":503,
+                    "responseOrigin":"UPSTREAM","failurePhase":"NONE","costMillis":4,"responseComplete":true}]}}]}
+                """));
+        var snapshot = new AdminTraceReadAdapter(admin).byPath("/p");
+        assertEquals(3, snapshot.overwritten()); assertEquals(1000, snapshot.observedAtMillis());
+        var observation = snapshot.rows().get(0).observation();
+        assertEquals("old", observation.resourceUid()); assertEquals("v2", observation.group());
+        assertEquals("UPSTREAM", observation.responseOrigin()); assertEquals(503, observation.attempts().get(0).statusCode());
+    }
+
     private static JsonNode read(String json) {
         try {
             return JSON.readTree(json);

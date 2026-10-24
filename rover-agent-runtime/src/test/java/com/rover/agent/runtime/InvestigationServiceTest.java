@@ -1,17 +1,21 @@
 package com.rover.agent.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.rover.agent.core.event.TaskEvent;
@@ -30,10 +34,13 @@ import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
+import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceRow;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ModelExplainer;
+import com.rover.agent.runtime.action.ActionProposal;
+import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
@@ -119,6 +126,47 @@ class InvestigationServiceTest {
         // 结论产出后回写事件：摘要与状态是追问与处置复核时的聚合口径。
         assertEquals(task.result().summary(), incidentRegistry.incident(task.incidentId()).orElseThrow().summary());
         assertEquals("RESOLVED", incidentRegistry.incident(task.incidentId()).orElseThrow().status().name());
+    }
+
+    @Test
+    void alertInvestigationCreatesOnlyAnApprovalCandidateFromQualifiedUpstreamEvidence() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api/order", "order-service", "")));
+        when(instances.instances()).thenReturn(List.of());
+        when(metrics.routeUpstreams(anyString(), anyInt())).thenReturn(List.of(
+                upstream("v2", "10.0.0.2:8080", 20, 5),
+                upstream("v1", "10.0.0.1:8080", 20, 0)));
+        AgentActionService actions = mock(AgentActionService.class);
+        when(actions.proposeEvidenceGatedQuarantine(anyString(), anyString(), anyString(),
+                eq("/api/order"), eq("v2"), anyList()))
+                .thenReturn(ActionProposal.rejected("Gateway 路由已变化"));
+        investigations = new InvestigationService(routes, instances, metrics, traces, configs, events,
+                r -> List.of(), (q, limit) -> List.of(), incidentRegistry, taskRegistry,
+                new ModelExplainer(TestGateway.notConfigured()), actions);
+
+        TaskView task = await(diagnose("/api/order", "订单接口告警").taskId());
+
+        assertEquals("COMPLETED", task.status().name());
+        assertTrue(task.result().limitations().stream().anyMatch(text -> text.contains("Gateway 路由已变化")));
+        verify(actions).proposeEvidenceGatedQuarantine(anyString(), anyString(), anyString(),
+                eq("/api/order"), eq("v2"), anyList());
+    }
+
+    @Test
+    void alertInvestigationDoesNotProposeQuarantineForOne5xx() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api/order", "order-service", "")));
+        when(instances.instances()).thenReturn(List.of());
+        when(metrics.routeUpstreams(anyString(), anyInt())).thenReturn(List.of(
+                upstream("v2", "10.0.0.2:8080", 20, 1)));
+        AgentActionService actions = mock(AgentActionService.class);
+        investigations = new InvestigationService(routes, instances, metrics, traces, configs, events,
+                r -> List.of(), (q, limit) -> List.of(), incidentRegistry, taskRegistry,
+                new ModelExplainer(TestGateway.notConfigured()), actions);
+
+        TaskView task = await(diagnose("/api/order", "订单接口告警").taskId());
+
+        assertEquals("COMPLETED", task.status().name());
+        assertTrue(task.result().limitations().stream().anyMatch(text -> text.contains("单次 5xx 不会触发")));
+        verifyNoInteractions(actions);
     }
 
     @Test
@@ -274,22 +322,23 @@ class InvestigationServiceTest {
         // Spring AI 2.x：工具调用循环在真实 ChatModel 内部执行，mock 无法触发。
         // 模型一个工具都不读也必须能产出解释：路由与实例快照由运行时预读后写进提示词。
         when(model.stream(any(Prompt.class))).thenReturn(Flux.just(
-                response("AI 解释（依据运行时预读快照）")));
+                response("{\"factIds\":[\"F1\"]}")));
 
         TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
         assertEquals("COMPLETED", task.status().name());
-        assertEquals("AI 解释（依据运行时预读快照）", task.result().aiAnalysis());
+        assertTrue(task.result().aiAnalysis().contains("evidenceId="));
+        assertTrue(task.result().aiAnalysis().contains("根因尚未确认"));
         assertTrue(task.steps().stream().anyMatch(step -> "AI 解读".equals(step.name())
                 && "COMPLETED".equals(step.status().name())
-                && step.outputSummary().contains("运行时预读快照：路由快照、实例快照")));
+                && step.outputSummary().contains("运行时预读快照：结构化证据目录")));
         // 提示词里确实带着预读快照文本：解释有据可依，不靠模型自觉调用工具。
         ArgumentCaptor<Prompt> prompts = ArgumentCaptor.forClass(Prompt.class);
         verify(model).stream(prompts.capture());
         String userText = prompts.getValue().getUserMessage().getText();
-        assertTrue(userText.contains("运行时已读取的只读快照："));
+        assertTrue(userText.contains("事实目录"));
         // 快照作为不可信数据被围栏标出，避免其中的文本被当成指令（提示注入隔离）。
-        assertTrue(userText.contains("快照 路由快照"));
+        assertTrue(userText.contains("F1 [evidenceId="));
         assertTrue(userText.contains("ROVER-DATA"));
     }
 
@@ -307,12 +356,12 @@ class InvestigationServiceTest {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         useModel(new ModelExplainer(TestGateway.of(model), new MicrometerAgentMetrics(registry)));
         when(model.stream(any(Prompt.class))).thenReturn(Flux.just(
-                response("先看路由"),
-                responseWithUsage("，再看实例", 1200, 64)));
+                response("{\"factIds\":["),
+                responseWithUsage("\"F1\"]}", 1200, 64)));
 
         TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
 
-        assertEquals("先看路由，再看实例", task.result().aiAnalysis());
+        assertTrue(task.result().aiAnalysis().contains("根因尚未确认"));
         assertEquals(1.0, registry.get("rover.agent.model.calls")
                 .tag("outcome", "ok").tag("scene", "解读").counter().count());
         assertEquals(1200.0, registry.get("rover.agent.model.tokens")
@@ -332,8 +381,7 @@ class InvestigationServiceTest {
         when(model.stream(any(Prompt.class))).thenAnswer(invocation -> {
             // 等订阅者挂上再出增量：否则连上太晚只会走"补发整段"，测不到增量路径
             subscribed.await();
-            readAllTools(invocation.getArgument(0));
-            return Flux.just(response("先看路由"), response("，再看实例"));
+            return Flux.just(response("{\"factIds\":["), response("\"F1\"]}"));
         });
 
         TaskView submitted = diagnose("/api/hello", "为什么失败？");
@@ -343,14 +391,14 @@ class InvestigationServiceTest {
         TaskView task = await(submitted.taskId());
 
         // 增量拼接结果与落库文本逐字一致，且订阅者一定收到终态通知。
-        assertEquals("先看路由，再看实例", task.result().aiAnalysis());
+        assertTrue(task.result().aiAnalysis().contains("根因尚未确认"));
         subscriber.awaitTerminal();
-        assertEquals(List.of("snapshot:", "delta:先看路由", "delta:，再看实例", "end:COMPLETED"),
+        assertEquals(List.of("snapshot:", "delta:" + task.result().aiAnalysis(), "end:COMPLETED"),
                 subscriber.notes());
         // 步骤说明如实记录证据来源：预读快照与模型另调的工具各自可追溯。
         assertTrue(task.steps().stream().anyMatch(step -> "AI 解读".equals(step.name())
-                && step.outputSummary() != null && step.outputSummary().contains("运行时预读快照：路由快照、实例快照")
-                && step.outputSummary().contains("模型另调工具：")));
+                && step.outputSummary() != null && step.outputSummary().contains("运行时预读快照：结构化证据目录")
+                && !step.outputSummary().contains("模型另调工具：")));
     }
 
     @Test
@@ -365,6 +413,24 @@ class InvestigationServiceTest {
         assertTrue(investigations.subscribeEvents(task.taskId(), subscriber).isPresent());
         subscriber.awaitTerminal();
         assertEquals(List.of("snapshot:", "end:COMPLETED"), subscriber.notes());
+    }
+
+    @Test
+    void rejectsInventedFactsWithoutPublishingTheModelText() throws Exception {
+        when(routes.routes()).thenReturn(List.of(route("/api", "demo", "")));
+        when(instances.instances()).thenReturn(List.of());
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(model.stream(any(Prompt.class))).thenReturn(Flux.just(response("{\"factIds\":[\"F999\"],\"analysis\":\"根因已确认，v2错误率100%，已回滚\"}")));
+        useModel(new ModelExplainer(TestGateway.of(model)));
+        TaskView task = await(diagnose("/api/hello", "为什么失败？").taskId());
+        assertNull(task.result().aiAnalysis());
+        assertTrue(task.steps().stream().anyMatch(step -> step.name().equals("AI 解读") && step.status().name().equals("FAILED")));
+        assertFalse(task.result().summary().contains("已回滚"));
+        RecordingSubscriber subscriber = new RecordingSubscriber();
+        investigations.subscribeEvents(task.taskId(), subscriber);
+        subscriber.awaitTerminal();
+        assertEquals(List.of("snapshot:", "end:COMPLETED"), subscriber.notes(), "拒绝的自由文本不能先进入 SSE 或持久快照");
     }
 
     /**
@@ -544,6 +610,11 @@ class InvestigationServiceTest {
 
     private static RouteSnapshot route(String prefix, String serviceName, String group) {
         return new RouteSnapshot("id-" + prefix, prefix, serviceName, group, "", "", 1L);
+    }
+
+    private static RouteUpstreamSnapshot upstream(String group, String hostPort, long requests, long errors) {
+        return new RouteUpstreamSnapshot("id-/api/order", hostPort, group, 60, requests, errors,
+                0, 0, 10, 20, System.currentTimeMillis());
     }
 
     private TaskView await(String taskId) throws InterruptedException {

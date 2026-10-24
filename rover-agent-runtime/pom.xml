@@ -51,6 +51,11 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- 可在实际连接时约束 DNS 解析地址，保留 TLS 主机名校验，避免预解析后的二次解析绕过。 -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.rover</groupId>
             <artifactId>rover-agent-core</artifactId>

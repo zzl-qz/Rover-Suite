@@ -2,7 +2,7 @@ package com.rover.agent.core.port;
 
 /**
  * 路由控制异常：CONFLICT 为版本冲突，REJECTED 为请求非法，FAILED 为落盘失败。
- * UNAVAILABLE 表示未收到响应，须按原 operationId 确认，不得换号重提。
+ * UNAVAILABLE 表示未收到可信提交结果（含可能已提交的 5xx），须按原 operationId 确认，不得换号重提。
  */
 public class RouteControlException extends RuntimeException {
 
@@ -40,7 +40,7 @@ public class RouteControlException extends RuntimeException {
         return currentRevision;
     }
 
-    /** 这次失败是否可能已经改变了 Gateway（只有「没拿到响应」有这种可能）。 */
+    /** 这次失败是否可能已经改变了 Gateway。 */
     public boolean outcomeUnknown() {
         return kind == Kind.UNAVAILABLE;
     }

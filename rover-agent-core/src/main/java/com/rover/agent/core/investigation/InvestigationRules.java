@@ -30,7 +30,7 @@ public final class InvestigationRules {
     /** H5 的假设陈述保持中性：只描述可观察到的路径状态码，不指向任何一侧。 */
     private static final String H5_STATEMENT = "该路径近期返回 503";
     /** H6 的假设陈述点明「路由 × 上游实例」这一口径：判定依据必须落在具体实例上。 */
-    private static final String H6_STATEMENT = "该路由的某个上游实例返回了 5xx";
+    private static final String H6_STATEMENT = "该路由访问某个上游实例时出现 5xx";
     /**
      * 追踪记录只对最近五分钟内的判定有价值。
      *
@@ -44,6 +44,9 @@ public final class InvestigationRules {
     private InvestigationRules() { }
 
     public static Findings evaluate(FindingsInput input) {
+        if (!input.timeRange().isUnspecified()) {
+            return evaluateSpecifiedRange(input);
+        }
         RouteSnapshot route = input.route();
         DiscoveryMode discovery = input.discoveryMode() == null ? DiscoveryMode.UNKNOWN : input.discoveryMode();
         List<InstanceSnapshot> instances = input.instances();
@@ -83,7 +86,7 @@ public final class InvestigationRules {
                 String group = Texts.orEmpty(route.group());
                 List<InstanceSnapshot> matching = instances.stream()
                         .filter(item -> service.equals(Texts.orEmpty(item.serviceName())))
-                        .filter(item -> group.isBlank() || group.equals(Texts.orEmpty(item.group())))
+                        .filter(item -> RouteSnapshot.matchesGroup(group, item.group()))
                         .toList();
                 long healthy = matching.stream().filter(InstanceSnapshot::healthy).count();
                 if (matching.isEmpty()) {
@@ -134,6 +137,34 @@ public final class InvestigationRules {
         return new Findings(List.copyOf(hypotheses), summary, confidence);
     }
 
+    /** 当前路由与实例不能验证历史状态；指定时段只能使用时间匹配的请求证据。 */
+    private static Findings evaluateSpecifiedRange(FindingsInput input) {
+        List<Hypothesis> hypotheses = new ArrayList<>();
+        String currentOnly = "当前快照不覆盖指定调查时间范围，无法用于确认或排除该时段的假设";
+        hypotheses.add(hypothesis("H1", "该路径在指定时段未命中路由", Verdict.UNKNOWN, currentOnly,
+                input.routeRead() ? List.of(SOURCE_ROUTES) : List.of()));
+        hypotheses.add(hypothesis("H3", "目标服务在指定时段没有匹配实例", Verdict.UNKNOWN, currentOnly,
+                input.instances() == null ? List.of() : List.of(SOURCE_INSTANCES)));
+        hypotheses.add(hypothesis("H4", "匹配实例在指定时段均不健康", Verdict.UNKNOWN, currentOnly,
+                input.instances() == null ? List.of() : List.of(SOURCE_INSTANCES)));
+        TraceSnapshot traces = input.traces();
+        boolean observed503 = traces != null && traces.rows() != null && traces.rows().stream()
+                .anyMatch(row -> row != null && input.timeRange().contains(row.startMillis())
+                        && Texts.orEmpty(input.path()).equals(Texts.orEmpty(row.path())) && row.statusCode() == 503);
+        hypotheses.add(hypothesis("H5", "该路径在指定时段返回 503",
+                observed503 ? Verdict.CONFIRMED : Verdict.UNKNOWN,
+                observed503 ? "指定时间范围内采到该路径返回 503；无法仅凭状态码确定来源或根因"
+                        : "没有取得该时段的 503 样本；追踪有采样和缓冲限制，不能据此排除故障",
+                traces == null ? List.of() : List.of(SOURCE_TRACES)));
+        hypotheses.add(hypothesis("H6", "该路由在指定时段访问上游实例时出现 5xx", Verdict.UNKNOWN,
+                "当前实时滚动指标不能回溯该调查时间范围，需要对应的历史指标", List.of()));
+        String summary = "调查时间范围：" + input.timeRange().describe()
+                + "。当前路由与实例快照仅作参考，不能据此判断该时段是否发生故障。"
+                + (observed503 ? "该时段的抽样追踪记录到该路径返回 503，根因仍需其他证据验证。"
+                        : "现有时段证据不足以确认故障原因。");
+        return new Findings(List.copyOf(hypotheses), summary, observed503 ? Confidence.MEDIUM : Confidence.LOW);
+    }
+
     /** H6：仅使用窗口内样本量达标的实例判定上游 5xx；无样本时无法验证。 */
     private static Hypothesis upstreamInstanceHypothesis(List<RouteUpstreamSnapshot> rows) {
         if (rows == null) {
@@ -153,7 +184,8 @@ public final class InvestigationRules {
             return hypothesis("H6", H6_STATEMENT, Verdict.CONFIRMED,
                     "窗口内样本达标的 " + adequate.size() + " 个上游实例中，"
                             + failing.stream().map(EvidenceNarrator::upstreamFact).collect(Collectors.joining("、"))
-                            + " 返回了 5xx（样本阈值 " + MIN_INSTANCE_SAMPLE + " 次）",
+                            + " 的转发窗口出现 5xx（样本阈值 " + MIN_INSTANCE_SAMPLE + " 次）。"
+                            + "该统计包含后端响应和网关生成的错误，不能据此确认响应来源或业务根因",
                     List.of(SOURCE_METRICS));
         }
         if (adequate.isEmpty()) {
@@ -166,12 +198,12 @@ public final class InvestigationRules {
                 && item.windowRequests() < MIN_INSTANCE_SAMPLE && item.status5xx() > 0);
         if (lowSample5xx) {
             return hypothesis("H6", H6_STATEMENT, Verdict.UNKNOWN,
-                    "样本达标的 " + adequate.size() + " 个上游实例均未返回 5xx，但存在请求数低于 " + MIN_INSTANCE_SAMPLE
-                            + " 次的实例返回过 5xx，样本不足，无法判断",
+                    "样本达标的 " + adequate.size() + " 个实例的转发窗口均未出现 5xx，但存在请求数低于 " + MIN_INSTANCE_SAMPLE
+                            + " 次的实例转发窗口出现过 5xx，样本不足，无法判断",
                     List.of(SOURCE_METRICS));
         }
         return hypothesis("H6", H6_STATEMENT, Verdict.REJECTED,
-                "窗口内样本达标的 " + adequate.size() + " 个上游实例均未返回 5xx", List.of(SOURCE_METRICS));
+                "窗口内样本达标的 " + adequate.size() + " 个实例的转发窗口均未出现 5xx", List.of(SOURCE_METRICS));
     }
 
     /** H5：确认近期采样追踪中出现过 503；未采到时无法验证，也不推断来源。 */

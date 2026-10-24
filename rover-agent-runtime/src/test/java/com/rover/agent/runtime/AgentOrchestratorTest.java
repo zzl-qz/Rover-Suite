@@ -18,12 +18,19 @@ import com.rover.agent.core.event.TaskEventSubscription;
 import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.event.TaskSnapshot;
 import com.rover.agent.core.model.AgentMessage;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertIngestResult;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.IncidentOrigin;
+import com.rover.agent.core.model.TimeRange;
+import com.rover.agent.core.planning.PlanValidator;
+import com.rover.agent.core.planning.PlanningLimits;
+import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
@@ -42,6 +49,7 @@ import com.rover.agent.runtime.llm.NoopChatModelGateway;
 import com.rover.agent.runtime.repository.InMemoryAgentMessageRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
+import com.rover.agent.runtime.repository.InMemoryAlertLifecycleRepository;
 import com.rover.agent.runtime.repository.InMemoryIncidentRepository;
 import com.rover.agent.runtime.task.IncidentRegistry;
 import com.rover.agent.runtime.task.InvestigationTaskRegistry;
@@ -51,6 +59,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -66,6 +77,7 @@ class AgentOrchestratorTest {
     private InMemoryAgentTaskRepository records;
     private InMemoryAgentSessionRepository sessions;
     private InMemoryIncidentRepository incidents;
+    private InMemoryAlertLifecycleRepository alertLifecycles;
     private RouteReadPort routePort;
     private InstanceReadPort instancePort;
     private InvestigationTaskRegistry tasks;
@@ -76,6 +88,7 @@ class AgentOrchestratorTest {
     void setUp() {
         sessions = new InMemoryAgentSessionRepository(50);
         incidents = new InMemoryIncidentRepository(50);
+        alertLifecycles = new InMemoryAlertLifecycleRepository();
         messages = new InMemoryAgentMessageRepository(200);
         records = new InMemoryAgentTaskRepository(50);
         tasks = new InvestigationTaskRegistry(records);
@@ -119,6 +132,144 @@ class AgentOrchestratorTest {
         TaskView finished = await(submitted.taskId());
         assertEquals(TaskStatus.COMPLETED, finished.status());
         assertEquals("/api/demo/tt", finished.path());
+    }
+
+    @Test
+    void authenticatedAlertCanBeReadObservedAndContinuedOnlyByItsHandler() throws Exception {
+        TaskView submitted = orchestrator.ingestAlert("alice", "/api/demo/tt", "5xx 告警", null, null);
+        TaskView done = await(submitted.taskId());
+
+        assertTrue(orchestrator.task(done.taskId(), "alice").isPresent());
+        assertTrue(orchestrator.task(done.taskId(), "bob").isEmpty());
+        assertTrue(orchestrator.workspace(done.sessionId(), "alice", 20).isPresent());
+        assertTrue(orchestrator.workspace(done.sessionId(), "bob", 20).isEmpty());
+        var incident = incidents.find(done.incidentId()).orElseThrow();
+        assertEquals(IncidentOrigin.ALERT, incident.origin());
+        assertEquals("alice", incident.triggeredBy());
+        assertEquals("alice", sessions.find(done.sessionId()).orElseThrow().userId());
+        List<TaskEvent> received = new CopyOnWriteArrayList<>();
+        TaskEventSubscription subscription = orchestrator.subscribeEvents(done.taskId(), "alice", received::add)
+                .orElseThrow();
+        assertTrue(orchestrator.subscribeEvents(done.taskId(), "bob", received::add).isEmpty());
+        subscription.cancel();
+        TaskView followUp = orchestrator.submit(done.sessionId(), "alice", "继续查这个告警",
+                AgentRequestOptions.none()).orElseThrow();
+        assertEquals(done.incidentId(), await(followUp.taskId()).incidentId());
+        assertEquals("alice", incidents.find(done.incidentId()).orElseThrow().triggeredBy());
+    }
+
+    @Test
+    void configuredHandlerDoesNotReplaceTheAuthenticatedAlertSource() throws Exception {
+        orchestrator = buildOrchestrator(routePort, "alice");
+        TaskView submitted = orchestrator.ingestAlert("alerts-service", "/api/demo/tt", "告警", null, null);
+        TaskView done = await(submitted.taskId());
+
+        assertEquals("alerts-service", incidents.find(done.incidentId()).orElseThrow().triggeredBy());
+        assertEquals("alice", sessions.find(done.sessionId()).orElseThrow().userId());
+        assertTrue(orchestrator.task(done.taskId(), "alice").isPresent());
+        assertTrue(orchestrator.task(done.taskId(), "alerts-service").isEmpty());
+        assertTrue(orchestrator.task(done.taskId(), "bob").isEmpty());
+        assertThrows(IllegalArgumentException.class,
+                () -> orchestrator.ingestAlert("alerts-service", "/api/demo/tt", "告警", 200L, 100L));
+        assertThrows(IllegalArgumentException.class,
+                () -> orchestrator.ingestAlert("alerts-service", "/api/demo/tt", "告警", 100L, null));
+    }
+
+    @Test
+    void duplicateFiringDeliveryReturnsOriginalTaskAndResolvedAllowsNextGeneration() throws Exception {
+        AlertIngestResult first = orchestrator.ingestAlert("alerts-service", "delivery-1", "cpu-high",
+                AlertEventState.FIRING, "/api/demo/tt", "CPU high", null, null);
+        assertTrue(first.taskStatus() == TaskStatus.PENDING || first.taskStatus() == TaskStatus.RUNNING);
+        AlertIngestResult duplicate = orchestrator.ingestAlert("alerts-service", "delivery-1", "cpu-high",
+                AlertEventState.FIRING, "/api/demo/tt", "CPU high", null, null);
+        assertTrue(duplicate.duplicate());
+        assertEquals(first.taskId(), duplicate.taskId());
+        assertEquals(1, sessions.findByUserId("alerts-service").size());
+
+        AlertIngestResult repeat = orchestrator.ingestAlert("alerts-service", "delivery-2", "cpu-high",
+                AlertEventState.FIRING, "/api/demo/tt", "CPU still high", null, null);
+        assertTrue(repeat.duplicate());
+        assertEquals(first.taskId(), repeat.taskId());
+
+        AlertIngestResult resolved = orchestrator.ingestAlert("alerts-service", "delivery-3", "cpu-high",
+                AlertEventState.RESOLVED, "/api/demo/tt", "CPU recovered", null, null);
+        assertTrue(resolved.resolved());
+        assertNull(resolved.taskId());
+        assertEquals(com.rover.agent.core.model.IncidentStatus.RESOLVED,
+                incidents.find(first.incidentId()).orElseThrow().status());
+        TaskView firstTask = orchestrator.task(first.taskId(), "alerts-service").orElseThrow();
+        assertEquals(TaskStatus.CANCELLED, firstTask.status());
+        AlertIngestResult next = orchestrator.ingestAlert("alerts-service", "delivery-4", "cpu-high",
+                AlertEventState.FIRING, "/api/demo/tt", "CPU high again", null, null);
+        assertEquals(2, next.generation());
+        assertNotNull(next.taskId());
+        assertNotNull(firstTask.incidentId());
+        await(next.taskId());
+        assertEquals(2, sessions.findByUserId("alerts-service").size());
+    }
+
+    @Test
+    void concurrentDuplicateDeliveryCreatesOnlyOneIncidentAndTask() throws Exception {
+        int callers = 8;
+        CountDownLatch ready = new CountDownLatch(callers);
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(callers);
+        try {
+            List<Future<AlertIngestResult>> results = new java.util.ArrayList<>();
+            for (int i = 0; i < callers; i++) {
+                results.add(pool.submit(() -> {
+                    ready.countDown();
+                    start.await();
+                    return orchestrator.ingestAlert("alerts-service", "delivery-concurrent", "cpu-high",
+                            AlertEventState.FIRING, "/api/demo/tt", "CPU high", null, null);
+                }));
+            }
+            assertTrue(ready.await(5, java.util.concurrent.TimeUnit.SECONDS));
+            start.countDown();
+            List<AlertIngestResult> accepted = results.stream().map(future -> {
+                try { return future.get(5, java.util.concurrent.TimeUnit.SECONDS); }
+                catch (Exception failure) { throw new AssertionError(failure); }
+            }).toList();
+            assertEquals(1, accepted.stream().map(AlertIngestResult::taskId).distinct().count());
+        assertEquals(1L, accepted.stream().filter(result -> !result.duplicate()).count());
+            assertEquals(1, sessions.findByUserId("alerts-service").size());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void alertDeliveryIdReuseWithDifferentPayloadConflictsAndDoesNotCreateAnotherTask() {
+        orchestrator.ingestAlert("alerts-service", "delivery-1", "cpu-high",
+                AlertEventState.FIRING, "/api/demo/tt", "CPU high", null, null);
+        assertThrows(com.rover.agent.runtime.task.AlertDeliveryConflictException.class, () ->
+                orchestrator.ingestAlert("alerts-service", "delivery-1", "cpu-high",
+                        AlertEventState.FIRING, "/api/pay", "different payload", null, null));
+        assertEquals(1, sessions.findByUserId("alerts-service").size());
+    }
+
+    @Test
+    void resolvedAlertBeforeQueuedTaskStartsCancelsPendingTask() throws Exception {
+        tasks.stop();
+        tasks = new InvestigationTaskRegistry(records);
+        retention = new WorkspaceRetention(sessions, incidents, messages, tasks, 50, 50, 200);
+        orchestrator = buildOrchestrator(routePort);
+        AlertIngestResult first = orchestrator.ingestAlert("alerts-service", "delivery-queued-1", "queued-alert",
+                AlertEventState.FIRING, "/api/demo/tt", "CPU high", null, null);
+        AlertIngestResult resolved = orchestrator.ingestAlert("alerts-service", "delivery-queued-2", "queued-alert",
+                AlertEventState.RESOLVED, "/api/demo/tt", "recovered", null, null);
+        assertTrue(resolved.resolved());
+        assertNull(resolved.taskId());
+        assertEquals(TaskStatus.CANCELLED,
+                records.find(first.taskId()).orElseThrow().status());
+    }
+
+    @Test
+    void resolvedUnknownAlertIsRejectedAndDoesNotCreateLifecycle() {
+        assertThrows(IllegalArgumentException.class, () -> orchestrator.ingestAlert("alerts-service",
+                "delivery-resolved-orphan", "unknown-alert", AlertEventState.RESOLVED,
+                "/api/demo/tt", "recovered", null, null));
+        assertTrue(sessions.findByUserId("alerts-service").isEmpty());
     }
 
     @Test
@@ -171,6 +322,17 @@ class AgentOrchestratorTest {
         assertEquals(task.taskId(), conversation.get(0).relatedTaskId());
         assertEquals(MessageRole.AGENT, conversation.get(1).role());
         assertEquals(task.taskId(), conversation.get(1).relatedTaskId());
+    }
+
+    @Test
+    void requestedWindowSurvivesEvenWhenTheTargetNeedsClarification() throws Exception {
+        Session session = orchestrator.startSession("admin");
+        TimeRange range = new TimeRange(100L, 200L);
+        TaskView submitted = orchestrator.submit(session.sessionId(), "admin", "帮我看看最近有没有问题",
+                new AgentRequestOptions(ResourceTarget.unknown(), range)).orElseThrow();
+
+        assertEquals(TaskStatus.COMPLETED, await(submitted.taskId()).status());
+        assertEquals(range, tasks.find(submitted.taskId()).timeRange());
     }
 
     @Test
@@ -314,6 +476,10 @@ class AgentOrchestratorTest {
 
     /** 按给定路由端口装配完整编排链（会话 → 目标 → 事件 → 对话主路径）。 */
     private AgentOrchestrator buildOrchestrator(RouteReadPort routes) {
+        return buildOrchestrator(routes, null);
+    }
+
+    private AgentOrchestrator buildOrchestrator(RouteReadPort routes, String alertOwner) {
         MetricReadPort metricPort = windowSeconds -> {
             throw new SnapshotUnavailableException("测试桩未提供指标");
         };
@@ -325,13 +491,15 @@ class AgentOrchestratorTest {
         EventReadPort eventPort = () -> List.of();
         LogQueryPort logPort = r -> List.of();
         KnowledgeReadPort knowledgePort = (q, limit) -> List.of();
-        InvestigationService investigations = new InvestigationService(routes, instancePort, metricPort,
-                tracePort, configPort, eventPort, logPort, knowledgePort, registry, tasks,
-                new ModelExplainer(new NoopChatModelGateway()));
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instancePort, 8);
         CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort,
                 configPort, eventPort, logPort, knowledgePort, CapabilityRegistry.standard());
+        PlanningLimits limits = PlanningLimits.defaults();
+        InvestigationService investigations = new InvestigationService(registry, tasks,
+                new ModelExplainer(new NoopChatModelGateway()), new RuleBasedPlanner(CapabilityRegistry.standard()),
+                new PlanValidator(CapabilityRegistry.standard(), limits), executor, limits, OpsJournal.none(), alertOwner,
+                null, alertLifecycles);
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
                 ScriptedConversationModel.service(executor, tools -> "已按问题作答。"), OpsJournal.none());

@@ -11,7 +11,12 @@ import java.util.List;
  * @param targets        版本目标；静态路由或未配置版本目标时为空
  */
 public record RouteControlRoute(String routeId, String businessPrefix, String targetUrl,
-                                List<RouteControlTarget> targets) {
+                                List<RouteControlTarget> targets,
+                                com.rover.agent.core.model.ResourceRef resourceRef) {
+
+    public RouteControlRoute(String routeId, String businessPrefix, String targetUrl, List<RouteControlTarget> targets) {
+        this(routeId, businessPrefix, targetUrl, targets, null);
+    }
 
     public RouteControlRoute {
         routeId = routeId == null ? "" : routeId.trim();

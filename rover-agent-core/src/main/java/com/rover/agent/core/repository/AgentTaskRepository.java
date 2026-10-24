@@ -13,6 +13,12 @@ public interface AgentTaskRepository {
     /** 保存任务快照；同 ID 覆盖。 */
     void save(TaskView task);
 
+    /** 持久实现将状态与可重放事件放在同一事务；内存宿主保留原语义。 */
+    default void saveEvent(TaskView task, com.rover.agent.core.event.TaskEvent event) { save(task); }
+    default boolean durableEvents() { return false; }
+    default Optional<com.rover.agent.core.event.TaskSnapshot> streamSnapshot(String taskId) { return Optional.empty(); }
+    default List<com.rover.agent.core.event.TaskEvent> eventsAfter(String taskId, long eventId, int limit) { return List.of(); }
+
     /** 按 ID 查询任务快照。 */
     Optional<TaskView> find(String taskId);
 

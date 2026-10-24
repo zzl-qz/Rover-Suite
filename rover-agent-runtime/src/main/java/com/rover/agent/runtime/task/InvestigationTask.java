@@ -19,6 +19,7 @@ import com.rover.agent.core.model.StepStatus;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.runtime.graph.InvestigationReporter;
@@ -42,11 +43,11 @@ public final class InvestigationTask implements InvestigationReporter {
     private final String taskId;
     private final String sessionId;
     private final String question;
-    private final Consumer<TaskView> snapshotSink;
+    private Consumer<TaskView> snapshotSink;
     private final TaskEventBus events;
     private final AgentMetrics metrics;
     private final AgentCheckpointRepository checkpoints;
-    private final long createdAtMillis = System.currentTimeMillis();
+    private long createdAtMillis = System.currentTimeMillis();
     private final List<Step> steps = new ArrayList<>();
     /** 本次执行已取到的证据：逐次交付、随恢复点落库，不等结论合成。 */
     private final List<Evidence> evidence = new ArrayList<>();
@@ -61,6 +62,7 @@ public final class InvestigationTask implements InvestigationReporter {
     private ResourceTarget target = ResourceTarget.unknown();
     private TaskType taskType = TaskType.INVESTIGATION;
     private InvestigationPlan plan = InvestigationPlan.empty();
+    private TimeRange timeRange = TimeRange.unspecified();
     private long completedAtMillis;
     private InvestigationReport report;
     private String error;
@@ -72,12 +74,15 @@ public final class InvestigationTask implements InvestigationReporter {
     private int lastRoundNo;
     private int lastToolCallCount;
     private long eventSeq;
+    private java.util.function.BiConsumer<TaskView, TaskEvent> eventSink = (view, event) -> { };
+    private boolean transactionalEvents;
     private boolean settled;
     /** 协作式取消标志：执行线程在每个检查点轮询它，置位后不再产出结论。volatile 保证跨线程可见。 */
     private volatile boolean cancelled;
     /** 当前执行该任务的线程；取消时用于中断阻塞中的取数/模型调用（不参与快照，故 transient）。 */
     private transient Thread runner;
-    private final AgentRunBudget budget;
+    private AgentRunBudget budget;
+    private java.util.function.BiConsumer<TaskView,AgentCheckpoint> checkpointSink;
     private final ScheduledExecutorService deadlines;
     private ScheduledFuture<?> deadlineTimer;
 
@@ -97,6 +102,7 @@ public final class InvestigationTask implements InvestigationReporter {
         this.events = events;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
         this.checkpoints = checkpoints;
+        this.checkpointSink = checkpoints::save;
         this.budget = new AgentRunBudget(limits);
         this.deadlines = deadlines;
     }
@@ -104,6 +110,35 @@ public final class InvestigationTask implements InvestigationReporter {
     public AgentRunBudget budget() {
         return budget;
     }
+
+    void eventSink(java.util.function.BiConsumer<TaskView, TaskEvent> sink) { this.eventSink = sink; }
+    void transactionalEvents(boolean enabled) { transactionalEvents = enabled; }
+    void snapshotSink(Consumer<TaskView> sink) { snapshotSink = sink; }
+    void checkpointSink(java.util.function.BiConsumer<TaskView,AgentCheckpoint> sink) { checkpointSink = sink; }
+
+    void restoreBudget(AgentRunBudget.State state) {
+        budget = new AgentRunBudget(new AgentRunLimits(state.maxModelCalls(), state.maxOutputTokens(), state.maxTotalTokens(),
+                java.time.Duration.ofMillis(state.timeoutMillis()), state.maxRepeatedToolResults()));
+        budget.restore(state);
+        budget.observeTemplates(evidence);
+    }
+
+    void restore(TaskView saved, com.rover.agent.core.event.TaskSnapshot stream, AgentCheckpoint mark) {
+        createdAtMillis = saved.createdAtMillis(); incidentId = saved.incidentId(); path = saved.path(); target = saved.target();
+        taskType = saved.taskType(); plan = saved.plan(); steps.addAll(saved.steps()); evidence.addAll(saved.evidence());
+        executedCapabilities.addAll(saved.executedCapabilities()); recalls = saved.recalls();
+        if (stream != null) {
+            eventSeq = stream.coveredEventId();
+            if (stream.analysis() != null) { analysis.append(stream.analysis()); }
+            if (stream.thinking() != null) { thinking.append(stream.thinking()); }
+        }
+        if (mark != null) { checkpointSeq = mark.sequenceNo(); lastRoundNo = mark.roundNo(); lastToolCallCount = mark.toolCallCount(); }
+    }
+
+    @Override public synchronized int resumeRounds() { return lastRoundNo; }
+    @Override public synchronized int resumeToolCalls() { return lastToolCallCount; }
+    @Override public synchronized InvestigationPlan resumePlan() { return plan; }
+    @Override public synchronized List<Evidence> resumeEvidence() { return List.copyOf(evidence); }
 
     public String taskId() {
         return taskId;
@@ -152,10 +187,21 @@ public final class InvestigationTask implements InvestigationReporter {
      * 由执行线程在解析出对象后调用；在此之前快照里的这些字段保持空值。
      */
     public synchronized void bind(String incidentId, String path, ResourceTarget target) {
+        bind(incidentId, path, target, timeRange);
+    }
+
+    /** 时间范围与目标一同绑定，工具和结论必须使用同一范围。 */
+    public synchronized void bind(String incidentId, String path, ResourceTarget target, TimeRange timeRange) {
+        if (cancelled || status.terminal()) { return; }
         this.incidentId = incidentId;
         this.path = path == null ? "" : path;
         this.target = target == null ? ResourceTarget.unknown() : target;
-        persist();
+        this.timeRange = timeRange == null ? TimeRange.unspecified() : timeRange;
+        snapshotSink.accept(view());
+    }
+
+    public synchronized TimeRange timeRange() {
+        return timeRange;
     }
 
     /** 标记人工对话执行形态，并发布全量快照通知订阅者。 */
@@ -195,15 +241,18 @@ public final class InvestigationTask implements InvestigationReporter {
      */
     @Override
     public synchronized void recordEvidence(List<Evidence> collected) {
+        if (cancelled) { return; }
         if (collected == null || collected.isEmpty()) {
             return;
         }
         evidence.addAll(collected);
+        budget.observeTemplates(collected);
     }
 
     /** 步骤完成、证据交付后推进恢复点，与任务快照和证据一起保存。 */
     @Override
     public synchronized void checkpoint(CheckpointStage stage, int roundNo, int toolCallCount, String runtimeNode) {
+        if (cancelled && status == TaskStatus.PENDING) { return; }
         if (stage == null) {
             return;
         }
@@ -213,7 +262,7 @@ public final class InvestigationTask implements InvestigationReporter {
                 roundNo, toolCallCount, steps.size(), evidence.size(), "", runtimeNode,
                 System.currentTimeMillis());
         // 这里写的是当前快照本身：状态、步骤、证据与恢复点在同一次写入里落下，恢复点不会领先于事实。
-        checkpoints.save(view(), mark);
+        checkpointSink.accept(view(), mark);
     }
 
     /** 补齐结论里带来、但没经 {@link #recordEvidence} 交付过的证据：按 ID 去重，保证不丢也不重复。 */
@@ -231,7 +280,7 @@ public final class InvestigationTask implements InvestigationReporter {
 
     /** 计划与能力进展的全量快照通知：payload 与订阅时补发的快照同型，订阅者按覆盖语义处理。 */
     private void publishSnapshot() {
-        publish(TaskEventType.SNAPSHOT, snapshot());
+        publish(TaskEventType.SNAPSHOT, new TaskSnapshot(view(), analysis.toString(), eventSeq + 1, thinking.toString()));
     }
 
     /**
@@ -339,6 +388,17 @@ public final class InvestigationTask implements InvestigationReporter {
         if (runner != null) {
             runner.interrupt();
         }
+    }
+
+    /** 进程关闭是暂停可重放的只读工作，不能伪装成人主动取消。 */
+    synchronized void suspendForRestart() {
+        if (!status.active()) { return; }
+        status = TaskStatus.PENDING;
+        error = "Admin 正在关闭，等待重启后恢复只读任务";
+        snapshotSink.accept(view());
+        cancelled = true;
+        budget.stop("Admin 正在关闭");
+        interruptRunner();
     }
 
     /**
@@ -482,7 +542,7 @@ public final class InvestigationTask implements InvestigationReporter {
     public synchronized TaskView view() {
         return new TaskView(taskId, sessionId, incidentId, status, currentStage, path, target, question,
                 createdAtMillis, completedAtMillis, List.copyOf(steps), report, error, clarification,
-                taskType, plan, List.copyOf(executedCapabilities), recalls, List.copyOf(evidence));
+                taskType, plan, List.copyOf(executedCapabilities), recalls, List.copyOf(evidence), budget.modelInvocations());
     }
 
     /** 任务快照：视图 + 已产生的解读与思考全文 + 已发布的最新事件序号（订阅者的对齐依据）。 */
@@ -492,11 +552,16 @@ public final class InvestigationTask implements InvestigationReporter {
 
     /** 把最新快照推给任务记录存储；调研期间读到的始终是一致视图。 */
     private void persist() {
+        if (cancelled && status == TaskStatus.PENDING) { return; }
+        if (transactionalEvents) { return; } // 状态随紧随其后的 outbox 事件提交。
         snapshotSink.accept(view());
     }
 
     /** 发布事件：只在状态锁内做非阻塞入队，事件序号在同一把锁内递增，顺序与状态变更一致。 */
     private void publish(TaskEventType type, Object payload) {
-        events.publish(new TaskEvent(++eventSeq, taskId, type, System.currentTimeMillis(), payload));
+        if (cancelled && status == TaskStatus.PENDING) { return; }
+        TaskEvent event = new TaskEvent(++eventSeq, taskId, type, System.currentTimeMillis(), payload);
+        eventSink.accept(view(), event);
+        events.publish(event);
     }
 }

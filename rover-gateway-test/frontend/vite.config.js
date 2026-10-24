@@ -6,12 +6,11 @@ export default defineConfig({
   plugins: [vue()],
   server: {
     port: 3000,
-    // 开发环境代理配置（可选，直接请求网关更简单）
-    // proxy: {
-    //   '/api': {
-    //     target: 'http://localhost:8080',
-    //     changeOrigin: true
-    //   }
-    // }
+    proxy: {
+      '/api': {
+        target: process.env.ROVER_ADMIN_URL || 'http://localhost:9090',
+        changeOrigin: true,
+      },
+    },
   }
 })

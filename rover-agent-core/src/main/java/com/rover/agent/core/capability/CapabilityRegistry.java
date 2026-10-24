@@ -52,11 +52,38 @@ public final class CapabilityRegistry {
                         CapabilityRisk.READ_ONLY,
                         List.of(TargetType.UNKNOWN, TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
                         true, AgentStepType.LOG_INVESTIGATION, "读取历史日志"),
+                new CapabilityDescriptor(AgentCapability.CHANGE_TIMELINE_QUERY, "变更时间线",
+                        "按历史窗口查询发布、路由/配置与实例变化及服务关联；区分源时间、观测区间和采集空档，相关性不是根因",
+                        CapabilityRisk.READ_ONLY, List.of(TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
+                        true, AgentStepType.EVENT_INVESTIGATION, "读取变更时间线"),
                 new CapabilityDescriptor(AgentCapability.KNOWLEDGE_RETRIEVAL, "知识检索",
                         "检索运维知识库：怎么配置限流/熔断/超时/采样率、怎么接入服务、常见问题怎么排查",
                         CapabilityRisk.READ_ONLY,
                         List.of(TargetType.UNKNOWN, TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
                         true, AgentStepType.KNOWLEDGE_INVESTIGATION, "检索知识")));
+    }
+
+    /** 仅公开已配置的外部只读适配器；默认注册表保持原有行为。 */
+    public static CapabilityRegistry withTelemetry(Set<AgentCapability> available) {
+        var entries = new java.util.ArrayList<>(standard().all());
+        for (var capability : List.of(AgentCapability.APPLICATION_METRICS_QUERY,
+                AgentCapability.APPLICATION_LOG_QUERY, AgentCapability.APPLICATION_TRACE_QUERY)) {
+            String name = switch (capability) {
+                case APPLICATION_METRICS_QUERY -> "读取应用指标";
+                case APPLICATION_LOG_QUERY -> "读取应用日志";
+                default -> "读取应用链路";
+            };
+            AgentStepType type = switch (capability) {
+                case APPLICATION_METRICS_QUERY -> AgentStepType.METRIC_INVESTIGATION;
+                case APPLICATION_LOG_QUERY -> AgentStepType.LOG_INVESTIGATION;
+                default -> AgentStepType.TRACE_INVESTIGATION;
+            };
+            entries.add(new CapabilityDescriptor(capability, name,
+                    "按服务端映射读取同组织、团队、环境及命名空间的外部遥测；保留采样、分页与覆盖边界，不证明业务根因",
+                    CapabilityRisk.READ_ONLY, List.of(TargetType.ROUTE, TargetType.SERVICE, TargetType.INSTANCE),
+                    available.contains(capability), type, name));
+        }
+        return new CapabilityRegistry(entries);
     }
 
     /** 全部已登记能力（含未开放的）。 */

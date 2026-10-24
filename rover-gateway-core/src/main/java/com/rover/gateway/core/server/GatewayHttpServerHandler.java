@@ -122,6 +122,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
             log.warn("Gateway reject pipelined request path={}, reason={}",
                     requestPath, HttpConstants.REJECT_CONNECTION_BUSY);
             ctx.channel().attr(DRAIN).set(Boolean.TRUE);
+            runtime.getMetricsRegistry().recordEarlyRejection(429, HttpConstants.REJECT_CONNECTION_BUSY);
             writeText(
                     ctx,
                     HttpResponseStatus.TOO_MANY_REQUESTS,
@@ -147,6 +148,7 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
             int used = runtime.inflightUsed();
             int max = runtime.maxInflight();
             runtime.getMetricsRegistry().recordReject(HttpConstants.REJECT_INFLIGHT_LIMIT);
+            runtime.getMetricsRegistry().recordEarlyRejection(503, HttpConstants.REJECT_INFLIGHT_LIMIT);
             log.warn("Gateway overloaded, reject request path={}, reason={}, inflight={}/{}",
                     requestPath, HttpConstants.REJECT_INFLIGHT_LIMIT, used, max);
             writeText(
@@ -234,17 +236,17 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
         try {
             if (err != null) {
                 log.warn("Gateway filter chain error, requestPath={}", requestPath, err);
-                if (!context.isCompleted()) {
-                    context.writeText(
-                            HttpResponseStatus.INTERNAL_SERVER_ERROR,
-                            "Gateway internal error");
-                }
+            }
+            if (!context.isCompleted()) {
+                context.writeText(HttpResponseStatus.INTERNAL_SERVER_ERROR, "Gateway internal error");
             }
         } finally {
             context.getBodyPipe().abort();
             clearInbound(ctx);
             releaseOccupy(ctx.channel());
             runtime.getMetricsRegistry().requestFinished();
+            try { runtime.getMetricsRegistry().recordCompleted(context); }
+            catch (Exception statsError) { log.warn("Final response metrics failed", statsError); }
             recordTraceIfNeeded(context);
             runtime.releaseProcessingPermit();
         }
@@ -383,10 +385,10 @@ public class GatewayHttpServerHandler extends ChannelInboundHandlerAdapter {
                     route == null ? null : route.getId(),
                     HttpProxyClient.redactTargetUrl(context.getTargetUrl()),
                     context.getStatusCode() == null ? 500 : context.getStatusCode(),
-                    System.currentTimeMillis() - totalCostMs,
+                    context.getStartMillis(),
                     totalCostMs,
                     slow,
-                    context.phaseCostsMillis());
+                    context.phaseCostsMillis(), context.responseObservation());
             runtime.getTraceBuffer().append(trace);
         } catch (Exception err) {
             log.warn("Trace record failed, ignore to protect request path", err);

@@ -9,6 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNotes;
 import com.rover.agent.core.model.AgentMessage;
+import com.rover.agent.core.model.AlertDelivery;
+import com.rover.agent.core.model.AutoExecutionPolicy;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertLifecycle;
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Confidence;
 import com.rover.agent.core.model.Evidence;
@@ -33,6 +37,7 @@ import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.model.Verdict;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.planning.PlannedStep;
+import com.rover.agent.runtime.task.IncidentRegistry;
 import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -227,9 +232,10 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(5, store.schemaVersion(),
+            assertEquals(18, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
-                            + "v5 保存请求数值与单位（审批卡要能回答「批的到底是权重还是百分比」）");
+                            + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
+                            + "v13 保存按管理目标绑定的持久动作命令");
         }
 
         // 模拟"迁移记录丢了但表还在"：MySQL 的 DDL 不能回滚，重跑必须照样通过。
@@ -240,13 +246,249 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-            assertEquals(5, store.schemaVersion());
+        assertEquals(18, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
 
     private static String tempPath(String prefix) throws Exception {
         return Files.createTempDirectory(prefix).resolve("rover").toString();
+    }
+
+    @Test
+    void authenticatedAlertSourceSurvivesUpdatesAndRestartSeparatelyFromItsHandler() throws Exception {
+        String path = tempPath("rover-alert-source");
+        String incidentId;
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.sessions().save(session("s1"));
+            IncidentRegistry registry = new IncidentRegistry(first.sessions(), first.incidents());
+            Incident alert = registry.openIncident("s1", IncidentOrigin.ALERT, ResourceTarget.route("/api/order"),
+                    new TimeRange(100, 200), "alerts-service");
+            incidentId = alert.incidentId();
+            registry.updateTimeRange(incidentId, new TimeRange(120, 180));
+            registry.attachTask(incidentId, "not-persisted-task");
+            registry.summarise(incidentId, "该时段证据不足");
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            Incident alert = reopened.incidents().find(incidentId).orElseThrow();
+            assertEquals("alerts-service", alert.triggeredBy());
+            assertEquals(new TimeRange(120, 180), alert.timeRange());
+            assertEquals("alice", reopened.sessions().find(alert.sessionId()).orElseThrow().userId());
+            assertEquals("该时段证据不足", alert.summary());
+        }
+    }
+
+    @Test
+    void alertDeliveryReceiptsAndLifecycleSurviveRestartAndTransactionsRollBack() throws Exception {
+        String path = tempPath("rover-alert-lifecycle");
+        AlertDelivery receipt = new AlertDelivery("monitor-a", "delivery-1", "route-errors",
+                AlertEventState.FIRING, "a".repeat(64), 1, "s1", "i1", "t1", 100L);
+        AlertLifecycle lifecycle = new AlertLifecycle("monitor-a", "route-errors", true, "/api/order",
+                1, "s1", "i1", "t1", AlertEventState.FIRING, "b".repeat(64), 101L);
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.alertLifecycles().transaction(tx -> {
+                assertTrue(tx.saveDelivery(receipt));
+                tx.saveLifecycle(lifecycle);
+                return null;
+            });
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            assertEquals(receipt, reopened.alertLifecycles().transaction(tx ->
+                    tx.delivery("monitor-a", "delivery-1").orElseThrow()));
+            assertEquals(lifecycle, reopened.alertLifecycles().transaction(tx ->
+                    tx.lifecycle("monitor-a", "route-errors").orElseThrow()));
+            assertThrows(IllegalStateException.class, () -> reopened.alertLifecycles().transaction(tx -> {
+                tx.saveLifecycle(new AlertLifecycle("monitor-a", "route-errors", false, "/api/order",
+                        1, "s1", "i1", null, AlertEventState.RESOLVED, "c".repeat(64), 102L));
+                throw new IllegalStateException("rollback");
+            }));
+            assertEquals(lifecycle, reopened.alertLifecycles().transaction(tx ->
+                    tx.lifecycle("monitor-a", "route-errors").orElseThrow()));
+        }
+    }
+
+    @Test
+    void autonomousPoliciesAreVersionedAuditedAndSurviveRestart() throws Exception {
+        String path = tempPath("rover-auto-policy");
+        var scope = new com.rover.agent.core.model.ResourceScope("org", "team", "prod");
+        var resource = new com.rover.agent.core.model.ResourceRef(scope, "gateway", "GATEWAY_ROUTE", "orders", "uid-1", 1);
+        AutoExecutionPolicy policy = AutoExecutionPolicy.create("policy-1", "namespace-a", resource,
+                "orders", "v2", 5, 5, System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.autoExecutionPolicies().save(policy, 0);
+            var revoked = policy.revise(false, 5, 5, policy.expiresAtMillis(), "admin", System.currentTimeMillis());
+            first.autoExecutionPolicies().save(revoked, 1);
+            assertEquals(2, first.autoExecutionPolicies().history("policy-1").size());
+            var audits = first.audit("namespace-a", 0, 10);
+            assertEquals("AUTO_POLICY_VERSIONED", audits.get(audits.size() - 1).kind());
+            assertThrows(IllegalStateException.class, () -> first.autoExecutionPolicies().save(
+                    revoked.revise(true, 5, 5, revoked.expiresAtMillis(), "admin", System.currentTimeMillis()), 1));
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            assertEquals(2, reopened.autoExecutionPolicies().find("policy-1").orElseThrow().version());
+            assertFalse(reopened.autoExecutionPolicies().find("policy-1").orElseThrow().enabled());
+            assertTrue(reopened.autoExecutionPolicies().find("policy-1", "other-namespace").isEmpty());
+            assertEquals(2, reopened.autoExecutionPolicies().history("policy-1").size());
+        }
+    }
+
+    @Test
+    void autonomousBudgetKeepsUnknownLocksAcrossRestartAndEnforcesCumulativeLimit() throws Exception {
+        String path = tempPath("rover-action-budget");
+        long day = java.time.Duration.ofHours(24).toMillis();
+        long cooldown = java.time.Duration.ofMinutes(15).toMillis();
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            var budget = first.autonomousActionBudget();
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "action-1", "action-1A", 6, 10, day, cooldown, -1, true, 1_000));
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESOURCE_BUSY,
+                    budget.reserve("resource", "action-2", "action-2A", 1, 10, day, cooldown, -1, true, 1_001));
+            budget.complete("action-1A", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.UNKNOWN, -1, 1_002);
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            var budget = reopened.autonomousActionBudget();
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESOURCE_BUSY,
+                    budget.reserve("resource", "action-2", "action-2A", 1, 10, day, cooldown, -1, true, 1_003),
+                    "未知结果必须在重启后继续锁住资源");
+            budget.complete("action-1A", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, 1_004);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.COOLDOWN_ACTIVE,
+                    budget.reserve("resource", "action-2", "action-2A", 1, 10, day, cooldown, 1, true, 1_005));
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.BUDGET_EXCEEDED,
+                    budget.reserve("resource", "action-2", "action-2A", 5, 10, day, 0, 1, true, 1_000 + cooldown + 10));
+        }
+    }
+
+    @Test
+    void autonomousRollingBudgetDoesNotResetAtWindowBoundary() throws Exception {
+        try (JdbcAgentStore store = new JdbcAgentStore(tempPath("rover-action-rolling-window"))) {
+            var budget = store.autonomousActionBudget();
+            long window = java.time.Duration.ofHours(24).toMillis();
+            long start = 5_000_000L;
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "seed", "seed", 0, 10, window, 0, 0, false, start));
+            budget.complete("seed", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.NOT_APPLIED, 0, start);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "a1", "a1-apply", 7, 10, window, 0, -1, true, start + window * 23 / 24));
+            budget.complete("a1-apply", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, start + window * 23 / 24);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "a2", "a2-apply", 2, 10, window, 0, -1, true, start + window * 23 / 24 + 1));
+            budget.complete("a2-apply", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, start + window * 23 / 24 + 1);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.BUDGET_EXCEEDED,
+                    budget.reserve("resource", "a3", "a3-apply", 2, 10, window, 0, -1, true, start + window + 1),
+                    "滚动窗口边界不应把上一笔尚在 24 小时内的影响清零");
+        }
+    }
+
+    @Test
+    void autonomousBudgetDetectsOscillationAndReleasesUnappliedReservation() throws Exception {
+        try (JdbcAgentStore store = new JdbcAgentStore(tempPath("rover-action-oscillation"))) {
+            var budget = store.autonomousActionBudget();
+            long window = java.time.Duration.ofHours(24).toMillis();
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "a1", "a1", 1, 10, window, 0, -1, true, 1_000));
+            budget.complete("a1", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, 1_001);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "a2", "a2", 1, 10, window, 0, 1, true, 1_002));
+            budget.complete("a2", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, 1, 1_003);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.OSCILLATION_DETECTED,
+                    budget.reserve("resource", "a3", "a3", 1, 10, window, 0, -1, true, 1_004));
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "manual", "manual", 1, 100, window, 0, -1, false, 1_005));
+            budget.complete("manual", com.rover.agent.core.repository.AutonomousActionBudgetRepository.Outcome.APPLIED, -1, 1_006);
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.OSCILLATION_DETECTED,
+                    budget.reserve("resource", "a3", "a3", 1, 10, window, 0, -1, true, 1_007));
+            assertEquals(com.rover.agent.core.repository.AutonomousActionBudgetRepository.Reservation.RESERVED,
+                    budget.reserve("resource", "after-manual", "after-manual", 1, 10, window, 0, 1, true, 1_008),
+                    "未生效的操作释放锁后，其他方向的自动动作可重新获取");
+        }
+    }
+
+    @Test
+    void shadowRunsAndVersionedCertificationsSurviveRestartAndKeepScopeIsolation() throws Exception {
+        String path = tempPath("rover-shadow-certification");
+        var scope = new com.rover.agent.core.model.ResourceScope("org", "team", "staging");
+        var subject = new com.rover.agent.core.model.ActionCertificationSubject(scope,
+                com.rover.agent.core.model.ActionType.ADJUST_ROUTE_TARGET_WEIGHT, "RULE_EVIDENCE_GATE",
+                "route-weight-evidence-gate-v1", "route-weight-v1", "effect-v1", "query-v1", "gateway");
+        var otherScope = new com.rover.agent.core.model.ResourceScope("org", "team", "prod");
+        var otherSubject = new com.rover.agent.core.model.ActionCertificationSubject(otherScope,
+                com.rover.agent.core.model.ActionType.ADJUST_ROUTE_TARGET_WEIGHT, "runbook", "1",
+                "adapter-1", "effect-1", "query-1", "gateway");
+        long otherNow = System.currentTimeMillis();
+        var otherCert = new com.rover.agent.core.model.ActionCertification(otherSubject, 1,
+                com.rover.agent.core.model.ActionCertification.State.ACTIVE, 3, "d".repeat(64), "admin",
+                otherNow, otherNow + 60_000, "admin", otherNow);
+        var run = new com.rover.agent.core.model.ActionShadowRun("shadow-1", subject, "action-1", 1,
+                "a".repeat(64), com.rover.agent.core.model.ActionShadowRun.Outcome.PASS, "ok", 7,
+                "b".repeat(64), System.currentTimeMillis());
+        try (JdbcAgentStore store = new JdbcAgentStore(path)) {
+            store.actionCertifications().saveShadow(run);
+            var cert = new com.rover.agent.core.model.ActionCertification(subject, 1,
+                    com.rover.agent.core.model.ActionCertification.State.ACTIVE, 3, "c".repeat(64), "admin",
+                    System.currentTimeMillis(), System.currentTimeMillis() + 60_000, "admin", System.currentTimeMillis());
+            store.actionCertifications().save(cert, 0);
+            store.actionCertifications().save(otherCert, 0);
+            assertEquals(List.of(cert), store.actionCertifications().current(scope),
+                    "scope list must filter in SQL rather than return certifications from other environments");
+            assertTrue(store.audit("3:org4:team7:staging", 0, 100).stream()
+                    .anyMatch(a -> a.kind().equals("ACTION_CERTIFICATION_VERSIONED")));
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            assertEquals(List.of(run), reopened.actionCertifications().recentShadowRuns(subject.fingerprint(), 10));
+            var cert = reopened.actionCertifications().current(subject.fingerprint()).orElseThrow();
+            assertTrue(cert.current(subject, System.currentTimeMillis()));
+            assertEquals(List.of(otherCert), reopened.actionCertifications().current(
+                    otherScope));
+            var revoked = cert.revoke("admin", System.currentTimeMillis());
+            assertEquals(revoked, reopened.actionCertifications().save(revoked, 1));
+        }
+    }
+
+    @Test
+    void schemaV17UpgradesToV18AndCertificationAuditIsAtomicWithRecord() throws Exception {
+        String path = tempPath("rover-shadow-v17-upgrade");
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            assertEquals(18, first.schemaVersion());
+        }
+        try (Connection connection = DriverManager.getConnection(
+                "jdbc:h2:file:" + path + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE", "sa", "");
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version=18");
+        }
+        try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
+            assertEquals(18, upgraded.schemaVersion());
+            assertTrue(upgraded.healthy());
+            var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "staging");
+            var subject = new com.rover.agent.core.model.ActionCertificationSubject(scope,
+                    com.rover.agent.core.model.ActionType.ADJUST_ROUTE_TARGET_WEIGHT, "runbook", "1",
+                    "adapter", "effect", "query", "gateway");
+            long now = System.currentTimeMillis();
+            var cert = new com.rover.agent.core.model.ActionCertification(subject, 1,
+                    com.rover.agent.core.model.ActionCertification.State.ACTIVE, 3, "a".repeat(64),
+                    "operator", now, now + 60_000, "operator", now);
+            upgraded.actionCertifications().save(cert, 0);
+            assertTrue(upgraded.audit("3:org3:ops7:staging", 0, 100).stream()
+                    .anyMatch(item -> item.kind().equals("ACTION_CERTIFICATION_VERSIONED")));
+        }
+    }
+
+    @Test
+    void schemaFiveUpgradeLeavesUnknownHistoricalSourcesUnset() throws Exception {
+        String path = tempPath("rover-alert-upgrade");
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            openSession(first, session("s1"), incident("i1", "s1"));
+        }
+        try (Connection connection = DriverManager.getConnection(
+                "jdbc:h2:file:" + path + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE", "sa", "");
+             Statement statement = connection.createStatement()) {
+            statement.executeUpdate("ALTER TABLE agent_incident DROP COLUMN triggered_by");
+            statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
+        }
+        try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
+            assertEquals(18, upgraded.schemaVersion());
+            assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
+            assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
+        }
     }
 
     /**

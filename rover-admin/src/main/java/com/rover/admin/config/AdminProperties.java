@@ -22,6 +22,15 @@ public class AdminProperties {
     /** 管理口鉴权 token，调用 Gateway/Nameserver 管理口时通过 X-Rover-Admin-Token 携带；空表示不鉴权 */
     private String adminToken;
 
+    /** 单进程 Agent 的服务端资产范围，不接受 HTTP/模型传入的环境或团队覆盖。 */
+    private String agentOrganizationId = "local";
+    private String agentTeamId = "operators";
+    private String agentEnvironmentId = "local";
+    /** 留空时从已配置 Gateway URL 的摘要生成稳定 ID。 */
+    private String gatewayControlTargetId;
+    /** 首次建库的引导口令；仅通过环境/受控配置提供，已有账号不覆盖。 */
+    private String bootstrapPassword;
+
     /** 落盘记录库（H2 嵌入式）文件路径，不含 .mv.db 后缀；默认 ./rover-logs/rover */
     private String logStorePath = "./rover-logs/rover";
     /** 落盘记录保留天数（诊断证据类：配置变更/健康翻转/审计），超期清理；默认 30 天 */

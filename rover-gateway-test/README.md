@@ -5,6 +5,8 @@
 首次使用建议先按公开[快速上手](../docs-public/quick-start.zh-CN.md)跑通单实例链路，再使用本页验证多实例与 Gateway 行为。
 如果要验证外部插件 JAR 的真实挂载，请看公开的[插件挂载指南](../docs-public/plugin-mounting-guide.zh-CN.md)。
 
+Agent 的双版本故障、真实流量、告警窗口与网关回执专项，使用 [S0-06 回放环境](../docs-public/agent-fault-replay.zh-CN.md)。它运行隔离的本地 Java 进程，固定用户请求集，每个故障重复两次，产出可比证据。
+
 ## 目录
 
 ```text

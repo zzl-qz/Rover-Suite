@@ -187,6 +187,7 @@ final class MetricsExporter {
         }
         List<Map<String, Object>> rows = r.routeUpstreamRows(routeId, range);
         root.put("rows", rows);
+        root.put("routeWindow", r.finalResponses().snapshot(routeId, range, nowMillis));
         List<Map<String, Object>> byVersion = r.routeVersionRows(routeId, rows, declared, range);
         root.put("byVersion", byVersion);
         root.put("versionCheck", versionCheck(declared, byVersion));

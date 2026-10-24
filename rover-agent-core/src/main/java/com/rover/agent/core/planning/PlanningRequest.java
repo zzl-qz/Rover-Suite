@@ -2,6 +2,7 @@ package com.rover.agent.core.planning;
 
 import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.ResourceTarget;
+import com.rover.agent.core.model.TimeRange;
 import java.util.List;
 
 /**
@@ -14,7 +15,8 @@ import java.util.List;
  * @param limitations 已产生的判断边界
  */
 public record PlanningRequest(String question, ResourceTarget target, String path,
-                              List<Evidence> evidence, List<String> limitations) {
+                              List<Evidence> evidence, List<String> limitations, TimeRange timeRange,
+                              List<com.rover.agent.core.model.Hypothesis> assessments) {
 
     public PlanningRequest {
         question = question == null ? "" : question.trim();
@@ -22,5 +24,17 @@ public record PlanningRequest(String question, ResourceTarget target, String pat
         path = path == null ? "" : path.trim();
         evidence = evidence == null ? List.of() : List.copyOf(evidence);
         limitations = limitations == null ? List.of() : List.copyOf(limitations);
+        timeRange = timeRange == null ? TimeRange.unspecified() : timeRange;
+        assessments = assessments == null ? List.of() : List.copyOf(assessments);
+    }
+
+    public PlanningRequest(String question, ResourceTarget target, String path, List<Evidence> evidence,
+                           List<String> limitations, TimeRange timeRange) {
+        this(question, target, path, evidence, limitations, timeRange, List.of());
+    }
+
+    public PlanningRequest(String question, ResourceTarget target, String path,
+                            List<Evidence> evidence, List<String> limitations) {
+        this(question, target, path, evidence, limitations, TimeRange.unspecified());
     }
 }

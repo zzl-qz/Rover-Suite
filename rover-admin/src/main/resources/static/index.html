@@ -730,17 +730,22 @@
                                             <div v-else class="empty slim">计划未给出候选原因</div>
 
                                             <h4>调查过程</h4>
-                                            <div v-if="turn.task.result && turn.task.result.hypotheses && turn.task.result.hypotheses.length">
-                                                <div v-for="(item, index) in turn.task.result.hypotheses" :key="item.id || index" class="diagnosis-step">
+                                            <div v-if="wbHypotheses(turn.task).length">
+                                                <div v-for="(item, index) in wbHypotheses(turn.task)" :key="item.id || index" class="diagnosis-step">
                                                     <span class="diagnosis-step-num">{{ item.id }}</span>
                                                     <strong>{{ item.statement }}</strong>
                                                     <span class="badge" :class="wbHypothesisBadge(item.status)">{{ wbHypothesisLabel(item.status) }}</span>
                                                     <span class="muted">{{ item.detail }}
                                                         <span v-if="item.sources && item.sources.length"> · 依据 {{ item.sources.join('、') }}</span>
                                                     </span>
+                                                    <div v-if="item.supportingEvidenceIds && item.supportingEvidenceIds.length" class="card-hint">支持证据：<code>{{ item.supportingEvidenceIds.join('、') }}</code></div>
+                                                    <div v-if="item.counterEvidenceIds && item.counterEvidenceIds.length" class="card-hint">反证：<code>{{ item.counterEvidenceIds.join('、') }}</code></div>
+                                                    <div v-if="item.missingEvidence && item.missingEvidence.length" class="card-hint">缺失证据：{{ item.missingEvidence.join('；') }}</div>
+                                                    <div v-if="item.nextCapabilities && item.nextCapabilities.length" class="card-hint">下一步检查：{{ item.nextCapabilities.join('、') }}（已查询但仍缺证据时需人工补充，不代表会无限重试）</div>
                                                 </div>
                                             </div>
                                             <div v-else class="empty slim">暂无假设验证明细</div>
+                                            <div v-if="turn.task.plan && turn.task.plan.progress && turn.task.plan.progress.stopReason" class="card-hint">调查停止原因：{{ turn.task.plan.progress.stopReason }}</div>
 
                                             <h4>证据</h4>
                                             <div v-if="!turn.task.evidence || !turn.task.evidence.length" class="empty slim">暂无可用证据</div>
@@ -754,10 +759,36 @@
                                                             <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
                                                         </div>
                                                         <div v-if="wbEvidenceScope(item)" class="muted wb-evidence-ref">{{ wbEvidenceScope(item) }}</div>
+                                        <details v-if="wbTimelineEvents(item).length" class="muted wb-evidence-ref">
+                                            <summary>查看发布与变更时间线（UTC）</summary>
+                                            <ol style="max-height:420px;overflow:auto">
+                                                <li v-for="change in wbTimelineEvents(item)" :key="change.eventId" style="margin-bottom:12px;overflow-wrap:anywhere">
+                                                    <strong>{{ change.kind }}</strong> · {{ wbTimelineTime(change) }}
+                                                    <div>{{ wbTimelineDescription(change) }}</div>
+                                                    <div>采集/接收：{{ new Date(Number(change.observedAtMillis)).toISOString() }} · 来源：{{ change.sourceId }} · 事件：{{ change.eventId }}</div>
+                                                    <div v-for="(bound, index) in change.limitations" :key="index">{{ bound }}</div>
+                                                </li>
+                                            </ol>
+                                        </details>
+                                        <details v-if="item.envelope" class="muted wb-evidence-ref">
+                                            <summary>查看取证详情与判断边界</summary>
+                                            <div v-for="(bound, boundIndex) in (item.envelope.limitations || [])" :key="boundIndex">{{ bound }}</div>
+                                            <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto">{{ JSON.stringify(item.envelope, null, 2) }}</pre>
+                                        </details>
                                                     </div>
                                                 </div>
                                             </div>
 
+                                            <details v-if="turn.task.modelInvocations && turn.task.modelInvocations.length" class="diagnosis-limitations">
+                                                <summary>模型调用记录（{{ turn.task.modelInvocations.length }}）</summary>
+                                                <div v-for="call in turn.task.modelInvocations" :key="call.id" style="margin-top:10px;overflow-wrap:anywhere">
+                                                    <strong>{{ call.scene }}</strong> · {{ call.identity.requestedModel }} · {{ call.status }}
+                                                    <div>输出校验：{{ call.validation }} · 核算输入/输出：{{ call.accountedInputTokens }}/{{ call.accountedOutputTokens }} token</div>
+                                                    <div>供应商返回模型：{{ call.returnedModel || '未提供' }} · {{ call.completedAtMillis ? (call.completedAtMillis - call.startedAtMillis) + ' ms' : '进行中' }}</div>
+                                                    <details><summary>版本与查询依据</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto">{{ JSON.stringify(call, null, 2) }}</pre></details>
+                                                </div>
+                                                <div class="muted">核算值用于任务预算，失败/中断按输出预留保守计入，不代表供应商账单；请求成功不代表诊断或修复成功。</div>
+                                            </details>
                                             <div v-if="turn.task.result && turn.task.result.limitations && turn.task.result.limitations.length" class="diagnosis-limitations">
                                                 <h4>判断范围</h4>
                                                 <ul><li v-for="(item, index) in turn.task.result.limitations" :key="index">{{ item }}</li></ul>
@@ -863,6 +894,77 @@
                     <!-- 右栏：事件上下文 -->
                     <div class="wb-col wb-col-side">
                         <div class="card">
+                            <div v-if="wbCanManageSystem()" class="wb-action-facts">
+                                <div class="card-head">
+                                    <h2>运维接管</h2>
+                                    <span v-if="wbOperationsStatus" class="badge ml-auto"
+                                          :class="wbOperationsStatus.healthy && !wbOperationsStatus.writesStopped ? 'ok' : 'warn'">
+                                        {{ !wbOperationsStatus.healthy ? '存储异常' : (wbOperationsStatus.writesStopped ? '已停写' : '写入可用') }}
+                                    </span>
+                                </div>
+                                <div v-if="wbOperationsStatus" class="wb-kv">
+                                    <div><span>运行状态</span><b>{{ wbOperationsStatus.persistent ? 'H2 持久运行' : '内存模式' }}</b></div>
+                                    <div><span>Schema</span><b>v{{ wbOperationsStatus.schemaVersion }}</b></div>
+                                    <div><span>任务排空</span><b>{{ wbOperationsStatus.draining ? '是' : '否' }}</b></div>
+                                    <div><span>未知结果</span><b>{{ wbOperationsStatus.uncertainActions }} 条待对账</b></div>
+                                    <div v-if="wbOperationsStatus.writeResume"><span>恢复审批</span><b>{{ wbOperationsStatus.writeResume.approvals }}/{{ wbOperationsStatus.writeResume.requiredApprovals }} 人（15 分钟内）</b></div>
+                                </div>
+                                <div class="wb-action-foot">
+                                    <button v-if="wbOperationsStatus && !wbOperationsStatus.writesStopped" class="btn mini danger"
+                                            :disabled="wbOperationBusy" @click="wbToggleWriteStop(true)">紧急停写</button>
+                                    <button v-else-if="wbOperationsStatus && wbOperationsStatus.writesStopped" class="btn mini"
+                                            :disabled="wbOperationBusy || !wbOperationsStatus.healthy || !wbOperationsStatus.canApproveWriteResume || wbOperationsStatus.uncertainActions > 0"
+                                            @click="wbApproveWriteResume">审批恢复写入</button>
+                                    <button class="btn mini" :disabled="wbOperationBusy" @click="wbLoadOperatorState()">刷新接管状态</button>
+                                </div>
+                                <p v-if="wbOperationsStatus && wbOperationsStatus.writesStopped" class="muted">恢复需两名不同系统管理员在 15 分钟内审批；存储不健康或存在未知结果时不可恢复。队列中的在途写入会完成或使用原操作号对账。</p>
+                                <p v-if="wbOperationMessage" class="muted">{{ wbOperationMessage }}</p>
+                                <div v-if="wbReconciliationQueue.length">
+                                    <strong>未知结果对账</strong>
+                                    <div v-for="item in wbReconciliationQueue" :key="item.actionId" class="wb-action-facts">
+                                        <code>{{ item.businessPrefix || item.routeId }}</code> · {{ item.serviceName }}@{{ item.group }}
+                                        <div class="muted">原操作号 {{ item.rollbackOperationId || item.applyOperationId }}</div>
+                                        <button class="btn mini" :disabled="wbOperationBusy" @click="wbReconcileAction(item)">仅重新对账</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="wbCanManagePolicies()" class="card wb-action-facts">
+                            <div class="card-head"><h2>受限自动处置授权</h2><span class="badge ml-auto" :class="wbAutonomyHealth && wbAutonomyHealth.healthy ? 'ok' : 'warn'">{{ wbAutonomyHealth ? wbAutonomyHealth.mode : '状态未知，按人工审批' }}</span></div>
+                            <p class="muted">{{ wbAutonomyHealth ? wbAutonomyHealth.message : '无法读取自动处置健康状态；自动动作按人工审批处理' }}</p>
+                            <p class="muted">只授权指定路由和版本在小流量下执行权重归零；必须有证据和业务效果验证。其他计划仍需人工批准。</p>
+                            <div class="field"><label>路由</label><select v-model="wbAutoRouteId" :disabled="wbAutoPolicyBusy"><option v-for="item in wbAutoCandidates" :key="item.routeId" :value="item.routeId">{{ item.businessPrefix || item.routeId }}</option></select></div>
+                            <div class="field"><label>当前有流量的版本</label><select v-model="wbAutoTargetKey" :disabled="wbAutoPolicyBusy"><option v-for="item in wbAutoTargets()" :key="item.serviceName + ':' + item.group" :value="item.serviceName + ':' + item.group">{{ item.serviceName }}@{{ item.group }}（权重 {{ item.weight }}）</option></select></div>
+                            <div class="wb-kv"><div><span>授权前占比上限</span><b><input type="number" min="0.1" max="10" step="0.1" v-model.number="wbAutoMaxBefore"></b></div><div><span>单次变化上限</span><b><input type="number" min="0.1" max="10" step="0.1" v-model.number="wbAutoMaxShift"></b></div></div>
+                            <div class="field"><label>24 小时累计自动影响上限（百分点）</label><input type="number" min="0.1" max="10" step="0.1" v-model.number="wbAutoMaxCumulative"></div>
+                            <p class="muted">同一路由同一时间只允许一个执行；自动动作间至少冷却 15 分钟，反向反复调整会暂停自动执行。</p>
+                            <div class="wb-action-foot"><button class="btn mini primary" :disabled="wbAutoPolicyBusy || !wbAutoCandidates.length" @click="wbCreateAutoPolicy">创建 7 天授权</button><button class="btn mini" :disabled="wbAutoPolicyBusy" @click="wbLoadAutoPolicies">刷新</button></div>
+                            <p v-if="wbAutoPolicyError" class="muted">{{ wbAutoPolicyError }}</p>
+                            <div v-for="policy in wbAutoPolicies" :key="policy.policyId" class="wb-action-facts"><div><code>{{ policy.policyId }}</code> · v{{ policy.version }} · {{ policy.serviceName }}@{{ policy.group }}</div><div class="muted">{{ policy.resource.resourceUid }} · 单次 ≤{{ policy.maxTrafficShiftPercent }}pp · 24h 累计 ≤{{ policy.maxCumulativeTrafficShiftPercent }}pp · 冷却 {{ Math.round(policy.cooldownMillis / 60000) }} 分钟 · {{ policy.enabled && policy.expiresAtMillis > Date.now() ? '有效至 ' + fmtTime(policy.expiresAtMillis) : '已停用或过期' }}</div><button v-if="!policy.enabled && policy.expiresAtMillis > Date.now()" class="btn mini primary" :disabled="wbAutoPolicyBusy" @click="wbEnableAutoPolicy(policy)">显式启用</button><button v-if="policy.enabled" class="btn mini danger" :disabled="wbAutoPolicyBusy" @click="wbRevokeAutoPolicy(policy)">撤销（立即阻止未提交计划）</button></div>
+                        </div>
+
+                        <div v-if="wbCanManagePolicies()" class="card wb-action-facts">
+                            <div class="card-head"><h2>影子运行与动作认证</h2><button class="btn mini" :disabled="wbCertificationBusy" @click="wbLoadCertifications">刷新</button></div>
+                            <p class="muted">影子评估只检查路由、证据、版本和写入预览，不会修改 Gateway。每个环境、Gateway、动作、Runbook、适配器与效果规则组合至少需要 3 次通过且覆盖 2 个计划版本；新失败会暂停原认证。</p>
+                            <p v-if="wbCertificationError" class="muted">{{ wbCertificationError }}</p>
+                            <div v-for="candidate in wbShadowCandidates" :key="candidate.action.actionId" class="wb-action-facts">
+                                <div><code>{{ candidate.action.actionId }}</code> · {{ candidate.action.serviceName }}@{{ candidate.action.group }} · {{ candidate.subject.runbookId }} v{{ candidate.subject.runbookVersion }} · {{ candidate.subject.adapterVersion }}</div>
+                                <div class="muted">计划版本 {{ candidate.action.plan.planVersion }} · 近期样本 {{ candidate.recentRuns.length }} · 不同计划版本 {{ candidate.distinctPlanVersions }} · {{ candidate.certificationEligible ? '满足认证样本门槛' : '仍需通过评估' }}</div>
+                                <div v-for="run in candidate.recentRuns.slice(0, 3)" :key="run.runId" class="muted">{{ run.outcome }} · {{ run.actionId }} · 计划 v{{ run.planVersion }} · {{ run.detail }}</div>
+                                <button class="btn mini primary" :disabled="wbCertificationBusy" @click="wbAssessShadow(candidate)">运行影子评估</button>
+                                <button v-if="candidate.certificationEligible && !wbCertificationActive(candidate.subject.fingerprint)" class="btn mini primary" :disabled="wbCertificationBusy" @click="wbCertifyCandidate(candidate)">签发 7 天认证</button>
+                            </div>
+                            <div v-for="cert in wbCertifications" :key="cert.subject.fingerprint" class="wb-action-facts">
+                                <div>{{ cert.subject.scope.environmentId }} · {{ cert.subject.actionType }} · {{ cert.subject.runbookId }} v{{ cert.subject.runbookVersion }} · {{ cert.subject.adapterVersion }}</div>
+                                <div class="muted">{{ cert.state }} · {{ cert.passingRuns }} 次通过 · 版本 {{ cert.version }} · 至 {{ fmtTime(cert.expiresAtMillis) }}</div>
+                                <div class="muted">管理目标 {{ cert.subject.controlTargetId }} · 效果规则 {{ cert.subject.effectRuleVersion }} · 指标查询 {{ cert.subject.metricQueryVersion }} · 样本 {{ cert.sampleHash }}</div>
+                                <button class="btn mini primary" :disabled="wbCertificationBusy" @click="wbRenewCertification(cert)">按最近评估重新认证 30 天</button>
+                                <button v-if="cert.state === 'ACTIVE'" class="btn mini danger" :disabled="wbCertificationBusy" @click="wbRevokeCertification(cert)">撤销认证</button>
+                            </div>
+                        </div>
+
+                        <div class="card">
                             <div class="card-head">
                                 <h2>当前事件</h2>
                                 <span v-if="wbActiveIncident" class="badge ml-auto"
@@ -879,6 +981,8 @@
                                     <div class="wide"><span>对象取值</span><b><code>{{ wbActiveIncident.target.value || '(未确定)' }}</code></b></div>
                                     <div><span>时间范围</span><b>{{ wbTimeRangeText(wbActiveIncident.timeRange) }}</b></div>
                                     <div><span>来源</span><b>{{ wbOriginLabel(wbActiveIncident.origin) }}</b></div>
+                                    <div v-if="wbActiveIncident.origin === 'ALERT'"><span>告警来源账号</span><b>{{ wbActiveIncident.triggeredBy || '历史记录未留存' }}</b></div>
+                                    <div v-if="wbActiveIncident.origin === 'ALERT'"><span>处理账号</span><b>{{ wbSession.userId || '未分配' }}</b></div>
                                     <div><span>调查次数</span><b>{{ (wbActiveIncident.taskIds || []).length }}</b></div>
                                     <div><span>最近更新</span><b>{{ fmtTime(wbActiveIncident.updatedAtMillis) }}</b></div>
                                 </div>
@@ -926,8 +1030,75 @@
                                     <div class="wb-action-progress" :class="wbActionProgress(action).tone">
                                         {{ wbActionProgress(action).mark }} {{ wbActionProgress(action).text }}
                                     </div>
+                                    <div v-if="action.plan && action.plan.verificationSpec && action.plan.verificationSpec.mode === 'BUSINESS_EFFECT'"
+                                         class="muted wb-action-facts">
+                                        <strong>业务效果 · 应用后</strong>
+                                        <span :class="wbEffect(action, 'APPLY') && wbEffect(action, 'APPLY').outcome === 'RECOVERED' ? 'tone-ok' : ''">
+                                            {{ wbEffectLabel(wbEffect(action, 'APPLY')) }}
+                                        </span>
+                                        <template v-if="wbEffect(action, 'APPLY')">
+                                            · 已观察 {{ wbEffect(action, 'APPLY').windowsSeen }} 个窗口
+                                            <span v-if="wbEffect(action, 'APPLY').latestValues && wbEffect(action, 'APPLY').latestValues.final5xxRate != null">
+                                                · 5xx {{ (wbEffect(action, 'APPLY').latestValues.final5xxRate * 100).toFixed(2) }}%
+                                            </span>
+                                            <ul v-if="wbEffect(action, 'APPLY').limitations && wbEffect(action, 'APPLY').limitations.length">
+                                                <li v-for="(reason, index) in wbEffect(action, 'APPLY').limitations" :key="'apply-limit-' + index">{{ reason }}</li>
+                                            </ul>
+                                        </template>
+                                    </div>
+                                    <div v-if="action.plan && action.plan.verificationSpec && action.plan.verificationSpec.mode === 'BUSINESS_EFFECT' && action.status === 'ROLLED_BACK'"
+                                         class="muted wb-action-facts">
+                                        <strong>业务效果 · 补偿后</strong>
+                                        {{ wbEffectLabel(wbEffect(action, 'COMPENSATION')) }}
+                                        <template v-if="wbEffect(action, 'COMPENSATION')">
+                                            · 已观察 {{ wbEffect(action, 'COMPENSATION').windowsSeen }} 个窗口
+                                            <span v-if="wbEffect(action, 'COMPENSATION').latestValues && wbEffect(action, 'COMPENSATION').latestValues.final5xxRate != null">
+                                                · 5xx {{ (wbEffect(action, 'COMPENSATION').latestValues.final5xxRate * 100).toFixed(2) }}%
+                                            </span>
+                                        </template>
+                                    </div>
+                                    <div v-if="wbApprovalProgress[action.actionId]" class="muted wb-action-facts">
+                                        {{ wbApprovalProgress[action.actionId].stage === 'APPLY' ? '执行' : '补偿' }}审批
+                                        {{ wbApprovalProgress[action.actionId].riskLevel }} ·
+                                        {{ wbApprovalProgress[action.actionId].currentApprovals }}/{{ wbApprovalProgress[action.actionId].requiredApprovals }} 人已批准
+                                        <span v-if="wbApprovalProgress[action.actionId].remainingApprovals > 0">· 等待其他审批人</span>
+                                    </div>
                                     <div class="muted wb-action-facts">
+                                        <template v-if="action.resourceRef">
+                                            {{ action.resourceRef.scope.organizationId }} / {{ action.resourceRef.scope.teamId }} / {{ action.resourceRef.scope.environmentId }}
+                                            · {{ action.resourceRef.controlTargetId }} · UID {{ action.resourceRef.resourceUid }} / {{ action.resourceRef.generation }}<br>
+                                        </template>
                                         按「{{ wbActionRequestText(action) }}」提出 · 路由表版本 {{ action.expectedRevision }}<template v-if="action.appliedRevision != null"> → {{ action.appliedRevision }}</template>
+                                    </div>
+                                    <div v-if="action.plan" class="wb-action-facts">
+                                        <div><strong>计划第 {{ action.plan.planVersion }} 版</strong> · 有效至 {{ fmtTime(action.plan.expiresAtMillis) }}
+                                            <span v-if="action.status === 'PENDING_APPROVAL' && wbPlanExpired(action.plan)" class="badge warn">已过期，需生成新版本</span>
+                                        </div>
+                                        <div v-if="action.plan.riskAssessment">
+                                            风险 {{ action.plan.riskAssessment.level }} · 服务端评估，需人工审批
+                                            <div class="muted">{{ action.plan.riskAssessment.blastRadius }}</div>
+                                            <div v-if="!action.plan.riskAssessment.capacityEvidenceAvailable" class="muted">剩余容量尚无充分证据，审批前需人工核实。</div>
+                                            <ul v-if="action.plan.riskAssessment.reasons && action.plan.riskAssessment.reasons.length">
+                                                <li v-for="(reason, index) in action.plan.riskAssessment.reasons" :key="index">{{ reason }}</li>
+                                            </ul>
+                                        </div>
+                                        <div v-if="action.plan.unresolvedAssumptions && action.plan.unresolvedAssumptions.length">
+                                            待核实事项
+                                            <ul><li v-for="(assumption, index) in action.plan.unresolvedAssumptions" :key="index">{{ assumption }}</li></ul>
+                                        </div>
+                                        <div v-if="action.plan.verificationSpec && action.plan.verificationSpec.mode === 'BUSINESS_EFFECT'" class="muted">
+                                            业务阈值：路由最终响应 5xx ≤ {{ (action.plan.verificationSpec.businessEffect.criteria[0].recoveryUpperBound * 100).toFixed(2) }}%，P95 上界 ≤ {{ action.plan.verificationSpec.businessEffect.guardrails[0].maximumValue }} ms；需要连续 {{ action.plan.verificationSpec.businessEffect.consecutiveWindows }} 个窗口达标。缺少基线、样本或有效时间线时不会报告恢复。
+                                        </div>
+                                        <div v-if="action.plan.compensationSpec" class="muted">
+                                            补偿需另行人工批准；仅恢复本次触及的权重，提交前核对资源身份、当前值和生效版本。
+                                        </div>
+                                        <details class="wb-action-diff">
+                                            <summary>计划详情 · 摘要 {{ (action.plan.planHash || '').slice(0, 12) }}</summary>
+                                            <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto">{{ JSON.stringify(action.plan, null, 2) }}</pre>
+                                        </details>
+                                    </div>
+                                    <div v-else-if="action.status === 'PENDING_APPROVAL'" class="banner warn slim">
+                                        这是未保存完整计划的历史提案，请重新生成后再批准。
                                     </div>
                                     <div v-if="wbActionPreviewNote(action)" class="muted wb-action-facts">{{ wbActionPreviewNote(action) }}</div>
                                     <details v-else-if="action.preview && action.preview.length" class="wb-action-diff">
@@ -948,20 +1119,42 @@
                                     <div v-if="wbActionError[action.actionId]" class="banner warn slim">
                                         {{ wbActionError[action.actionId] }}
                                     </div>
+                                    <form v-if="action.plan && action.status === 'PENDING_APPROVAL' && wbPlanEdits[action.actionId]"
+                                          @submit.prevent="wbSavePlanRevision(action)" class="wb-action-facts">
+                                        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">
+                                            <div class="field">
+                                                <label :for="'wb-plan-unit-' + action.actionId">目标单位</label>
+                                                <select :id="'wb-plan-unit-' + action.actionId" v-model="wbPlanEdits[action.actionId].requestedUnit" :disabled="!wbActionIdle(action)" required>
+                                                    <option value="RAW_WEIGHT">相对权重</option>
+                                                    <option value="TRAFFIC_PERCENT">流量占比（%）</option>
+                                                </select>
+                                            </div>
+                                            <div class="field">
+                                                <label :for="'wb-plan-value-' + action.actionId">新目标值</label>
+                                                <input :id="'wb-plan-value-' + action.actionId" v-model="wbPlanEdits[action.actionId].requestedValue"
+                                                       type="number" min="0" :max="wbPlanEdits[action.actionId].requestedUnit === 'RAW_WEIGHT' ? 10000 : 100"
+                                                       step="1" :disabled="!wbActionIdle(action)" required>
+                                            </div>
+                                        </div>
+                                        <p class="muted">将重新读取当前路由并生成待审批的新版本，旧版本保留且不能执行。</p>
+                                        <button class="btn mini primary" type="submit" :disabled="!wbActionIdle(action)">{{ wbActionBusy[action.actionId] === 'revise' ? '生成中…' : '生成新版本' }}</button>
+                                        <button class="btn mini" type="button" :disabled="!wbActionIdle(action)" @click="wbCancelPlanEdit(action)">取消修改</button>
+                                    </form>
                                     <div class="wb-action-foot">
                                         <span class="muted wb-action-meta">{{ wbActionMeta(action) }}</span>
                                         <template v-if="wbActionIdle(action) && action.status === 'PENDING_APPROVAL'">
                                             <button class="btn mini" :disabled="wbActionBusy[action.actionId]"
                                                     @click="wbActionCommand(action, 'reject')">拒绝</button>
-                                            <button class="btn mini primary" :disabled="wbActionBusy[action.actionId]"
+                                            <button v-if="action.plan && !wbPlanEdits[action.actionId]" class="btn mini" @click="wbEditPlan(action)">修改计划</button>
+                                            <button v-if="action.plan" class="btn mini primary" :disabled="wbActionBusy[action.actionId] || wbPlanExpired(action.plan)"
                                                     @click="wbActionCommand(action, 'approve')">
-                                                {{ wbActionBusy[action.actionId] === 'approve' ? '执行中…' : '批准并执行' }}
+                                                {{ wbActionBusy[action.actionId] === 'approve' ? '提交审批…' : (wbApprovalProgress[action.actionId] && wbApprovalProgress[action.actionId].requiredApprovals > 1 ? '批准（需双人）' : '批准并执行') }}
                                             </button>
                                         </template>
                                         <template v-else-if="wbActionIdle(action) && action.status === 'SUCCESS'">
                                             <button class="btn mini danger" :disabled="wbActionBusy[action.actionId]"
                                                     @click="wbActionCommand(action, 'rollback')">
-                                                {{ wbActionBusy[action.actionId] === 'rollback' ? '回滚中…' : '回滚' }}
+                                                {{ wbActionBusy[action.actionId] === 'rollback' ? '提交审批…' : (wbApprovalProgress[action.actionId] && wbApprovalProgress[action.actionId].requiredApprovals > 1 ? '申请回滚（需双人）' : '回滚') }}
                                             </button>
                                         </template>
                                         <template v-else-if="wbActionIdle(action) && action.status === 'UNCERTAIN'">
@@ -1018,6 +1211,22 @@
                                             <code>{{ item.rawReference }}</code> · {{ item.source }} · {{ fmtTime(item.observedAtMillis) }}
                                         </div>
                                         <div v-if="wbEvidenceScope(item)" class="muted wb-evidence-ref">{{ wbEvidenceScope(item) }}</div>
+                                        <details v-if="wbTimelineEvents(item).length" class="muted wb-evidence-ref">
+                                            <summary>查看发布与变更时间线（UTC）</summary>
+                                            <ol style="max-height:420px;overflow:auto">
+                                                <li v-for="change in wbTimelineEvents(item)" :key="change.eventId" style="margin-bottom:12px;overflow-wrap:anywhere">
+                                                    <strong>{{ change.kind }}</strong> · {{ wbTimelineTime(change) }}
+                                                    <div>{{ wbTimelineDescription(change) }}</div>
+                                                    <div>采集/接收：{{ new Date(Number(change.observedAtMillis)).toISOString() }} · 来源：{{ change.sourceId }} · 事件：{{ change.eventId }}</div>
+                                                    <div v-for="(bound, index) in change.limitations" :key="index">{{ bound }}</div>
+                                                </li>
+                                            </ol>
+                                        </details>
+                                        <details v-if="item.envelope" class="muted wb-evidence-ref">
+                                            <summary>查看取证详情与判断边界</summary>
+                                            <div v-for="(bound, boundIndex) in (item.envelope.limitations || [])" :key="boundIndex">{{ bound }}</div>
+                                            <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto">{{ JSON.stringify(item.envelope, null, 2) }}</pre>
+                                        </details>
                                     </div>
                                 </div>
                             </div>
@@ -1240,7 +1449,7 @@
                             </div>
                             <div class="field wide" v-if="currentVendorMap.fastModel">
                                 <label>快速模型（后台指定）</label>
-                                <div class="muted"><code>{{ currentVendorMap.fastModel }}</code> <span class="card-hint">承接目标解析/调查规划等廉价调用</span></div>
+                                <div class="muted"><code>{{ currentVendorMap.fastModel }}</code> <span class="card-hint">用于目标识别和诊断事实选择；调查规划使用主模型</span></div>
                             </div>
                         </template>
 

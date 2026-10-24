@@ -10,6 +10,7 @@ import com.rover.agent.core.planning.PlanValidator;
 import com.rover.agent.core.planning.PlanningLimits;
 import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
+import com.rover.agent.core.port.AgentAccess;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
 import com.rover.agent.core.port.KnowledgeReadPort;
@@ -19,18 +20,25 @@ import com.rover.agent.core.port.RouteControlPort;
 import com.rover.agent.core.port.RouteReadPort;
 import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
+import com.rover.agent.core.repository.AlertLifecycleRepository;
+import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
 import com.rover.agent.core.repository.AgentTaskRepository;
 import com.rover.agent.core.repository.IncidentRepository;
 import com.rover.agent.runtime.action.ActionExecutor;
+import com.rover.agent.runtime.action.ActionExecutorRegistry;
+import com.rover.agent.runtime.action.ActionCommandRunner;
 import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.action.RouteWeightActionExecutor;
+import com.rover.agent.runtime.action.RiskBasedApprovalPolicy;
 import com.rover.agent.runtime.journal.OpsJournal;
 import com.rover.agent.runtime.knowledge.InMemoryKnowledgeStore;
 import com.rover.agent.runtime.llm.ChatModelGateway;
 import com.rover.agent.runtime.llm.ConversationModel;
+import com.rover.agent.runtime.llm.SpringAiConversationModel;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.llm.ModelTargetInterpreter;
 import com.rover.agent.runtime.llm.NoopChatModelGateway;
@@ -57,6 +65,13 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 public class AgentRuntimeConfiguration {
+    @Bean
+    public com.rover.agent.runtime.llm.ProviderIsolation.Policy modelIsolationPolicy(
+            @Value("${rover.agent.llm.isolation.failure-threshold:3}") int failures,
+            @Value("${rover.agent.llm.isolation.cooldown-seconds:30}") int cooldown,
+            @Value("${rover.agent.llm.isolation.max-concurrent:4}") int concurrent) {
+        return new com.rover.agent.runtime.llm.ProviderIsolation.Policy(failures,cooldown,concurrent);
+    }
 
     /** 内存实现的容量上限：落库实现不受它约束，业务代码也不感知区别。 */
     private static final int SESSION_CAPACITY = 200;
@@ -67,8 +82,10 @@ public class AgentRuntimeConfiguration {
 
     /** Agent 存储：没配记录库路径时用内存，单测不用落盘。 */
     @Bean(destroyMethod = "close")
-    public AgentStore agentStore(@Value("${rover.admin.log-store-path:}") String logStorePath) {
+    public AgentStore agentStore(@Value("${rover.admin.log-store-path:}") String logStorePath,
+                                 @Value("${rover.agent.production-mode:false}") boolean productionMode) {
         if (logStorePath == null || logStorePath.isBlank()) {
+            if (productionMode) { throw new IllegalStateException("生产模式必须配置持久 H2，禁止回退内存"); }
             return AgentStore.memory(SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY, TASK_CAPACITY,
                     ACTION_CAPACITY);
         }
@@ -107,8 +124,34 @@ public class AgentRuntimeConfiguration {
     }
 
     @Bean
-    public OpsJournal opsJournal(AgentStore agentStore) {
-        return agentStore.journal();
+    public AlertLifecycleRepository agentAlertLifecycleRepository(AgentStore agentStore) {
+        return agentStore.alertLifecycles();
+    }
+
+    @Bean
+    public AutoExecutionPolicyRepository agentAutoExecutionPolicyRepository(AgentStore agentStore) {
+        return agentStore.autoExecutionPolicies();
+    }
+
+    @Bean
+    public com.rover.agent.core.repository.ActionCertificationRepository agentActionCertificationRepository(AgentStore agentStore) {
+        return agentStore.actionCertifications();
+    }
+
+    @Bean
+    public ActionCommandRepository agentActionCommandRepository(AgentStore agentStore) {
+        return agentStore.actionCommands();
+    }
+
+    @Bean
+    public OpsJournal opsJournal(AgentStore agentStore, RouteControlPort routeControlPort) {
+        var journal = agentStore.journal().scoped(routeControlPort.resourceNamespace());
+        if (!routeControlPort.requiresResourceIdentity()) { return journal; }
+        return journal.identified(key -> routeControlPort.state().routes().stream()
+                .filter(route -> route.resourceRef() != null && (key.equals(route.routeId())
+                        || key.equals(route.businessPrefix()) || key.startsWith(route.businessPrefix() + "/")))
+                .max(java.util.Comparator.comparingInt(route -> route.businessPrefix().length()))
+                .map(route -> route.resourceRef().resourceUid() + ":" + route.resourceRef().generation()).orElse(null));
     }
 
     /**
@@ -145,8 +188,10 @@ public class AgentRuntimeConfiguration {
     @Bean
     public IncidentRegistry agentIncidentRegistry(AgentSessionRepository agentSessionRepository,
                                                   IncidentRepository agentIncidentRepository,
-                                                  WorkspaceRetention agentWorkspaceRetention) {
-        return new IncidentRegistry(agentSessionRepository, agentIncidentRepository, agentWorkspaceRetention);
+                                                  WorkspaceRetention agentWorkspaceRetention,
+                                                  RouteControlPort routeControlPort) {
+        return new IncidentRegistry(agentSessionRepository, agentIncidentRepository, agentWorkspaceRetention,
+                routeControlPort.resourceScope(), routeControlPort.resourceNamespace());
     }
 
     @Bean
@@ -154,7 +199,7 @@ public class AgentRuntimeConfiguration {
             @Value("${rover.agent.limits.max-model-calls:20}") int maxModelCalls,
             @Value("${rover.agent.limits.max-output-tokens:4096}") int maxOutputTokens,
             @Value("${rover.agent.limits.max-total-tokens:100000}") long maxTotalTokens,
-            @Value("${rover.agent.limits.task-timeout-seconds:180}") int timeoutSeconds,
+            @Value("${rover.agent.limits.task-timeout-seconds:300}") int timeoutSeconds,
             @Value("${rover.agent.limits.max-repeated-tool-results:3}") int maxRepeatedToolResults) {
         return new AgentRunLimits(maxModelCalls, maxOutputTokens, maxTotalTokens,
                 java.time.Duration.ofSeconds(timeoutSeconds), maxRepeatedToolResults);
@@ -169,17 +214,20 @@ public class AgentRuntimeConfiguration {
                                                        int queueCapacity,
                                                        @Value("${rover.agent.execution.task-capacity:200}")
                                                        int taskCapacity,
-                                                       AgentMetrics agentMetrics, AgentRunLimits agentRunLimits) {
+                                                       AgentMetrics agentMetrics, AgentRunLimits agentRunLimits, AgentStore store) {
         // 参数越界时在装配阶段直接失败：配置错误必须早暴露，而不是运行期以「任务莫名被拒」出现。
         AgentExecutionSettings settings = new AgentExecutionSettings(workerThreads, queueCapacity, taskCapacity);
-        return new InvestigationTaskRegistry(agentTaskRepository, settings, new TaskEventBus(), agentMetrics,
+        var registry = new InvestigationTaskRegistry(agentTaskRepository, settings, new TaskEventBus(), agentMetrics,
                 agentCheckpointRepository, agentRunLimits);
+        if (store.persistent()) { registry.persistence(store.durable()); }
+        return registry;
     }
 
     @Bean
     public ModelExplainer agentModelExplainer(ObjectProvider<ChatModelGateway> chatModelGateways,
-                                              AgentMetrics agentMetrics) {
-        return new ModelExplainer(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics);
+                                              AgentMetrics agentMetrics,
+                                              @Value("${rover.agent.llm.report-timeout-seconds:30}") int timeoutSeconds) {
+        return new ModelExplainer(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics, timeoutSeconds);
     }
 
     /**
@@ -190,7 +238,7 @@ public class AgentRuntimeConfiguration {
      */
     @Bean
     public TargetInterpreter agentTargetInterpreter(ObjectProvider<ChatModelGateway> chatModelGateways,
-                                                    @Value("${rover.agent.llm.quick-timeout-seconds:10}")
+                                                    @Value("${rover.agent.llm.target-timeout-seconds:${rover.agent.llm.quick-timeout-seconds:10}}")
                                                     int quickTimeoutSeconds) {
         return new ModelTargetInterpreter(chatModelGateways.getIfAvailable(NoopChatModelGateway::new),
                 quickTimeoutSeconds);
@@ -204,8 +252,8 @@ public class AgentRuntimeConfiguration {
 
     /** 能力注册表：能力清单、规划可选集合与执行映射共用同一份，避免口径分叉。 */
     @Bean
-    public CapabilityRegistry agentCapabilityRegistry() {
-        return CapabilityRegistry.standard();
+    public CapabilityRegistry agentCapabilityRegistry(ObjectProvider<com.rover.agent.core.port.TelemetryReadPort> telemetry) {
+        return CapabilityRegistry.withTelemetry(telemetry.getIfAvailable(com.rover.agent.core.port.TelemetryReadPort::disconnected).capabilities());
     }
 
     /** 运维知识库：内存 FAQ 种子，回答「怎么配置 / 怎么接入 / 怎么排查」；换落盘或向量检索时替换此实现。 */
@@ -220,9 +268,48 @@ public class AgentRuntimeConfiguration {
                                                      MetricReadPort metricReadPort, TraceReadPort traceReadPort,
                                                      ConfigReadPort configReadPort, EventReadPort eventReadPort,
                                                      LogQueryPort logQueryPort, KnowledgeReadPort knowledgeReadPort,
-                                                     CapabilityRegistry agentCapabilityRegistry) {
+                                                     CapabilityRegistry agentCapabilityRegistry,
+                                                     AgentTaskRepository tasks, AgentSessionRepository sessions,
+                                                     RouteControlPort control, ObjectProvider<AgentAccess> access,
+                                                     InvestigationTaskRegistry running,
+                                                     com.rover.agent.runtime.timeline.ChangeTimelineService timeline,
+                                                     ObjectProvider<com.rover.agent.core.port.TelemetryReadPort> telemetry) {
         return new CapabilityExecutor(routeReadPort, instanceReadPort, metricReadPort, traceReadPort,
-                configReadPort, eventReadPort, logQueryPort, knowledgeReadPort, agentCapabilityRegistry);
+                configReadPort, eventReadPort, logQueryPort, knowledgeReadPort, agentCapabilityRegistry, taskId -> {
+                    AgentAccess policy = access.getIfAvailable(AgentAccess::local);
+                    if (!policy.managed()) { return; }
+                    var task = tasks.find(taskId).orElseThrow(() -> new AgentAccess.Denied("任务已不存在"));
+                    var session = sessions.find(task.sessionId()).orElseThrow(() -> new AgentAccess.Denied("会话已不存在"));
+                    if (!java.util.Objects.equals(control.resourceScope(), session.scope())
+                            || !control.resourceNamespace().equals(session.targetNamespace())) {
+                        throw new AgentAccess.Denied("任务的资源范围已失效");
+                    }
+                    policy.require(session.userId(), AgentAccess.Permission.READ);
+                    var execution = running.find(taskId);
+                    if (execution != null) { execution.budget().reserveTool(); }
+                }, taskId -> {
+                    var task = tasks.find(taskId).orElse(null);
+                    var session = task == null ? null : sessions.find(task.sessionId()).orElse(null);
+                    var execution = running.find(taskId);
+                    java.util.Map<String, String> budget = java.util.Map.of();
+                    if (execution != null) {
+                        var state = execution.budget().snapshot();
+                        budget = java.util.Map.of("modelCalls", Integer.toString(state.modelCalls()),
+                                "toolCalls", Integer.toString(state.toolCalls()), "tokens", Long.toString(state.tokens()),
+                                "deadlineAtMillis", Long.toString(state.deadlineAtMillis()));
+                    }
+                    return new com.rover.agent.core.model.InvestigationContext(taskId,
+                            task == null ? null : task.incidentId(), session == null ? control.resourceScope() : session.scope(),
+                            control.controlTargetId(), control.resourceNamespace(), task == null ? null : task.target(),
+                            execution == null ? null : execution.timeRange(), budget,
+                            access.getIfAvailable(AgentAccess::local).managed() ? "LIVE_RBAC_V1" : "LOCAL_V1");
+                }, timeline, telemetry.getIfAvailable(com.rover.agent.core.port.TelemetryReadPort::disconnected));
+    }
+
+    @Bean
+    public com.rover.agent.runtime.timeline.ChangeTimelineService changeTimelineService(AgentStore store, RouteControlPort control,
+            @Value("${rover.admin.log-collect-interval-seconds:30}") long collectSeconds) {
+        return new com.rover.agent.runtime.timeline.ChangeTimelineService(store, control, Math.max(5, collectSeconds) * 1000);
     }
 
     /**
@@ -242,11 +329,13 @@ public class AgentRuntimeConfiguration {
     public InvestigationPlanner agentInvestigationPlanner(CapabilityRegistry agentCapabilityRegistry,
                                                          ObjectProvider<ChatModelGateway> chatModelGateways,
                                                          AgentMetrics agentMetrics,
-                                                         @Value("${rover.agent.llm.quick-timeout-seconds:10}")
-                                                         int quickTimeoutSeconds) {
+                                                         @Value("${rover.agent.llm.planning-timeout-seconds:60}") int timeoutSeconds,
+                                                         @Value("${rover.agent.llm.planning-max-output-tokens:2048}") int outputTokens,
+                                                         @Value("${rover.agent.llm.planning-thinking-enabled:false}") boolean thinkingEnabled,
+                                                         @Value("${rover.agent.llm.planning-evidence-context-chars:24000}") int contextChars) {
         return new LlmInvestigationPlanner(new RuleBasedPlanner(agentCapabilityRegistry),
-                new SpringAiJsonCompletion(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics,
-                        "调查规划", quickTimeoutSeconds), agentCapabilityRegistry);
+                SpringAiJsonCompletion.investigation(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics,
+                        timeoutSeconds, outputTokens, thinkingEnabled), agentCapabilityRegistry, contextChars);
     }
 
     @Bean
@@ -270,15 +359,21 @@ public class AgentRuntimeConfiguration {
     @Bean
     public InvestigationService agentInvestigationService(IncidentRegistry agentIncidentRegistry,
                                                           InvestigationTaskRegistry agentTaskRegistry,
+                                                          AlertLifecycleRepository alertLifecycleRepository,
                                                           ModelExplainer agentModelExplainer,
                                                           InvestigationPlanner agentInvestigationPlanner,
                                                           PlanValidator agentPlanValidator,
                                                           CapabilityExecutor agentCapabilityExecutor,
                                                           PlanningLimits agentPlanningLimits,
-                                                          OpsJournal opsJournal) {
-        return new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
+                                                          OpsJournal opsJournal,
+                                                          AgentActionService agentActionService,
+                                                          @Value("${rover.agent.alerts.owner-user-id:}")
+                                                          String alertOwnerUserId, ObjectProvider<AgentAccess> access) {
+        var service = new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
                 agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits,
-                opsJournal);
+                opsJournal, alertOwnerUserId, agentActionService, alertLifecycleRepository);
+        service.access(access.getIfAvailable(AgentAccess::local));
+        return service;
     }
 
     /**
@@ -290,21 +385,41 @@ public class AgentRuntimeConfiguration {
     public ToolLoopService agentToolLoopService(CapabilityExecutor agentCapabilityExecutor,
                                                ObjectProvider<ChatModelGateway> chatModelGateways,
                                                ObjectProvider<ConversationModel> conversationModels,
-                                               AgentActionService agentActionService) {
+                                               AgentActionService agentActionService,
+                                               AgentMetrics agentMetrics) {
         // 模型侧留一个可替换的入口：端到端测试用它注入脚本，从而在不依赖真实模型的前提下
         // 验证「工具真的取数、证据真的落库」这条链路——这是单测替代不了的部分。
         // 变更提议入口同样注入：模型能走到的最远处就是「登记一条待审批变更」，执行在 ActionExecutor 里。
-        return new ToolLoopService(agentCapabilityExecutor,
-                chatModelGateways.getIfAvailable(NoopChatModelGateway::new),
-                conversationModels.getIfAvailable(),
+        ChatModelGateway gateway = chatModelGateways.getIfAvailable(NoopChatModelGateway::new);
+        return new ToolLoopService(agentCapabilityExecutor, gateway,
+                conversationModels.getIfAvailable(() -> new SpringAiConversationModel(gateway, agentMetrics)),
                 agentActionService);
     }
 
     /** 装配依赖路由控制端口和变更仓储的权重执行器。 */
     @Bean
+    public RiskBasedApprovalPolicy agentActionApprovalPolicy(
+            @Value("${rover.agent.approvals.policy-id:risk-approval-v1}") String policyId,
+            @Value("${rover.agent.approvals.high-impact-percent:25}") double highImpactPercent,
+            @Value("${rover.agent.approvals.r2-approvers:1}") int r2Approvers,
+            @Value("${rover.agent.approvals.r3-approvers:2}") int r3Approvers,
+            AutoExecutionPolicyRepository autoPolicies, RouteControlPort routeControlPort) {
+        return new RiskBasedApprovalPolicy(policyId, highImpactPercent, r2Approvers, r3Approvers,
+                () -> autoPolicies.list(routeControlPort.resourceNamespace()));
+    }
+
+    @Bean
     public ActionExecutor agentActionExecutor(RouteControlPort routeControlPort,
-                                             AgentActionRepository agentActionRepository) {
-        return new RouteWeightActionExecutor(routeControlPort, agentActionRepository);
+                                             AgentActionRepository agentActionRepository,
+                                             ObjectProvider<AgentAccess> access,
+                                             RiskBasedApprovalPolicy approvalPolicy) {
+        return new RouteWeightActionExecutor(routeControlPort, agentActionRepository,
+                access.getIfAvailable(AgentAccess::local), approvalPolicy);
+    }
+
+    @Bean
+    public ActionExecutorRegistry agentActionExecutorRegistry(java.util.List<ActionExecutor> executors) {
+        return new ActionExecutorRegistry(executors);
     }
 
     /** 装配受控变更服务；模型仅可调用 propose，人工接口负责审批和后续操作。 */
@@ -312,9 +427,65 @@ public class AgentRuntimeConfiguration {
     public AgentActionService agentActionService(AgentActionRepository agentActionRepository,
                                                  AgentSessionRepository agentSessionRepository,
                                                  RouteControlPort routeControlPort,
-                                                 ActionExecutor agentActionExecutor) {
+                                                 ActionExecutorRegistry agentActionExecutorRegistry,
+                                                 ObjectProvider<AgentAccess> access,
+                                                 RiskBasedApprovalPolicy approvalPolicy,
+                                                 ActionCommandRepository actionCommandRepository,
+                                                 AgentStore store,
+                                                 IncidentRepository incidentRepository,
+                                                 com.rover.agent.runtime.verification.ActionEffectVerificationService effectVerification,
+                                                 com.rover.agent.runtime.verification.BusinessEffectPolicy businessEffectPolicy,
+                                                 com.rover.agent.core.repository.ActionCertificationRepository certifications,
+                                                 @Value("${rover.agent.actions.async-execution:true}") boolean asyncExecution) {
         return new AgentActionService(agentActionRepository, agentSessionRepository, routeControlPort,
-                agentActionExecutor);
+                agentActionExecutorRegistry, access.getIfAvailable(AgentAccess::local), approvalPolicy,
+                actionCommandRepository, asyncExecution, effectVerification, businessEffectPolicy,
+                store.autonomousActionBudget(), certifications, new com.rover.agent.runtime.action.ActionShadowAssessmentService(
+                        store.actions(), routeControlPort, store.actionCertifications(),
+                        () -> store.persistent() && store.durable().healthy()),
+                () -> store.persistent() && store.durable().healthy());
+    }
+
+    @Bean(destroyMethod = "close")
+    public ActionCommandRunner agentActionCommandRunner(ActionCommandRepository actionCommandRepository,
+                                                        AgentActionService agentActionService,
+                                                        @Value("${rover.agent.actions.worker-threads:1}") int workerThreads,
+                                                        @Value("${rover.agent.actions.queue-capacity:64}") int queueCapacity,
+                                                        @Value("${rover.agent.actions.poll-millis:250}") long pollMillis) {
+        return new ActionCommandRunner(actionCommandRepository, agentActionService, workerThreads,
+                queueCapacity, pollMillis);
+    }
+
+    @Bean(destroyMethod = "close")
+    public com.rover.agent.runtime.verification.ActionEffectVerificationService agentActionEffectVerificationService(
+            AgentActionRepository actions, AgentSessionRepository sessions, AgentStore store,
+            MetricReadPort metrics, com.rover.agent.runtime.timeline.ChangeTimelineService timeline) {
+        var verifier = new com.rover.agent.runtime.verification.ActionEffectVerificationService(
+                actions, sessions, store.effectVerifications(), metrics, timeline);
+        verifier.start(100, 1_000);
+        store.effectVerifications().due(System.currentTimeMillis(), 100).forEach(item -> {
+            try { verifier.runDue(item, System.currentTimeMillis()); }
+            catch (RuntimeException ignored) { /* retained for the periodic retry */ }
+        });
+        return verifier;
+    }
+
+    @Bean
+    public com.rover.agent.runtime.verification.BusinessEffectPolicy agentBusinessEffectPolicy(
+            @Value("${rover.agent.verification.enabled:false}") boolean enabled,
+            @Value("${rover.agent.verification.baseline-seconds:300}") long baselineSeconds,
+            @Value("${rover.agent.verification.propagation-grace-seconds:5}") long graceSeconds,
+            @Value("${rover.agent.verification.window-seconds:60}") long windowSeconds,
+            @Value("${rover.agent.verification.consecutive-windows:2}") int consecutiveWindows,
+            @Value("${rover.agent.verification.minimum-requests:100}") long minimumRequests,
+            @Value("${rover.agent.verification.minimum-coverage:0.95}") double minimumCoverage,
+            @Value("${rover.agent.verification.maximum-observation-seconds:300}") long maximumSeconds,
+            @Value("${rover.agent.verification.recovery-5xx-rate:0.01}") double recovery5xxRate,
+            @Value("${rover.agent.verification.maximum-p95-millis:2000}") double maximumP95Millis) {
+        return new com.rover.agent.runtime.verification.BusinessEffectPolicy(enabled,
+                Math.multiplyExact(baselineSeconds, 1000), Math.multiplyExact(graceSeconds, 1000),
+                Math.multiplyExact(windowSeconds, 1000), consecutiveWindows, minimumRequests, minimumCoverage,
+                Math.multiplyExact(maximumSeconds, 1000), recovery5xxRate, maximumP95Millis);
     }
 
     /** Agent 应用入口：目标/事件/任务/执行的编排都在这里，HTTP 层只做契约映射。 */
@@ -329,9 +500,11 @@ public class AgentRuntimeConfiguration {
                                                InvestigationService agentInvestigationService,
                                                WorkspaceRetention agentWorkspaceRetention,
                                                ToolLoopService agentToolLoopService,
-                                               OpsJournal opsJournal) {
-        return new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
+                                               OpsJournal opsJournal, ObjectProvider<AgentAccess> access) {
+        var orchestrator = new AgentOrchestrator(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
                 agentTaskRepository, agentIncidentRegistry, agentContextManager, agentTargetResolver,
                 agentInvestigationService, agentWorkspaceRetention, agentToolLoopService, opsJournal);
+        orchestrator.access(access.getIfAvailable(AgentAccess::local));
+        return orchestrator;
     }
 }

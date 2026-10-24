@@ -33,13 +33,17 @@ public class AdminTraceReadAdapter implements TraceReadPort {
                     continue;
                 }
                 rows.add(new TraceRow(row.path("traceId").asText(""), rowPath,
-                        row.path("statusCode").asInt(0), row.path("startMillis").asLong(0)));
+                        row.path("statusCode").asInt(0), row.path("startMillis").asLong(0),
+                        row.path("observation").isObject() ? new com.fasterxml.jackson.databind.ObjectMapper()
+                                .convertValue(row.path("observation"), com.rover.agent.core.snapshot.TraceObservation.class) : null));
             }
             boolean disabled = traces.path("enabled").isBoolean() && !traces.path("enabled").asBoolean();
             return new TraceSnapshot(!disabled, traces.path("sampleRate").asDouble(0), List.copyOf(rows),
-                    System.currentTimeMillis());
+                    traces.path("observedAtMillis").asLong(System.currentTimeMillis()),
+                    traces.path("collectionStartedAtMillis").asLong(0), traces.path("overwritten").asLong(-1),
+                    traces.path("samplingMode").asText("UNKNOWN_LEGACY"));
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取 Gateway 追踪失败", ex);
+            throw AdminValues.unavailable("读取 Gateway 追踪失败", ex);
         }
     }
 }

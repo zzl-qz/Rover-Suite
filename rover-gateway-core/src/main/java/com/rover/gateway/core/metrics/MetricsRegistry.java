@@ -25,6 +25,48 @@ import java.util.function.Supplier;
  * 所有派生指标（QPS/平均/P95/路由维度）都从本类派生，保证数据自洽。
  */
 public class MetricsRegistry {
+    private volatile FinalResponseWindow finalResponses = new FinalResponseWindow(System.currentTimeMillis());
+    private volatile long collectionEpoch;
+
+    FinalResponseWindow finalResponses() {
+        if (collectionEpoch != settings.getCollectionEpoch()) {
+            synchronized (this) {
+                if (collectionEpoch != settings.getCollectionEpoch()) {
+                    finalResponses = new FinalResponseWindow(System.currentTimeMillis());
+                    collectionEpoch = settings.getCollectionEpoch();
+                }
+            }
+        }
+        return finalResponses;
+    }
+
+    public String routeWindowJson(String routeId, long fromMillis, long toMillis) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("enabled", settings.isEnabled());
+        if (settings.isEnabled()) { payload.put("routeWindow", finalResponses().snapshotRange(routeId, fromMillis, toMillis,
+                System.currentTimeMillis())); }
+        return com.rover.common.json.JsonCodec.toJson(payload);
+    }
+
+    public void recordCompleted(com.rover.gateway.core.filter.GatewayRequestContext context) {
+        if (!settings.isEnabled() || !context.markMetricsRecorded()) { return; }
+        long cost = Math.max(0, (System.nanoTime() - context.getStartNanos()) / 1_000_000);
+        var observation = context.responseObservation();
+        int status = context.getStatusCode() == null ? 500 : context.getStatusCode();
+        record(UNMATCHED_ROUTE.equals(observation.routeId()) ? null : observation.routeId(), status, cost, context.getUpstreamHostPort(),
+                context.getUpstreamCostMillis(), context.isUpstreamConnectFail(), context.isUpstreamTimeout(),
+                observation.group());
+        finalResponses().record(System.currentTimeMillis(), status, cost, observation);
+    }
+
+    public void recordEarlyRejection(int status, String reason) {
+        if (!settings.isEnabled()) { return; }
+        record(null, status, 0);
+        finalResponses().record(System.currentTimeMillis(), status, 0,
+                new com.rover.gateway.core.trace.ResponseObservation(UNMATCHED_ROUTE, null, 0, null, null, null,
+                        "GATEWAY", "RECEIVE", reason, true, List.of()));
+    }
+
 
     /** 环形数组固定长度（秒），即窗口上限 5 分钟。 */
     public static final int RING_SECONDS = GatewayDefaults.METRICS_WINDOW_SECONDS;
@@ -182,19 +224,16 @@ public class MetricsRegistry {
         addStatus(statusCode);
 
         String routeKey = routeId == null || routeId.isBlank() ? UNMATCHED_ROUTE : routeId;
-        boolean gatewayError = routeId == null || routeId.isBlank();
-        if (statusCode == 504) {
+        if (timeout) {
             errProxyTimeout.increment();
-            gatewayError = true;
-        } else if (statusCode == 502) {
+        } else if (connectFail) {
             errUpstreamConnect.increment();
-            gatewayError = true;
         }
         if (routeId == null || routeId.isBlank()) {
             errRouteUnmatched.increment();
         }
 
-        globalRing.record(epochSecond, cost, gatewayError, statusCode);
+        globalRing.record(epochSecond, cost, statusCode >= 500 && statusCode < 600, statusCode);
         RouteMetrics routeMetrics = routes.computeIfAbsent(routeKey, key -> new RouteMetrics());
         routeMetrics.record(statusCode, epochSecond, cost);
 
@@ -341,6 +380,7 @@ public class MetricsRegistry {
             if (((Number) row.get("windowRequests")).longValue() > 0) {
                 // 版本归属：实例被选中时所处的 group（空串表示无版本/默认组）
                 row.put("group", routeMetrics.instanceGroups.getOrDefault(entry.getKey(), ""));
+                row.put("groupKnown", !"__mixed__".equals(row.get("group")));
                 rows.add(row);
             }
         }
@@ -389,6 +429,8 @@ public class MetricsRegistry {
             // 版本内多实例的 p95 取最大值，作为保守上界（不做跨实例样本合并）
             long instanceP95 = ((Number) instanceRow.getOrDefault("p95Millis", 0)).longValue();
             row.put("p95Millis", Math.max(((Number) row.get("p95Millis")).longValue(), instanceP95));
+            row.put("maxInstanceP95Millis", row.get("p95Millis"));
+            row.put("p95Method", "MAX_INSTANCE_RESERVOIR_P95_LEGACY");
         }
         // 拒绝原因按版本归因：容量问题与上游 5xx 分开算
         RouteMetrics routeMetrics = routeId == null ? null : routes.get(routeId);
@@ -434,6 +476,9 @@ public class MetricsRegistry {
         row.put("connectFail", 0L);
         row.put("timeout", 0L);
         row.put("p95Millis", 0L);
+        row.put("maxInstanceP95Millis", 0L);
+        row.put("p95Method", "MAX_INSTANCE_RESERVOIR_P95_LEGACY");
+        row.put("rejectCountScope", "LIFETIME");
         row.put("noUpstreamRejects", 0L);
         row.put("circuitOpenRejects", 0L);
         row.put("sumMillis", 0.0);
@@ -733,7 +778,8 @@ public class MetricsRegistry {
 
         void recordInstance(String hostPort, String group) {
             instanceCounts.computeIfAbsent(hostPort, key -> new LongAdder()).increment();
-            instanceGroups.putIfAbsent(hostPort, group);
+            instanceGroups.compute(hostPort, (ignored, previous) -> previous == null || previous.equals(group)
+                    ? group : "__mixed__");
         }
 
         boolean statusSumEqualsTotal() {

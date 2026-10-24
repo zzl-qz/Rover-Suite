@@ -40,10 +40,10 @@ class OpsToolsBudgetTest {
         OpsTools tools = opsTools();
 
         for (int index = 0; index < EXPECTED_BUDGET; index++) {
-            assertFalse(tools.listRoutes().contains("已达上限"),
+            assertFalse(tools.getRoute("/budget/" + index).contains("已达上限"),
                     "第 " + (index + 1) + " 次取数仍在预算内，不应被拦下");
         }
-        assertEquals(EXPECTED_BUDGET, routes.calls(), "预算内的每次调用都应真实取数一次");
+        assertEquals(EXPECTED_BUDGET, routes.calls(), "不同目标在预算内各取数一次");
 
         String blocked = tools.listRoutes();
         assertTrue(blocked.contains("已达上限"), "超出预算必须明确让模型收尾，不能静默丢弃");
@@ -55,14 +55,15 @@ class OpsToolsBudgetTest {
         OpsTools tools = opsTools();
 
         for (int index = 0; index < EXPECTED_BUDGET / 2; index++) {
-            tools.listRoutes();
+            tools.getRoute("/budget/" + index);
             tools.getConfigs();
         }
-        assertEquals(EXPECTED_BUDGET, routes.calls() + configs.calls(), "两个工具各调一半也应恰好耗尽预算");
+        assertEquals(EXPECTED_BUDGET, tools.callCount(), "缓存命中也消耗工具循环额度，不能用它无限循环");
+        assertEquals(EXPECTED_BUDGET / 2 + 1, routes.calls() + configs.calls(), "相同配置只读取一次");
 
         assertTrue(tools.listRoutes().contains("已达上限"), "预算是任务级总量，换工具不应重置额度");
         assertTrue(tools.getConfigs().contains("已达上限"));
-        assertEquals(EXPECTED_BUDGET, routes.calls() + configs.calls(), "被拦下的调用同样不再取数");
+        assertEquals(EXPECTED_BUDGET / 2 + 1, routes.calls() + configs.calls(), "被拦下的调用同样不再取数");
     }
 
     private OpsTools opsTools() {

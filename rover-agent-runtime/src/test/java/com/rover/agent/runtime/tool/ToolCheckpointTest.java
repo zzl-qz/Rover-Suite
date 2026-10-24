@@ -38,6 +38,35 @@ class ToolCheckpointTest {
     private final InMemoryAgentCheckpointRepository checkpoints = new InMemoryAgentCheckpointRepository();
 
     @Test
+    void repeatedSameReadReusesEvidenceWithoutAdvancingCheckpoint() {
+        InvestigationTask task = registerTask("tool-checkpoint-repeat");
+        OpsTools tools = new OpsTools(executor(), task);
+        tools.listRoutes();
+        int evidenceCount = tools.evidence().size();
+        int marks = checkpoints.byTask(task.taskId()).size();
+        assertTrue(tools.listRoutes().contains("没有新信息"));
+        assertEquals(evidenceCount, tools.evidence().size());
+        assertEquals(marks, checkpoints.byTask(task.taskId()).size());
+    }
+
+    @Test
+    void discoveryOverviewDoesNotHideFailedRouteReadOrLoseUnknownAssessment() {
+        InvestigationTask task = registerTask("tool-route-failure");
+        RouteReadPort routes = new RouteReadPort() {
+            public List<RouteSnapshot> routes() { throw new IllegalArgumentException("invalid response"); }
+            public DiscoveryMode discoveryMode() { return DiscoveryMode.NAMESERVER; }
+        };
+        OpsTools tools = new OpsTools(new CapabilityExecutor(routes, null, null, null, null, null, null, null,
+                CapabilityRegistry.standard()), task);
+        tools.getRoute("/orders");
+        assertEquals(com.rover.agent.core.model.StepStatus.FAILED, task.view().steps().get(0).status());
+        var h = tools.judge().hypotheses().stream().filter(item -> item.id().equals("H1")).findFirst().orElseThrow();
+        assertEquals(com.rover.agent.core.model.Verdict.UNKNOWN, h.status());
+        assertFalse(h.missingEvidence().isEmpty());
+        assertTrue(h.supportingEvidenceIds().isEmpty());
+    }
+
+    @Test
     void eachCompletedToolAdvancesOneSafeResumePoint() {
         InvestigationTask task = registerTask("tool-checkpoint-1");
         OpsTools tools = new OpsTools(executor(), task);

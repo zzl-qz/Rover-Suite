@@ -3,6 +3,7 @@ package com.rover.agent.runtime.llm;
 import com.rover.agent.runtime.metrics.ModelCallOutcome;
 import com.rover.agent.runtime.task.AgentRunBudget;
 import java.io.InterruptedIOException;
+import java.net.http.HttpTimeoutException;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,16 +25,19 @@ final class QuickModelCall {
     static String content(ChatModelGateway gateway, int timeoutSeconds, String scene,
                           Function<ChatClient, String> call) {
         try {
-            return call.apply(AgentBudgetAdvisor.client(gateway.chatClient(timeoutSeconds),
-                    AgentRunBudget.current(), gateway::reasoningDelta));
+            return call.apply(client(gateway,timeoutSeconds,scene));
         } catch (RuntimeException failure) {
             if (timeoutSeconds <= 0 || !timedOut(failure)) {
                 throw failure;
             }
             log.warn("Agent 模型调用超时（{}），重试一次", scene);
-            return call.apply(AgentBudgetAdvisor.client(gateway.chatClient(timeoutSeconds),
-                    AgentRunBudget.current(), gateway::reasoningDelta));
+            return call.apply(client(gateway,timeoutSeconds,scene));
         }
+    }
+
+    private static ChatClient client(ChatModelGateway gateway,int timeoutSeconds,String scene) {
+        return AgentBudgetAdvisor.client(gateway.select(ChatModelGateway.Purpose.LIGHTWEIGHT,timeoutSeconds,false),
+                AgentRunBudget.current(),gateway::reasoningDelta,scene,ModelContracts.TARGET);
     }
 
     /**
@@ -43,13 +47,15 @@ final class QuickModelCall {
      * 重试不会变好。调用方按这个分类决定日志级别与指标标签，不必再自己判异常链。
      */
     static ModelCallOutcome classify(Throwable failure) {
-        return timedOut(failure) ? ModelCallOutcome.TIMEOUT : ModelCallOutcome.ERROR;
+        String kind=ModelFailures.kind(failure);
+        return kind.equals("CIRCUIT_OPEN") || kind.equals("PROVIDER_BUSY") || kind.equals("ISOLATION_CAPACITY")
+                ? ModelCallOutcome.ISOLATED : timedOut(failure) ? ModelCallOutcome.TIMEOUT : ModelCallOutcome.ERROR;
     }
 
-    /** 沿异常链找超时：okhttp 的超时最终是 InterruptedIOException("timeout")，SocketTimeoutException 是其子类。 */
+    /** 沿异常链识别 SDK/Socket 超时和 JDK HTTP 超时；后者不继承 InterruptedIOException。 */
     private static boolean timedOut(Throwable failure) {
         for (Throwable current = failure; current != null; current = current.getCause()) {
-            if (current instanceof InterruptedIOException) {
+            if (current instanceof InterruptedIOException || current instanceof HttpTimeoutException) {
                 return true;
             }
         }

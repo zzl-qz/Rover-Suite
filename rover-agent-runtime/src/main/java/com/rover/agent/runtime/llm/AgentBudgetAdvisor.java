@@ -34,10 +34,14 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
     private static final TokenCountEstimator TOKENS = new JTokkitTokenCountEstimator();
     private final AgentRunBudget budget;
     private final Function<ChatResponse, String> reasoning;
+    private final ModelClient model;
+    private final String scene;
+    private final String promptVersion;
 
-    private AgentBudgetAdvisor(AgentRunBudget budget, Function<ChatResponse, String> reasoning) {
+    private AgentBudgetAdvisor(AgentRunBudget budget, Function<ChatResponse, String> reasoning,ModelClient model,String scene,String promptVersion) {
         this.budget = budget;
         this.reasoning = reasoning;
+        this.model=model;this.scene=scene;this.promptVersion=promptVersion;
     }
 
     public static ChatClient client(ChatClient client, AgentRunBudget budget,
@@ -45,8 +49,15 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
         if (budget == null) {
             return client;
         }
-        AgentBudgetAdvisor advisor = new AgentBudgetAdvisor(budget, reasoning);
-        return client.mutate().defaultAdvisors(advisor.new ToolGuardAdvisor(), advisor).build();
+        return client(new ModelClient(client,com.rover.agent.core.model.ModelIdentity.unknown(),null,null),budget,reasoning,"LEGACY","legacy-v1");
+    }
+
+    public static ChatClient client(ModelClient model,AgentRunBudget budget,Function<ChatResponse,String> reasoning,
+                                    String scene,String promptVersion) {
+        if (model==null || model.client()==null) { throw new IllegalStateException("模型客户端不可用"); }
+        if (budget==null) { return model.client(); }
+        AgentBudgetAdvisor advisor = new AgentBudgetAdvisor(budget, reasoning,model,scene,promptVersion);
+        return model.client().mutate().defaultAdvisors(advisor.new ToolGuardAdvisor(), advisor).build();
     }
 
     @Override
@@ -62,12 +73,20 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
     @Override
     public ChatClientResponse adviseCall(ChatClientRequest request, CallAdvisorChain chain) {
         Round round = prepare(request);
-        return Mono.fromCallable(() -> chain.nextCall(round.request))
-                .subscribeOn(Schedulers.boundedElastic())
-                .doOnNext(response -> round.collect(response.chatResponse()))
-                .takeUntilOther(budget.stopSignal())
-                .doOnSuccess(response -> budget.check())
-                .block(budget.remaining());
+        try {
+            ChatClientResponse completedResponse=Mono.fromCallable(() -> chain.nextCall(round.request))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .doOnNext(response -> round.collect(response.chatResponse()))
+                    .takeUntilOther(budget.stopSignal())
+                    .doOnSuccess(result -> budget.check())
+                    .block(budget.remaining());
+            round.finish(null); return completedResponse;
+        } catch (RuntimeException failure) {
+            round.finish(failure);
+            // 阻塞等待可能比任务定时器先到截止点；先结算预算，不能留下未标记的超时任务。
+            budget.check();
+            throw failure;
+        }
     }
 
     @Override
@@ -77,7 +96,9 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
             return chain.nextStream(round.request)
                     .doOnNext(response -> round.collect(response.chatResponse()))
                     .takeUntilOther(budget.stopSignal())
-                    .doOnComplete(budget::check);
+                    .doOnComplete(() -> { budget.check(); round.finish(null); })
+                    .doOnError(round::finish)
+                    .doOnCancel(() -> round.finish(new java.util.concurrent.CancellationException()));
         });
     }
 
@@ -85,15 +106,20 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
         Prompt prompt = request.prompt();
         ChatOptions options = prompt.getOptions();
         long input = 0;
+        StringBuilder promptAudit=new StringBuilder();
+        StringBuilder toolAudit=new StringBuilder();
         for (Message message : prompt.getInstructions()) {
+            promptAudit.append(message.getMessageType()).append(':').append(ModelContracts.digest(message.getText()));
             input += estimate(message.getText()) + 4L;
             if (message instanceof AssistantMessage assistant) {
                 for (AssistantMessage.ToolCall call : assistant.getToolCalls()) {
                     input += estimate(call.name()) + estimate(call.arguments()) + 4L;
+                    promptAudit.append(ModelContracts.digest(call.name(),call.arguments()));
                 }
             } else if (message instanceof ToolResponseMessage tools) {
                 for (ToolResponseMessage.ToolResponse response : tools.getResponses()) {
                     input += estimate(response.name()) + estimate(response.responseData()) + 4L;
+                    promptAudit.append(ModelContracts.digest(response.name(),response.responseData()));
                 }
             }
         }
@@ -106,8 +132,23 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
             ToolDefinition definition = callback.getToolDefinition();
             input += estimate(definition.name()) + estimate(definition.description())
                     + estimate(definition.inputSchema()) + 4L;
+            toolAudit.append(ModelContracts.digest(definition.name(),definition.description(),definition.inputSchema()));
         }
-        int outputLimit = budget.beginModelCall(input, options == null ? null : options.getMaxTokens());
+        String promptDigest=ModelContracts.digest(promptAudit.toString());
+        String toolDigest=ModelContracts.digest(toolAudit.toString());
+        ProviderIsolation.Lease lease=null;
+        try {
+            if (model.isolation()!=null) { lease=model.isolation().acquire(model.isolationKey()); }
+        } catch (ProviderIsolation.Rejected rejected) {
+            String id=budget.invocationStarted(scene,model.identity(),promptVersion,promptDigest,toolDigest,0,0);
+            budget.invocationFinished(id,rejected.kind(),0,0,null,null); throw rejected;
+        }
+        int outputLimit;
+        String invocationId;
+        try {
+            var reservation=budget.beginModelInvocation(scene,model.identity(),promptVersion,promptDigest,toolDigest,input,options==null ? null : options.getMaxTokens());
+            outputLimit=reservation.outputLimit();invocationId=reservation.id();
+        } catch (RuntimeException failure) { if (lease!=null) { lease.close(); } throw failure; }
         ChatOptions bounded;
         if (options instanceof ToolCallingChatOptions tools) {
             bounded = tools.mutate().maxTokens(outputLimit).build();
@@ -115,7 +156,7 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
             bounded = (options == null ? ChatOptions.builder() : options.mutate()).maxTokens(outputLimit).build();
         }
         return new Round(request.mutate().prompt(new Prompt(prompt.getInstructions(), bounded)).build(),
-                input, outputLimit);
+                input, outputLimit,invocationId,lease);
     }
 
     private static int estimate(String text) {
@@ -159,17 +200,35 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
         private final StringBuilder generated = new StringBuilder();
         private long chargedInput;
         private long chargedOutput;
+        private final String invocationId;
+        private final ProviderIsolation.Lease lease;
+        private String returnedModel;
+        private String fingerprint;
+        private boolean finished;
 
-        private Round(ChatClientRequest request, long input, int outputLimit) {
+        private Round(ChatClientRequest request, long input, int outputLimit,String invocationId,ProviderIsolation.Lease lease) {
             this.request = request;
             this.chargedInput = input;
             this.outputLimit = outputLimit;
+            this.invocationId=invocationId;this.lease=lease;
+        }
+
+        private synchronized void finish(Throwable failure) {
+            if (finished) { return; } finished=true;
+            if (lease!=null) { if (failure==null) { lease.success(); } else { lease.failure(failure); } }
+            budget.modelInvocationCompleted(invocationId,failure==null ? "SUCCEEDED" : ModelFailures.kind(failure),chargedInput,chargedOutput,returnedModel,fingerprint);
         }
 
         private void collect(ChatResponse response) {
             budget.check();
             if (response == null) {
                 return;
+            }
+            if (response.getMetadata()!=null) {
+                if (response.getMetadata().getModel()!=null && !response.getMetadata().getModel().isBlank()) { returnedModel=response.getMetadata().getModel(); }
+                Object value=response.getMetadata().get("systemFingerprint");
+                if (value==null) { value=response.getMetadata().get("system_fingerprint"); }
+                if (value instanceof String text) { fingerprint=text; }
             }
             if (response.getResult() != null) {
                 AssistantMessage message = response.getResult().getOutput();
@@ -193,7 +252,7 @@ public final class AgentBudgetAdvisor implements CallAdvisor, StreamAdvisor {
                     output = Math.max(output, usage.getCompletionTokens());
                 }
             }
-            budget.consume(input - chargedInput + output - chargedOutput);
+            budget.consumeModelTokens(input-chargedInput,output-chargedOutput);
             chargedInput = input;
             chargedOutput = output;
             if (output > outputLimit) {

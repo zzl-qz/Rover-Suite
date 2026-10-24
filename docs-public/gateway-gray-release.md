@@ -155,48 +155,43 @@ and persist it" — the whole site 404s and a restart does not bring it back.
 ### Apply protocol (write-first, pre-built)
 
 ```
-1. operationId already APPLIED  → return the recorded result (idempotent replay)
+1. existing operationId → verify request digest and expiry; replay same intent, reject mismatch/expiry
 2. expectedRevision != revision → record CONFLICT, throw 409 (details carry currentRevision)
 3. validate the candidate table → on failure record REJECTED, throw 400
 4. pre-build the runnable state (new RouteMatcher, new filters)
-5. persist first (including nextRevision / operationId)
+5. commit routes and APPLIED receipt in one durable transaction (including request digest)
 6. then atomically swap the in-memory references
-7. bump revision, record APPLIED
+7. publish runtime revision; the receipt was already committed with the routes
 ```
 
-Every step that can fail happens **before** the write to disk; after the write
-there is only non-failing atomic reference replacement. The window "disk written
-but memory not swapped" is therefore structurally removed, not covered by a
-try/catch. If memory were changed first and the disk write failed, memory would
-be new while disk stays old, and a restart would silently roll behavior back.
+Build the candidate runtime before committing, then publish it. A crash between
+commit and publication restores both routes and receipts from the transaction store.
+An unknown commit outcome requires reconciliation with the original operation ID.
 
 ### Persistence
 
-Routes are persisted to `config/routes.overlay.json` as
-`{revision, appliedOperationId, appliedAtMillis, routes:[...]}`, written with a
-same-directory `.tmp` file plus an atomic move. At startup the `revision` /
-`appliedOperationId` are read back into memory, so the revision reported after a
-restart is the one that was last confirmed.
+Routes and receipts share a transaction in `config/routes.overlay.json.state.mv.db`,
+with a separate generation/high-water witness. The old `routes.overlay.json` is
+only an initial migration input; an existing transaction store never falls back
+to stale JSON/YAML. See [receipt retention and recovery](gateway-operation-receipts.zh-CN.md).
 
 ### Conflicts, idempotency, rollback, and confirmation
 
 - A stale `revision` returns HTTP **409** with `currentRevision` in the body; the
   caller refreshes and retries. The Admin route page does this automatically.
-- Re-submitting an `operationId` that is already `APPLIED` returns the recorded
-  result without applying again.
+- Re-submitting an unexpired `APPLIED` operation with the same parameters returns
+  its original result. Changed parameters, action type, or expected revision return 409.
 - Rollback takes `toRevision` and runs the **same** protocol, producing a new
   revision. A rollback therefore cannot overwrite a concurrent change; the
   optimistic lock guarantees it. Only the most recent `5` applied snapshots are
   kept, and a target outside that window is rejected with `400`.
 - `GET /_manage/routes/operations/{operationId}` answers "did my timed-out write
-  apply": `APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` / `UNKNOWN`, plus
+  apply": `APPLIED` / `CONFLICT` / `REJECTED` / `FAILED` / `EXPIRED` / `UNKNOWN`, plus
   `currentRevision`.
-- `FAILED` means **submitted but the disk write failed** (the change did not take
-  effect); it differs from `REJECTED` as "could not be written" differs from
-  "failed validation". Neither should be read as "never submitted". `UNKNOWN`
-  means **no record** — it may never have been submitted, or it may have been
-  evicted from the bounded operation table (most recent `200`). It does **not**
-  mean "not applied".
+- Receipts are no longer evicted after 200 operations. Their full result is valid for
+  30 days; expired IDs remain reserved. `UNKNOWN` and `EXPIRED` never mean "not applied".
+  A storage failure cannot fabricate a durable `FAILED` receipt; reconcile HTTP 5xx
+  with the original ID. A rejected ID cannot be reused with revised parameters.
 - The Gateway accepts a caller-generated `operationId`. Admin passes it through for create/update,
   target-weight, and rollback requests, so these writes can be reconciled after a timeout. Admin currently
   generates the delete operation's ID itself. Admin exposes

@@ -12,4 +12,13 @@ import java.util.List;
  * @param rows             与目标路径精确匹配的追踪记录
  * @param observedAtMillis 取证时刻
  */
-public record TraceSnapshot(boolean enabled, double sampleRate, List<TraceRow> rows, long observedAtMillis) { }
+public record TraceSnapshot(boolean enabled, double sampleRate, List<TraceRow> rows, long observedAtMillis,
+                            long collectionStartedAtMillis, long overwritten, String samplingMode) {
+    public TraceSnapshot(boolean enabled, double sampleRate, List<TraceRow> rows, long observedAtMillis) {
+        this(enabled, sampleRate, rows, observedAtMillis, 0, -1, "UNKNOWN_LEGACY");
+    }
+    public TraceSnapshot filtered(List<TraceRow> kept) {
+        return new TraceSnapshot(enabled, sampleRate, kept, observedAtMillis, collectionStartedAtMillis,
+                overwritten, samplingMode);
+    }
+}

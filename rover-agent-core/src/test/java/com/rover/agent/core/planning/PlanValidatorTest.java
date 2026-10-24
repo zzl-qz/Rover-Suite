@@ -19,6 +19,18 @@ class PlanValidatorTest {
 
     private final PlanValidator validator = new PlanValidator(REGISTRY, PlanningLimits.defaults());
 
+    @Test
+    void optionalSuggestionsCannotCrowdRequiredReadsOutOfTheStepBudget() {
+        var target=ResourceTarget.route("/orders");
+        var plan=new InvestigationPlan("investigate",List.of(),List.of(
+                PlannedStep.optional(AgentCapability.LOG_QUERY,"optional",target),
+                PlannedStep.optional(AgentCapability.CONFIG_READ,"optional",target),
+                PlannedStep.required(AgentCapability.ROUTE_QUERY,"required",target)));
+        var validated=new PlanValidator(REGISTRY,new PlanningLimits(3,10,1))
+                .validate(plan,request("/orders",target),Set.of());
+        assertEquals(List.of(AgentCapability.ROUTE_QUERY),validated.steps().stream().map(PlannedStep::capability).toList());
+    }
+
     private static PlanningRequest request(String path, ResourceTarget target) {
         return new PlanningRequest("为什么失败？", target, path, List.of(), List.of());
     }

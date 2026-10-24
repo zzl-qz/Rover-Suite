@@ -2,6 +2,7 @@ package com.rover.agent.core.capability;
 
 import com.rover.agent.core.model.AgentStepType;
 import com.rover.agent.core.model.Evidence;
+import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.snapshot.ConfigEntrySnapshot;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
@@ -12,6 +13,8 @@ import com.rover.agent.core.snapshot.RouteUpstreamSnapshot;
 import com.rover.agent.core.snapshot.TraceSnapshot;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /** 能力执行结果：一次只读能力调用的结构化产出，含证据文本与供规则使用的结构化快照。 */
 public record CapabilityResult(AgentCapability capability, AgentStepType stepType, String stepName,
@@ -19,7 +22,8 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
                                RouteSnapshot route, boolean routeRead, DiscoveryMode discoveryMode,
                                List<InstanceSnapshot> instances, TraceSnapshot traces,
                                GatewayMetricSnapshot metric, List<RouteUpstreamSnapshot> routeUpstreams,
-                               List<ConfigEntrySnapshot> configs, List<RegistryEventSnapshot> events) {
+                               List<ConfigEntrySnapshot> configs, List<RegistryEventSnapshot> events,
+                               boolean retryable) {
 
     public CapabilityResult {
         capability = capability == null ? AgentCapability.ROUTE_QUERY : capability;
@@ -28,6 +32,40 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
         evidence = List.copyOf(stamp(evidence == null ? List.of() : evidence));
         limitations = limitations == null ? List.of() : List.copyOf(limitations);
         discoveryMode = discoveryMode == null ? DiscoveryMode.UNKNOWN : discoveryMode;
+    }
+
+    public CapabilityResult(AgentCapability capability, AgentStepType stepType, String stepName, boolean executed,
+                            List<Evidence> evidence, List<String> limitations, RouteSnapshot route, boolean routeRead,
+                            DiscoveryMode discoveryMode, List<InstanceSnapshot> instances, TraceSnapshot traces,
+                            GatewayMetricSnapshot metric, List<RouteUpstreamSnapshot> routeUpstreams,
+                            List<ConfigEntrySnapshot> configs, List<RegistryEventSnapshot> events) {
+        this(capability, stepType, stepName, executed, evidence, limitations, route, routeRead, discoveryMode,
+                instances, traces, metric, routeUpstreams, configs, events, false);
+    }
+
+    public CapabilityResult retryable(boolean value) {
+        return new CapabilityResult(capability, stepType, stepName, executed, evidence, limitations, route, routeRead,
+                discoveryMode, instances, traces, metric, routeUpstreams, configs, events, value);
+    }
+
+    /** 服务发现概览读取成功，不能掩盖同一次调用的路由表读取失败。 */
+    public boolean readFailed() {
+        return !executed || evidence.isEmpty() || capability == AgentCapability.ROUTE_QUERY && !routeRead
+                || evidence.stream().allMatch(e -> e.envelope().qualityStatus() == com.rover.agent.core.model.EvidenceQuality.UNAVAILABLE
+                        || e.envelope().qualityStatus() == com.rover.agent.core.model.EvidenceQuality.OUT_OF_RANGE);
+    }
+
+    /** 只按异常类型识别网络瞬态失败；缺配置、无样本、权限、解析错误均不靠文本猜测重试。 */
+    public static boolean transientFailure(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof com.rover.agent.core.port.SnapshotUnavailableException unavailable
+                    && unavailable.retryable()) { return true; }
+            if (cause instanceof java.net.SocketTimeoutException || cause instanceof java.net.ConnectException
+                    || cause instanceof java.net.http.HttpTimeoutException
+                    || cause instanceof java.util.concurrent.TimeoutException) { return true; }
+            if (cause.getCause() == cause) { break; }
+        }
+        return false;
     }
 
     /** 执行成功：带证据与判断边界。 */
@@ -117,6 +155,33 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
                 configs, snapshot);
     }
 
+    /** 给指定时段的调查标注证据适用范围；当前快照不能冒充该时段的历史状态。 */
+    public CapabilityResult inTimeRange(TimeRange range) {
+        if (range == null || range.isUnspecified()) {
+            return this;
+        }
+        boolean currentContext = capability == AgentCapability.ROUTE_QUERY
+                || capability == AgentCapability.INSTANCE_QUERY || capability == AgentCapability.CONFIG_READ;
+        List<Evidence> scoped = new ArrayList<>();
+        for (Evidence item : evidence) {
+            Map<String, String> metadata = new LinkedHashMap<>(item.metadata());
+            metadata.put("requestedFromMillis", Long.toString(range.fromMillis()));
+            metadata.put("requestedToMillis", Long.toString(range.toMillis()));
+            metadata.put("temporalScope", currentContext ? "CURRENT_CONTEXT"
+                    : capability == AgentCapability.KNOWLEDGE_RETRIEVAL ? "REFERENCE" : "REQUESTED_WINDOW");
+            scoped.add(new Evidence(item.evidenceId(), item.taskId(), item.type(), item.source(), item.title(),
+                    currentContext ? "当前状态参考（不覆盖指定时段）：" + item.summary() : item.summary(),
+                    item.rawReference(), Map.copyOf(metadata), item.observedAtMillis(),
+                    item.envelope().requested(range, currentContext)));
+        }
+        List<String> bounds = new ArrayList<>(limitations);
+        if (currentContext) {
+            bounds.add("当前快照仅作状态参考，不能用于确认或排除指定时间范围（" + range.describe() + "）的故障。");
+        }
+        return copy(scoped, bounds, route, routeRead, discoveryMode, instances, traces, metric,
+                routeUpstreams, configs, events);
+    }
+
     /**
      * 追加证据与判断边界：一次能力可以产出多条证据（如按组件拆分的配置快照、按实例拆分的异常观测）。
      */
@@ -140,6 +205,6 @@ public record CapabilityResult(AgentCapability capability, AgentStepType stepTyp
                                   List<ConfigEntrySnapshot> nextConfigs, List<RegistryEventSnapshot> nextEvents) {
         return new CapabilityResult(capability, stepType, stepName, executed, nextEvidence, nextLimitations, nextRoute,
                 nextRouteRead, nextDiscovery, nextInstances, nextTraces, nextMetric, nextRouteUpstreams, nextConfigs,
-                nextEvents);
+                nextEvents, retryable);
     }
 }

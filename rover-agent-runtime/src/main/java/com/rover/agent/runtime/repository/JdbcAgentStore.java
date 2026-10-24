@@ -6,6 +6,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.AutoExecutionPolicy;
+import com.rover.agent.core.model.AlertDelivery;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertLifecycle;
+import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.ActionApproval;
+import com.rover.agent.core.model.ActionExecutionCommand;
+import com.rover.agent.core.model.ActionEffectVerification;
+import com.rover.agent.core.model.ActionCertification;
+import com.rover.agent.core.model.ActionCertificationSubject;
+import com.rover.agent.core.model.ActionShadowRun;
 import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.AgentAction;
 import com.rover.agent.core.model.AgentCheckpoint;
@@ -23,6 +34,7 @@ import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.MessageRole;
 import com.rover.agent.core.model.RecallChoice;
 import com.rover.agent.core.model.ResourceTarget;
+import com.rover.agent.core.model.RemediationPlan;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.Step;
@@ -35,6 +47,13 @@ import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.ActionCommandRepository;
+import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
+import com.rover.agent.core.repository.ActionEffectVerificationRepository;
+import com.rover.agent.core.repository.ActionCertificationRepository;
+import com.rover.agent.core.repository.AutonomousActionBudgetRepository;
+import com.rover.agent.core.repository.AlertLifecycleRepository;
+import com.rover.agent.core.repository.ActionUpdateConflictException;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
@@ -56,6 +75,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.UnaryOperator;
 import org.slf4j.Logger;
@@ -93,6 +113,12 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final Tasks tasks = new Tasks();
     private final Checkpoints checkpoints = new Checkpoints();
     private final Actions actions = new Actions();
+    private final ActionCommands actionCommands = new ActionCommands();
+    private final EffectVerifications effectVerifications = new EffectVerifications();
+    private final Certifications certifications = new Certifications();
+    private final AlertLifecycles alertLifecycles = new AlertLifecycles();
+    private final AutoPolicies autoPolicies = new AutoPolicies();
+    private final AutonomousBudget autonomousBudget = new AutonomousBudget();
 
     public JdbcAgentStore(String dbPath) {
         if (dbPath == null || dbPath.isBlank()) {
@@ -102,10 +128,12 @@ public final class JdbcAgentStore implements AutoCloseable {
         if (file.getParentFile() != null) {
             file.getParentFile().mkdirs();
         }
-        String jdbcUrl = "jdbc:h2:file:" + dbPath + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE";
+        String jdbcUrl = "jdbc:h2:file:" + dbPath + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE;WRITE_DELAY=0";
         try {
             connection = DriverManager.getConnection(jdbcUrl, "sa", "");
             migrate();
+            recoverJobs();
+            recoverActionCommands();
             recoverInterrupted();
             recoverInterruptedActions();
         } catch (SQLException ex) {
@@ -139,6 +167,220 @@ public final class JdbcAgentStore implements AutoCloseable {
         return actions;
     }
 
+    public ActionCommandRepository actionCommands() { return actionCommands; }
+
+    public ActionEffectVerificationRepository effectVerifications() { return effectVerifications; }
+
+    public AlertLifecycleRepository alertLifecycles() { return alertLifecycles; }
+
+    public AutoExecutionPolicyRepository autoExecutionPolicies() { return autoPolicies; }
+
+    public ActionCertificationRepository actionCertifications() { return certifications; }
+
+    public AutonomousActionBudgetRepository autonomousActionBudget() { return autonomousBudget; }
+
+    private final class AutonomousBudget implements AutonomousActionBudgetRepository {
+        @Override public Reservation reserve(String key, String actionId, String reservationId, double impact, double maximum,
+                long window, long cooldown, int direction, boolean budgeted, long now) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    var current = queryOne("SELECT * FROM agent_action_budget WHERE resource_key=?",
+                            row -> new BudgetRow(row.getString("locked_action"), row.getString("locked_reservation"), row.getLong("cooldown_until"),
+                                    row.getLong("budget_window"), row.getDouble("reserved_percent"),
+                                    row.getLong("reserved_cooldown"), row.getInt("reserved_direction"),
+                                    row.getBoolean("reserved_budgeted")), key).orElse(null);
+                    if (current == null) {
+                        run("INSERT INTO agent_action_budget(resource_key,locked_action,budget_window,cooldown_until,reserved_percent,reserved_cooldown,reserved_direction,reserved_budgeted) "
+                                        + "VALUES(?,NULL,?,0,0,0,0,FALSE)", key, window);
+                        current = new BudgetRow(null, null, 0, window, 0, 0, 0, false);
+                    }
+                    if (actionId.equals(current.lockedAction()) && reservationId.equals(current.lockedReservation())) { return Reservation.ALREADY_RESERVED; }
+                    if (current.lockedAction() != null) { return Reservation.RESOURCE_BUSY; }
+                    long cooldownUntil = current.cooldownUntil();
+                    if (budgeted && now < cooldownUntil) { return Reservation.COOLDOWN_ACTIVE; }
+                    if (budgeted) {
+                        long cutoff = now - window;
+                        run("DELETE FROM agent_action_budget_event WHERE resource_key=? AND applied_at<=?", key, cutoff);
+                        double used = queryOne("SELECT COALESCE(SUM(impact_percent),0) FROM agent_action_budget_event WHERE resource_key=? AND applied_at>?",
+                                row -> row.getDouble(1), key, cutoff).orElse(0.0);
+                        List<Integer> recent = query("SELECT direction FROM agent_action_budget_event WHERE resource_key=? AND applied_at>? ORDER BY event_order DESC LIMIT 2",
+                                row -> row.getInt(1), key, cutoff);
+                        if (recent.size() >= 2 && recent.get(0) != direction && recent.get(1) == direction) {
+                            return Reservation.OSCILLATION_DETECTED;
+                        }
+                        if (used + impact > maximum + 1e-9) { return Reservation.BUDGET_EXCEEDED; }
+                    }
+                    run("UPDATE agent_action_budget SET locked_action=?,locked_reservation=?,budget_window=?,reserved_percent=?,reserved_cooldown=?,reserved_direction=?,reserved_budgeted=? WHERE resource_key=?",
+                            actionId, reservationId, window, impact, cooldown, direction, budgeted, key);
+                    return Reservation.RESERVED;
+                });
+            }
+        }
+
+        @Override public void complete(String reservationId, Outcome outcome, int direction, long now) {
+            synchronized (JdbcAgentStore.this) {
+                inTransaction(() -> {
+                    BudgetRow row = queryOne("SELECT * FROM agent_action_budget WHERE locked_reservation=?",
+                            result -> new BudgetRow(result.getString("locked_action"), result.getString("locked_reservation"), result.getLong("cooldown_until"),
+                                    result.getLong("budget_window"), result.getDouble("reserved_percent"), result.getLong("reserved_cooldown"),
+                                    result.getInt("reserved_direction"), result.getBoolean("reserved_budgeted")), reservationId).orElse(null);
+                    if (row == null || outcome == Outcome.UNKNOWN) { return null; }
+                    if (outcome == Outcome.APPLIED && direction != row.reservedDirection()) {
+                        throw new IllegalStateException("autonomous budget direction binding changed");
+                    }
+                    long cooldownUntil = row.cooldownUntil();
+                    if (outcome == Outcome.APPLIED && row.reservedBudgeted()) {
+                        queryOne("SELECT resource_key FROM agent_action_budget WHERE locked_action=?",
+                                result -> result.getString(1), row.lockedAction()).ifPresent(key -> run("INSERT INTO agent_action_budget_event(resource_key,action_id,reservation_id,applied_at,impact_percent,direction) VALUES(?,?,?,?,?,?)",
+                                key, eventId(reservationId), eventId(reservationId), now, row.reservedPercent(), direction));
+                        cooldownUntil = Math.addExact(now, row.reservedCooldown());
+                    }
+                    run("UPDATE agent_action_budget SET locked_action=NULL,locked_reservation=NULL,cooldown_until=?,reserved_percent=0,reserved_cooldown=0,reserved_direction=0,reserved_budgeted=FALSE WHERE locked_reservation=?",
+                            cooldownUntil, reservationId);
+                    return null;
+                });
+            }
+        }
+    }
+
+    private record BudgetRow(String lockedAction, String lockedReservation, long cooldownUntil, long budgetWindow, double reservedPercent,
+                             long reservedCooldown, int reservedDirection, boolean reservedBudgeted) {
+    }
+
+    private final class Certifications implements ActionCertificationRepository {
+        @Override public ActionShadowRun saveShadow(ActionShadowRun run) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    run("INSERT INTO agent_action_shadow_run(run_id,subject_hash,scope_key,observed_at,payload_json) VALUES(?,?,?,?,?)",
+                            run.runId(), run.subject().fingerprint(), scopeKey(run.subject().scope()), run.observedAtMillis(), toJson(run));
+                    appendAudit("ACTION_SHADOW_ASSESSED", run.actionId(), run.assessedBy(), scopeKey(run.subject().scope()), run);
+                    return run;
+                });
+            }
+        }
+        @Override public List<ActionShadowRun> recentShadowRuns(String fingerprint, int limit) {
+            validateLimit(limit);
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json FROM agent_action_shadow_run WHERE subject_hash=? ORDER BY run_order DESC LIMIT ?",
+                        row -> fromJson(row.getString(1), ActionShadowRun.class), fingerprint, limit);
+            }
+        }
+        @Override public List<ActionShadowRun> recentShadowRuns(com.rover.agent.core.model.ResourceScope scope, int limit) {
+            validateLimit(limit);
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json FROM agent_action_shadow_run WHERE scope_key=? ORDER BY run_order DESC LIMIT ?",
+                        row -> fromJson(row.getString(1), ActionShadowRun.class), scopeKey(scope), limit);
+            }
+        }
+        @Override public Optional<ActionCertification> current(String fingerprint) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_action_certification WHERE subject_hash=? ORDER BY certification_version DESC LIMIT 1",
+                        row -> fromJson(row.getString(1), ActionCertification.class), fingerprint);
+            }
+        }
+        @Override public Optional<ActionCertification> atVersion(String fingerprint, long version) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_action_certification WHERE subject_hash=? AND certification_version=?",
+                        row -> fromJson(row.getString(1), ActionCertification.class), fingerprint, version);
+            }
+        }
+        @Override public List<ActionCertification> current(com.rover.agent.core.model.ResourceScope scope) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT c.payload_json FROM agent_action_certification c JOIN (SELECT subject_hash,MAX(certification_version) AS v "
+                                + "FROM agent_action_certification GROUP BY subject_hash) latest "
+                                + "ON c.subject_hash=latest.subject_hash AND c.certification_version=latest.v "
+                                + "WHERE c.scope_key=? ORDER BY c.subject_hash",
+                        row -> fromJson(row.getString(1), ActionCertification.class), scopeKey(scope));
+            }
+        }
+        @Override public ActionCertification save(ActionCertification certification, long expectedVersion) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    long current = queryOne("SELECT MAX(certification_version) FROM agent_action_certification WHERE subject_hash=?",
+                            row -> row.getLong(1), certification.subject().fingerprint()).orElse(0L);
+                    if (current != expectedVersion || certification.version() != expectedVersion + 1) {
+                        throw new IllegalStateException("certification version conflict");
+                    }
+                    run("INSERT INTO agent_action_certification(subject_hash,certification_version,scope_key,updated_at,payload_json) VALUES(?,?,?,?,?)",
+                            certification.subject().fingerprint(), certification.version(), scopeKey(certification.subject().scope()),
+                            certification.updatedAtMillis(), toJson(certification));
+                    appendAudit("ACTION_CERTIFICATION_VERSIONED", certification.subject().fingerprint(),
+                            certification.updatedBy(), scopeKey(certification.subject().scope()), certification);
+                    return certification;
+                });
+            }
+        }
+    }
+
+    private static String scopeKey(com.rover.agent.core.model.ResourceScope scope) {
+        return scope.organizationId().length() + ":" + scope.organizationId() + scope.teamId().length() + ":"
+                + scope.teamId() + scope.environmentId().length() + ":" + scope.environmentId();
+    }
+
+    private static void validateLimit(int limit) {
+        if (limit < 1 || limit > 100) { throw new IllegalArgumentException("limit must be 1..100"); }
+    }
+
+    private static String eventId(String actionId) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(actionId.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is required by the Java runtime", impossible);
+        }
+    }
+
+    private final class AutoPolicies implements AutoExecutionPolicyRepository {
+        @Override public List<AutoExecutionPolicy> list(String namespace) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT p.payload_json FROM agent_auto_policy p JOIN (SELECT policy_id,MAX(policy_version) AS v "
+                                + "FROM agent_auto_policy WHERE target_namespace=? GROUP BY policy_id) latest "
+                                + "ON p.policy_id=latest.policy_id AND p.policy_version=latest.v ORDER BY p.policy_id",
+                        row -> fromJson(row.getString(1), AutoExecutionPolicy.class), namespace);
+            }
+        }
+
+        @Override public Optional<AutoExecutionPolicy> find(String policyId) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_auto_policy WHERE policy_id=? ORDER BY policy_version DESC LIMIT 1",
+                        row -> fromJson(row.getString(1), AutoExecutionPolicy.class), policyId);
+            }
+        }
+
+        @Override public Optional<AutoExecutionPolicy> find(String policyId, String namespace) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_auto_policy WHERE policy_id=? AND target_namespace=? "
+                                + "ORDER BY policy_version DESC LIMIT 1",
+                        row -> fromJson(row.getString(1), AutoExecutionPolicy.class), policyId, namespace);
+            }
+        }
+
+        @Override public List<AutoExecutionPolicy> history(String policyId) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json FROM agent_auto_policy WHERE policy_id=? ORDER BY policy_version",
+                        row -> fromJson(row.getString(1), AutoExecutionPolicy.class), policyId);
+            }
+        }
+
+        @Override public AutoExecutionPolicy save(AutoExecutionPolicy policy, long expectedVersion) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    AutoExecutionPolicy current = find(policy.policyId()).orElse(null);
+                    long actual = current == null ? 0 : current.version();
+                    if (actual != expectedVersion || policy.version() != expectedVersion + 1
+                            || current != null && !current.targetNamespace().equals(policy.targetNamespace())) {
+                        throw new IllegalStateException("preauthorization policy version conflict");
+                    }
+                    run("INSERT INTO agent_auto_policy(policy_id,policy_version,target_namespace,enabled,payload_json,updated_at) "
+                                    + "VALUES(?,?,?,?,?,?)", policy.policyId(), policy.version(), policy.targetNamespace(),
+                            policy.enabled(), toJson(policy), policy.updatedAtMillis());
+                    appendAudit("AUTO_POLICY_VERSIONED", policy.policyId(), policy.updatedBy(), policy.targetNamespace(), policy);
+                    return policy;
+                });
+            }
+        }
+    }
+
     /** 资源笔记：有已确认根因的调查才会写，按资源键读一条。 */
     public synchronized Optional<ResourceNote> findNote(String resourceKey) {
         if (resourceKey == null || resourceKey.isBlank()) {
@@ -169,6 +411,231 @@ public final class JdbcAgentStore implements AutoCloseable {
         }
     }
 
+    /** 独立于会话的审计记录；删除工作区不会删除历史执行证据。 */
+    public record Audit(long id, String kind, String aggregateId, String actor, String namespace,
+                        String payloadJson, long createdAtMillis) { }
+
+    public synchronized void appendAudit(String kind, String aggregateId, String actor, String namespace, Object payload) {
+        run("INSERT INTO agent_audit(event_kind,aggregate_id,actor,resource_namespace,payload_json,created_at) VALUES(?,?,?,?,?,?)",
+                kind, aggregateId, actor, namespace, toJson(payload), System.currentTimeMillis());
+    }
+
+    public synchronized List<Audit> audit(String namespace, long after, int limit) {
+        return query("SELECT * FROM agent_audit WHERE resource_namespace=? AND audit_id>? ORDER BY audit_id LIMIT ?",
+                row -> new Audit(row.getLong("audit_id"), row.getString("event_kind"), row.getString("aggregate_id"),
+                        row.getString("actor"), row.getString("resource_namespace"), row.getString("payload_json"), row.getLong("created_at")),
+                namespace, after, Math.max(1, Math.min(1000, limit)));
+    }
+
+    /** H2 的在线一致性备份；调用者只能传服务端配置的备份路径。 */
+    public synchronized void backup(java.nio.file.Path destination) {
+        try {
+            java.nio.file.Files.createDirectories(destination.toAbsolutePath().getParent());
+            if (java.nio.file.Files.exists(destination)) { throw new IllegalArgumentException("备份目标已存在"); }
+            try (PreparedStatement statement = connection.prepareStatement("BACKUP TO ?")) {
+                statement.setString(1, destination.toAbsolutePath().toString());
+                statement.execute();
+            }
+        } catch (SQLException | java.io.IOException ex) { throw new IllegalStateException("一致性备份失败", ex); }
+    }
+
+    public synchronized boolean healthy() {
+        try { return connection.isValid(2) && currentVersion() == MIGRATIONS.get(MIGRATIONS.size() - 1).version(); }
+        catch (SQLException ex) { return false; }
+    }
+
+    public com.rover.agent.runtime.timeline.JdbcChangeTimeline timeline() {
+        return new com.rover.agent.runtime.timeline.JdbcChangeTimeline(connection, this);
+    }
+
+    public record Job(String taskId, String kind, String payloadJson, long attempt, String state,
+                      String budgetJson, long notBeforeMillis) { }
+
+    public synchronized void enqueueJob(String taskId, String kind, Object payload) {
+        enqueueJob(taskId, kind, payload, 0);
+    }
+
+    public synchronized void enqueueJob(String taskId, String kind, Object payload, long notBeforeMillis) {
+        if (notBeforeMillis < 0) { throw new IllegalArgumentException("唤醒时间不能为负数"); }
+        run("INSERT INTO agent_job(task_id,job_kind,payload_json,attempt,state,budget_json,not_before) VALUES(?,?,?,0,'PENDING',NULL,?)",
+                taskId, kind, toJson(payload), notBeforeMillis);
+    }
+
+    public synchronized List<Job> pendingJobs() {
+        return query("SELECT * FROM agent_job WHERE state='PENDING' AND not_before<=? ORDER BY task_id LIMIT 200",
+                JdbcAgentStore::readJob, System.currentTimeMillis());
+    }
+
+    private static Job readJob(ResultSet row) throws SQLException {
+        return new Job(row.getString("task_id"), row.getString("job_kind"), row.getString("payload_json"),
+                row.getLong("attempt"), row.getString("state"), row.getString("budget_json"), row.getLong("not_before"));
+    }
+
+    private static ActionCommandRepository.Job readActionCommandJob(ResultSet row) throws SQLException {
+        var command = new ActionExecutionCommand(row.getString("command_id"), row.getString("action_id"),
+                ActionType.valueOf(row.getString("action_type")),
+                ActionExecutionCommand.Phase.valueOf(row.getString("phase")),
+                fromJson(row.getString("scope_json"), com.rover.agent.core.model.ResourceScope.class),
+                row.getString("control_target_id"), row.getString("target_namespace"), row.getInt("plan_version"),
+                row.getString("plan_hash"), row.getString("policy_version"), row.getString("operation_id"), row.getString("actor"),
+                row.getLong("created_at"));
+        return new ActionCommandRepository.Job(command, row.getLong("attempt"), row.getString("state"),
+                row.getLong("not_before"));
+    }
+
+    private final class AlertLifecycles implements AlertLifecycleRepository {
+        @Override public <T> T transaction(java.util.function.Function<AlertLifecycleRepository.Transaction, T> work) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> work.apply(new AlertLifecycleRepository.Transaction() {
+                    @Override public Optional<AlertDelivery> delivery(String sourceId, String deliveryId) {
+                        return queryOne("SELECT * FROM agent_alert_delivery WHERE source_id=? AND delivery_id=?",
+                                row -> new AlertDelivery(row.getString("source_id"), row.getString("delivery_id"),
+                                        row.getString("alert_key"), AlertEventState.valueOf(row.getString("event_state")),
+                                        row.getString("payload_fingerprint"), row.getLong("generation"),
+                                        row.getString("session_id"), row.getString("incident_id"), row.getString("task_id"),
+                                        row.getLong("accepted_at")), sourceId, deliveryId);
+                    }
+
+                    @Override public Optional<AlertLifecycle> lifecycle(String sourceId, String alertKey) {
+                        return queryOne("SELECT * FROM agent_alert_lifecycle WHERE source_id=? AND alert_key=?",
+                                row -> new AlertLifecycle(row.getString("source_id"), row.getString("alert_key"),
+                                        row.getBoolean("active"), row.getString("path"), row.getLong("generation"),
+                                        row.getString("session_id"), row.getString("incident_id"), row.getString("task_id"),
+                                        AlertEventState.valueOf(row.getString("last_state")),
+                                        row.getString("last_fingerprint"), row.getLong("updated_at")), sourceId, alertKey);
+                    }
+
+                    @Override public boolean saveDelivery(AlertDelivery delivery) {
+                        if (queryOne("SELECT delivery_id FROM agent_alert_delivery WHERE source_id=? AND delivery_id=?",
+                                row -> row.getString(1), delivery.sourceId(), delivery.deliveryId()).isPresent()) { return false; }
+                        run("INSERT INTO agent_alert_delivery(source_id,delivery_id,alert_key,event_state,"
+                                        + "payload_fingerprint,generation,session_id,incident_id,task_id,accepted_at) "
+                                        + "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                delivery.sourceId(), delivery.deliveryId(), delivery.alertKey(), delivery.state().name(),
+                                delivery.payloadFingerprint(), delivery.generation(), delivery.sessionId(),
+                                delivery.incidentId(), delivery.taskId(), delivery.acceptedAtMillis());
+                        return true;
+                    }
+
+                    @Override public void saveLifecycle(AlertLifecycle item) {
+                        upsert("UPDATE agent_alert_lifecycle SET active=?,path=?,generation=?,session_id=?,incident_id=?,task_id=?,"
+                                        + "last_state=?,last_fingerprint=?,updated_at=? WHERE source_id=? AND alert_key=?",
+                                "INSERT INTO agent_alert_lifecycle(active,path,generation,session_id,incident_id,task_id,last_state,"
+                                        + "last_fingerprint,updated_at,source_id,alert_key) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                                new Object[]{item.active(), item.path(), item.generation(), item.sessionId(), item.incidentId(),
+                                        item.taskId(), item.lastState().name(), item.lastPayloadFingerprint(), item.updatedAtMillis(),
+                                        item.sourceId(), item.alertKey()},
+                                new Object[]{item.active(), item.path(), item.generation(), item.sessionId(), item.incidentId(),
+                                        item.taskId(), item.lastState().name(), item.lastPayloadFingerprint(), item.updatedAtMillis(),
+                                        item.sourceId(), item.alertKey()});
+                    }
+
+                    @Override public void pruneDeliveriesBefore(long cutoff) {
+                        run("DELETE FROM agent_alert_delivery WHERE accepted_at<?", cutoff);
+                    }
+                }));
+            }
+        }
+    }
+
+    private final class EffectVerifications implements ActionEffectVerificationRepository {
+        @Override public Optional<ActionEffectVerification> find(String actionId, ActionEffectVerification.Phase phase) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json,version FROM agent_action_verification WHERE action_id=? AND phase=?",
+                        row -> fromJson(row.getString(1), ActionEffectVerification.class).withVersion(row.getLong(2)),
+                        actionId, phase.name());
+            }
+        }
+
+        @Override public ActionEffectVerification save(ActionEffectVerification item) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    int changed;
+                    if (item.version() == 0) {
+                        changed = run("INSERT INTO agent_action_verification(action_id,phase,plan_version,plan_hash,state,outcome,"
+                                        + "baseline_at,applied_at,next_window_at,deadline_at,windows_seen,recovered_windows,payload_json,version) "
+                                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1)", item.actionId(), item.phase().name(),
+                                item.planVersion(), item.planHash(), item.state().name(), item.outcome().name(),
+                                item.baselineAtMillis(), item.appliedAtMillis(), item.nextWindowAtMillis(), item.deadlineAtMillis(),
+                                item.windowsSeen(), item.consecutiveRecoveredWindows(), toJson(item));
+                    } else {
+                        changed = run("UPDATE agent_action_verification SET plan_version=?,plan_hash=?,state=?,outcome=?,"
+                                        + "baseline_at=?,applied_at=?,next_window_at=?,deadline_at=?,windows_seen=?,recovered_windows=?,"
+                                        + "payload_json=?,version=version+1 WHERE action_id=? AND phase=? AND version=?",
+                                item.planVersion(), item.planHash(), item.state().name(), item.outcome().name(),
+                                item.baselineAtMillis(), item.appliedAtMillis(), item.nextWindowAtMillis(), item.deadlineAtMillis(),
+                                item.windowsSeen(), item.consecutiveRecoveredWindows(), toJson(item), item.actionId(),
+                                item.phase().name(), item.version());
+                    }
+                    if (changed != 1) { throw new IllegalStateException("business verification version is stale or duplicate"); }
+                    return item.withVersion(item.version() + 1);
+                });
+            }
+        }
+
+        @Override public List<ActionEffectVerification> due(long nowMillis, int limit) {
+            if (limit < 1 || limit > 1000) { throw new IllegalArgumentException("verification batch limit is invalid"); }
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT payload_json,version FROM agent_action_verification WHERE state='PREPARED' "
+                                + "OR (state='OBSERVING' AND next_window_at<=?) ORDER BY CASE WHEN state='PREPARED' "
+                                + "THEN baseline_at ELSE next_window_at END,action_id LIMIT ?",
+                        row -> fromJson(row.getString(1), ActionEffectVerification.class).withVersion(row.getLong(2)),
+                        nowMillis, limit);
+            }
+        }
+    }
+
+    public synchronized Optional<Job> claimJob(String taskId, long expectedAttempt) {
+        return inTransaction(() -> {
+            if (run("UPDATE agent_job SET state='RUNNING',attempt=attempt+1 WHERE task_id=? AND state='PENDING' AND attempt=? AND not_before<=?",
+                    taskId, expectedAttempt, System.currentTimeMillis()) == 0) { return Optional.empty(); }
+            return queryOne("SELECT * FROM agent_job WHERE task_id=?", JdbcAgentStore::readJob, taskId);
+        });
+    }
+
+    public synchronized void finishJob(String taskId, long attempt) {
+        run("UPDATE agent_job SET state='DONE' WHERE task_id=? AND attempt=? AND state='RUNNING'", taskId, attempt);
+    }
+
+    /** Cancel a job that has not yet reached the task registry and persist its cancellation atomically. */
+    public synchronized boolean cancelUnregisteredJob(String taskId, Runnable cancellation) {
+        return inTransaction(() -> {
+            if (run("UPDATE agent_job SET state='DONE' WHERE task_id=? AND state IN ('PENDING','RUNNING')", taskId) != 1) {
+                return false;
+            }
+            cancellation.run();
+            return true;
+        });
+    }
+
+    public synchronized void saveBudget(String taskId, long attempt, Object state) {
+        if (run("UPDATE agent_job SET budget_json=? WHERE task_id=? AND attempt=? AND state='RUNNING'", toJson(state), taskId, attempt) != 1) {
+            throw new IllegalStateException("任务 attempt 已失效，停止迟到执行");
+        }
+    }
+
+    public synchronized boolean currentAttempt(String taskId, long attempt) {
+        return queryOne("SELECT attempt FROM agent_job WHERE task_id=? AND attempt=? AND state='RUNNING'", row -> row.getLong(1), taskId, attempt).isPresent();
+    }
+
+    public synchronized void withCurrentAttempt(String taskId, long attempt, Runnable write) {
+        inTransaction(() -> {
+            if (!currentAttempt(taskId, attempt)) { throw new IllegalStateException("任务 attempt 已过期"); }
+            write.run(); return null;
+        });
+    }
+
+    private void recoverJobs() {
+        // 仅在同一个 Admin 的重启路径调用；不支持并发启动第二个 Agent Admin。
+        run("UPDATE agent_job SET state='DONE' WHERE state IN ('PENDING','RUNNING') AND task_id IN "
+                + "(SELECT task_id FROM agent_task WHERE status NOT IN ('PENDING','RUNNING'))");
+        run("UPDATE agent_job SET state='PENDING' WHERE state='RUNNING'");
+    }
+
+    private void recoverActionCommands() {
+        run("UPDATE agent_action_command SET state='PENDING' WHERE state='RUNNING'");
+    }
+
     @Override
     public void close() {
         try {
@@ -187,12 +654,12 @@ public final class JdbcAgentStore implements AutoCloseable {
             synchronized (JdbcAgentStore.this) {
                 Object[] values = {blankToNull(session.userId()), session.title(),
                         blankToNull(session.activeIncidentId()), session.status().name(),
-                        session.createdAtMillis(), session.lastActiveAtMillis(), session.sessionId()};
+                        session.createdAtMillis(), session.lastActiveAtMillis(), toJson(session.scope()), session.targetNamespace(), session.sessionId()};
                 // 会话上的事件列表不落库：它由 agent_incident.session_id 派生，存两份只会有一天对不上。
                 upsert("UPDATE agent_session SET user_id = ?, title = ?, active_incident_id = ?, status = ?, "
-                                + "created_at = ?, last_active_at = ? WHERE session_id = ?",
+                                + "created_at = ?, last_active_at = ?, scope_json = ?, target_namespace = ? WHERE session_id = ?",
                         "INSERT INTO agent_session (user_id, title, active_incident_id, status, created_at, "
-                                + "last_active_at, session_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                + "last_active_at, scope_json, target_namespace, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         values, values);
             }
         }
@@ -239,14 +706,14 @@ public final class JdbcAgentStore implements AutoCloseable {
         List<String> incidentIds = query("SELECT incident_id FROM agent_incident WHERE session_id = ? "
                 + "ORDER BY created_at, incident_id", result -> result.getString(1), row.sessionId());
         return new Session(row.sessionId(), row.userId(), row.title(), row.activeIncidentId(), row.status(),
-                row.createdAtMillis(), row.lastActiveAtMillis(), incidentIds);
+                row.createdAtMillis(), row.lastActiveAtMillis(), incidentIds).withScope(row.scope(), row.targetNamespace());
     }
 
     private static SessionRow readSessionRow(ResultSet rows) throws SQLException {
         return new SessionRow(rows.getString("session_id"), blankToNull(rows.getString("user_id")),
                 rows.getString("title"), blankToNull(rows.getString("active_incident_id")),
                 SessionStatus.valueOf(rows.getString("status")), rows.getLong("created_at"),
-                rows.getLong("last_active_at"));
+                rows.getLong("last_active_at"), fromJson(rows.getString("scope_json"), com.rover.agent.core.model.ResourceScope.class), Texts.raw(rows.getString("target_namespace")));
     }
 
     // ---------------------------------------------------------------- 消息
@@ -321,13 +788,14 @@ public final class JdbcAgentStore implements AutoCloseable {
                 Object[] values = {incident.sessionId(), incident.origin().name(), incident.status().name(),
                         incident.title(), incident.summary(), target.type().name(), target.value(),
                         incident.timeRange().fromMillis(), incident.timeRange().toMillis(),
-                        incident.createdAtMillis(), System.currentTimeMillis(), incident.incidentId()};
+                        incident.createdAtMillis(), System.currentTimeMillis(), incident.triggeredBy(),
+                        incident.incidentId()};
                 upsert("UPDATE agent_incident SET session_id = ?, origin = ?, status = ?, title = ?, summary = ?, "
                                 + "target_type = ?, target_key = ?, time_from = ?, time_to = ?, created_at = ?, "
-                                + "updated_at = ?, version = version + 1 WHERE incident_id = ?",
+                                + "updated_at = ?, triggered_by = ?, version = version + 1 WHERE incident_id = ?",
                         "INSERT INTO agent_incident (session_id, origin, status, title, summary, target_type, "
-                                + "target_key, time_from, time_to, created_at, updated_at, version, incident_id) "
-                                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+                                + "target_key, time_from, time_to, created_at, updated_at, triggered_by, version, incident_id) "
+                                + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
                         values, values);
             }
         }
@@ -378,7 +846,8 @@ public final class JdbcAgentStore implements AutoCloseable {
         List<String> taskIds = query("SELECT task_id FROM agent_task WHERE incident_id = ? ORDER BY created_at, "
                 + "task_id", result -> result.getString(1), row.incidentId());
         return new Incident(row.incidentId(), row.sessionId(), row.origin(), row.title(), row.status(),
-                row.target(), row.timeRange(), row.summary(), row.createdAtMillis(), row.updatedAtMillis(), taskIds);
+                row.target(), row.timeRange(), row.summary(), row.createdAtMillis(), row.updatedAtMillis(), taskIds,
+                row.triggeredBy());
     }
 
     private static IncidentRow readIncidentRow(ResultSet rows) throws SQLException {
@@ -389,12 +858,51 @@ public final class JdbcAgentStore implements AutoCloseable {
         return new IncidentRow(rows.getString("incident_id"), rows.getString("session_id"),
                 IncidentOrigin.valueOf(rows.getString("origin")), IncidentStatus.valueOf(rows.getString("status")),
                 rows.getString("title"), Texts.raw(rows.getString("summary")), readTarget(rows), timeRange,
-                rows.getLong("created_at"), rows.getLong("updated_at"));
+                rows.getLong("created_at"), rows.getLong("updated_at"), rows.getString("triggered_by"));
     }
 
     // ---------------------------------------------------------------- 任务
 
     private final class Tasks implements AgentTaskRepository {
+
+        @Override public boolean durableEvents() { return true; }
+
+        @Override public void saveEvent(TaskView task, com.rover.agent.core.event.TaskEvent event) {
+            synchronized (JdbcAgentStore.this) {
+                inTransaction(() -> {
+                    if (event.type() != com.rover.agent.core.event.TaskEventType.ANALYSIS_DELTA
+                            && event.type() != com.rover.agent.core.event.TaskEventType.THINKING_DELTA) {
+                        writeTask(task);
+                        writeSteps(task);
+                        writeEvidence(task.taskId(), task.evidence());
+                    }
+                    run("INSERT INTO agent_task_outbox (task_id,event_id,event_json,created_at) VALUES(?,?,?,?)",
+                            task.taskId(), event.eventId(), toJson(event), event.timestampMillis());
+                    var previous = streamSnapshot(task.taskId()).orElse(new com.rover.agent.core.event.TaskSnapshot(task, "", 0, ""));
+                    String text = event.payload() instanceof Map<?,?> map ? String.valueOf(map.getOrDefault("text", null)) : "";
+                    String analysis = previous.analysis() + (event.type() == com.rover.agent.core.event.TaskEventType.ANALYSIS_DELTA ? text : "");
+                    String thinking = previous.thinking() + (event.type() == com.rover.agent.core.event.TaskEventType.THINKING_DELTA ? text : "");
+                    run("MERGE INTO agent_task_stream(task_id,event_id,analysis_text,thinking_text) KEY(task_id) VALUES(?,?,?,?)",
+                            task.taskId(), event.eventId(), analysis, thinking);
+                    return null;
+                });
+            }
+        }
+
+        @Override public List<com.rover.agent.core.event.TaskEvent> eventsAfter(String taskId, long eventId, int limit) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT event_json FROM agent_task_outbox WHERE task_id=? AND event_id>? ORDER BY event_id LIMIT ?",
+                        row -> fromJson(row.getString(1), com.rover.agent.core.event.TaskEvent.class),
+                        taskId, eventId, Math.max(1, Math.min(1000, limit)));
+            }
+        }
+
+        @Override public Optional<com.rover.agent.core.event.TaskSnapshot> streamSnapshot(String taskId) {
+            synchronized (JdbcAgentStore.this) {
+                return find(taskId).flatMap(task -> queryOne("SELECT * FROM agent_task_stream WHERE task_id=?",
+                        row -> new com.rover.agent.core.event.TaskSnapshot(task, row.getString("analysis_text"), row.getLong("event_id"), row.getString("thinking_text")), taskId));
+            }
+        }
 
         @Override
         public void save(TaskView task) {
@@ -554,14 +1062,17 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final class Actions implements AgentActionRepository {
 
         @Override
-        public void save(AgentAction action) {
-            writeAction(action, null);
+        public AgentAction save(AgentAction action) {
+            if (writeAction(action, null) == 0) {
+                throw new ActionUpdateConflictException(action.actionId());
+            }
+            return action.withVersion(Math.addExact(action.version(), 1L));
         }
 
         @Override
         public Optional<AgentAction> find(String actionId) {
             synchronized (JdbcAgentStore.this) {
-                return queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore::readActionRow,
+                return queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore.this::readActionRow,
                         actionId);
             }
         }
@@ -570,7 +1081,83 @@ public final class JdbcAgentStore implements AutoCloseable {
         public List<AgentAction> bySession(String sessionId) {
             synchronized (JdbcAgentStore.this) {
                 return query("SELECT * FROM agent_action WHERE session_id = ? ORDER BY created_at DESC, action_id",
-                        JdbcAgentStore::readActionRow, sessionId);
+                        JdbcAgentStore.this::readActionRow, sessionId);
+            }
+        }
+
+        @Override public List<AgentAction> byStatus(java.util.Set<ActionStatus> statuses, int limit) {
+            if (statuses == null || statuses.isEmpty() || limit < 1 || limit > 1000) {
+                throw new IllegalArgumentException("action status query is invalid");
+            }
+            synchronized (JdbcAgentStore.this) {
+                String marks = String.join(",", java.util.Collections.nCopies(statuses.size(), "?"));
+                Object[] values = new Object[statuses.size() + 1];
+                int index = 0;
+                for (ActionStatus status : statuses) { values[index++] = status.name(); }
+                values[index] = limit;
+                return query("SELECT * FROM agent_action WHERE status IN (" + marks
+                                + ") ORDER BY updated_at DESC, action_id LIMIT ?", JdbcAgentStore.this::readActionRow, values);
+            }
+        }
+
+        @Override
+        public List<RemediationPlan> planVersions(String planId) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT plan_json FROM agent_remediation_plan WHERE plan_id = ? ORDER BY plan_version",
+                        rows -> fromJson(rows.getString("plan_json"), RemediationPlan.class), planId);
+            }
+        }
+
+        @Override
+        public List<ActionApproval> approvals(String actionId, ActionApproval.Stage stage, int planVersion,
+                                              String planHash, String policyVersion) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT * FROM agent_action_approval WHERE action_id=? AND approval_stage=? "
+                                + "AND plan_version=? AND plan_hash=? AND policy_version=? "
+                                + "ORDER BY approved_at, approver",
+                        row -> new ActionApproval(row.getString("action_id"),
+                                ActionApproval.Stage.valueOf(row.getString("approval_stage")),
+                                row.getInt("plan_version"), row.getString("plan_hash"),
+                                row.getString("policy_version"), row.getString("approver"), row.getLong("approved_at")),
+                        actionId, stage.name(), planVersion, planHash, policyVersion);
+            }
+        }
+
+        @Override
+        public boolean recordApproval(ActionApproval approval) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    AgentAction current = actions.find(approval.actionId()).orElseThrow(() ->
+                            new ActionUpdateConflictException(approval.actionId()));
+                    ActionStatus expected = approval.stage() == ActionApproval.Stage.APPLY
+                            ? ActionStatus.PENDING_APPROVAL : ActionStatus.SUCCESS;
+                    int planVersion = current.plan() == null ? ActionApproval.LEGACY_PLAN_VERSION
+                            : current.plan().planVersion();
+                    String planHash = current.plan() == null ? ActionApproval.LEGACY_PLAN_HASH
+                            : current.plan().planHash();
+                    if (current.status() != expected || approval.planVersion() != planVersion
+                            || !approval.planHash().equals(planHash)) {
+                        throw new ActionUpdateConflictException(approval.actionId());
+                    }
+                    try (PreparedStatement statement = connection.prepareStatement(
+                            "INSERT INTO agent_action_approval(action_id,approval_stage,plan_version,plan_hash,"
+                                    + "policy_version,approver,approved_at) VALUES(?,?,?,?,?,?,?)")) {
+                        statement.setString(1, approval.actionId());
+                        statement.setString(2, approval.stage().name());
+                        statement.setInt(3, approval.planVersion());
+                        statement.setString(4, approval.planHash());
+                        statement.setString(5, approval.policyVersion());
+                        statement.setString(6, approval.approver());
+                        statement.setLong(7, approval.approvedAtMillis());
+                        statement.executeUpdate();
+                    } catch (SQLException ex) {
+                        if ("23505".equals(ex.getSQLState())) { return false; }
+                        throw new IllegalStateException("保存审批回执失败", ex);
+                    }
+                    String namespace = sessions.find(current.sessionId()).map(Session::targetNamespace).orElse("");
+                    appendAudit("ACTION_APPROVAL_RECORDED", approval.actionId(), approval.approver(), namespace, approval);
+                    return true;
+                });
             }
         }
 
@@ -579,12 +1166,17 @@ public final class JdbcAgentStore implements AutoCloseable {
                                                 UnaryOperator<AgentAction> mutation) {
             synchronized (JdbcAgentStore.this) {
                 AgentAction current = queryOne("SELECT * FROM agent_action WHERE action_id = ?",
-                        JdbcAgentStore::readActionRow, actionId).orElse(null);
+                        JdbcAgentStore.this::readActionRow, actionId).orElse(null);
                 if (current == null || current.status() != expected) {
                     return Optional.empty();
                 }
                 AgentAction moved = mutation.apply(current);
-                return writeAction(moved, expected) == 0 ? Optional.empty() : Optional.of(moved);
+                if (!actionId.equals(moved.actionId())) {
+                    throw new IllegalArgumentException("状态迁移不能改变变更 ID");
+                }
+                moved = moved.withVersion(current.version());
+                return writeAction(moved, expected) == 0 ? Optional.empty()
+                        : Optional.of(moved.withVersion(Math.addExact(current.version(), 1L)));
             }
         }
 
@@ -596,12 +1188,184 @@ public final class JdbcAgentStore implements AutoCloseable {
         }
     }
 
+    private final class ActionCommands implements ActionCommandRepository {
+
+        @Override
+        public void enqueue(ActionExecutionCommand command) {
+            synchronized (JdbcAgentStore.this) {
+                inTransaction(() -> {
+                    ActionCommandRepository.Job existing = queryOne("SELECT * FROM agent_action_command WHERE command_id=?",
+                            JdbcAgentStore::readActionCommandJob, command.commandId()).orElse(null);
+                    if (existing != null) {
+                        if ("DONE".equals(existing.state())) {
+                            run("UPDATE agent_action_command SET state='PENDING',actor=?,"
+                                            + "created_at=?,not_before=0,last_error=NULL WHERE command_id=? AND state='DONE'",
+                                    command.actor(), command.createdAtMillis(), command.commandId());
+                            appendAudit("ACTION_COMMAND_REQUEUED", command.actionId(), command.actor(),
+                                    command.targetNamespace(), command);
+                        }
+                        return null;
+                    }
+                    run("INSERT INTO agent_action_command(command_id,action_id,action_type,phase,scope_json,"
+                                    + "control_target_id,target_namespace,plan_version,plan_hash,policy_version,operation_id,actor,"
+                                    + "attempt,state,not_before,created_at,last_error) "
+                                    + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,0,'PENDING',0,?,NULL)",
+                            command.commandId(), command.actionId(), command.actionType().name(), command.phase().name(),
+                            toJson(command.scope()), command.controlTargetId(), command.targetNamespace(),
+                            command.planVersion(), command.planHash(), command.policyVersion(), command.operationId(), command.actor(),
+                            command.createdAtMillis());
+                    appendAudit("ACTION_COMMAND_QUEUED", command.actionId(), command.actor(),
+                            command.targetNamespace(), command);
+                    return null;
+                });
+            }
+        }
+
+        @Override
+        public List<ActionCommandRepository.Job> pending(long nowMillis, int limit) {
+            if (limit < 1 || limit > 1000) { throw new IllegalArgumentException("command batch limit is invalid"); }
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT * FROM agent_action_command WHERE state='PENDING' AND not_before<=? "
+                                + "ORDER BY created_at,command_id LIMIT ?", JdbcAgentStore::readActionCommandJob,
+                        nowMillis, limit);
+            }
+        }
+
+        @Override
+        public Optional<ActionCommandRepository.Job> claim(String commandId, long expectedAttempt) {
+            synchronized (JdbcAgentStore.this) {
+                int changed = run("UPDATE agent_action_command SET state='RUNNING',attempt=attempt+1 "
+                                + "WHERE command_id=? AND state='PENDING' AND attempt=? AND not_before<=?",
+                        commandId, expectedAttempt, System.currentTimeMillis());
+                return changed == 1 ? queryOne("SELECT * FROM agent_action_command WHERE command_id=?",
+                        JdbcAgentStore::readActionCommandJob, commandId) : Optional.empty();
+            }
+        }
+
+        @Override
+        public void finish(String commandId, long attempt) {
+            synchronized (JdbcAgentStore.this) {
+                if (run("UPDATE agent_action_command SET state='DONE',last_error=NULL "
+                                + "WHERE command_id=? AND state='RUNNING' AND attempt=?", commandId, attempt) != 1) {
+                    throw new IllegalStateException("action command attempt is stale");
+                }
+            }
+        }
+
+        @Override
+        public void retry(String commandId, long attempt, long notBeforeMillis, String reason) {
+            synchronized (JdbcAgentStore.this) {
+                if (run("UPDATE agent_action_command SET state='PENDING',not_before=?,last_error=? "
+                                + "WHERE command_id=? AND state='RUNNING' AND attempt=?",
+                        notBeforeMillis, reason, commandId, attempt) != 1) {
+                    throw new IllegalStateException("action command attempt is stale");
+                }
+            }
+        }
+    }
+
     /**
-     * 写入一行变更记录：命中则更新，未命中则插入。
+     * 按行版本写入；更新失败不能退化为插入，避免复活已删除记录。
      *
      * @param expectedStatus 非空时作为更新的状态条件（CAS）；返回受影响行数，0 表示状态已被别人改过
      */
     private int writeAction(AgentAction action, ActionStatus expectedStatus) {
+        synchronized (this) {
+            return inTransaction(() -> {
+                AgentAction current = actions.find(action.actionId()).orElse(null);
+                if (current == null ? action.version() != 0
+                        : action.version() == 0 || action.version() != current.version()) { return 0; }
+                if (expectedStatus != null && (current == null || current.status() != expectedStatus)) { return 0; }
+                if (current != null) {
+                    action.requireSameIntent(current);
+                    if (current.status() == ActionStatus.SUPERSEDED && action.status() != current.status()) {
+                        throw new ActionUpdateConflictException(action.actionId());
+                    }
+                    if (action.plan() != null && action.status() == ActionStatus.EXECUTING
+                            && latestPlan(action.plan().planId()).planVersion() != action.plan().planVersion()) {
+                        throw new ActionUpdateConflictException(action.actionId());
+                    }
+                } else {
+                    // 删除工作区只删除运行记录；不得重用历史动作 ID 继承旧计划或审批权限。
+                    if (planForAction(action.actionId()).isPresent()) {
+                        throw new ActionUpdateConflictException(action.actionId());
+                    }
+                    AgentAction parent = validateNewPlan(action);
+                    if (parent != null) {
+                        AgentAction superseded = parent.superseded(action.createdAtMillis());
+                        if (writeActionRow(superseded, ActionStatus.PENDING_APPROVAL) != 1) {
+                            throw new ActionUpdateConflictException(parent.actionId());
+                        }
+                        auditAction(superseded);
+                    }
+                }
+                int changed = writeActionRow(action, expectedStatus);
+                if (changed != 0) {
+                    if (current == null && action.plan() != null) {
+                        RemediationPlan plan = action.plan();
+                        run("INSERT INTO agent_remediation_plan(plan_id,plan_version,action_id,session_id,plan_hash,plan_json,created_at) "
+                                        + "VALUES(?,?,?,?,?,?,?)", plan.planId(), plan.planVersion(), action.actionId(),
+                                action.sessionId(), plan.planHash(), toJson(plan), plan.createdAtMillis());
+                        appendAudit("REMEDIATION_PLAN_CREATED", plan.planId(),
+                                com.rover.agent.core.util.AuditActor.current(action.requestedBy()),
+                                sessions.find(action.sessionId()).map(Session::targetNamespace).orElse(""), plan);
+                    }
+                    auditAction(action);
+                }
+                return changed;
+            });
+        }
+    }
+
+    private void auditAction(AgentAction action) {
+        appendAudit("ACTION_" + action.status().name(), action.actionId(),
+                com.rover.agent.core.util.AuditActor.current(action.approvedBy() == null ? action.requestedBy() : action.approvedBy()),
+                sessions.find(action.sessionId()).map(Session::targetNamespace).orElse(""),
+                action.withVersion(Math.addExact(action.version(), 1L)));
+    }
+
+    private Optional<RemediationPlan> planForAction(String actionId) {
+        return queryOne("SELECT plan_json FROM agent_remediation_plan WHERE action_id = ?",
+                rows -> fromJson(rows.getString("plan_json"), RemediationPlan.class), actionId);
+    }
+
+    private RemediationPlan latestPlan(String planId) {
+        List<RemediationPlan> versions = actions.planVersions(planId);
+        return versions.isEmpty() ? null : versions.get(versions.size() - 1);
+    }
+
+    private AgentAction validateNewPlan(AgentAction action) {
+        RemediationPlan plan = action.plan();
+        if (plan == null) { return null; }
+        plan.requireMatches(action);
+        if (action.status() != ActionStatus.PENDING_APPROVAL || action.applyOperationId() != null
+                || action.rollbackOperationId() != null || action.approvedAtMillis() != 0) {
+            throw new IllegalArgumentException("新计划必须从待批准状态开始");
+        }
+        RemediationPlan previous = latestPlan(plan.planId());
+        if (previous == null) {
+            if (plan.planVersion() != 1) { throw new ActionUpdateConflictException(action.actionId()); }
+            return null;
+        }
+        if (plan.planVersion() != previous.planVersion() + 1) {
+            throw new ActionUpdateConflictException(action.actionId());
+        }
+        String parentId = queryOne("SELECT action_id FROM agent_remediation_plan WHERE plan_id = ? AND plan_version = ?",
+                rows -> rows.getString("action_id"), plan.planId(), previous.planVersion()).orElseThrow();
+        AgentAction parent = actions.find(parentId).orElse(null);
+        if (parent == null || parent.status() != ActionStatus.PENDING_APPROVAL
+                || !Objects.equals(parent.sessionId(), action.sessionId())
+                || !Objects.equals(parent.resourceRef(), action.resourceRef())
+                || !Objects.equals(parent.routeId(), action.routeId())
+                || !Objects.equals(parent.businessPrefix(), action.businessPrefix())
+                || !Objects.equals(parent.serviceName(), action.serviceName())
+                || !Objects.equals(parent.group(), action.group()) || parent.type() != action.type()) {
+            throw new ActionUpdateConflictException(action.actionId());
+        }
+        return parent;
+    }
+
+    private int writeActionRow(AgentAction action, ActionStatus expectedStatus) {
         synchronized (JdbcAgentStore.this) {
             Object[] values = {action.sessionId(), action.incidentId(), action.taskId(), action.type().name(),
                     action.status().name(), action.routeId(), blankToNull(action.businessPrefix()),
@@ -611,7 +1375,7 @@ public final class JdbcAgentStore implements AutoCloseable {
                     action.expectedRevision(), action.applyOperationId(),
                     action.appliedRevision(), action.rollbackOperationId(), action.requestedBy(),
                     action.approvedBy(), action.approvedAtMillis(), toJson(action.preview()), action.impact(),
-                    action.errorMessage(), action.createdAtMillis(), action.updatedAtMillis()};
+                    action.errorMessage(), action.createdAtMillis(), action.updatedAtMillis(), toJson(action.resourceRef())};
             String update = "UPDATE agent_action SET session_id = ?, incident_id = ?, task_id = ?, action_type = ?, "
                     + "status = ?, route_id = ?, business_prefix = ?, service_name = ?, target_group = ?, "
                     + "before_weight = ?, desired_weight = ?, requested_value = ?, requested_unit = ?, "
@@ -619,27 +1383,31 @@ public final class JdbcAgentStore implements AutoCloseable {
                     + "apply_operation_id = ?, "
                     + "applied_revision = ?, rollback_operation_id = ?, requested_by = ?, approved_by = ?, "
                     + "approved_at = ?, preview_json = ?, impact = ?, error_message = ?, created_at = ?, "
-                    + "updated_at = ?, version = version + 1 WHERE action_id = ?";
+                    + "updated_at = ?, resource_ref_json = ?, version = version + 1 WHERE action_id = ? AND version = ?";
+            Object[] updateValues = append(append(values, action.actionId()), action.version());
             if (expectedStatus != null) {
-                return run(update + " AND status = ?", append(append(values, action.actionId()),
-                        expectedStatus.name()));
+                return run(update + " AND status = ?", append(updateValues, expectedStatus.name()));
             }
-            if (run(update, append(values, action.actionId())) > 0) {
-                return 1;
+            if (action.version() > 0) {
+                return run(update, updateValues);
+            }
+            if (queryOne("SELECT * FROM agent_action WHERE action_id = ?", JdbcAgentStore.this::readActionRow,
+                    action.actionId()).isPresent()) {
+                return 0;
             }
             run("INSERT INTO agent_action (session_id, incident_id, task_id, action_type, status, route_id, "
                             + "business_prefix, service_name, target_group, before_weight, desired_weight, "
                             + "requested_value, requested_unit, before_traffic_percent, desired_traffic_percent, "
                             + "expected_revision, apply_operation_id, applied_revision, rollback_operation_id, "
                             + "requested_by, approved_by, approved_at, preview_json, impact, error_message, "
-                            + "created_at, updated_at, version, action_id) "
+                            + "created_at, updated_at, resource_ref_json, version, action_id) "
                             + "VALUES (" + "?, ".repeat(values.length) + "1, ?)",
                     append(values, action.actionId()));
             return 1;
         }
     }
 
-    private static AgentAction readActionRow(ResultSet rows) throws SQLException {
+    private AgentAction readActionRow(ResultSet rows) throws SQLException {
         return new AgentAction(rows.getString("action_id"), rows.getString("session_id"),
                 rows.getString("incident_id"), rows.getString("task_id"),
                 ActionType.valueOf(rows.getString("action_type")), ActionStatus.valueOf(rows.getString("status")),
@@ -653,7 +1421,9 @@ public final class JdbcAgentStore implements AutoCloseable {
                 rows.getString("rollback_operation_id"), rows.getString("requested_by"),
                 rows.getString("approved_by"), rows.getLong("approved_at"),
                 orEmpty(fromJson(rows.getString("preview_json"), STRINGS)), Texts.raw(rows.getString("impact")),
-                rows.getString("error_message"), rows.getLong("created_at"), rows.getLong("updated_at"));
+                rows.getString("error_message"), rows.getLong("created_at"), rows.getLong("updated_at"),
+                rows.getLong("version")).withResourceRef(fromJson(rows.getString("resource_ref_json"), com.rover.agent.core.model.ResourceRef.class))
+                .withPlan(planForAction(rows.getString("action_id")).orElse(null));
     }
 
     /** 单位列：历史数据没有单位时存 NULL，读回来也是 null，不要退化成某个默认值。 */
@@ -686,7 +1456,13 @@ public final class JdbcAgentStore implements AutoCloseable {
                 Texts.raw(row.path()), row.target(), row.question(), row.createdAtMillis(), row.completedAtMillis(),
                 steps, assembleReport(row, evidence), row.error(), row.clarification(), row.taskType(),
                 fromJson(row.planJson(), InvestigationPlan.class), orEmpty(fromJson(row.executedJson(),
-                        CAPABILITIES)), orEmpty(fromJson(row.recallsJson(), RECALLS)), evidence);
+                        CAPABILITIES)), orEmpty(fromJson(row.recallsJson(), RECALLS)), evidence,modelInvocations(row.taskId()));
+    }
+
+    /** 模型调用与预算共用同一持久账本，避免两份状态在崩溃点不一致；旧任务没有账本则返回空。 */
+    private List<com.rover.agent.core.model.ModelInvocation> modelInvocations(String taskId) {
+        return queryOne("SELECT budget_json FROM agent_job WHERE task_id=? AND budget_json IS NOT NULL",row->row.getString(1),taskId)
+                .map(json->fromJson(json,com.rover.agent.runtime.task.AgentRunBudget.State.class).modelInvocations()).orElse(List.of());
     }
 
     /**
@@ -757,13 +1533,19 @@ public final class JdbcAgentStore implements AutoCloseable {
 
     private void writeEvidence(String taskId, List<Evidence> reported) {
         List<Evidence> evidence = reported == null ? List.of() : reported;
+        List<Evidence> saved = query("SELECT * FROM agent_evidence WHERE task_id=? ORDER BY sequence_no",
+                JdbcAgentStore::readEvidence, taskId);
+        if (evidence.size() < saved.size() || !evidence.subList(0, saved.size()).equals(saved)) {
+            throw new IllegalArgumentException("已采集证据只允许追加；修正事实必须生成新证据 ID");
+        }
         List<String> kept = new ArrayList<>();
         int sequence = 0;
         for (Evidence item : evidence) {
             int order = sequence++;
             kept.add(item.evidenceId());
             Object[] values = {taskId, item.type().name(), order, item.source(), item.title(), item.summary(),
-                    item.rawReference(), toJson(item.metadata()), item.observedAtMillis()};
+                    item.rawReference(), toJson(Map.of("evidenceEnvelopeVersion", 1, "metadata", item.metadata(),
+                            "envelope", item.envelope())), item.observedAtMillis()};
             upsert("UPDATE agent_evidence SET task_id = ?, evidence_type = ?, sequence_no = ?, source = ?, title = ?, "
                             + "summary = ?, raw_reference = ?, payload_json = ?, observed_at = ? WHERE evidence_id = ?",
                     "INSERT INTO agent_evidence (task_id, evidence_type, sequence_no, source, title, summary, "
@@ -809,20 +1591,32 @@ public final class JdbcAgentStore implements AutoCloseable {
     }
 
     private static Evidence readEvidence(ResultSet rows) throws SQLException {
+        String payload = rows.getString("payload_json");
+        com.rover.agent.core.model.EvidenceEnvelope envelope = null;
+        Map<String, String> metadata;
+        try {
+            var json = payload == null || payload.isBlank() ? JSON.createObjectNode() : JSON.readTree(payload);
+            if (json.has("evidenceEnvelopeVersion") && json.path("evidenceEnvelopeVersion").isIntegralNumber()) {
+                if (json.path("evidenceEnvelopeVersion").asInt() != 1) { throw new IllegalArgumentException("不支持的证据版本"); }
+                metadata = JSON.convertValue(json.required("metadata"), new TypeReference<Map<String, String>>() { });
+                envelope = JSON.convertValue(json.required("envelope"), com.rover.agent.core.model.EvidenceEnvelope.class);
+            } else { metadata = metadataOf(payload); }
+        } catch (Exception ex) { throw new SQLException("读取证据契约失败", ex); }
         return new Evidence(rows.getString("evidence_id"), rows.getString("task_id"),
                 EvidenceType.valueOf(rows.getString("evidence_type")), rows.getString("source"),
                 rows.getString("title"), rows.getString("summary"), rows.getString("raw_reference"),
-                metadataOf(rows.getString("payload_json")), rows.getLong("observed_at"));
+                metadata, rows.getLong("observed_at"), envelope);
     }
 
     // ---------------------------------------------------------------- 行投影
 
     private record SessionRow(String sessionId, String userId, String title, String activeIncidentId,
-                              SessionStatus status, long createdAtMillis, long lastActiveAtMillis) { }
+                              SessionStatus status, long createdAtMillis, long lastActiveAtMillis,
+                              com.rover.agent.core.model.ResourceScope scope, String targetNamespace) { }
 
     private record IncidentRow(String incidentId, String sessionId, IncidentOrigin origin, IncidentStatus status,
                                String title, String summary, ResourceTarget target, TimeRange timeRange,
-                               long createdAtMillis, long updatedAtMillis) { }
+                               long createdAtMillis, long updatedAtMillis, String triggeredBy) { }
 
     private record TaskRow(String taskId, String sessionId, String incidentId, TaskType taskType, TaskStatus status,
                            String question, String path, ResourceTarget target, AgentStepType currentStage,
@@ -1056,13 +1850,145 @@ public final class JdbcAgentStore implements AutoCloseable {
                                 "ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS before_traffic_percent DOUBLE",
                                 "ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS desired_traffic_percent DOUBLE"),
                         List.of(),
-                        List.of()));
+                        List.of()),
+                new Migration(6, "incident: retain authenticated trigger separately from handler",
+                        List.of("ALTER TABLE agent_incident ADD COLUMN IF NOT EXISTS triggered_by VARCHAR(128)"),
+                        List.of(), List.of()),
+                new Migration(7, "bind action to resource identity and session scope",
+                        List.of("ALTER TABLE agent_action ADD COLUMN IF NOT EXISTS resource_ref_json TEXT",
+                                "ALTER TABLE agent_session ADD COLUMN IF NOT EXISTS scope_json TEXT",
+                                "ALTER TABLE agent_session ADD COLUMN IF NOT EXISTS target_namespace VARCHAR(64)"),
+                        List.of(), List.of()),
+                new Migration(8, "transactional action audit and task event outbox",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_audit (audit_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, "
+                                        + "event_kind VARCHAR(128) NOT NULL, aggregate_id VARCHAR(128) NOT NULL, actor VARCHAR(128), "
+                                        + "resource_namespace TEXT, payload_json TEXT NOT NULL, created_at BIGINT NOT NULL)",
+                                "CREATE INDEX IF NOT EXISTS idx_agent_audit_aggregate ON agent_audit(aggregate_id,audit_id)",
+                                "CREATE TABLE IF NOT EXISTS agent_task_outbox (task_id VARCHAR(64) NOT NULL, event_id BIGINT NOT NULL, "
+                                        + "event_json TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(task_id,event_id))",
+                                "CREATE TABLE IF NOT EXISTS agent_task_stream (task_id VARCHAR(64) PRIMARY KEY, event_id BIGINT NOT NULL, analysis_text TEXT NOT NULL, thinking_text TEXT NOT NULL)"),
+                        List.of(), List.of()),
+                new Migration(9, "single Admin durable read jobs and execution budget",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_job (task_id VARCHAR(64) PRIMARY KEY REFERENCES agent_task(task_id) ON DELETE CASCADE, "
+                                        + "job_kind VARCHAR(32) NOT NULL, payload_json TEXT NOT NULL, attempt BIGINT NOT NULL, state VARCHAR(32) NOT NULL, "
+                                        + "budget_json TEXT, not_before BIGINT NOT NULL)",
+                                "CREATE INDEX IF NOT EXISTS idx_agent_job_due ON agent_job(state,not_before)"), List.of(), List.of()),
+                new Migration(10, "durable change timeline and source baselines",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_change_event (resource_namespace VARCHAR(64) NOT NULL, "
+                                        + "event_id VARCHAR(64) NOT NULL, source_id VARCHAR(255) NOT NULL, source_event_id VARCHAR(255) NOT NULL, "
+                                        + "event_kind VARCHAR(64) NOT NULL, range_from BIGINT NOT NULL, range_to BIGINT NOT NULL, observed_at BIGINT NOT NULL, "
+                                        + "route_id VARCHAR(255) NOT NULL, route_prefix VARCHAR(255) NOT NULL, component VARCHAR(255) NOT NULL, "
+                                        + "intent_digest VARCHAR(64) NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(resource_namespace,event_id), "
+                                        + "UNIQUE(resource_namespace,source_id,source_event_id))",
+                                "CREATE INDEX IF NOT EXISTS idx_change_window ON agent_change_event(resource_namespace,range_from,range_to)",
+                                "CREATE INDEX IF NOT EXISTS idx_change_route ON agent_change_event(resource_namespace,source_id,route_prefix,range_to)",
+                                "CREATE TABLE IF NOT EXISTS agent_change_link (resource_namespace VARCHAR(64) NOT NULL,event_id VARCHAR(64) NOT NULL, "
+                                        + "link_kind VARCHAR(32) NOT NULL,resource_id VARCHAR(255) NOT NULL, PRIMARY KEY(resource_namespace,event_id,link_kind,resource_id), "
+                                        + "FOREIGN KEY(resource_namespace,event_id) REFERENCES agent_change_event(resource_namespace,event_id) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_change_resource ON agent_change_link(resource_namespace,link_kind,resource_id,event_id)",
+                                "CREATE TABLE IF NOT EXISTS agent_timeline_source (resource_namespace VARCHAR(64) NOT NULL,source_id VARCHAR(255) NOT NULL, "
+                                        + "payload_json TEXT NOT NULL,PRIMARY KEY(resource_namespace,source_id))"), List.of(), List.of()),
+                new Migration(11, "immutable remediation plan versions",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_remediation_plan (plan_id VARCHAR(128) NOT NULL, "
+                                        + "plan_version INT NOT NULL, action_id VARCHAR(64) NOT NULL UNIQUE, "
+                                        + "session_id VARCHAR(64) NOT NULL, plan_hash VARCHAR(64) NOT NULL, "
+                                        + "plan_json TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(plan_id,plan_version))",
+                                "CREATE INDEX IF NOT EXISTS idx_remediation_plan_session ON agent_remediation_plan(session_id,created_at)"),
+                        List.of(), List.of()),
+                new Migration(12, "immutable plan and policy scoped approvals",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_approval ("
+                                        + "approval_id BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY, "
+                                        + "action_id VARCHAR(64) NOT NULL, approval_stage VARCHAR(16) NOT NULL, "
+                                        + "plan_version INT NOT NULL, plan_hash VARCHAR(64) NOT NULL, "
+                                        + "policy_version VARCHAR(128) NOT NULL, approver VARCHAR(128) NOT NULL, "
+                                        + "approved_at BIGINT NOT NULL, "
+                                        + "CONSTRAINT uq_action_approval UNIQUE(action_id,approval_stage,plan_version,"
+                                        + "plan_hash,policy_version,approver), "
+                                        + "FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)"),
+                        List.of(), List.of(new Index("idx_action_approval_lookup",
+                                "CREATE INDEX idx_action_approval_lookup ON agent_action_approval"
+                                        + "(action_id,approval_stage,plan_version,policy_version)"))),
+                new Migration(13, "typed durable action commands by managed target",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_command ("
+                                        + "command_id VARCHAR(256) PRIMARY KEY, action_id VARCHAR(64) NOT NULL, "
+                                        + "action_type VARCHAR(64) NOT NULL, phase VARCHAR(16) NOT NULL, "
+                                        + "scope_json TEXT, control_target_id VARCHAR(255) NOT NULL, "
+                                        + "target_namespace VARCHAR(255) NOT NULL, plan_version INT NOT NULL, "
+                                        + "plan_hash VARCHAR(64) NOT NULL, policy_version VARCHAR(128) NOT NULL, "
+                                        + "operation_id VARCHAR(64), actor VARCHAR(128), "
+                                        + "attempt BIGINT NOT NULL, state VARCHAR(16) NOT NULL, not_before BIGINT NOT NULL, "
+                                        + "created_at BIGINT NOT NULL, last_error TEXT, "
+                                        + "FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_action_command_due ON agent_action_command(state,not_before,created_at)",
+                                "CREATE INDEX IF NOT EXISTS idx_action_command_target ON agent_action_command(target_namespace,control_target_id,created_at)"),
+                        List.of(), List.of()),
+                new Migration(14, "separate action business effect verification history",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_verification ("
+                                        + "action_id VARCHAR(64) NOT NULL, phase VARCHAR(24) NOT NULL, "
+                                        + "plan_version INT NOT NULL, plan_hash VARCHAR(64) NOT NULL, "
+                                        + "state VARCHAR(16) NOT NULL, outcome VARCHAR(32) NOT NULL, "
+                                        + "baseline_at BIGINT NOT NULL, applied_at BIGINT NOT NULL, next_window_at BIGINT NOT NULL, "
+                                        + "deadline_at BIGINT NOT NULL, windows_seen INT NOT NULL, recovered_windows INT NOT NULL, "
+                                        + "payload_json TEXT NOT NULL, version BIGINT NOT NULL, "
+                                        + "PRIMARY KEY(action_id,phase), FOREIGN KEY(action_id) REFERENCES agent_action(action_id) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_action_verification_due ON agent_action_verification(state,next_window_at,action_id)"),
+                        List.of(), List.of()),
+                new Migration(15, "alert delivery idempotency receipts and active lifecycle",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_alert_delivery ("
+                                        + "source_id VARCHAR(128) NOT NULL, delivery_id VARCHAR(128) NOT NULL, "
+                                        + "alert_key VARCHAR(256) NOT NULL, event_state VARCHAR(16) NOT NULL, "
+                                        + "payload_fingerprint VARCHAR(64) NOT NULL, generation BIGINT NOT NULL, "
+                                        + "session_id VARCHAR(64), incident_id VARCHAR(64), task_id VARCHAR(64), "
+                                        + "accepted_at BIGINT NOT NULL, PRIMARY KEY(source_id,delivery_id))",
+                                "CREATE TABLE IF NOT EXISTS agent_alert_lifecycle ("
+                                        + "source_id VARCHAR(128) NOT NULL, alert_key VARCHAR(256) NOT NULL, "
+                                        + "active BOOLEAN NOT NULL, path VARCHAR(512) NOT NULL, generation BIGINT NOT NULL, "
+                                        + "session_id VARCHAR(64), incident_id VARCHAR(64), task_id VARCHAR(64), "
+                                        + "last_state VARCHAR(16) NOT NULL, last_fingerprint VARCHAR(64), updated_at BIGINT NOT NULL, "
+                                        + "PRIMARY KEY(source_id,alert_key))",
+                                "CREATE INDEX IF NOT EXISTS idx_alert_delivery_accepted ON agent_alert_delivery(accepted_at)"),
+                        List.of(), List.of()),
+                new Migration(16, "versioned narrowly scoped autonomous action policies",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_auto_policy ("
+                                        + "policy_id VARCHAR(64) NOT NULL, policy_version BIGINT NOT NULL, "
+                                        + "target_namespace VARCHAR(128) NOT NULL, enabled BOOLEAN NOT NULL, "
+                                        + "payload_json TEXT NOT NULL, updated_at BIGINT NOT NULL, "
+                                        + "PRIMARY KEY(policy_id,policy_version))",
+                                "CREATE INDEX IF NOT EXISTS idx_agent_auto_policy_target ON agent_auto_policy(target_namespace,enabled,policy_id,policy_version)"),
+                        List.of(), List.of()),
+                new Migration(17, "autonomous route execution lock and rolling impact budget",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_budget ("
+                                        + "resource_key VARCHAR(512) PRIMARY KEY, locked_action VARCHAR(64), locked_reservation VARCHAR(128), "
+                                        + "budget_window BIGINT NOT NULL, cooldown_until BIGINT NOT NULL, "
+                                        + "reserved_percent DOUBLE NOT NULL, reserved_cooldown BIGINT NOT NULL, "
+                                        + "reserved_direction INT NOT NULL, reserved_budgeted BOOLEAN NOT NULL)",
+                                "CREATE TABLE IF NOT EXISTS agent_action_budget_event ("
+                                        + "resource_key VARCHAR(512) NOT NULL, action_id VARCHAR(64) NOT NULL, reservation_id VARCHAR(64) NOT NULL, "
+                                        + "event_order BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL, applied_at BIGINT NOT NULL, impact_percent DOUBLE NOT NULL, direction INT NOT NULL, "
+                                        + "PRIMARY KEY(resource_key,reservation_id), FOREIGN KEY(resource_key) "
+                                        + "REFERENCES agent_action_budget(resource_key) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_action_budget_recent ON agent_action_budget_event(resource_key,applied_at,event_order)"),
+                        List.of(), List.of()),
+                new Migration(18, "shadow action evidence and versioned certification records",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_action_shadow_run ("
+                                        + "run_id VARCHAR(64) PRIMARY KEY, subject_hash VARCHAR(64) NOT NULL, scope_key VARCHAR(512) NOT NULL, "
+                                        + "observed_at BIGINT NOT NULL, run_order BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL, payload_json TEXT NOT NULL)",
+                                "CREATE INDEX IF NOT EXISTS idx_shadow_run_subject ON agent_action_shadow_run(subject_hash,observed_at)",
+                                "CREATE INDEX IF NOT EXISTS idx_shadow_run_scope ON agent_action_shadow_run(scope_key,observed_at)",
+                                "CREATE TABLE IF NOT EXISTS agent_action_certification ("
+                                        + "subject_hash VARCHAR(64) NOT NULL, certification_version BIGINT NOT NULL, scope_key VARCHAR(512) NOT NULL, "
+                                        + "updated_at BIGINT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(subject_hash,certification_version))",
+                                "CREATE INDEX IF NOT EXISTS idx_action_cert_scope ON agent_action_certification(scope_key,subject_hash,certification_version)"),
+                        List.of(), List.of()));
 
     private void migrate() throws SQLException {
         // applied_at 用毫秒时间戳：与业务表同一口径，也不依赖各驱动对 TIMESTAMP 的绑定细节。
         execute("CREATE TABLE IF NOT EXISTS agent_schema_migrations ("
                 + "version INT PRIMARY KEY, description VARCHAR(255), applied_at BIGINT NOT NULL)");
         int current = currentVersion();
+        if (current > MIGRATIONS.get(MIGRATIONS.size() - 1).version()) {
+            throw new IllegalStateException("数据库版本高于当前程序，禁止降级启动");
+        }
         for (Migration migration : MIGRATIONS) {
             if (migration.version() > current) {
                 applyMigration(migration);
@@ -1139,7 +2065,7 @@ public final class JdbcAgentStore implements AutoCloseable {
         String expected = name.toLowerCase(Locale.ROOT);
         Set<String> found = new HashSet<>();
         for (String table : List.of("agent_message", "agent_incident", "agent_task", "agent_step", "agent_evidence",
-                "agent_checkpoint", "agent_action")) {
+                "agent_checkpoint", "agent_action", "agent_action_approval")) {
             for (String candidate : List.of(table, table.toUpperCase(Locale.ROOT))) {
                 try (ResultSet indexes = metadata.getIndexInfo(null, null, candidate, false, false)) {
                     while (indexes.next()) {
@@ -1160,7 +2086,8 @@ public final class JdbcAgentStore implements AutoCloseable {
      */
     private void recoverInterrupted() {
         synchronized (this) {
-            List<TaskRow> leftovers = query("SELECT * FROM agent_task WHERE status IN (?, ?) ORDER BY created_at",
+            List<TaskRow> leftovers = query("SELECT * FROM agent_task WHERE status IN (?, ?) AND NOT EXISTS "
+                            + "(SELECT 1 FROM agent_job WHERE agent_job.task_id=agent_task.task_id AND state='PENDING') ORDER BY created_at",
                     JdbcAgentStore::readTaskRow, TaskStatus.PENDING.name(), TaskStatus.RUNNING.name());
             for (TaskRow row : leftovers) {
                 String reason = checkpoints.latest(row.taskId())
@@ -1181,26 +2108,51 @@ public final class JdbcAgentStore implements AutoCloseable {
      */
     private void recoverInterruptedActions() {
         synchronized (this) {
+            inTransaction(() -> {
+            List<AgentAction> interrupted = query("SELECT * FROM agent_action WHERE status IN (?,?,?,?)",
+                    JdbcAgentStore.this::readActionRow, ActionStatus.EXECUTING.name(), ActionStatus.VERIFYING.name(),
+                    ActionStatus.ROLLING_BACK.name(), ActionStatus.RECONCILING.name());
             long now = System.currentTimeMillis();
             int unsent = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE status = ? AND apply_operation_id IS NULL",
+                            + "version = version + 1 WHERE status = ? AND apply_operation_id IS NULL "
+                            + "AND NOT EXISTS (SELECT 1 FROM agent_action_command c WHERE c.action_id=agent_action.action_id "
+                            + "AND c.state IN ('PENDING','RUNNING'))",
                     ActionStatus.FAILED.name(), RESTART_NOT_SUBMITTED, now, ActionStatus.EXECUTING.name());
             int unknown = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE status IN (?, ?) AND apply_operation_id IS NOT NULL",
+                            + "version = version + 1 WHERE status IN (?, ?) AND apply_operation_id IS NOT NULL "
+                            + "AND NOT EXISTS (SELECT 1 FROM agent_action_command c WHERE c.action_id=agent_action.action_id "
+                            + "AND c.state IN ('PENDING','RUNNING'))",
                     ActionStatus.UNCERTAIN.name(), RESTART_UNKNOWN, now, ActionStatus.EXECUTING.name(),
                     ActionStatus.VERIFYING.name());
             int rollbackUnsent = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NULL",
+                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NULL "
+                            + "AND NOT EXISTS (SELECT 1 FROM agent_action_command c WHERE c.action_id=agent_action.action_id "
+                            + "AND c.state IN ('PENDING','RUNNING'))",
                     ActionStatus.SUCCESS.name(), RESTART_ROLLBACK_NOT_SUBMITTED, now,
                     ActionStatus.ROLLING_BACK.name());
             int rollbackUnknown = run("UPDATE agent_action SET status = ?, error_message = ?, updated_at = ?, "
-                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NOT NULL",
+                            + "version = version + 1 WHERE status = ? AND rollback_operation_id IS NOT NULL "
+                            + "AND NOT EXISTS (SELECT 1 FROM agent_action_command c WHERE c.action_id=agent_action.action_id "
+                            + "AND c.state IN ('PENDING','RUNNING'))",
                     ActionStatus.UNCERTAIN.name(), RESTART_UNKNOWN, now, ActionStatus.ROLLING_BACK.name());
+            run("UPDATE agent_action SET status=?,error_message=?,updated_at=?,version=version+1 "
+                            + "WHERE status=? AND NOT EXISTS (SELECT 1 FROM agent_action_command c "
+                            + "WHERE c.action_id=agent_action.action_id AND c.state IN ('PENDING','RUNNING'))",
+                    ActionStatus.UNCERTAIN.name(), RESTART_UNKNOWN, now, ActionStatus.RECONCILING.name());
             if (unsent + unknown + rollbackUnsent + rollbackUnknown > 0) {
                 log.warn("重启前有 {} 条变更停在执行中：{} 条未提交（判为失败）、{} 条结果未知（待确认）",
                         unsent + unknown + rollbackUnsent + rollbackUnknown,
                         unsent + rollbackUnsent, unknown + rollbackUnknown);
             }
+            for (AgentAction before : interrupted) {
+                AgentAction recovered = actions.find(before.actionId()).orElseThrow();
+                if (recovered.version() != before.version()) {
+                    appendAudit("ACTION_RESTART_RECOVERED", recovered.actionId(), "system:startup",
+                            sessions.find(recovered.sessionId()).map(Session::targetNamespace).orElse(""), recovered);
+                }
+            }
+            return null;
+            });
         }
     }
 
@@ -1218,6 +2170,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private <T> T inTransaction(SqlWork<T> work) {
         try {
             boolean autoCommit = connection.getAutoCommit();
+            if (!autoCommit) { return work.run(); }
             connection.setAutoCommit(false);
             try {
                 T result = work.run();

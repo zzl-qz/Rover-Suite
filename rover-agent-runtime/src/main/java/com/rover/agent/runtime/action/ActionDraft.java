@@ -81,6 +81,7 @@ final class ActionDraft {
                 origin.beforeTrafficPercent(), origin.desiredTrafficPercent(),
                 origin.expectedRevision(),
                 applyOperationId, appliedRevision, rollbackOperationId, origin.requestedBy(), approvedBy,
-                approvedAtMillis, preview, origin.impact(), errorMessage, origin.createdAtMillis(), atMillis);
+                approvedAtMillis, preview, origin.impact(), errorMessage, origin.createdAtMillis(), atMillis,
+                origin.version(), origin.resourceRef(), origin.plan());
     }
 }

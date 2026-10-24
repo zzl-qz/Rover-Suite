@@ -39,8 +39,9 @@ public class LogStoreConfiguration {
      * 返回 AutoCloseable，Spring 关闭时自动停止调度线程。
      */
     @Bean
-    public TelemetryCollector telemetryCollector(AdminConfigService service, RecordStore store, AdminProperties props) {
-        return new TelemetryCollector(service, store, props);
+    public TelemetryCollector telemetryCollector(AdminConfigService service, RecordStore store, AdminProperties props,
+            com.rover.agent.runtime.timeline.ChangeTimelineService timeline) {
+        return new TelemetryCollector(service, store, props, timeline);
     }
 
     /**

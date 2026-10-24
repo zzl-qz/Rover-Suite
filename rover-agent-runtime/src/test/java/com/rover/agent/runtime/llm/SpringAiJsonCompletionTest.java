@@ -11,6 +11,7 @@ import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.InterruptedIOException;
+import java.net.http.HttpTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -21,6 +22,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 
@@ -33,8 +35,66 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
  */
 class SpringAiJsonCompletionTest {
 
+    @Test void investigationUsesItsOwnMainModelBudgetAndDoesNotRestartTimedOutReasoning() {
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(model.call(any(Prompt.class))).thenThrow(new RuntimeException(new HttpTimeoutException("slow investigation")));
+        var gateway = new RecordingGateway(model);
+        var registry = new SimpleMeterRegistry();
+        assertTrue(SpringAiJsonCompletion.investigation(gateway, new MicrometerAgentMetrics(registry), 60, 2048, true)
+                .complete("system", "evidence", ACCEPT_ANY).isEmpty());
+        assertEquals(List.of(60), gateway.planningTimeouts);
+        assertTrue(gateway.planningThinking);
+        assertTrue(gateway.requestedTimeouts.isEmpty(), "规划不能走轻量模型入口");
+        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(1)).call(any(Prompt.class));
+        assertEquals(1.0, registry.get("rover.agent.model.calls").tag("outcome", "timeout").counter().count());
+    }
+
+    @Test void investigationRejectsProviderTruncationEvenWhenThePrefixLooksLikeValidJson() {
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(model.call(any(Prompt.class))).thenAnswer(call -> {
+            assertEquals(2048, ((Prompt) call.getArgument(0)).getOptions().getMaxTokens());
+            return new ChatResponse(List.of(new Generation(new AssistantMessage("{\"steps\":[]}"),
+                    ChatGenerationMetadata.builder().finishReason("length").build())));
+        });
+        var registry = new SimpleMeterRegistry();
+        assertTrue(SpringAiJsonCompletion.investigation(new RecordingGateway(model),new MicrometerAgentMetrics(registry),60,2048,false)
+                .complete("system","evidence", ACCEPT_ANY).isEmpty());
+        assertEquals(1.0, registry.get("rover.agent.model.calls").tag("outcome","rejected").counter().count());
+    }
+
     /** 测试用契约：原样接受任何文本（这些用例只关心调用与重试行为，不关心契约内容）。 */
     private static final Function<String, Optional<String>> ACCEPT_ANY = Optional::of;
+
+    @Test
+    void jdkHttpClientTimeoutAlsoRetriesOnce() {
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(model.call(any(Prompt.class)))
+                .thenThrow(new RuntimeException(new HttpTimeoutException("Request cancelled")))
+                .thenReturn(response("ok"));
+        RecordingGateway gateway = new RecordingGateway(model);
+
+        assertEquals(Optional.of("ok"), new SpringAiJsonCompletion(gateway, AgentMetrics.NOOP, "调查规划", 10)
+                .complete("system", "question", ACCEPT_ANY));
+        assertEquals(List.of(10, 10), gateway.requestedTimeouts);
+    }
+
+    @Test
+    void repeatedJdkTimeoutsAreMeasuredAsTimeoutRatherThanOrdinaryErrors() {
+        ChatModel model = mock(ChatModel.class);
+        when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
+        when(model.call(any(Prompt.class))).thenThrow(new RuntimeException(new HttpTimeoutException("Request cancelled")));
+        RecordingGateway gateway = new RecordingGateway(model);
+        SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+        assertTrue(new SpringAiJsonCompletion(gateway, new MicrometerAgentMetrics(registry), "调查规划", 10)
+                .complete("system", "question", ACCEPT_ANY).isEmpty());
+        assertEquals(List.of(10, 10), gateway.requestedTimeouts);
+        assertEquals(1.0, registry.get("rover.agent.model.calls").tag("outcome", "timeout").counter().count());
+        assertNull(registry.find("rover.agent.model.calls").tag("outcome", "error").counter());
+    }
 
     @Test
     void retriesOnceWithTheSameSceneTimeoutAfterATimeout() {
@@ -141,6 +201,8 @@ class SpringAiJsonCompletionTest {
 
         private final ChatClient client;
         private final List<Integer> requestedTimeouts = new ArrayList<>();
+        private final List<Integer> planningTimeouts = new ArrayList<>();
+        private boolean planningThinking;
 
         private RecordingGateway(ChatModel model) {
             this.client = ChatClient.builder(model).build();
@@ -164,6 +226,12 @@ class SpringAiJsonCompletionTest {
         @Override
         public ChatClient chatClient(int timeoutSeconds) {
             requestedTimeouts.add(timeoutSeconds);
+            return client;
+        }
+
+        @Override public ChatClient planningClient(int timeoutSeconds, boolean thinkingEnabled) {
+            planningTimeouts.add(timeoutSeconds);
+            planningThinking = thinkingEnabled;
             return client;
         }
 

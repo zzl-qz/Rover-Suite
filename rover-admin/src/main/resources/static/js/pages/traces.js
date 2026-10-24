@@ -6,23 +6,38 @@ window.RoverAdminPages.traces = {
             traces: [],
             tracesMeta: null,
             tracesError: null,
+            tracesLoading: false,
+            tracesRequest: 0,
+            tracesQuery: null,
             traceFilter: { traceId: '', path: '', slow: false },
             selectedTrace: null,
         };
     },
 
-    computed: {},
+    computed: {
+        traceQueryChanged() {
+            if (!this.tracesQuery) return false;
+            return Object.keys(this.traceFilter).some(key => (this.traceFilter[key] || '') !== (this.tracesQuery[key] || ''));
+        },
+    },
 
     methods: {
-        async fetchTraces() {
+        async fetchTraces(force = false) {
+            if (this.tracesLoading && !force) return;
+            const request = ++this.tracesRequest;
+            this.tracesLoading = true;
             this.tracesError = null;
+            const filters = force || !this.tracesQuery ? { ...this.traceFilter } : { ...this.tracesQuery };
             const params = new URLSearchParams();
-            if (this.traceFilter.traceId) params.set('traceId', this.traceFilter.traceId);
-            if (this.traceFilter.path) params.set('path', this.traceFilter.path);
-            if (this.traceFilter.slow) params.set('slow', 'true');
+            const traceId = filters.traceId.trim();
+            const path = filters.path.trim();
+            if (traceId) params.set('traceId', traceId);
+            if (path) params.set('path', path);
+            if (filters.slow) params.set('slow', 'true');
             const qs = params.toString() ? ('?' + params.toString()) : '';
             try {
                 const data = await RoverAdminApi.api('/api/traces' + qs);
+                if (request !== this.tracesRequest) return;
                 this.tracesMeta = {
                     count: data.count,
                     capacity: data.capacity,
@@ -30,12 +45,15 @@ window.RoverAdminPages.traces = {
                     slowThresholdMillis: data.slowThresholdMillis,
                 };
                 this.traces = data.traces || [];
+                this.tracesQuery = filters;
                 if (this.selectedTrace
                     && !this.traces.some(t => t.traceId === this.selectedTrace.traceId)) {
                     this.selectedTrace = null;
                 }
             } catch (e) {
-                this.tracesError = e.message;
+                if (request === this.tracesRequest) this.tracesError = e.message;
+            } finally {
+                if (request === this.tracesRequest) this.tracesLoading = false;
             }
         },
         selectTrace(trace) {

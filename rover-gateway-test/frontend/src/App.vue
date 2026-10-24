@@ -1,7 +1,7 @@
 <template>
   <div class="container">
     <!-- 全局 toast 提示：请求结果即时反馈，无需打开控制台 -->
-    <div class="toast-container">
+    <div class="toast-container" role="status" aria-live="polite" aria-atomic="false">
       <div v-for="t in toasts" :key="t.id" :class="['toast', t.type]">
         {{ t.message }}
       </div>
@@ -14,8 +14,8 @@
 
     <!-- 网关配置 -->
     <div class="config-panel">
-      <label>网关地址：</label>
-      <input v-model="gatewayUrl" placeholder="http://localhost" />
+      <label for="gateway-url">网关地址：</label>
+      <input id="gateway-url" v-model="gatewayUrl" type="url" inputmode="url" placeholder="http://localhost" />
       <button @click="updateGateway">更新</button>
       <button @click="resetStats" class="btn-reset">重置统计</button>
       <p class="config-hint">默认对齐仓库 Gateway 配置端口 80；若你改过网关端口，这里一并改。</p>
@@ -45,16 +45,16 @@
       <h3>🔐 请求头测试</h3>
       <div class="header-config">
         <div class="header-row">
-          <label>Authorization:</label>
-          <input v-model="customHeaders.Authorization" placeholder="Bearer token123" />
+          <label for="authorization-header">Authorization:</label>
+          <input id="authorization-header" v-model="customHeaders.Authorization" autocomplete="off" placeholder="Bearer token123" />
         </div>
         <div class="header-row">
-          <label>X-Request-ID:</label>
-          <input v-model="customHeaders['X-Request-ID']" placeholder="req-12345" />
+          <label for="request-id-header">X-Request-ID:</label>
+          <input id="request-id-header" v-model="customHeaders['X-Request-ID']" autocomplete="off" placeholder="req-12345" />
         </div>
         <div class="header-row">
-          <label>X-Custom-Header:</label>
-          <input v-model="customHeaders['X-Custom-Header']" placeholder="custom-value" />
+          <label for="custom-header">X-Custom-Header:</label>
+          <input id="custom-header" v-model="customHeaders['X-Custom-Header']" autocomplete="off" placeholder="custom-value" />
         </div>
       </div>
       <div class="button-group">
@@ -81,8 +81,8 @@
     <div class="test-section">
       <h3>⏱️ 超时与延迟测试</h3>
       <div class="delay-config">
-        <label>延迟时间 (ms)：</label>
-        <input v-model.number="delayMs" type="number" min="0" max="10000" step="100" />
+        <label for="delay-ms">延迟时间 (ms)：</label>
+        <input id="delay-ms" v-model.number="delayMs" type="number" min="0" max="10000" step="100" />
       </div>
       <div class="button-group">
         <button @click="testDelay" :disabled="loading" class="btn btn-warning">
@@ -98,8 +98,8 @@
     <div class="test-section">
       <h3>🔀 并发测试（负载均衡验证）</h3>
       <div class="concurrent-config">
-        <label>并发数：</label>
-        <input v-model.number="concurrentCount" type="number" min="1" max="50" />
+        <label for="concurrent-count">并发数：</label>
+        <input id="concurrent-count" v-model.number="concurrentCount" type="number" min="1" max="50" step="1" />
       </div>
       <div class="button-group">
         <button @click="testConcurrent" :disabled="loading" class="btn btn-primary">
@@ -156,7 +156,7 @@
     </div>
 
     <!-- 响应面板 -->
-    <div class="response-panel">
+    <div class="response-panel" :aria-busy="loading">
       <h3>📝 最新响应</h3>
       <div v-if="loading" class="loading">
         <div class="spinner"></div>
@@ -200,12 +200,21 @@ let request = axios.create({
   timeout: 10000
 })
 
+const parseGatewayUrl = (value) => {
+  const url = new URL(String(value || '').trim())
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('网关地址必须以 http:// 或 https:// 开头')
+  return url.origin
+}
+
 const updateGateway = () => {
-  request = axios.create({
-    baseURL: gatewayUrl.value,
-    timeout: 10000
-  })
-  showToast('success', `网关地址已切换为 ${gatewayUrl.value}，结果会显示在下方「最新响应」`)
+  try {
+    const baseURL = parseGatewayUrl(gatewayUrl.value)
+    gatewayUrl.value = baseURL
+    request.defaults.baseURL = baseURL
+    showToast('success', `网关地址已切换为 ${baseURL}`)
+  } catch (error) {
+    showToast('error', error.message || '请输入有效的网关地址')
+  }
 }
 
 // 自定义请求头
@@ -272,7 +281,7 @@ const updateStats = (success, port, latency) => {
   } else {
     stats.error++
   }
-  if (latency) {
+  if (Number.isFinite(latency) && latency >= 0) {
     stats.totalLatency += latency
     stats.avgLatency = Math.round(stats.totalLatency / stats.total)
   }
@@ -303,6 +312,7 @@ const getPortBarWidth = (count) => {
 
 // 通用请求方法（带耗时统计）
 const makeRequest = async (method, endpoint, config = {}) => {
+  if (loading.value) return
   loading.value = true
   lastResponse.value = null
   const startTime = Date.now()
@@ -380,9 +390,13 @@ const testDelay = async () => {
 }
 
 const testTimeout1s = async () => {
+  if (loading.value) return
+  let baseURL
+  try { baseURL = parseGatewayUrl(gatewayUrl.value) }
+  catch (error) { showToast('error', error.message); return }
   // 请求需要 2s 响应，但设置 1s 超时
   const timeoutRequest = axios.create({
-    baseURL: gatewayUrl.value,
+    baseURL,
     timeout: 1000
   })
 
@@ -414,9 +428,15 @@ const testTimeout1s = async () => {
 
 // 并发测试
 const testConcurrent = async () => {
+  if (loading.value) return
+  const count = Math.floor(Number(concurrentCount.value))
+  if (!Number.isFinite(count) || count < 1 || count > 50) {
+    showToast('error', '并发数必须在 1 到 50 之间')
+    return
+  }
   loading.value = true
   lastResponse.value = {
-    message: `正在发送 ${concurrentCount.value} 个并发请求...`,
+    message: `正在发送 ${count} 个并发请求...`,
     timestamp: new Date().toLocaleTimeString()
   }
 
@@ -425,18 +445,20 @@ const testConcurrent = async () => {
   let okCount = 0
   let failCount = 0
 
-  for (let i = 0; i < concurrentCount.value; i++) {
+  for (let i = 0; i < count; i++) {
     promises.push(
       request.get('/api/hello')
         .then(response => {
           okCount++
-          updateStats(true, response.data.port, 0)
-          addHistory('GET', `/api/hello (并发 ${i + 1})`, true, response.data.port, 0)
+          const latency = Math.max(0, Date.now() - startTime)
+          updateStats(true, response.data.port, latency)
+          addHistory('GET', `/api/hello (并发 ${i + 1})`, true, response.data.port, latency)
         })
         .catch(error => {
           failCount++
-          updateStats(false, null, 0)
-          addHistory('GET', `/api/hello (并发 ${i + 1})`, false, null, 0)
+          const latency = Math.max(0, Date.now() - startTime)
+          updateStats(false, null, latency)
+          addHistory('GET', `/api/hello (并发 ${i + 1})`, false, null, latency)
         })
     )
   }
@@ -446,12 +468,12 @@ const testConcurrent = async () => {
 
   lastResponse.value = {
     message: `并发测试完成`,
-    concurrentCount: concurrentCount.value,
+    concurrentCount: count,
     totalTime: `${totalTime}ms`,
     timestamp: new Date().toLocaleTimeString()
   }
   if (failCount === 0) {
-    showToast('success', `并发测试完成：${concurrentCount.value} 个请求全部成功，总耗时 ${totalTime}ms`)
+    showToast('success', `并发测试完成：${count} 个请求全部成功，总耗时 ${totalTime}ms`)
   } else {
     showToast('error', `并发测试完成：成功 ${okCount} / 失败 ${failCount}，总耗时 ${totalTime}ms`)
   }
@@ -515,9 +537,9 @@ const formatJSON = (obj) => JSON.stringify(obj, null, 2)
 
 .container {
   background: white;
-  border-radius: 16px;
-  padding: 30px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 8px 24px rgba(26, 33, 28, 0.12);
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -583,6 +605,18 @@ const formatJSON = (obj) => JSON.stringify(obj, null, 2)
 
 .config-panel button:hover {
   background: #5a67d8;
+}
+
+.config-panel button:focus-visible, .btn:focus-visible {
+  outline: 2px solid #304f35;
+  outline-offset: 2px;
+}
+
+.config-panel input:focus-visible, .header-row input:focus-visible,
+.delay-config input:focus-visible, .concurrent-config input:focus-visible {
+  outline: 2px solid #647c67;
+  outline-offset: 1px;
+  border-color: #647c67;
 }
 
 .btn-reset {
@@ -805,8 +839,8 @@ const formatJSON = (obj) => JSON.stringify(obj, null, 2)
 
 .port-bar {
   height: 100%;
-  background: linear-gradient(90deg, #667eea, #764ba2);
-  transition: width 0.3s;
+  background: #647c67;
+  transition: width 120ms ease-out;
 }
 
 .port-count {
@@ -884,6 +918,7 @@ const formatJSON = (obj) => JSON.stringify(obj, null, 2)
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
   padding: 8px 12px;
   background: white;
   margin-bottom: 6px;
@@ -918,8 +953,10 @@ const formatJSON = (obj) => JSON.stringify(obj, null, 2)
 
 .history-endpoint {
   flex: 1;
+  min-width: 0;
   color: #2d3748;
   font-family: 'Courier New', monospace;
+  overflow-wrap: anywhere;
 }
 
 .history-status {
@@ -947,5 +984,25 @@ const formatJSON = (obj) => JSON.stringify(obj, null, 2)
   font-weight: bold;
   min-width: 80px;
   text-align: right;
+}
+
+@media (max-width: 700px) {
+  .container { padding: 16px; }
+  .header { margin-bottom: 20px; }
+  .header h1 { font-size: 1.7em; }
+  .subtitle { font-size: 1em; }
+  .test-section, .stats-panel, .history-panel, .response-panel { padding: 16px; }
+  .header-row { align-items: stretch; flex-direction: column; gap: 6px; }
+  .header-row label { min-width: 0; }
+  .delay-config, .concurrent-config { align-items: stretch; flex-direction: column; }
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .history-item { align-items: flex-start; flex-wrap: wrap; gap: 7px; }
+  .history-endpoint { flex-basis: 100%; order: 1; }
+  .history-time { min-width: auto; }
+  .history-port { min-width: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 </style>

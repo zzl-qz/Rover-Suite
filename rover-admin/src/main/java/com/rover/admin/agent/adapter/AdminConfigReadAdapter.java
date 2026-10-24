@@ -23,7 +23,7 @@ public class AdminConfigReadAdapter implements ConfigReadPort {
         try {
             return admin.listConfigs().stream().map(AdminConfigReadAdapter::toSnapshot).toList();
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取生效配置失败", ex);
+            throw AdminValues.unavailable("读取生效配置失败", ex);
         }
     }
 
@@ -32,12 +32,15 @@ public class AdminConfigReadAdapter implements ConfigReadPort {
      * 这里必须把它记成 unavailable，否则读取失败会被当成「当前值就是空」。
      */
     private static ConfigEntrySnapshot toSnapshot(Map<String, Object> item) {
+        String key = AdminValues.text(item.get("key"));
+        boolean sensitive = key.toLowerCase(java.util.Locale.ROOT)
+                .matches(".*(password|passwd|token|secret|authorization|api.?key|credential|private.?key).*" );
         return new ConfigEntrySnapshot(
                 AdminValues.text(item.get("component")),
-                AdminValues.text(item.get("key")),
+                key,
                 AdminValues.text(item.get("description")),
-                AdminValues.text(item.get("value")),
-                AdminValues.text(item.get("defaultValue")),
+                sensitive ? "[REDACTED]" : AdminValues.text(item.get("value")),
+                sensitive ? "[REDACTED]" : AdminValues.text(item.get("defaultValue")),
                 AdminValues.text(item.get("applyMode")),
                 AdminValues.boolValue(item.get("hotReloadable")),
                 AdminValues.boolValue(item.get("error")));

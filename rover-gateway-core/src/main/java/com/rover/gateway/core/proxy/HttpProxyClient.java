@@ -59,6 +59,7 @@ public class HttpProxyClient {
     public static final int DEFAULT_MAX_RESPONSE_BYTES = GatewayDefaults.MAX_RESPONSE_BODY_BYTES;
 
     /** 本连接是否已写出代理响应头；中途失败时不能再写 JSON 错包。 */
+    private static final AttributeKey<Integer> RESPONSE_STATUS = AttributeKey.valueOf("rover.proxy.responseStatus");
     private static final AttributeKey<Boolean> RESPONSE_STARTED =
             AttributeKey.valueOf("rover.proxy.responseStarted");
 
@@ -182,7 +183,7 @@ public class HttpProxyClient {
                             if (err != null) {
                                 return handleError(ctx, err, targetUrl, startNanos, writeClientError);
                             }
-                            return new ProxyResult(proxyResponse.statusCode(), elapsedMillis(startNanos), false, false);
+                            return ProxyResult.upstream(proxyResponse.statusCode(), elapsedMillis(startNanos));
                         });
             } catch (Exception err) {
                 return CompletableFuture.completedFuture(
@@ -191,7 +192,7 @@ public class HttpProxyClient {
         }).exceptionally(err -> {
             if (body.isAborted()) {
                 int code = body.overflowed() ? 413 : 499;
-                return new ProxyResult(code, elapsedMillis(startNanos), false, false);
+                return new ProxyResult(code, elapsedMillis(startNanos), false, false, "GATEWAY", "REQUEST_BODY", code == 413);
             }
             return handleError(ctx, err, targetUrl, startNanos, writeClientError);
         }).whenComplete((ignored, err) -> inFlight.decrementAndGet());
@@ -233,11 +234,12 @@ public class HttpProxyClient {
         Throwable cause = unwrap(err);
         String safeTarget = redactTargetUrl(targetUrl);
         // 响应头已写出时不能再塞 JSON 错包，只能关连接，避免半包后再写一个完整响应。
+        Integer startedStatus = ctx.channel().attr(RESPONSE_STATUS).get();
         if (clearResponseStarted(ctx)) {
             if (ctx.channel().isActive()) {
                 ctx.close();
             }
-            return classifyWithoutWrite(cause, startNanos);
+            return classifyWithoutWrite(cause, startNanos).partialResponse(startedStatus);
         }
         if (!writeClientError) {
             return classifyWithoutWrite(cause, startNanos);
@@ -245,48 +247,48 @@ public class HttpProxyClient {
         if (cause instanceof HttpTimeoutException) {
             log.warn("Proxy request timeout, targetUrl={}", safeTarget, cause);
             writeProxyError(ctx, HttpResponseStatus.GATEWAY_TIMEOUT, "后端请求超时");
-            return new ProxyResult(HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true);
+            return ProxyResult.gateway(HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof ResponseTooLargeException) {
             log.warn("Proxy response too large, targetUrl={}, limit={}",
                     safeTarget, DEFAULT_MAX_RESPONSE_BYTES);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应体超过网关上限");
-            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), false, false);
+            return ProxyResult.gateway(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), false, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof ConnectException) {
             log.warn("Proxy target connection error, targetUrl={}", safeTarget, cause);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端连接失败");
-            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+            return ProxyResult.gateway(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof InterruptedException) {
             Thread.currentThread().interrupt();
             log.warn("Proxy request interrupted, targetUrl={}", safeTarget, cause);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "代理请求被中断");
-            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+            return ProxyResult.gateway(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof IllegalArgumentException) {
             log.warn("Invalid proxy target URL, targetUrl={}", safeTarget, cause);
             writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "目标 URL 非法");
-            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+            return ProxyResult.gateway(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
         log.warn("Proxy request IO error, targetUrl={}", safeTarget, cause);
         writeProxyError(ctx, HttpResponseStatus.BAD_GATEWAY, "后端响应异常");
-        return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+        return ProxyResult.gateway(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
     }
 
     /** 头已发出后的失败：只归类指标，不再写 body。 */
     private static ProxyResult classifyWithoutWrite(Throwable cause, long startNanos) {
         if (cause instanceof HttpTimeoutException) {
-            return new ProxyResult(HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true);
+            return ProxyResult.gateway(HttpResponseStatus.GATEWAY_TIMEOUT.code(), elapsedMillis(startNanos), false, true).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof ResponseTooLargeException) {
-            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), false, false);
+            return ProxyResult.gateway(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), false, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
         if (cause instanceof ConnectException || cause instanceof InterruptedException
                 || cause instanceof IllegalArgumentException) {
-            return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+            return ProxyResult.gateway(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
         }
-        return new ProxyResult(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false);
+        return ProxyResult.gateway(HttpResponseStatus.BAD_GATEWAY.code(), elapsedMillis(startNanos), true, false).failedAt(HttpProxyClient.failurePhase(cause));
     }
 
     /** 解包 CompletionException/ExecutionException，拿到真正的业务异常。 */
@@ -305,7 +307,43 @@ public class HttpProxyClient {
     }
 
     /** 一次代理转发的统计结果。 */
-    public record ProxyResult(int statusCode, long upstreamCostMillis, boolean connectFail, boolean timeout) {
+    public record ProxyResult(int statusCode, long upstreamCostMillis, boolean connectFail, boolean timeout,
+                              String responseOrigin, String failurePhase, boolean responseComplete) {
+        /** 旧插件/测试缺少来源事实时保持 UNKNOWN，不能把 503/504 本身当成原因。 */
+        public ProxyResult(int statusCode, long upstreamCostMillis, boolean connectFail, boolean timeout) {
+            this(statusCode, upstreamCostMillis, connectFail, timeout,
+                    connectFail || timeout ? "GATEWAY" : "UNKNOWN",
+                    timeout ? "UPSTREAM_TIMEOUT" : connectFail ? "CONNECT" : "UNKNOWN", true);
+        }
+
+        public static ProxyResult upstream(int status, long cost) {
+            return new ProxyResult(status, cost, false, false, "UPSTREAM", "NONE", true);
+        }
+
+        ProxyResult failedAt(String phase) {
+            return new ProxyResult(statusCode, upstreamCostMillis, "CONNECT".equals(phase) || "CONNECT_TIMEOUT".equals(phase),
+                    "UPSTREAM_TIMEOUT".equals(phase), responseOrigin, phase, responseComplete);
+        }
+
+        public static ProxyResult gateway(int status, long cost, boolean connect, boolean timeout) {
+            return new ProxyResult(status, cost, connect, timeout, "GATEWAY",
+                    timeout ? "UPSTREAM_TIMEOUT" : connect ? "CONNECT_OR_IO" : "PROXY_RESPONSE", true);
+        }
+
+        public ProxyResult partialResponse(Integer startedStatus) {
+            return new ProxyResult(startedStatus == null ? statusCode : startedStatus, upstreamCostMillis,
+                    connectFail, timeout, startedStatus == null ? "UNKNOWN" : "UPSTREAM", failurePhase, false);
+        }
+    }
+
+    static String failurePhase(Throwable cause) {
+        if (cause instanceof ConnectException) { return "CONNECT"; }
+        if (cause != null && cause.getClass().getName().contains("ConnectTimeout")) { return "CONNECT_TIMEOUT"; }
+        if (cause instanceof HttpTimeoutException || cause instanceof java.util.concurrent.TimeoutException) { return "UPSTREAM_TIMEOUT"; }
+        if (cause instanceof ResponseTooLargeException) { return "UPSTREAM_RESPONSE_LIMIT"; }
+        if (cause instanceof IllegalArgumentException) { return "TARGET"; }
+        if (cause instanceof InterruptedException) { return "INTERRUPTED"; }
+        return "UPSTREAM_IO";
     }
 
     /** 把客户端原始请求改造成发给后端的代理请求。 */
@@ -391,6 +429,7 @@ public class HttpProxyClient {
             response.headers().set(HttpHeaderNames.CONTENT_LENGTH, contentLength.get(0));
         }
 
+        ctx.channel().attr(RESPONSE_STATUS).set(info.statusCode());
         ctx.channel().attr(RESPONSE_STARTED).set(Boolean.TRUE);
         ctx.writeAndFlush(response);
     }
@@ -421,6 +460,7 @@ public class HttpProxyClient {
     }
 
     private static boolean clearResponseStarted(ChannelHandlerContext ctx) {
+        ctx.channel().attr(RESPONSE_STATUS).set(null);
         Boolean started = ctx.channel().attr(RESPONSE_STARTED).getAndSet(null);
         return Boolean.TRUE.equals(started);
     }

@@ -8,6 +8,8 @@ import com.rover.agent.core.event.TaskEventType;
 import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.AlertEventState;
+import com.rover.agent.core.model.AlertIngestResult;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.runtime.AgentOrchestrator;
 import com.rover.agent.runtime.metrics.AgentMetrics;
@@ -47,10 +49,22 @@ public class AgentController {
 
     private final AgentOrchestrator agent;
     private final AgentMetrics metrics;
+    private final com.rover.agent.core.port.AgentAccess access;
 
     public AgentController(AgentOrchestrator agent, AgentMetrics metrics) {
+        this(agent, metrics, com.rover.agent.core.port.AgentAccess.local());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public AgentController(AgentOrchestrator agent, AgentMetrics metrics,
+                           org.springframework.beans.factory.ObjectProvider<com.rover.agent.core.port.AgentAccess> access) {
+        this(agent, metrics, access.getIfAvailable(com.rover.agent.core.port.AgentAccess::local));
+    }
+
+    private AgentController(AgentOrchestrator agent, AgentMetrics metrics, com.rover.agent.core.port.AgentAccess access) {
         this.agent = agent;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
+        this.access = access;
     }
 
     /** 新建会话。 */
@@ -148,10 +162,16 @@ public class AgentController {
 
     /**
      * 接收告警事件，创建独立会话并异步调查，返回 202 任务视图。
-     * 接口需要登录；告警会话不归属人工用户。
+     * 接口需要登录；来源取认证主体，处理归属由服务端映射，不接受载荷指定账号。
      */
     @PostMapping("/events/ingest")
-    public ResponseEntity<?> ingestEvent(@RequestBody IngestRequest request, Authentication authentication) {
+    public ResponseEntity<?> ingestEvent(@RequestBody IngestRequest request,
+                                         @org.springframework.web.bind.annotation.RequestHeader(value = "Idempotency-Key", required = false) String deliveryId,
+                                         Authentication authentication) {
+        String sourceUserId = user(authentication);
+        if (sourceUserId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
         if (request == null || request.path() == null || request.path().isBlank()) {
             return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", "缺少 path（要排查的路由前缀）", null));
         }
@@ -159,16 +179,26 @@ public class AgentController {
             return ResponseEntity.badRequest()
                     .body(commandError("BAD_REQUEST", "fromMillis 与 toMillis 需同时提供", null));
         }
+        if (request.alertKey() == null || request.alertKey().isBlank() || request.state() == null) {
+            return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", "alertKey 和 state 必填", null));
+        }
+        if (deliveryId == null || deliveryId.isBlank()) {
+            return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", "缺少 Idempotency-Key 请求头", null));
+        }
         try {
-            TaskView task = agent.ingestAlert(request.path(), request.message(), request.fromMillis(), request.toMillis());
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body(task);
+            AlertIngestResult result = agent.ingestAlert(sourceUserId, deliveryId, request.alertKey(), request.state(),
+                    request.path(), request.message(), request.fromMillis(), request.toMillis());
+            return ResponseEntity.status(result.duplicate() ? HttpStatus.OK : HttpStatus.ACCEPTED).body(result);
+        } catch (com.rover.agent.runtime.task.AlertDeliveryConflictException ex) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(commandError("ALERT_IDEMPOTENCY_CONFLICT", ex.getMessage(), null));
         } catch (IllegalArgumentException ex) {
             return ResponseEntity.badRequest().body(commandError("BAD_REQUEST", ex.getMessage(), null));
         }
     }
 
     /** 事件接入请求体：路由前缀必填；告警文本与观测窗口可选。 */
-    public record IngestRequest(String path, String message, Long fromMillis, Long toMillis) {
+    public record IngestRequest(String path, String message, Long fromMillis, Long toMillis,
+                                String alertKey, AlertEventState state) {
     }
 
     /**
@@ -177,16 +207,19 @@ public class AgentController {
      * 任务不存在、不可观察或无权访问时返回 404。
      */
     @GetMapping(path = "/tasks/{taskId}/events", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<SseEmitter> taskEvents(@PathVariable String taskId, Authentication authentication) {
+    public ResponseEntity<SseEmitter> taskEvents(@PathVariable String taskId, Authentication authentication,
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Last-Event-ID", required = false) Long after) {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
-        TaskEventSseSubscriber subscriber = new TaskEventSseSubscriber(emitter, metrics);
+        TaskEventSseSubscriber subscriber = new TaskEventSseSubscriber(emitter, metrics,
+                () -> access.require(user(authentication), com.rover.agent.core.port.AgentAccess.Permission.READ));
         emitter.onCompletion(subscriber::cancel);
         emitter.onError(error -> subscriber.cancel());
         emitter.onTimeout(() -> {
             subscriber.cancel();
             emitter.complete();
         });
-        TaskEventSubscription subscription = agent.subscribeEvents(taskId, user(authentication), subscriber)
+        TaskEventSubscription subscription = (after == null ? agent.subscribeEvents(taskId, user(authentication), subscriber)
+                : agent.subscribeEvents(taskId, user(authentication), after, subscriber))
                 .orElse(null);
         if (subscription == null) {
             return ResponseEntity.notFound().build();
@@ -209,15 +242,17 @@ public class AgentController {
 
         private final SseEmitter emitter;
         private final AgentMetrics metrics;
+        private final Runnable authorize;
         private final AtomicBoolean finished = new AtomicBoolean();
 
         /** 连接数指标的记账标志：只对「确实建立过的连接」加减，断开与收尾都不会把计数减成负数。 */
         private final AtomicBoolean counted = new AtomicBoolean();
         private volatile TaskEventSubscription subscription = TaskEventSubscription.NONE;
 
-        private TaskEventSseSubscriber(SseEmitter emitter, AgentMetrics metrics) {
+        private TaskEventSseSubscriber(SseEmitter emitter, AgentMetrics metrics, Runnable authorize) {
             this.emitter = emitter;
             this.metrics = metrics;
+            this.authorize = authorize;
         }
 
         /** 订阅句柄在订阅成功之后才拿到；若期间连接已经结束，就地退订，避免留下无人消费的订阅。 */
@@ -262,7 +297,8 @@ public class AgentController {
 
         private void write(TaskEvent event) {
             try {
-                emitter.send(SseEmitter.event().name(event.type().name())
+                authorize.run();
+                emitter.send(SseEmitter.event().id(Long.toString(event.eventId())).name(event.type().name())
                         .data(event, MediaType.APPLICATION_JSON));
             } catch (Exception ex) {
                 finished.set(true);

@@ -26,7 +26,7 @@ public class AdminRouteReadAdapter implements RouteReadPort {
         try {
             return admin.listRoutes().stream().map(route -> toSnapshot(route, observedAt)).toList();
         } catch (Exception ex) {
-            throw new SnapshotUnavailableException("读取 Gateway 路由失败", ex);
+            throw AdminValues.unavailable("读取 Gateway 路由失败", ex);
         }
     }
 
@@ -38,7 +38,8 @@ public class AdminRouteReadAdapter implements RouteReadPort {
     private static RouteSnapshot toSnapshot(Map<String, Object> route, long observedAt) {
         return new RouteSnapshot(AdminValues.text(route.get("id")), AdminValues.text(route.get("businessPrefix")),
                 serviceNameOf(route), groupsOf(route),
-                AdminValues.text(route.get("targetUrl")), AdminValues.text(route.get("targetUrls")), observedAt);
+                AdminValues.text(route.get("targetUrl")), AdminValues.text(route.get("targetUrls")), observedAt,
+                AdminValues.text(route.get("resourceUid")), route.get("generation") instanceof Number n ? n.longValue() : 0);
     }
 
     /** 版本目标的 serviceName（校验保证同一条路由的 targets 同服务）；静态路由或空列表时为空串。 */

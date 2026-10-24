@@ -11,7 +11,7 @@ public record TaskView(String taskId, String sessionId, String incidentId, TaskS
                        InvestigationReport result, String error, String clarification,
                        TaskType taskType, InvestigationPlan plan,
                        List<AgentCapability> executedCapabilities,
-                       List<RecallChoice> recalls, List<Evidence> evidence) {
+                       List<RecallChoice> recalls, List<Evidence> evidence, List<ModelInvocation> modelInvocations) {
 
     public TaskView {
         taskType = taskType == null ? TaskType.INVESTIGATION : taskType;
@@ -20,6 +20,17 @@ public record TaskView(String taskId, String sessionId, String incidentId, TaskS
                 : List.copyOf(executedCapabilities);
         recalls = recalls == null ? List.of() : List.copyOf(recalls);
         evidence = evidence == null ? List.of() : List.copyOf(evidence);
+        modelInvocations = modelInvocations == null ? List.of() : List.copyOf(modelInvocations);
+    }
+
+    public TaskView(String taskId, String sessionId, String incidentId, TaskStatus status,
+                    AgentStepType currentStage, String path, ResourceTarget target, String question,
+                    long createdAtMillis, long completedAtMillis, List<Step> steps,
+                    InvestigationReport result, String error, String clarification, TaskType taskType,
+                    InvestigationPlan plan, List<AgentCapability> executedCapabilities,
+                    List<RecallChoice> recalls, List<Evidence> evidence) {
+        this(taskId,sessionId,incidentId,status,currentStage,path,target,question,createdAtMillis,completedAtMillis,
+                steps,result,error,clarification,taskType,plan,executedCapabilities,recalls,evidence,List.of());
     }
 
     /** 兼容构造器：只关心调查链的调用方不必显式给出任务类型与计划。 */

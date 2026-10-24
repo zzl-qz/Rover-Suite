@@ -1,7 +1,7 @@
 package com.rover.admin.agent.model;
 
 /**
- * 目标解析和调查规划使用的快速模型配置。
+ * 目标解析和事实编号选择使用的快速模型配置；调查规划独立使用主模型。
  * 未配置时回退到主模型，并禁用深度思考。
  */
 public record FastModel(String baseUrl, String apiKey, String model) {

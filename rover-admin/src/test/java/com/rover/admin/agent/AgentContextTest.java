@@ -45,6 +45,7 @@ import org.springframework.test.web.servlet.MockMvc;
  * 而它恰好是最容易在重构中悄悄断掉的部分。
  */
 @SpringBootTest
+@org.springframework.test.context.TestPropertySource(properties="rover.admin.log-store-path=./target/test-data/AgentContextTest/rover")
 @AutoConfigureMockMvc
 class AgentContextTest {
 
