@@ -9,6 +9,7 @@ import com.rover.common.spi.discovery.ServiceDiscoveryStatus;
 import com.rover.common.config.ConfigValues;
 import com.rover.common.json.JsonCodec;
 import com.rover.common.manage.AbstractManageApi;
+import com.rover.common.manage.ManageApiException;
 import com.rover.gateway.core.config.GatewayDefaults;
 import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
@@ -116,6 +117,10 @@ public class GatewayManageApi extends AbstractManageApi {
             handleInstanceIsolations(ctx, request);
             return true;
         }
+        if (path.equals(ManageApiPaths.CONFIG_ACTIONS) || path.startsWith(ManageApiPaths.CONFIG_ACTIONS + "/")) {
+            handleConfigActions(ctx, request, path);
+            return true;
+        }
         if (ManageApiPaths.ROUTES_PREVIEW.equals(path)) {
             handleRoutesPreview(ctx, request);
             return true;
@@ -137,6 +142,43 @@ public class GatewayManageApi extends AbstractManageApi {
             return true;
         }
         return handleConfigs(ctx, request, path);
+    }
+
+    private void handleConfigActions(ChannelHandlerContext ctx, FullHttpRequest request, String path) {
+        if (HttpMethod.POST.equals(request.method()) && ManageApiPaths.CONFIG_ACTIONS.equals(path)) {
+            Map<String,Object> body = JsonCodec.parseObjectMap(bodyOf(request));
+            com.rover.gateway.core.config.GatewayConfigActionStore.Receipt receipt;
+            try {
+                receipt = runtime.getConfigActionStore().execute(text(body.get("operationId")),
+                        text(body.get("key")), text(body.get("expectedValue")),
+                        text(body.get("desiredValue")), text(body.get("actor")));
+            } catch (com.rover.gateway.core.config.GatewayConfigActionStore.IdempotencyConflictException ex) {
+                throw new ManageApiException(HttpResponseStatus.CONFLICT, ex.getMessage());
+            }
+            writeJson(ctx, HttpResponseStatus.OK, JsonCodec.toJson(configActionReceipt(receipt)));
+            return;
+        }
+        if (HttpMethod.GET.equals(request.method()) && path.startsWith(ManageApiPaths.CONFIG_ACTIONS + "/")) {
+            String operationId = path.substring((ManageApiPaths.CONFIG_ACTIONS + "/").length());
+            var receipt = runtime.getConfigActionStore().query(operationId);
+            if (receipt == null) {
+                writeJson(ctx, HttpResponseStatus.NOT_FOUND, JsonCodec.toJson(Map.of("operationId", operationId, "status", "UNKNOWN")));
+            } else { writeJson(ctx, HttpResponseStatus.OK, JsonCodec.toJson(configActionReceipt(receipt))); }
+            return;
+        }
+        writeJson(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED, JsonCodec.toJson(Map.of("message", "config actions support POST collection and GET receipt")));
+    }
+
+    private static Map<String,Object> configActionReceipt(com.rover.gateway.core.config.GatewayConfigActionStore.Receipt receipt) {
+        Map<String,Object> body = new LinkedHashMap<>(receipt.result());
+        body.put("operationId", receipt.operationId()); body.put("key", receipt.configKey());
+        body.put("status", receipt.status()); body.put("replayed", receipt.replayed());
+        body.put("actor", receipt.actor()); body.put("expectedValue", receipt.expectedValue());
+        body.put("desiredValue", receipt.desiredValue()); body.put("createdAtMillis", receipt.createdAtMillis());
+        body.put("updatedAtMillis", receipt.updatedAtMillis());
+        // The current shared Admin token authenticates the caller, not this caller-supplied name.
+        body.put("actorAuthenticated", false);
+        return body;
     }
 
     /**

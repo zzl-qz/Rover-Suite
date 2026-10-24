@@ -169,6 +169,16 @@ public class GatewayRuntimeConfigManager extends AbstractRuntimeConfigManager {
         return super.updateConfig(key, value);
     }
 
+    /** Compare-and-set hook for a deliberately narrow durable operational action. */
+    public synchronized boolean updateTraceSampleRateIfCurrent(String expected, String desired) {
+        String key = GatewayRuntimeConfigKeys.TRACE_SAMPLE_RATE;
+        String current = listConfigs().stream().filter(item -> item.getKey().equals(key))
+                .map(com.rover.common.config.ConfigItem::getValue).findFirst().orElseThrow();
+        if (!java.util.Objects.equals(current, expected)) { return false; }
+        updateConfig(key, desired);
+        return true;
+    }
+
     @Override
     protected void validate(String key, String value) {
         PluginConfigBinding binding = pluginBindings.get(key);

@@ -98,6 +98,8 @@ public class GatewayRuntime {
     /** 运行时配置管理器。 */
     private final GatewayRuntimeConfigManager configManager;
 
+    private final com.rover.gateway.core.config.GatewayConfigActionStore configActionStore;
+
     /** 路由 overlay 持久化。 */
     private final RouteOverlayStore routeOverlayStore;
 
@@ -199,6 +201,7 @@ public class GatewayRuntime {
         this.proxyClient = new HttpProxyClient(connectTimeoutMillis, requestTimeoutMillis);
         this.serviceDiscovery = serviceDiscovery;
         this.configManager = configManager;
+        this.configActionStore = new com.rover.gateway.core.config.GatewayConfigActionStore(routeOverlayStore.getPath(), configManager);
         this.routeOverlayStore = routeOverlayStore;
         try {
             this.instanceIsolationStore = new com.rover.gateway.core.route.RouteInstanceIsolationStore(routeOverlayStore.getPath());
@@ -223,6 +226,8 @@ public class GatewayRuntime {
         history.addLast(new VersionedRoutes(0, initialRoutes));
         rebuildFilters();
     }
+
+    public com.rover.gateway.core.config.GatewayConfigActionStore getConfigActionStore() { return configActionStore; }
 
     public synchronized void initializeManagedState() {
         routeOverlayStore.operations().initialize(currentState());

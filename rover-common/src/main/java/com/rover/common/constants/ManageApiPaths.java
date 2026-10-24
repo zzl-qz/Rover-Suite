@@ -10,6 +10,8 @@ public final class ManageApiPaths {
     public static final String HEALTH = PREFIX + "/health";
     public static final String STATUS = PREFIX + "/status";
     public static final String CONFIGS = PREFIX + "/configs";
+    /** Durable, allowlisted operational configuration actions. */
+    public static final String CONFIG_ACTIONS = CONFIGS + "/actions";
     public static final String ROUTES = PREFIX + "/routes";
     /** 路由变更预览：只比对差异，不落盘、不生效。 */
     public static final String ROUTES_PREVIEW = ROUTES + "/preview";
