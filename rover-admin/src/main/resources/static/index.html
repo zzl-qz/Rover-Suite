@@ -50,8 +50,8 @@
                 </span>
                 <span class="clock" v-if="page === 'dashboard' && updatedAtText">更新于 {{ updatedAtText }}</span>
                 <div class="range-chip" v-if="page === 'dashboard'">
-                    <button :class="{ on: liveRange === 60 }" @click="setLiveRange(60)">1m</button>
-                    <button :class="{ on: liveRange === 300 }" @click="setLiveRange(300)">5m</button>
+                    <button :class="{ on: liveRange === 60 }" :aria-pressed="liveRange === 60" @click="setLiveRange(60)">1m</button>
+                    <button :class="{ on: liveRange === 300 }" :aria-pressed="liveRange === 300" @click="setLiveRange(300)">5m</button>
                 </div>
                 <span class="discovery-pill" v-if="discoveryType && discoveryType !== 'UNKNOWN'">
                     <span class="dot ok"></span>{{ discoveryType }}
@@ -161,14 +161,20 @@
                                 <tr v-for="r in liveRoutes" :key="r.routeId"
                                     class="clickable"
                                     :class="{ on: selectedRouteId === r.routeId }"
-                                    @click="toggleRoute(r.routeId)">
+                                    :aria-expanded="selectedRouteId === r.routeId"
+                                    :aria-controls="'route-detail-' + r.routeId"
+                                    :aria-label="'路由 ' + routeLabel(r.routeId) + '，查看上游详情'"
+                                    tabindex="0"
+                                    @click="toggleRoute(r.routeId)"
+                                    @keydown.enter.prevent.stop="toggleRoute(r.routeId)"
+                                    @keydown.space.prevent.stop="toggleRoute(r.routeId)">
                                     <td><code>{{ routeLabel(r.routeId) }}</code></td>
                                     <td>{{ num(r.lastSecondRequests) }}</td>
                                     <td>{{ num(r.windowRequests) }}</td>
                                     <td>{{ ((r.errorRate || 0) * 100).toFixed(1) }}%</td>
                                     <td>{{ num(r.avgMillis) }}ms</td>
                                 </tr>
-                                <tr v-if="selectedRoute && selectedRoute.instances">
+                                <tr v-if="selectedRoute && selectedRoute.instances" :id="'route-detail-' + selectedRoute.routeId">
                                     <td colspan="5" class="expand-cell">
                                         <div class="upstream-note">该路由自进程启动以来打到各上游的累计次数（带版本）</div>
                                         <div class="upstream-chips">
@@ -477,9 +483,9 @@
                         <span class="card-hint">共 {{ routes.length }} 条，版本 revision={{ routesRevision }}；保存后立即热替换并落盘</span>
                         <button class="btn primary ml-auto" @click="openRouteDrawer(null)">新增路由</button>
                     </div>
-                    <div v-if="routesError" class="banner warn">{{ routesError }}</div>
-                    <div v-else-if="!routes.length" class="empty">还没有路由，点右上角加一条。</div>
-                    <table v-else class="table">
+                    <div v-if="routesError" class="banner warn" role="status">读取失败：{{ routesError }}<span v-if="routes.length">；仍显示上次成功读取的数据</span><button class="btn mini ml-auto" @click="fetchRoutes(true)">重试</button></div>
+                    <div v-if="!routes.length && !routesError" class="empty">还没有路由，点右上角加一条。</div>
+                    <table v-if="routes.length" class="table">
                         <thead><tr>
                             <th>ID</th><th>前缀</th><th>转发到（服务 → 分组 · 权重 · 占比）</th>
                             <th>stripPrefix</th><th class="w-actions"></th>
@@ -513,8 +519,19 @@
                             <td class="row-actions">
                                 <button class="btn mini ghost" @click="openMetrics(r.id)" :disabled="!r.id"
                                         :title="r.id ? '查看版本与实例的窗口指标' : '路由未设置 ID，无法独立统计'">诊断</button>
+                                <button v-if="routeSupportsInstanceIsolation(r)" class="btn mini"
+                                        @click="openInstanceIsolation(r)" :disabled="!canManageInstanceIsolation || instanceIsolationLoading"
+                                        title="按当前 Nameserver 实例快照隔离一个实例">隔离实例</button>
                                 <button class="btn mini" @click="openRouteDrawer(r)">编辑</button>
                                 <button class="btn mini danger" @click="deleteRoute(r.businessPrefix)">删除</button>
+                                <div v-for="row in routeInstanceIsolations(r)" :key="row.instanceId + ':' + row.host + ':' + row.port"
+                                     class="route-isolation" :class="row.lifecycle === 'EXPIRED_PENDING_REVIEW' ? 'warn' : ''">
+                                    <span><strong>{{ row.lifecycle === 'EXPIRED_PENDING_REVIEW' ? '到期待人工核验' : (row.state === 'ISOLATED' ? '已隔离' : '已恢复') }}</strong>
+                                        {{ row.serviceName }}/{{ row.group || '全部分组' }} · {{ row.instanceId }} · {{ row.host }}:{{ row.port }}
+                                        <small>操作人 {{ row.requestedBy }} · 版本 {{ row.version }} · {{ fmtTime(row.expiresAtMillis) }}</small></span>
+                                    <button v-if="row.state === 'ISOLATED'" class="btn mini" @click="restoreInstanceIsolation(r, row)"
+                                            :disabled="!canManageInstanceIsolation">核验并恢复</button>
+                                </div>
                             </td>
                         </tr>
                         </tbody>
@@ -530,9 +547,9 @@
                         <span class="card-hint">Nameserver 管理口实时数据</span>
                         <span class="badge ok ml-auto">{{ instances.length }} 个实例</span>
                     </div>
-                    <div v-if="instancesError" class="banner warn">{{ instancesError }}</div>
-                    <div v-else-if="!instances.length" class="empty">当前没有注册实例</div>
-                    <table v-else class="table">
+                    <div v-if="instancesError" class="banner warn" role="status">读取失败：{{ instancesError }}<span v-if="instances.length">；仍显示上次成功读取的数据</span></div>
+                    <div v-if="!instances.length && !instancesError" class="empty">当前没有注册实例</div>
+                    <table v-if="instances.length" class="table">
                         <thead><tr>
                             <th>服务</th><th>实例 ID</th><th>地址</th><th>分组</th>
                             <th>健康</th><th>临时</th><th>权重</th><th>最近心跳</th><th>已空闲</th>
@@ -1250,19 +1267,19 @@
                         <span class="banner-hint">要看普通请求：去「配置管理」把 <code>gateway.trace.sampleRate</code> 改成 <code>1</code> 并保存（热更新，不用重启）。</span>
                     </div>
                     <div class="filter-bar">
-                        <input v-model="traceFilter.traceId" placeholder="traceId 过滤" class="filter-input">
-                        <input v-model="traceFilter.path" placeholder="path 过滤" class="filter-input">
+                        <input v-model="traceFilter.traceId" aria-label="按 traceId 过滤" placeholder="traceId 过滤" class="filter-input">
+                        <input v-model="traceFilter.path" aria-label="按请求路径过滤" placeholder="path 过滤" class="filter-input">
                         <label class="filter-check">
                             <input type="checkbox" v-model="traceFilter.slow"> 只看慢请求
                         </label>
-                        <button class="btn ghost" @click="fetchTraces">查询</button>
+                        <button class="btn ghost" @click="fetchTraces(true)" :disabled="tracesLoading" :aria-busy="tracesLoading">{{ tracesLoading ? '查询中…' : (traceQueryChanged ? '应用筛选' : '刷新') }}</button>
                     </div>
-                    <div v-if="tracesError" class="banner warn">{{ tracesError }}</div>
-                    <div v-else-if="!traces.length" class="empty">
+                    <div v-if="tracesError" class="banner warn" role="status">读取失败：{{ tracesError }}<span v-if="traces.length">；仍显示上次成功读取的数据</span></div>
+                    <div v-if="!traces.length && !tracesError" class="empty">
                         暂无请求记录。
                         <div class="empty-hint">网关有流量后按采样规则采集；点一行可展开阶段耗时。默认采样率 0 = 只记慢请求。</div>
                     </div>
-                    <table v-else class="table">
+                    <table v-if="traces.length" class="table">
                         <thead><tr>
                             <th>时间</th><th>traceId</th><th>方法</th><th>路径</th>
                             <th>路由</th><th>目标</th><th>状态</th><th>总耗时</th>
@@ -1270,7 +1287,13 @@
                         <tbody>
                         <template v-for="t in traces" :key="t.traceId">
                             <tr class="clickable" :class="{ 'row-slow': t.slow, on: selectedTrace && selectedTrace.traceId === t.traceId }"
-                                @click="selectTrace(t)">
+                                :aria-expanded="Boolean(selectedTrace && selectedTrace.traceId === t.traceId)"
+                                :aria-controls="'trace-detail-' + t.traceId"
+                                :aria-label="'请求 ' + t.method + ' ' + t.path + '，状态 ' + t.statusCode + '，查看阶段耗时'"
+                                tabindex="0"
+                                @click="selectTrace(t)"
+                                @keydown.enter.prevent.stop="selectTrace(t)"
+                                @keydown.space.prevent.stop="selectTrace(t)">
                                 <td>{{ fmtTime(t.startMillis) }}</td>
                                 <td><code class="trace-id">{{ t.traceId }}</code></td>
                                 <td>{{ t.method }}</td>
@@ -1283,7 +1306,7 @@
                                     <span v-if="t.slow" class="badge warn">慢</span>
                                 </td>
                             </tr>
-                            <tr v-if="selectedTrace && selectedTrace.traceId === t.traceId" class="expand-row">
+                            <tr v-if="selectedTrace && selectedTrace.traceId === t.traceId" class="expand-row" :id="'trace-detail-' + t.traceId">
                                 <td colspan="8">
                                     <div class="trace-expand">
                                         <div class="trace-expand-hint">
@@ -1320,19 +1343,19 @@
                         <span class="card-hint">环形缓冲最多 200 条，超出覆盖最旧的，不会无限涨内存</span>
                     </div>
                     <div class="filter-bar">
-                        <select v-model="eventFilter.type" class="nice-select" @change="resetEventPage">
+                        <select v-model="eventFilter.type" class="nice-select" aria-label="按事件类型筛选" @change="resetEventPage">
                             <option value="">全部类型</option>
                             <option v-for="t in eventTypeOptions" :key="t" :value="t">{{ eventLabel(t) }}</option>
                         </select>
-                        <input v-model="eventFilter.service" class="filter-input" placeholder="服务名过滤"
+                        <input v-model="eventFilter.service" class="filter-input" aria-label="按服务名过滤" placeholder="服务名过滤"
                                @input="resetEventPage">
                         <span class="card-hint">匹配 {{ filteredEvents.length }} / 缓冲 {{ events.length }}</span>
                     </div>
-                    <div v-if="eventsError" class="banner warn">{{ eventsError }}</div>
-                    <div v-else-if="!filteredEvents.length" class="empty">
+                    <div v-if="eventsError" class="banner warn" role="status">读取失败：{{ eventsError }}<span v-if="events.length">；仍显示上次成功读取的数据</span></div>
+                    <div v-if="!filteredEvents.length && !eventsError" class="empty">
                         {{ events.length ? '没有符合筛选条件的事件。' : '暂无事件，客户端注册/注销后此处会实时展示。' }}
                     </div>
-                    <table v-else class="table">
+                    <table v-if="filteredEvents.length" class="table">
                         <thead><tr>
                             <th>时间</th><th>类型</th><th>服务</th><th>实例</th><th>详情</th>
                         </tr></thead>
@@ -1347,9 +1370,9 @@
                         </tbody>
                     </table>
                     <div class="pager" v-if="filteredEvents.length">
-                        <button class="btn mini" :disabled="eventPage <= 1" @click="eventPage--">上一页</button>
-                        <span>第 {{ Math.min(eventPage, eventTotalPages) }} / {{ eventTotalPages }} 页 · 每页 {{ eventPageSize }} 条</span>
-                        <button class="btn mini" :disabled="eventPage >= eventTotalPages" @click="eventPage++">下一页</button>
+                        <button class="btn mini" :disabled="safeEventPage <= 1" @click="eventPage = safeEventPage - 1">上一页</button>
+                        <span>第 {{ safeEventPage }} / {{ eventTotalPages }} 页 · 每页 {{ eventPageSize }} 条</span>
+                        <button class="btn mini" :disabled="safeEventPage >= eventTotalPages" @click="eventPage = safeEventPage + 1">下一页</button>
                     </div>
                 </div>
             </section>
@@ -1399,8 +1422,8 @@
                                             @click="c.value = opt">{{ configChipLabel(c, opt) }}</button>
                                 </div>
                                 <div class="config-actions" v-if="isDirty(c)">
-                                    <button class="btn mini primary" @click="updateConfig(c)" :disabled="configBusyKey === c.key">
-                                        {{ configBusyKey === c.key ? '保存中' : '保存' }}
+                                    <button class="btn mini primary" @click="updateConfig(c)" :disabled="configBusyKey !== null">
+                                        {{ configBusyKey === c.component + ':' + c.key ? '保存中' : '保存' }}
                                     </button>
                                     <button class="btn mini" @click="revertConfig(c)">撤销</button>
                                 </div>
@@ -1420,7 +1443,7 @@
                         <h2>模型服务</h2>
                         <span class="card-hint">支持展示模型返回的思考过程；保存即生效、不用重启，密钥加密落盘</span>
                         <label class="switch ml-auto">
-                            <input type="checkbox" v-model="modelForm.enabled">
+                            <input type="checkbox" v-model="modelForm.enabled" :disabled="modelSaving">
                             <span class="slider"></span>
                             <em>{{ modelForm.enabled ? '模型解读已开启' : '模型解读已关闭' }}</em>
                         </label>
@@ -1434,8 +1457,8 @@
 
                     <div class="model-form">
                         <div class="field wide">
-                            <label>模型厂商</label>
-                            <select v-model="modelVendor" class="nice-select">
+                            <label for="model-vendor">模型厂商</label>
+                            <select id="model-vendor" v-model="modelVendor" class="nice-select" :disabled="modelSaving">
                                 <option v-for="v in modelVendors" :key="v.code" :value="v.code">
                                     {{ v.label }}
                                 </option>
@@ -1455,28 +1478,28 @@
 
                         <template v-else>
                             <div class="field wide">
-                                <label>服务地址 baseUrl</label>
-                                <input v-model="modelForm.customBaseUrl" placeholder="http://127.0.0.1:11434/v1">
+                                <label for="model-base-url">服务地址 baseUrl</label>
+                                <input id="model-base-url" v-model="modelForm.customBaseUrl" placeholder="http://127.0.0.1:11434/v1" :disabled="modelSaving">
                             </div>
                             <div class="field">
-                                <label>主模型名</label>
-                                <input v-model="modelForm.customModel" placeholder="qwen2.5:7b">
+                                <label for="model-main-name">主模型名</label>
+                                <input id="model-main-name" v-model="modelForm.customModel" placeholder="qwen2.5:7b" :disabled="modelSaving">
                             </div>
                             <div class="field">
-                                <label>快速模型名（可选）</label>
-                                <input v-model="modelForm.customFastModel" placeholder="留空则不配快速模型">
+                                <label for="model-fast-name">快速模型名（可选）</label>
+                                <input id="model-fast-name" v-model="modelForm.customFastModel" placeholder="留空则不配快速模型" :disabled="modelSaving">
                             </div>
                         </template>
 
                         <div class="field">
-                            <label>API Key</label>
-                            <input v-model="modelForm.apiKey" type="password" autocomplete="new-password"
-                                   :placeholder="modelConfig && modelConfig.apiKeyMasked ? '已保存，留空表示不改' : '本地无鉴权模型可留空'">
+                            <label for="model-api-key">API Key</label>
+                            <input id="model-api-key" v-model="modelForm.apiKey" type="password" autocomplete="new-password"
+                                   :placeholder="modelConfig && modelConfig.apiKeyMasked ? '已保存，留空表示不改' : '本地无鉴权模型可留空'" :disabled="modelSaving">
                         </div>
                         <div class="field timeout">
-                            <label>单次调用超时</label>
+                            <label for="model-timeout">单次调用超时</label>
                             <div class="num-wrap">
-                                <input type="number" v-model="modelForm.timeoutSeconds" min="1" max="300" step="1">
+                                <input id="model-timeout" type="number" v-model="modelForm.timeoutSeconds" min="1" max="300" step="1" :disabled="modelSaving">
                                 <span class="unit">秒</span>
                             </div>
                         </div>
@@ -1487,14 +1510,14 @@
                             {{ modelSaving ? '保存中...' : '保存并生效' }}
                         </button>
                         <button class="btn ghost" @click="testModelConfig"
-                                :disabled="modelTesting || (!isCustom ? !currentVendorMap.mainModel : (!modelForm.customBaseUrl || !modelForm.customModel))">
+                                :disabled="modelSaving || modelTesting || (!isCustom ? !currentVendorMap.mainModel : (!modelForm.customBaseUrl || !modelForm.customModel))">
                             {{ modelTesting ? '测试中...' : '测试连接（不保存）' }}
                         </button>
-                        <button class="btn ghost" @click="verifyModelConfig" :disabled="modelVerifying">
+                        <button class="btn ghost" @click="verifyModelConfig" :disabled="modelSaving || modelVerifying">
                             {{ modelVerifying ? '验证中...' : '验证已生效配置' }}
                         </button>
                         <button class="btn ghost" v-if="modelConfig && modelConfig.apiKeyMasked"
-                                :class="{ on: modelClearKey }" @click="modelClearKey = !modelClearKey">
+                                :class="{ on: modelClearKey }" :disabled="modelSaving" @click="modelClearKey = !modelClearKey">
                             {{ modelClearKey ? '取消清除密钥' : '清除已存密钥' }}
                         </button>
                         <span class="card-hint ml-auto" v-if="modelDirty">有未保存的改动</span>

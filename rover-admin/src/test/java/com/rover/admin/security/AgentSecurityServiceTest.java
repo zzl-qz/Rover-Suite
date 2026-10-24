@@ -27,6 +27,28 @@ class AgentSecurityServiceTest {
     }
     private RouteControlPort control() { var port = mock(RouteControlPort.class); when(port.resourceNamespace()).thenReturn("scope-a"); return port; }
 
+    @Test void instanceIsolationRequiresEnabledAdminInCurrentScope() throws Exception {
+        var properties = properties(); var port = control();
+        try (var store = AgentStore.file(properties.getLogStorePath())) {
+            var users = new AdminUserStore(properties, new BCryptPasswordEncoder());
+            var security = new AgentSecurityService(properties, users, port, "admin", Clock.systemUTC(), store);
+            try {
+                users.saveAccount("viewer", "a-long-viewer-password", Set.of("VIEWER"), "scope-a", true);
+                users.saveAccount("admin-2", "a-long-manager-password", Set.of("ADMIN"), "scope-a", true);
+                users.saveAccount("operator", "a-long-operator-password", Set.of("OPERATOR"), "scope-a", true);
+                users.saveAccount("policy", "a-long-policy-password", Set.of("POLICY_ADMIN"), "scope-a", true);
+                users.saveAccount("disabled", "a-long-disabled-password", Set.of("ADMIN"), "scope-a", false);
+                users.saveAccount("other-scope", "a-long-other-scope-password", Set.of("ADMIN"), "scope-b", true);
+
+                assertDoesNotThrow(() -> security.requireInstanceIsolationManager("admin"));
+                assertDoesNotThrow(() -> security.requireInstanceIsolationManager("admin-2"));
+                for (String principal : Set.of("viewer", "operator", "policy", "disabled", "other-scope", "missing")) {
+                    assertThrows(AgentAccess.Denied.class, () -> security.requireInstanceIsolationManager(principal), principal);
+                }
+            } finally { security.close(); users.close(); }
+        }
+    }
+
     @Test void expiredRevokedAndWrongScopeTokensCannotBeUsed() throws Exception {
         var properties = properties(); var port = control();
         Clock now = Clock.fixed(Instant.parse("2026-10-18T00:00:00Z"), ZoneOffset.UTC);

@@ -316,6 +316,16 @@ public class AgentSecurityService implements AgentAccess {
 
     public AdminUserStore.Account account(String username) { return users.account(username); }
 
+    /** Instance isolation/restore changes live traffic and is reserved for an enabled system administrator. */
+    public void requireInstanceIsolationManager(String principal) {
+        AdminUserStore.Account account = users.account(principal);
+        if (account == null || !account.enabled() || !account.roles().contains("ADMIN")
+                || (account.namespace() != null && !Objects.equals(account.namespace(), control.resourceNamespace()))
+                || !permissions(principal).contains(Permission.APPROVE) || writesStopped()) {
+            throw new AgentAccess.Denied("实例隔离和恢复仅允许当前管理范围内的系统管理员执行");
+        }
+    }
+
     public List<AdminUserStore.Account> accounts(String actor) {
         require(actor, Permission.MANAGE_SYSTEM);
         return users.accounts();

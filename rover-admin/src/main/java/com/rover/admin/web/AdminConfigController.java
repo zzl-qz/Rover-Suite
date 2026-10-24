@@ -16,6 +16,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.security.core.Authentication;
+import com.rover.admin.security.AgentSecurityService;
 import org.springframework.web.bind.annotation.RestController;
 import lombok.extern.slf4j.Slf4j;
 
@@ -31,9 +33,11 @@ import lombok.extern.slf4j.Slf4j;
 public class AdminConfigController {
 
     private final AdminConfigService configService;
+    private final AgentSecurityService security;
 
-    public AdminConfigController(AdminConfigService configService) {
+    public AdminConfigController(AdminConfigService configService, AgentSecurityService security) {
         this.configService = configService;
+        this.security = security;
     }
 
     /** 仪表盘聚合：组件状态 + 发现模式 + 自洽校验（不含全量 metrics，减轻 15 秒轮询）。 */
@@ -125,6 +129,28 @@ public class AdminConfigController {
     @PostMapping(AdminApiPaths.ROUTES_TARGET_WEIGHT)
     public Map<String, Object> adjustTargetWeight(@RequestBody Map<String, Object> body) {
         return configService.adjustTargetWeight(body);
+    }
+
+    /** 列出 Gateway 持久实例隔离状态（到期项目显示为待核验，不自动恢复流量）。 */
+    @GetMapping(AdminApiPaths.ROUTE_INSTANCE_ISOLATIONS)
+    public Map<String,Object> routeInstanceIsolations() { return configService.routeInstanceIsolations(); }
+
+    /** 隔离或核验后恢复单个路由实例。 */
+    @PostMapping(AdminApiPaths.ROUTE_INSTANCE_ISOLATIONS)
+    public Map<String,Object> changeRouteInstanceIsolation(@RequestBody Map<String,Object> body, Authentication actor) {
+        security.requireInstanceIsolationManager(actor.getName());
+        body.put("requestedBy", actor.getName());
+        return configService.changeRouteInstanceIsolation(body);
+    }
+
+    @GetMapping(AdminApiPaths.AGENT_ROUTE_INSTANCE_ISOLATIONS)
+    public Map<String,Object> agentRouteInstanceIsolations() { return configService.routeInstanceIsolations(); }
+
+    @PostMapping(AdminApiPaths.AGENT_ROUTE_INSTANCE_ISOLATIONS)
+    public Map<String,Object> agentChangeRouteInstanceIsolation(@RequestBody Map<String,Object> body, Authentication actor) {
+        security.requireInstanceIsolationManager(actor.getName());
+        body.put("requestedBy", actor.getName()); body.put("source", "AGENT");
+        return configService.changeRouteInstanceIsolation(body);
     }
 
     /** 按 toRevision 和当前 revision 回滚，生成新版本并返回可回查的 operationId。 */

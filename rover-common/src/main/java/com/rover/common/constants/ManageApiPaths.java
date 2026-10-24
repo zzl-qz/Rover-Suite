@@ -27,6 +27,8 @@ public final class ManageApiPaths {
     public static final String PROMETHEUS = PREFIX + "/prometheus";
     public static final String TRACES = PREFIX + "/traces";
     public static final String INSTANCES = PREFIX + "/instances";
+    /** Durable route-scoped instance isolation overrides. */
+    public static final String ROUTE_INSTANCE_ISOLATIONS = ROUTES + "/instances/isolations";
     public static final String EVENTS = PREFIX + "/events";
 
     public static final String PARAM_ID = "id";

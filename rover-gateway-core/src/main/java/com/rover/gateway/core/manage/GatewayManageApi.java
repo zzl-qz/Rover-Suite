@@ -14,6 +14,7 @@ import com.rover.gateway.core.config.GatewaySystemProperties;
 import com.rover.gateway.core.discovery.NameserverServiceDiscovery;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteOverlayStore;
+import com.rover.gateway.core.route.RouteInstanceIsolationStore;
 import com.rover.gateway.core.route.RouteValidator;
 import com.rover.gateway.core.runtime.GatewayRuntime;
 import io.netty.channel.ChannelHandlerContext;
@@ -109,6 +110,10 @@ public class GatewayManageApi extends AbstractManageApi {
         }
         if (HttpMethod.GET.equals(request.method()) && ManageApiPaths.DISCOVERY_SNAPSHOT.equals(path)) {
             writeJson(ctx, HttpResponseStatus.OK, discoverySnapshotJson());
+            return true;
+        }
+        if (ManageApiPaths.ROUTE_INSTANCE_ISOLATIONS.equals(path)) {
+            handleInstanceIsolations(ctx, request);
             return true;
         }
         if (ManageApiPaths.ROUTES_PREVIEW.equals(path)) {
@@ -487,6 +492,190 @@ public class GatewayManageApi extends AbstractManageApi {
         resp.put("subscribeCount", rows.size());
         resp.put("subscriptions", rows);
         return JsonCodec.toJson(resp);
+    }
+
+    private synchronized void handleInstanceIsolations(ChannelHandlerContext ctx, FullHttpRequest request) {
+        if (HttpMethod.GET.equals(request.method())) {
+            List<RouteInstanceIsolationStore.Isolation> allRows = runtime.getInstanceIsolationStore().list();
+            int offset = 0, limit = 1000;
+            QueryStringDecoder decoder = new QueryStringDecoder(request.uri());
+            try { if (decoder.parameters().containsKey("offset")) { offset = Math.max(0, Integer.parseInt(decoder.parameters().get("offset").get(0))); }
+                if (decoder.parameters().containsKey("limit")) { limit = Math.max(1, Math.min(1000, Integer.parseInt(decoder.parameters().get("limit").get(0)))); } }
+            catch (RuntimeException ex) { writeJson(ctx, HttpResponseStatus.BAD_REQUEST, JsonCodec.toJson(Map.of("message", "offset/limit 必须为整数"))); return; }
+            int from = Math.min(offset, allRows.size()), to = Math.min(allRows.size(), from + limit);
+            List<Map<String,Object>> rows = allRows.subList(from, to).stream().map(row -> {
+                Map<String,Object> value = new LinkedHashMap<>();
+                value.put("routeUid", row.key().routeUid()); value.put("generation", row.key().generation());
+                value.put("routeId", row.key().routeId()); value.put("serviceName", row.key().serviceName());
+                value.put("group", row.key().group()); value.put("instanceId", row.key().instanceId());
+                value.put("host", row.key().host()); value.put("port", row.key().port());
+                value.put("source", row.source().name()); value.put("state", row.state().name());
+                value.put("lifecycle", row.lifecycle(System.currentTimeMillis())); value.put("requestedBy", row.requestedBy());
+                value.put("reason", row.reason()); value.put("capacityEvidence", row.capacityEvidence());
+                value.put("minimumHealthyAfter", row.minimumHealthyAfter()); value.put("createdAtMillis", row.createdAtMillis());
+                value.put("expiresAtMillis", row.expiresAtMillis()); value.put("version", row.version()); return value;
+            }).toList();
+            writeJson(ctx, HttpResponseStatus.OK, JsonCodec.toJson(Map.of("isolations", rows, "total", allRows.size(),
+                    "offset", offset, "limit", limit, "hasMore", to < allRows.size(), "durable", runtime.getInstanceIsolationStore().healthy()))); return;
+        }
+        if (!HttpMethod.POST.equals(request.method())) {
+            writeJson(ctx, HttpResponseStatus.METHOD_NOT_ALLOWED, JsonCodec.toJson(Map.of("message", "只支持 GET/POST"))); return;
+        }
+        runtime.withRouteMutationLock(() -> {
+        Map<String,Object> body = JsonCodec.parseObjectMap(bodyOf(request));
+        RouteInstanceIsolationStore.Key key = isolationKey(body);
+        String operation = requiredOperation(body);
+        long now = System.currentTimeMillis();
+        boolean restore = "RESTORE".equals(text(body.get("operation")));
+        RouteInstanceIsolationStore.Source source = RouteInstanceIsolationStore.Source.valueOf(text(body.get("source")));
+        int expectedVersion = intValue(body.get("expectedVersion"));
+        RouteInstanceIsolationStore.Isolation prior = restore
+                ? runtime.getInstanceIsolationStore().replayRestore(key, source, text(body.get("requestedBy")), expectedVersion,
+                        text(body.get("capacityEvidence")), intValue(body.get("minimumHealthyAfter")), operation)
+                : runtime.getInstanceIsolationStore().replayIsolate(key, source, text(body.get("requestedBy")),
+                        text(body.get("reason")), text(body.get("capacityEvidence")), intValue(body.get("minimumHealthyAfter")),
+                        longValue(body.get("expiresAtMillis")), expectedVersion, operation);
+        if (prior != null) {
+            writeJson(ctx, HttpResponseStatus.OK, JsonCodec.toJson(Map.of("status", prior.state().name(),
+                    "version", prior.version(), "operationId", operation, "replayed", true)));
+            return;
+        }
+        RouteInstanceIsolationStore.Isolation existing = runtime.getInstanceIsolationStore().list().stream()
+                .filter(row -> row.key().equals(key)).findFirst().orElse(null);
+        RouteInstanceIsolationStore.Isolation result;
+        if (restore) {
+            result = runtime.getInstanceIsolationStore().restore(key, source, text(body.get("requestedBy")),
+                    expectedVersion, text(body.get("capacityEvidence")), intValue(body.get("minimumHealthyAfter")), operation, now,
+                    () -> { validateIsolationTarget(key, true); requireRestoreCapacity(body, key, existing); });
+        } else if ("ISOLATE".equals(text(body.get("operation")))) {
+            result = runtime.getInstanceIsolationStore().isolate(key, source, text(body.get("requestedBy")),
+                    text(body.get("reason")), text(body.get("capacityEvidence")), intValue(body.get("minimumHealthyAfter")),
+                    longValue(body.get("expiresAtMillis")), expectedVersion, operation, now,
+                    () -> { validateIsolationTarget(key, false); requireRemainingCapacity(key, existing, body); });
+        } else { throw new IllegalArgumentException("operation 必须是 ISOLATE 或 RESTORE"); }
+        writeJson(ctx, HttpResponseStatus.OK, JsonCodec.toJson(Map.of("status", result.state().name(),
+                "version", result.version(), "operationId", operation, "isolation", Map.of(
+                        "routeUid", key.routeUid(), "generation", key.generation(), "instanceId", key.instanceId(),
+                        "source", result.source().name(), "lifecycle", result.lifecycle(now)))));
+        });
+    }
+
+    private void validateIsolationTarget(RouteInstanceIsolationStore.Key key, boolean restoring) {
+        RouteConfig route = runtime.getRouteMatcher().listRoutes().stream().filter(item ->
+                key.routeUid().equals(item.getResourceUid()) && key.generation() == item.getGeneration()
+                        && key.routeId().equals(item.getId())).findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("路由 UID/代次已改变，旧隔离不得执行"));
+        var target = route.getTargets() == null ? null : route.getTargets().stream().filter(item ->
+                key.serviceName().equals(item.serviceName()) && (item.group() == null || item.group().isBlank()
+                        || key.group().equals(item.group()))).findFirst().orElse(null);
+        if (runtime.getDiscoveryType() != com.rover.gateway.core.discovery.DiscoveryType.NAMESERVER || target == null) {
+            throw new IllegalArgumentException("实例隔离当前仅支持 Nameserver 动态服务路由");
+        }
+        var allRows = runtime.getInstanceIsolationStore().list().stream().filter(row -> row.key().routeUid().equals(key.routeUid())
+                && row.key().generation() == key.generation() && row.key().routeId().equals(key.routeId())
+                && row.key().serviceName().equals(key.serviceName())).toList();
+        if (!restoring) {
+            var rows = allRows;
+            if (rows.stream().anyMatch(row -> row.key().instanceId().equals(key.instanceId())
+                    && row.key().host().equals(key.host()) && row.key().port() == key.port()
+                    && row.active())) {
+                throw new IllegalArgumentException("该实例已处于隔离状态，请核验当前记录");
+            }
+        }
+        if (runtime.getServiceDiscovery() instanceof NameserverServiceDiscovery nameserver) {
+            String discoveryGroup = target.group() == null || target.group().isBlank() ? null : target.group();
+            List<com.rover.common.model.ServiceInstance> instances = nameserver.getInstanceCache().get(key.serviceName(), discoveryGroup);
+            boolean found = instances.stream().anyMatch(instance -> {
+                String id = instance.getInstanceId() == null || instance.getInstanceId().isBlank()
+                        ? instance.getHost() + ":" + instance.getPort() : instance.getInstanceId();
+                return id.equals(key.instanceId()) && instance.getHost().equals(key.host()) && instance.getPort() == key.port()
+                        && (instance.getGroup() == null ? "" : instance.getGroup()).equals(key.group())
+                        && (!restoring || instance.isHealthy());
+            });
+            if (!found) { throw new IllegalArgumentException(restoring
+                    ? "实例身份不匹配或实例仍不健康，拒绝恢复流量" : "实例身份与 Gateway 当前发现快照不匹配"); }
+        } else { throw new IllegalArgumentException("实例隔离当前仅支持 Nameserver 动态服务路由"); }
+    }
+
+    private void requireRestoreCapacity(Map<String,Object> body, RouteInstanceIsolationStore.Key key,
+                                        RouteInstanceIsolationStore.Isolation existing) {
+        int minimum = intValue(body.get("minimumHealthyAfter"));
+        String evidence = text(body.get("capacityEvidence"));
+        if (minimum < 1 || evidence.isBlank() || evidence.length() > 256) {
+            throw new IllegalArgumentException("恢复必须声明剩余容量证据及最少健康实例数");
+        }
+        if (existing == null || !existing.active()) { throw new IllegalArgumentException("该实例当前没有有效隔离记录"); }
+        RouteConfig route = runtime.getRouteMatcher().listRoutes().stream().filter(item -> key.routeUid().equals(item.getResourceUid())
+                && key.generation() == item.getGeneration() && key.routeId().equals(item.getId())).findFirst().orElseThrow();
+        List<com.rover.common.model.ServiceInstance> instances = capacityInstances(route, key);
+        var isolatedKeys = runtime.getInstanceIsolationStore().active(key.routeUid(), key.generation(), key.routeId(), key.serviceName(), "")
+                .stream().map(RouteInstanceIsolationStore.Isolation::key).collect(java.util.stream.Collectors.toSet());
+        long healthyAfter = instances.stream().filter(instance -> {
+            RouteInstanceIsolationStore.Key instanceKey = isolationKey(route, key.serviceName(), instance);
+            return instanceKey.equals(key) || !isolatedKeys.contains(instanceKey);
+        }).count();
+        if (healthyAfter < minimum) {
+            throw new IllegalArgumentException("恢复后剩余容量门槛不满足；核对实例健康与隔离状态后再试");
+        }
+    }
+
+    private void requireRemainingCapacity(RouteInstanceIsolationStore.Key key,
+            RouteInstanceIsolationStore.Isolation existing, Map<String,Object> body) {
+        String evidence = text(body.get("capacityEvidence"));
+        int minimum = intValue(body.get("minimumHealthyAfter"));
+        if (evidence.isBlank() || evidence.length() > 256 || minimum < 1) {
+            throw new IllegalArgumentException("隔离前必须提供容量核对记录及隔离后的最少健康实例数");
+        }
+        if (existing != null && existing.active()) { return; }
+        RouteConfig route = runtime.getRouteMatcher().listRoutes().stream().filter(item -> key.routeUid().equals(item.getResourceUid())
+                && key.generation() == item.getGeneration() && key.routeId().equals(item.getId())).findFirst().orElseThrow();
+        List<com.rover.common.model.ServiceInstance> instances = capacityInstances(route, key);
+        var isolatedKeys = runtime.getInstanceIsolationStore().active(key.routeUid(), key.generation(), key.routeId(), key.serviceName(), "")
+                .stream().map(RouteInstanceIsolationStore.Isolation::key).collect(java.util.stream.Collectors.toSet());
+        long remaining = instances.stream().map(instance -> isolationKey(route, key.serviceName(), instance))
+                .filter(instanceKey -> !instanceKey.equals(key) && !isolatedKeys.contains(instanceKey)).count();
+        if (remaining < minimum) {
+            throw new IllegalArgumentException("隔离会使剩余健康实例低于门槛；先扩容或降低经核准的门槛");
+        }
+    }
+
+    private List<com.rover.common.model.ServiceInstance> capacityInstances(RouteConfig route, RouteInstanceIsolationStore.Key key) {
+        if (!(runtime.getServiceDiscovery() instanceof NameserverServiceDiscovery nameserver)) { return List.of(); }
+        boolean allGroups = route.getTargets().stream().anyMatch(target -> key.serviceName().equals(target.serviceName())
+                && (target.group() == null || target.group().isBlank()));
+        String group = allGroups ? null : key.group();
+        return nameserver.getInstanceCache().get(key.serviceName(), group).stream()
+                .filter(com.rover.common.model.ServiceInstance::isHealthy).toList();
+    }
+
+    private static RouteInstanceIsolationStore.Key isolationKey(RouteConfig route, String serviceName,
+            com.rover.common.model.ServiceInstance instance) {
+        String instanceId = instance.getInstanceId() == null || instance.getInstanceId().isBlank()
+                ? instance.getHost() + ":" + instance.getPort() : instance.getInstanceId();
+        return new RouteInstanceIsolationStore.Key(route.getResourceUid(), route.getGeneration(), route.getId(),
+                serviceName, instance.getGroup(), instanceId, instance.getHost(), instance.getPort());
+    }
+
+    private static RouteInstanceIsolationStore.Key isolationKey(Map<String,Object> body) {
+        return new RouteInstanceIsolationStore.Key(text(body.get("routeUid")), longValue(body.get("generation")),
+                text(body.get("routeId")), text(body.get("serviceName")), text(body.get("group")), text(body.get("instanceId")),
+                text(body.get("host")), intValue(body.get("port")));
+    }
+    private static String requiredOperation(Map<String,Object> body) {
+        String operation = text(body.get("operation"));
+        String operationId = text(body.get("operationId"));
+        if (!("ISOLATE".equals(operation) || "RESTORE".equals(operation))) {
+            throw new IllegalArgumentException("operation 必须是 ISOLATE 或 RESTORE");
+        }
+        if (operationId.isBlank() || operationId.length() > 128
+                || !operationId.matches("[A-Za-z0-9._:-]{1,128}")) {
+            throw new IllegalArgumentException("需要有效的 operationId");
+        }
+        return operationId;
+    }
+    private static long longValue(Object value) {
+        try { return new java.math.BigDecimal(text(value)).longValueExact(); }
+        catch (NumberFormatException | ArithmeticException ex) { throw new IllegalArgumentException("需要精确长整数"); }
     }
 
     /** 组装 GET /_manage/status 的 JSON 内容。 */

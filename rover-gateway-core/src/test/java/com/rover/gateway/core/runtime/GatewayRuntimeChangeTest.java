@@ -107,10 +107,10 @@ class GatewayRuntimeChangeTest {
 
     @Test
     void overlayWriteFailureKeepsOldRoutesInMemory() throws IOException {
-        // 把 store 的父目录先造成一个普通文件，写 blocked/routes.json 时创建目录必然失败
-        Path blocked = tempDir.resolve("blocked");
+        // 用无效文件占住路由事务 DB 路径；旁边的实例隔离 DB 仍可正常启动。
+        Path blocked = tempDir.resolve("blocked.json.state.mv.db");
         Files.writeString(blocked, "not a directory");
-        RouteOverlayStore brokenStore = new RouteOverlayStore(blocked.resolve("routes.json"));
+        RouteOverlayStore brokenStore = new RouteOverlayStore(tempDir.resolve("blocked.json"));
 
         GatewayRuntime runtime = runtime(brokenStore, List.of(versionedRoute("r1", "/api/a", 100)));
         assertEquals(0, runtime.getRevision(), "初始版本应为 0");
@@ -202,22 +202,21 @@ class GatewayRuntimeChangeTest {
 
     @Test
     void failedStorageWithoutDurableReceiptRemainsUnknownAndCanBeRetriedAfterRecovery() throws IOException {
-        // 把 store 的父目录先造成一个普通文件，写 blocked/routes.json 时创建目录必然失败
-        Path blocked = tempDir.resolve("blocked-retry");
+        // 用无效文件占住路由事务 DB 路径；隔离库仍可工作，便于单独测试路由存储故障。
+        Path blocked = tempDir.resolve("blocked-retry.json.state.mv.db");
         Files.writeString(blocked, "not a directory");
-        GatewayRuntime runtime = runtime(new RouteOverlayStore(blocked.resolve("routes.json")),
+        GatewayRuntime runtime = runtime(new RouteOverlayStore(tempDir.resolve("blocked-retry.json")),
                 List.of(versionedRoute("r1", "/api/a", 100)));
 
         assertThrows(IllegalStateException.class,
                 () -> runtime.applyRoutes(0, "op-retry", List.of(versionedRoute("r2", "/api/b", 100))));
 
         // 存储不可写时不能用易失内存 FAILED 冒充持久事实；丢失响应仍必须对账。
-        GatewayRuntime.OperationRecord record = runtime.operationOf("op-retry");
-        assertNull(record, "无法持久化的失败只能报告 UNKNOWN，不能谎称确定未执行");
+        assertThrows(IllegalStateException.class, () -> runtime.operationOf("op-retry"),
+                "底层存储不可读时不能伪称操作为确定失败或不存在");
 
         // 关键：FAILED 不能被当成幂等重放，否则磁盘恢复后同一 operationId 再也重试不了
         Files.delete(blocked);
-        Files.createDirectories(blocked);
         RouteChangeResult retried = runtime.applyRoutes(0, "op-retry", List.of(versionedRoute("r2", "/api/b", 100)));
 
         assertEquals("APPLIED", retried.status(), "磁盘恢复后同一 operationId 应能重新执行并生效");

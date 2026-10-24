@@ -17,6 +17,7 @@ import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.proxy.InboundBodyPipe;
 import com.rover.gateway.core.route.RouteConfig;
 import com.rover.gateway.core.route.RouteMatcher;
+import com.rover.gateway.core.route.RouteInstanceIsolationStore;
 import com.rover.gateway.core.route.RouteTarget;
 import com.rover.gateway.core.route.WeightedTargetRouter;
 import com.rover.gateway.core.trace.TracePhase;
@@ -47,6 +48,7 @@ public class RouteAndProxyFilter implements Filter {
     private final MetricsRegistry metricsRegistry;
     private final InstanceCircuitBreaker circuitBreaker;
     private final RetrySettings retry;
+    private final RouteInstanceIsolationStore isolationStore;
 
     public RouteAndProxyFilter(RouteMatcher routeMatcher, HttpProxyClient proxyClient) {
         this(routeMatcher, proxyClient, DiscoveryType.STATIC, null, null, null, null);
@@ -80,7 +82,7 @@ public class RouteAndProxyFilter implements Filter {
             MetricsRegistry metricsRegistry,
             InstanceCircuitBreaker circuitBreaker) {
         this(routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, metricsRegistry,
-                circuitBreaker, null);
+                circuitBreaker, null, null);
     }
 
     public RouteAndProxyFilter(
@@ -92,6 +94,14 @@ public class RouteAndProxyFilter implements Filter {
             MetricsRegistry metricsRegistry,
             InstanceCircuitBreaker circuitBreaker,
             RetrySettings retry) {
+        this(routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, metricsRegistry,
+                circuitBreaker, retry, null);
+    }
+
+    public RouteAndProxyFilter(RouteMatcher routeMatcher, HttpProxyClient proxyClient,
+            DiscoveryType discoveryType, ServiceDiscovery serviceDiscovery, LoadBalancer loadBalancer,
+            MetricsRegistry metricsRegistry, InstanceCircuitBreaker circuitBreaker, RetrySettings retry,
+            RouteInstanceIsolationStore isolationStore) {
         this.routeMatcher = routeMatcher;
         this.proxyClient = proxyClient;
         this.discoveryType = discoveryType == null ? DiscoveryType.STATIC : discoveryType;
@@ -100,6 +110,7 @@ public class RouteAndProxyFilter implements Filter {
         this.metricsRegistry = metricsRegistry;
         this.circuitBreaker = circuitBreaker;
         this.retry = retry;
+        this.isolationStore = isolationStore;
     }
 
     @Override
@@ -311,7 +322,8 @@ public class RouteAndProxyFilter implements Filter {
             if (instances == null || instances.isEmpty()) {
                 return null;
             }
-            List<ServiceInstance> candidates = applyCircuitAndExclude(instances, exclude);
+            List<ServiceInstance> candidates = applyIsolation(route, target, instances);
+            candidates = applyCircuitAndExclude(candidates, exclude);
             if (candidates == null) {
                 return exclude.isEmpty() ? ChosenUpstream.allOpen(target) : null;
             }
@@ -332,7 +344,8 @@ public class RouteAndProxyFilter implements Filter {
             return null;
         }
 
-        List<ServiceInstance> candidates = applyCircuitAndExclude(instances, exclude);
+        List<ServiceInstance> candidates = applyIsolation(route, target, instances);
+        candidates = applyCircuitAndExclude(candidates, exclude);
         if (candidates == null) {
             return exclude.isEmpty() ? ChosenUpstream.allOpen(target) : null;
         }
@@ -369,6 +382,27 @@ public class RouteAndProxyFilter implements Filter {
             return serviceDiscovery.getInstances(target.serviceName(), target.group());
         }
         return StaticUpstreamCluster.instancesOf(route);
+    }
+
+    /** Manual and Agent isolation overlays dominate discovery health and circuit recovery. */
+    List<ServiceInstance> applyIsolation(RouteConfig route, RouteTarget target, List<ServiceInstance> instances) {
+        if (isolationStore != null && !isolationStore.isReadable()) { return List.of(); }
+        if (isolationStore == null || route.getResourceUid() == null || route.getResourceUid().isBlank()
+                || route.getGeneration() <= 0 || instances == null || instances.isEmpty()) { return instances; }
+        String service = target == null ? instances.get(0).getServiceName() : target.serviceName();
+        String group = target == null ? instances.get(0).getGroup() : target.group();
+        var isolated = isolationStore.active(route.getResourceUid(), route.getGeneration(), route.getId(), service, group);
+        if (isolated.isEmpty()) { return instances; }
+        List<ServiceInstance> available = new ArrayList<>(instances.size());
+        for (ServiceInstance instance : instances) {
+            String id = instance.getInstanceId() == null || instance.getInstanceId().isBlank()
+                    ? instance.getHost() + ":" + instance.getPort() : instance.getInstanceId();
+            String instanceGroup = instance.getGroup() == null ? "" : instance.getGroup();
+            RouteInstanceIsolationStore.Key key = new RouteInstanceIsolationStore.Key(route.getResourceUid(),
+                    route.getGeneration(), route.getId(), service, instanceGroup, id, instance.getHost(), instance.getPort());
+            if (!isolationStore.isolates(key)) { available.add(instance); }
+        }
+        return available;
     }
 
     /** LB 计数键：动态路由按版本隔离（service@group），静态路由沿用路由级键。 */

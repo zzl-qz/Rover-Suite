@@ -101,6 +101,9 @@ public class GatewayRuntime {
     /** 路由 overlay 持久化。 */
     private final RouteOverlayStore routeOverlayStore;
 
+    /** Route-scoped instance isolation overlay, durable across Gateway restarts. */
+    private final com.rover.gateway.core.route.RouteInstanceIsolationStore instanceIsolationStore;
+
     /** 路由清洗校验器。 */
     private final RouteValidator routeValidator;
 
@@ -197,6 +200,11 @@ public class GatewayRuntime {
         this.serviceDiscovery = serviceDiscovery;
         this.configManager = configManager;
         this.routeOverlayStore = routeOverlayStore;
+        try {
+            this.instanceIsolationStore = new com.rover.gateway.core.route.RouteInstanceIsolationStore(routeOverlayStore.getPath());
+        } catch (RuntimeException ex) {
+            throw new IllegalStateException("Gateway 实例隔离持久存储不可用，拒绝启动以避免忽略已隔离实例", ex);
+        }
         this.routeValidator = new RouteValidator(this.discoveryType);
         this.metricsRegistry.setUpstreamInFlightSupplier(proxyClient::getInFlightCount);
         this.metricsRegistry.setDiscoveryStatusSupplier(() -> serviceDiscovery instanceof ServiceDiscoveryStatus status
@@ -219,6 +227,14 @@ public class GatewayRuntime {
     public synchronized void initializeManagedState() {
         routeOverlayStore.operations().initialize(currentState());
     }
+
+    public com.rover.gateway.core.route.RouteInstanceIsolationStore getInstanceIsolationStore() {
+        return instanceIsolationStore;
+    }
+
+    public DiscoveryType getDiscoveryType() { return discoveryType; }
+
+    public ServiceDiscovery getServiceDiscovery() { return serviceDiscovery; }
 
     /** 当前路由匹配器快照。 */
     public RouteMatcher getRouteMatcher() {
@@ -549,6 +565,7 @@ public class GatewayRuntime {
 
         // 预构建：可运行态在这里一次做完，落盘之后不再有会失败的构建
         assignIdentities(normalized, getRouteMatcher().listRoutes(), false);
+        rejectInvalidatedIsolations(normalized);
         RouteMatcher nextMatcher = new RouteMatcher(normalized);
         List<Filter> nextFilters = assembleFilters(nextMatcher);
 
@@ -571,6 +588,33 @@ public class GatewayRuntime {
         log.info("路由已热更新, count={}, revision={}, operationId={}, overlay={}",
                 normalized.size(), nextRevision, appliedOperationId, routeOverlayStore.getPath().toAbsolutePath());
         return new RouteChangeResult("APPLIED", nextRevision, appliedOperationId, message, normalized);
+    }
+
+    /** Route edits and isolation writes share this monitor so validation cannot race a route replacement. */
+    public synchronized void withRouteMutationLock(Runnable operation) {
+        operation.run();
+    }
+
+    private void rejectInvalidatedIsolations(List<RouteConfig> candidate) {
+        for (var isolation : instanceIsolationStore.list()) {
+            if (!isolation.active()) { continue; }
+            var key = isolation.key();
+            boolean retained = candidate.stream().anyMatch(route ->
+                    key.routeUid().equals(route.getResourceUid())
+                            && key.generation() == route.getGeneration()
+                            && key.routeId().equals(route.getId())
+                            && route.getTargets() != null
+                            && route.getTargets().stream().anyMatch(target ->
+                                    key.serviceName().equals(target.serviceName())
+                                            && (target.group() == null || target.group().isBlank()
+                                                    || key.group().equals(target.group()))));
+            if (!retained) {
+                throw new ManageApiException(HttpResponseStatus.CONFLICT,
+                        "活动实例隔离期间不能删除或修改对应路由；先恢复实例流量，再重试",
+                        Map.of("code", "ACTIVE_INSTANCE_ISOLATION", "routeId", key.routeId(),
+                                "instanceId", key.instanceId()));
+            }
+        }
     }
 
     /** 新增或按 businessPrefix/id 替换单条路由，整表走同一条变更协议。 */
@@ -732,7 +776,8 @@ public class GatewayRuntime {
                             : existing.getBusinessPrefix().equals(route.getBusinessPrefix())).findFirst().orElse(null);
             if (previous != null) {
                 route.setResourceUid(previous.getResourceUid());
-                route.setGeneration(previous.getGeneration());
+                boolean unchanged = RouteOverlayStore.toRow(previous).equals(RouteOverlayStore.toRow(route));
+                route.setGeneration(unchanged ? previous.getGeneration() : Math.addExact(previous.getGeneration(), 1));
             } else if (!restoring || route.getResourceUid() == null || route.getResourceUid().isBlank()) {
                 route.setResourceUid(java.util.UUID.randomUUID().toString());
                 route.setGeneration(1);
@@ -798,7 +843,8 @@ public class GatewayRuntime {
                 serviceDiscovery,
                 loadBalancer.get(),
                 metricsRegistry,
-                filterSettings.getCircuitBreaker().isEnabled() ? circuitBreaker : null);
+                filterSettings.getCircuitBreaker().isEnabled() ? circuitBreaker : null,
+                instanceIsolationStore);
     }
 
     /** 按当前路由、发现、LB、Filter 配置重新组装过滤器链并原子替换。 */

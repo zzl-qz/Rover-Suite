@@ -15,6 +15,12 @@ window.RoverAdminPages.routes = {
     data() {
         return {
             routes: [],
+            routesLoading: false,
+            routesRequest: 0,
+            instanceIsolations: [],
+            instanceIsolationError: null,
+            instanceIsolationLoading: false,
+            instanceIsolationRequest: 0,
             // 读路由表时一起拿到的版本号；提交时必须原样回传，网关用它判并发冲突
             routesRevision: 0,
             routesError: null,
@@ -31,6 +37,10 @@ window.RoverAdminPages.routes = {
     },
 
     computed: {
+        canManageInstanceIsolation() {
+            return Boolean(this.auth && this.auth.authenticated && this.auth.permissions
+                && this.auth.permissions.includes('MANAGE_SYSTEM'));
+        },
         routeUpstreamOptions() {
             return [
                 { label: '注册中心（按版本分流）', value: 'discovery' },
@@ -55,15 +65,137 @@ window.RoverAdminPages.routes = {
     },
 
     methods: {
-        async fetchRoutes() {
+        async fetchRoutes(force = false) {
+            if (this.routesLoading && !force) return;
+            const request = ++this.routesRequest;
+            this.routesLoading = true;
             this.routesError = null;
             try {
                 const state = await RoverAdminApi.api('/api/routes');
+                if (request !== this.routesRequest) return;
                 this.routes = state.routes || [];
                 this.routesRevision = state.revision || 0;
             } catch (e) {
-                this.routesError = e.message;
+                if (request === this.routesRequest) this.routesError = e.message;
+            } finally {
+                if (request === this.routesRequest) this.routesLoading = false;
             }
+        },
+        async loadRoutesPage() {
+            await Promise.all([this.fetchRoutes(), this.fetchInstanceIsolations(), this.fetchInstanceIsolationPermissions()]);
+        },
+        async fetchInstanceIsolationPermissions() {
+            try {
+                const result = await RoverAdminApi.api('/api/agent/security/me');
+                this.auth = { ...this.auth, authenticated: true, permissions: result.permissions || [] };
+            } catch (e) {
+                this.auth = { ...this.auth, permissions: [] };
+            }
+        },
+        async fetchInstanceIsolations(force = false) {
+            if (this.instanceIsolationLoading && !force) return;
+            const request = ++this.instanceIsolationRequest;
+            this.instanceIsolationError = null;
+            this.instanceIsolationLoading = true;
+            try {
+                const result = await RoverAdminApi.api('/api/routes/instances/isolations');
+                if (request !== this.instanceIsolationRequest) return;
+                this.instanceIsolations = result.isolations || [];
+            } catch (e) {
+                if (request === this.instanceIsolationRequest) this.instanceIsolationError = e.message;
+            } finally {
+                if (request === this.instanceIsolationRequest) this.instanceIsolationLoading = false;
+            }
+        },
+        routeInstanceIsolations(route) {
+            return this.instanceIsolations.filter(row => row.routeUid === route.resourceUid
+                && Number(row.generation) === Number(route.generation) && row.routeId === route.id);
+        },
+        routeSupportsInstanceIsolation(route) {
+            return this.discoveryType === 'NAMESERVER' && Boolean(route && route.targets && route.targets.length);
+        },
+        async openInstanceIsolation(route) {
+            if (!this.canManageInstanceIsolation) { this.toast('error', '当前账号没有实例隔离管理权限'); return; }
+            if (!this.routeSupportsInstanceIsolation(route)) { this.toast('error', '实例隔离当前仅支持 Nameserver 动态服务路由'); return; }
+            await this.fetchInstanceIsolations();
+            const targets = (route.targets || []).filter(target => target.serviceName);
+            if (!targets.length) { this.toast('error', '当前路由没有注册中心服务目标'); return; }
+            const labels = targets.map((target, index) => `${index + 1}. ${target.serviceName}/${target.group || '全部分组'} weight=${target.weight}`).join('\n');
+            const targetIndex = Number(prompt(`路由 ${route.id}（UID ${route.resourceUid} / 代次 ${route.generation}）\n${labels}\n\n输入要操作的服务目标编号；留空取消`));
+            if (!Number.isInteger(targetIndex) || targetIndex < 1 || targetIndex > targets.length) return;
+            const target = targets[targetIndex - 1];
+            const selection = prompt(`请输入 ${target.serviceName}/${target.group || '全部分组'} 的实例 ID；留空取消`);
+            if (!selection) return;
+            const existing = this.instanceIsolations.find(row => row.routeUid === route.resourceUid
+                && Number(row.generation) === Number(route.generation) && row.routeId === route.id
+                && row.serviceName === target.serviceName
+                && (!target.group || row.group === target.group)
+                && row.instanceId === selection.trim() && row.state === 'ISOLATED');
+            if (existing) { this.toast('error', '该实例已隔离，请从隔离记录逐项核验恢复'); return; }
+            const instances = await RoverAdminApi.api('/api/instances');
+            const instance = instances.find(item => item.serviceName === target.serviceName
+                && (!target.group || item.group === target.group) && item.instanceId === selection.trim());
+            if (!instance) { this.toast('error', '所选实例不属于该路由目标的当前服务分组'); return; }
+            await this.changeInstanceIsolation({ routeUid: route.resourceUid, generation: route.generation, routeId: route.id,
+                serviceName: target.serviceName, group: instance.group || '', instanceId: instance.instanceId, host: instance.host, port: instance.port,
+                requestedBy: this.auth.username, source: 'MANUAL', version: 0 }, 'ISOLATE');
+        },
+        async restoreInstanceIsolation(route, row) {
+            if (!this.canManageInstanceIsolation) { this.toast('error', '当前账号没有实例隔离管理权限'); return; }
+            if (!confirm(`请确认已检查 ${row.instanceId}（${row.host}:${row.port}）健康，且恢复流量不会超过容量门槛。继续恢复？`)) return;
+            await this.changeInstanceIsolation({ routeUid: route.resourceUid, generation: route.generation, routeId: route.id,
+                serviceName: row.serviceName, group: row.group || '', instanceId: row.instanceId, host: row.host, port: row.port,
+                requestedBy: this.auth.username, source: row.source, version: row.version }, 'RESTORE');
+        },
+        async changeInstanceIsolation(row, operation) {
+            const body = { ...row, operation, operationId: newOperationId() };
+            if (operation === 'ISOLATE') {
+                body.expectedVersion = row.version || 0;
+                body.reason = '运维人员在路由面板执行实例隔离';
+                const minutes = Number(prompt('隔离时长（分钟，最多 10080）', '30'));
+                if (!Number.isFinite(minutes) || minutes < 1 || minutes > 10080) return;
+                body.expiresAtMillis = Date.now() + minutes * 60_000;
+            } else { body.expectedVersion = row.version; }
+            const instances = await RoverAdminApi.api('/api/instances');
+            const routeIsolated = this.instanceIsolations.filter(item => item.lifecycle !== 'RESTORED'
+                && item.routeUid === row.routeUid && Number(item.generation) === Number(row.generation)
+                && item.routeId === row.routeId && item.serviceName === row.serviceName
+                && !(operation === 'RESTORE' && item.instanceId === row.instanceId
+                    && item.host === row.host && Number(item.port) === Number(row.port)));
+            const healthy = instances.filter(item => item.serviceName === row.serviceName
+                && (operation === 'RESTORE' || item.healthy)
+                && (this.routeHasUnrestrictedTarget(row.routeId, row.serviceName) || (item.group || '') === (row.group || '')))
+                .filter(item => {
+                    const sameInstance = (item.instanceId || `${item.host}:${item.port}`) === row.instanceId
+                        && item.host === row.host && Number(item.port) === Number(row.port);
+                    if (operation === 'ISOLATE' && sameInstance) return false;
+                    return !routeIsolated.some(isolated => isolated.instanceId === (item.instanceId || `${item.host}:${item.port}`)
+                        && isolated.host === item.host && Number(isolated.port) === Number(item.port));
+                }).length;
+            const minimum = Number(prompt('要求操作后至少保留的健康实例数', '1'));
+            if (!Number.isInteger(minimum) || minimum < 1 || healthy < minimum) {
+                this.toast('error', `剩余健康实例 ${healthy}，未达到要求 ${minimum || 1}`); return;
+            }
+            body.minimumHealthyAfter = minimum;
+            body.capacityEvidence = `人工核对 Nameserver 健康实例数=${healthy}; ${new Date().toISOString()}`;
+            try {
+                const result = await RoverAdminApi.api('/api/agent/security/me');
+                if (!result.permissions || !result.permissions.includes('MANAGE_SYSTEM')) {
+                    this.toast('error', '当前账号没有系统管理权限，不能隔离或恢复实例'); return;
+                }
+                this.auth = { ...this.auth, authenticated: true, permissions: result.permissions };
+            } catch (e) { this.toast('error', '无法确认当前账号权限，已取消实例操作'); return; }
+            try {
+                await RoverAdminApi.api('/api/routes/instances/isolations', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+                });
+                this.toast('success', operation === 'ISOLATE' ? '实例已隔离，到期需人工核验恢复' : '实例隔离已解除');
+                await this.fetchInstanceIsolations(true);
+            } catch (e) { this.toast('error', e.message); }
+        },
+        routeHasUnrestrictedTarget(routeId, serviceName) {
+            const route = this.routes.find(item => item.id === routeId);
+            return Boolean(route && (route.targets || []).some(target => target.serviceName === serviceName && !target.group));
         },
         resetRouteForm() {
             this.routeForm = {
@@ -463,7 +595,6 @@ function newOperationId() {
     }
     return 'op-' + Date.now() + '-' + Math.random().toString(16).slice(2);
 }
-
 /**
  * 把路由上的 targetUrl + targetUrls 拆成「一台机器一行」。
  * 与网关解析口径一致：取最后一个 | 后面的纯数字当权重，否则整段都是地址、权重留空。

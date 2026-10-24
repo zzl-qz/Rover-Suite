@@ -4,6 +4,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.never;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -23,6 +24,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(AdminConfigController.class)
 class AdminConfigControllerWebTest {
@@ -32,6 +34,9 @@ class AdminConfigControllerWebTest {
 
     @MockitoBean
     private AdminConfigService configService;
+
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    private com.rover.admin.security.AgentSecurityService security;
 
     @Test
     void servesAdminPage() throws Exception {
@@ -129,6 +134,24 @@ class AdminConfigControllerWebTest {
                         .content("{\"businessPrefix\":\"/orders\"}"))
                 .andExpect(status().isOk())
                 .andExpect(content().json("{\"ok\":true}"));
+    }
+
+    @Test
+    void proxiesIsolationReadAndRequiresManagerForIsolationWrites() throws Exception {
+        when(configService.routeInstanceIsolations()).thenReturn(Map.of("isolations", List.of(), "durable", true));
+        when(configService.changeRouteInstanceIsolation(Map.of("operation", "ISOLATE", "requestedBy", "admin")))
+                .thenReturn(Map.of("status", "ISOLATED"));
+
+        mockMvc.perform(get("/api/routes/instances/isolations"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.durable").value(true));
+        verify(security, never()).requireInstanceIsolationManager(org.mockito.ArgumentMatchers.anyString());
+
+        mockMvc.perform(post("/api/routes/instances/isolations").principal(org.springframework.security.authentication.UsernamePasswordAuthenticationToken.authenticated("admin", null, List.of()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operation\":\"ISOLATE\"}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.status").value("ISOLATED"));
+        verify(security).requireInstanceIsolationManager("admin");
+        verify(configService).changeRouteInstanceIsolation(Map.of("operation", "ISOLATE", "requestedBy", "admin"));
     }
 
     @Test

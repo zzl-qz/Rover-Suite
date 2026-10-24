@@ -134,7 +134,7 @@ window.RoverAdminPages.shared = {
                 }
                 if (this.page === 'traces') await this.fetchTraces();
                 if (this.page === 'workbench') await this.wbRefresh();
-                if (this.page === 'routes') await this.fetchRoutes();
+                if (this.page === 'routes') await this.loadRoutesPage();
                 if (this.page === 'metrics') await Promise.all([this.fetchRoutes(), this.refreshMetrics()]);
                 if (this.page === 'instances') await this.fetchInstances();
                 if (this.page === 'events') await this.fetchEvents();
@@ -148,6 +148,7 @@ window.RoverAdminPages.shared = {
             if (document.hidden) return;
             if (this.page === 'traces') this.fetchTraces();
             if (this.page === 'workbench') this.wbPollSession();
+            if (this.page === 'routes') { this.fetchRoutes(); this.fetchInstanceIsolations(); }
             if (this.page === 'instances') this.fetchInstances();
             if (this.page === 'events') this.fetchEvents();
         },

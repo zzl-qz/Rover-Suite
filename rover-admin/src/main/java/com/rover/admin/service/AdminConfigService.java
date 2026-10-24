@@ -87,6 +87,38 @@ public class AdminConfigService {
         }
     }
 
+    public Map<String,Object> routeInstanceIsolations() {
+        try { List<Map<String,Object>> rows = new ArrayList<>(); int offset = 0, total = 0;
+            do { JsonNode node = httpClient.getJson(properties.getGatewayUrl(), ManageApiPaths.ROUTE_INSTANCE_ISOLATIONS + "?offset=" + offset + "&limit=1000");
+                Map<String,Object> page = JsonCodec.parseObjectMap(node.toString());
+                Object items = page.get("isolations"); if (items instanceof List<?> list) for (Object item : list) if (item instanceof Map<?,?> map) {
+                    Map<String,Object> row = new LinkedHashMap<>(); map.forEach((key,value) -> row.put(String.valueOf(key), value)); rows.add(row);
+                }
+                total = page.get("total") instanceof Number n ? n.intValue() : rows.size(); offset = rows.size();
+            } while (offset < total && !rows.isEmpty());
+            return Map.of("isolations", List.copyOf(rows), "total", total, "durable", true); }
+        catch (Exception ex) { throw new IllegalStateException("读取 Gateway 实例隔离状态失败: " + ex.getMessage(), ex); }
+    }
+
+    public Map<String,Object> changeRouteInstanceIsolation(Map<String,Object> body) {
+        String routeId = String.valueOf(body.getOrDefault("routeId", ""));
+        String instanceId = String.valueOf(body.getOrDefault("instanceId", ""));
+        body.putIfAbsent("source", "MANUAL");
+        try {
+            Map<String,Object> result = httpClient.postJson(properties.getGatewayUrl(),
+                    ManageApiPaths.ROUTE_INSTANCE_ISOLATIONS, body);
+            recordOperation(RecordType.CONFIG_CHANGE, "routeInstanceIsolation", routeId, instanceId,
+                    String.valueOf(body.getOrDefault("operation", "")) + ":" + result.get("status"));
+            return result;
+        } catch (ManageApiCallException ex) {
+            recordOperation(RecordType.ERROR, "routeInstanceIsolation", routeId, instanceId, "FAILED:" + ex.getMessage());
+            throw ex;
+        } catch (Exception ex) {
+            recordOperation(RecordType.ERROR, "routeInstanceIsolation", routeId, instanceId, "FAILED:" + ex.getMessage());
+            throw new ManageApiCallException(0, "调用 Gateway 实例隔离接口失败", ex);
+        }
+    }
+
     /** 只要路由行，给 Agent 只读适配器用。 */
     public List<Map<String, Object>> listRoutes() {
         Object rows = routesState().get("routes");

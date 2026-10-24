@@ -8,6 +8,7 @@ import com.rover.common.spi.loadbalance.LoadBalancer;
 import com.rover.gateway.core.metrics.MetricsFilter;
 import com.rover.gateway.core.metrics.MetricsRegistry;
 import com.rover.gateway.core.filter.circuit.InstanceCircuitBreaker;
+import com.rover.gateway.core.route.RouteInstanceIsolationStore;
 import com.rover.gateway.core.filter.ratelimit.RateLimitFilter;
 import com.rover.gateway.core.proxy.HttpProxyClient;
 import com.rover.gateway.core.route.RouteMatcher;
@@ -61,6 +62,20 @@ public class GatewayFilterAssembler {
             LoadBalancer loadBalancer,
             MetricsRegistry metricsRegistry,
             InstanceCircuitBreaker circuitBreaker) {
+        return assemble(settings, routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer,
+                metricsRegistry, circuitBreaker, null);
+    }
+
+    public List<Filter> assemble(
+            FilterSettings settings,
+            RouteMatcher routeMatcher,
+            HttpProxyClient proxyClient,
+            DiscoveryType discoveryType,
+            ServiceDiscovery serviceDiscovery,
+            LoadBalancer loadBalancer,
+            MetricsRegistry metricsRegistry,
+            InstanceCircuitBreaker circuitBreaker,
+            RouteInstanceIsolationStore isolationStore) {
         // key 用类名，避免同名过滤器被重复加入。
         Map<String, Filter> filters = new LinkedHashMap<>();
 
@@ -119,7 +134,7 @@ public class GatewayFilterAssembler {
         // 终端过滤器固定放最后，负责路由匹配和真实转发。
         orderedFilters.add(new RouteAndProxyFilter(
                 routeMatcher, proxyClient, discoveryType, serviceDiscovery, loadBalancer, metricsRegistry,
-                circuitBreaker, settings == null ? null : settings.getRetry()));
+                circuitBreaker, settings == null ? null : settings.getRetry(), isolationStore));
 
         log.info("Gateway filter chain ready, size={}", orderedFilters.size());
         for (Filter filter : orderedFilters) {

@@ -20,6 +20,8 @@ public final class AdminApiPaths {
     public static final String ROUTES_ROLLBACK = "/routes/rollback";
     /** 路由写操作记录查询：请求超时后用同一个 operationId 确认是否已执行。 */
     public static final String ROUTE_OPERATION = "/routes/operations/{operationId}";
+    public static final String ROUTE_INSTANCE_ISOLATIONS = "/routes/instances/isolations";
+    public static final String AGENT_ROUTE_INSTANCE_ISOLATIONS = "/agent/routes/instances/isolations";
     public static final String INSTANCES = "/instances";
     public static final String NAMESERVER_METRICS = "/nameserver/metrics";
     public static final String EVENTS = "/events";

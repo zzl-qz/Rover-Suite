@@ -177,8 +177,10 @@ public class RouteOperationStore {
             RouteOverlayStore.AppliedState state = JsonCodec.fromJson(row.getString("state_json"), RouteOverlayStore.AppliedState.class);
             boolean upgraded = false;
             for (RouteConfig route : state.routes()) {
-                if (route.getResourceUid() == null || route.getResourceUid().isBlank()) {
+                if (route.getResourceUid() == null || route.getResourceUid().isBlank() || route.getGeneration() <= 0) {
+                    if (route.getResourceUid() == null || route.getResourceUid().isBlank()) {
                     route.setResourceUid(UUID.randomUUID().toString());
+                    }
                     route.setGeneration(1);
                     upgraded = true;
                 }
