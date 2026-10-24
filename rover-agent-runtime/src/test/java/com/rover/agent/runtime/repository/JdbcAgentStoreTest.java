@@ -9,6 +9,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNotes;
 import com.rover.agent.core.model.AgentMessage;
+import com.rover.agent.core.model.ConfigActionIntent;
+import com.rover.agent.core.model.ConfigActionApproval;
+import com.rover.agent.core.model.ConfigActionStatus;
+import com.rover.agent.core.model.GatewayConfigAction;
+import com.rover.agent.core.model.ResourceScope;
 import com.rover.agent.core.model.AlertDelivery;
 import com.rover.agent.core.model.AutoExecutionPolicy;
 import com.rover.agent.core.model.AlertEventState;
@@ -56,6 +61,65 @@ import org.junit.jupiter.api.Test;
  * 重启中断只改状态、迁移可重跑。
  */
 class JdbcAgentStoreTest {
+
+    @Test
+    void configActionIntentAndUnknownStateSurviveRestartAndCannotBeReplayedAsPending() throws Exception {
+        String path = tempPath("rover-config-action");
+        ResourceScope scope = new ResourceScope("org", "team", "test");
+        ConfigActionIntent intent = new ConfigActionIntent(ConfigActionIntent.ALLOWED_KEY, "0.0", "1",
+                scope, "gateway-test", "namespace-test");
+        long now = System.currentTimeMillis();
+        String policy = "gateway-config-approval-v1";
+        List<ConfigActionApproval> approvals = List.of(
+                new ConfigActionApproval("reviewer-a", intent.intentHash(), policy, now),
+                new ConfigActionApproval("reviewer-b", intent.intentHash(), policy, now + 1));
+        GatewayConfigAction action = new GatewayConfigAction("cfg-action-1", "s1", null, null, "alice",
+                intent, intent.intentHash(), policy, approvals, "agent-op-1", "cfg-parent",
+                ConfigActionStatus.QUEUED, null, now, now + 1, now + 60_000, 0);
+        try (JdbcAgentStore first = new JdbcAgentStore(path)) {
+            first.sessions().save(session("s1"));
+            first.gatewayConfigActions().save(action);
+            assertTrue(first.gatewayConfigActions().hasNonTerminalForSession("s1"));
+            assertThrows(IllegalStateException.class, () -> first.sessions().remove("s1"));
+            assertTrue(first.gatewayConfigActions().find(action.actionId()).isPresent());
+            assertThrows(IllegalArgumentException.class, () -> first.gatewayConfigActions().transition(
+                    "cfg-action-1", ConfigActionStatus.QUEUED, current ->
+                            new GatewayConfigAction(current.actionId(), current.sessionId(), current.incidentId(),
+                                    current.taskId(), current.requestedBy(), current.intent(), current.intentHash(),
+                                    current.policyVersion(), current.approvals(), current.operationId(),
+                                    ConfigActionStatus.EXECUTING, null, current.createdAtMillis(), now + 1,
+                                    current.expiresAtMillis() + 1, current.version())));
+            assertTrue(first.gatewayConfigActions().transition("cfg-action-1", ConfigActionStatus.QUEUED,
+                    current -> current.withStatus(ConfigActionStatus.EXECUTING, null, now + 2)).isPresent());
+            assertTrue(first.gatewayConfigActions().transition("cfg-action-1", ConfigActionStatus.EXECUTING,
+                    current -> current.withStatus(ConfigActionStatus.UNKNOWN, "Gateway 回执待人工对账", now + 3)).isPresent());
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            GatewayConfigAction restored = reopened.gatewayConfigActions().find("cfg-action-1").orElseThrow();
+            assertEquals(intent, restored.intent());
+            assertEquals(intent.intentHash(), restored.intentHash());
+            assertEquals("agent-op-1", restored.operationId());
+            assertEquals("cfg-parent", restored.compensatesActionId());
+            assertEquals(action.actionId(), reopened.gatewayConfigActions().findCompensation("cfg-parent").orElseThrow().actionId());
+            assertEquals(ConfigActionStatus.UNKNOWN, restored.status());
+            assertTrue(reopened.gatewayConfigActions().hasNonTerminalForSession("s1"));
+            assertTrue(reopened.gatewayConfigActions().byStatus(java.util.Set.of(ConfigActionStatus.UNKNOWN), 10)
+                    .contains(restored));
+        }
+    }
+
+    @Test
+    void configActionIntentRejectsTamperedHashAndUnregisteredConfigValues() throws Exception {
+        ResourceScope scope = new ResourceScope("org", "team", "test");
+        ConfigActionIntent intent = new ConfigActionIntent(ConfigActionIntent.ALLOWED_KEY, "0.0", "1", scope,
+                "gateway-test", "namespace-test");
+        long now = System.currentTimeMillis();
+        assertThrows(IllegalArgumentException.class, () -> new ConfigActionIntent("gateway.adminToken", "0", "1",
+                scope, "gateway-test", "namespace-test"));
+        assertThrows(IllegalArgumentException.class, () -> new GatewayConfigAction("cfg-tamper", "s1", null, null,
+                "alice", intent, "0".repeat(64), "gateway-config-approval-v1", List.of(), "agent-op-tamper",
+                ConfigActionStatus.PENDING_APPROVAL, null, now, now, now + 60_000, 0));
+    }
 
     @Test
     void restartKeepsTheWholeSessionIncidentTaskChain() throws Exception {
@@ -232,7 +296,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(18, store.schemaVersion(),
+            assertEquals(20, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
                             + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
                             + "v13 保存按管理目标绑定的持久动作命令");
@@ -246,7 +310,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-        assertEquals(18, store.schemaVersion());
+            assertEquals(20, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -448,7 +512,7 @@ class JdbcAgentStoreTest {
     void schemaV17UpgradesToV18AndCertificationAuditIsAtomicWithRecord() throws Exception {
         String path = tempPath("rover-shadow-v17-upgrade");
         try (JdbcAgentStore first = new JdbcAgentStore(path)) {
-            assertEquals(18, first.schemaVersion());
+            assertEquals(20, first.schemaVersion());
         }
         try (Connection connection = DriverManager.getConnection(
                 "jdbc:h2:file:" + path + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE", "sa", "");
@@ -456,7 +520,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version=18");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(18, upgraded.schemaVersion());
+            assertEquals(20, upgraded.schemaVersion());
             assertTrue(upgraded.healthy());
             var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "staging");
             var subject = new com.rover.agent.core.model.ActionCertificationSubject(scope,
@@ -485,7 +549,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(18, upgraded.schemaVersion());
+            assertEquals(20, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }

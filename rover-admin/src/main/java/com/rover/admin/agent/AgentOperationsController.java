@@ -34,7 +34,8 @@ public class AgentOperationsController {
         security.require(actor.getName(), Permission.MANAGE_SYSTEM);
         boolean healthy = store.persistent() && store.durable().healthy();
         var uncertainActions = scopedActions(java.util.Set.of(com.rover.agent.core.model.ActionStatus.UNCERTAIN));
-        long uncertain = uncertainActions.size();
+        long uncertain = uncertainActions.size() + scopedConfigActions(
+                java.util.Set.of(com.rover.agent.core.model.ConfigActionStatus.UNKNOWN)).size();
         var status = new OperationStatus(store.persistent(), healthy, security.writesStopped(), tasks.draining(),
                 uncertain, store.persistent() ? store.durable().schemaVersion() : 0, security.writeResumeState(),
                 security.writeResumeApproverAllowed(actor.getName()));
@@ -61,6 +62,13 @@ public class AgentOperationsController {
                         && (control.resourceScope() == null || java.util.Objects.equals(control.resourceScope(), session.scope())))
                 .flatMap(session -> store.actions().bySession(session.sessionId()).stream())
                 .filter(action -> outstandingStatuses.contains(action.status())).count();
+        outstanding += scopedConfigActions(java.util.EnumSet.of(
+                com.rover.agent.core.model.ConfigActionStatus.PENDING_APPROVAL,
+                com.rover.agent.core.model.ConfigActionStatus.QUEUED,
+                com.rover.agent.core.model.ConfigActionStatus.EXECUTING,
+                com.rover.agent.core.model.ConfigActionStatus.UNKNOWN,
+                com.rover.agent.core.model.ConfigActionStatus.RECONCILE_QUEUED,
+                com.rover.agent.core.model.ConfigActionStatus.RECONCILING)).size();
         if (outstanding > 0) {
             return ResponseEntity.status(409).body(Map.of("message", "仍有 " + outstanding + " 条待执行或待对账动作；先完成对账后再审批恢复"));
         }
@@ -88,6 +96,15 @@ public class AgentOperationsController {
                         && (control.resourceScope() == null
                         || java.util.Objects.equals(control.resourceScope(), session.scope())))
                 .orElse(false);
+    }
+    private java.util.List<com.rover.agent.core.model.GatewayConfigAction> scopedConfigActions(
+            java.util.Set<com.rover.agent.core.model.ConfigActionStatus> statuses) {
+        return store.gatewayConfigActions().byStatus(statuses, 1000).stream()
+                .filter(action -> store.sessions().find(action.sessionId()).map(session ->
+                        java.util.Objects.equals(control.resourceNamespace(), session.targetNamespace())
+                                && (control.resourceScope() == null
+                                || java.util.Objects.equals(control.resourceScope(), session.scope())))
+                        .orElse(false)).toList();
     }
     @PostMapping("/resume") public Object resume(Authentication actor) {
         security.require(actor.getName(), Permission.MANAGE_SYSTEM);

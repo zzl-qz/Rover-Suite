@@ -114,10 +114,15 @@ public final class GatewayConfigActionStore {
     private Connection open() throws Exception { return DriverManager.getConnection(url, "sa", ""); }
     private static void validate(String operationId, String key, String expected, String desired, String actor) {
         if (operationId == null || !operationId.matches("[A-Za-z0-9._:-]{1,128}") || !TRACE_SAMPLE_RATE.equals(key)
-                || !ALLOWED_VALUES.contains(expected) || !ALLOWED_VALUES.contains(desired) || expected.equals(desired)
+                || !validExpected(expected) || !ALLOWED_VALUES.contains(desired) || Double.parseDouble(expected) == Double.parseDouble(desired)
                 || actor == null || actor.isBlank() || actor.length() > 128) {
             throw new IllegalArgumentException("仅允许对 trace.sampleRate 使用明确的 0/1 变更，并提供不同旧值与新值、操作号和操作者");
         }
+    }
+    private static boolean validExpected(String value) {
+        if (value == null || value.length() > 32) return false;
+        try { double rate = Double.parseDouble(value); return Double.isFinite(rate) && (rate == 0 || rate == 1); }
+        catch (NumberFormatException invalid) { return false; }
     }
     static String requestHash(String key, String expected, String desired, String actor) {
         return hash(key + "|" + expected + "|" + desired + "|" + actor);

@@ -1,6 +1,7 @@
 package com.rover.agent.runtime.repository;
 
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.GatewayConfigActionRepository;
 import com.rover.agent.core.repository.ActionCertificationRepository;
 import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
 import com.rover.agent.core.repository.AutonomousActionBudgetRepository;
@@ -26,6 +27,7 @@ public final class AgentStore implements AutoCloseable {
     private final AgentTaskRepository tasks;
     private final AgentCheckpointRepository checkpoints;
     private final AgentActionRepository actions;
+    private final GatewayConfigActionRepository gatewayConfigActions;
     private final AutoExecutionPolicyRepository autoExecutionPolicies;
     private final ActionCertificationRepository actionCertifications;
     private final AutonomousActionBudgetRepository autonomousActionBudget;
@@ -40,6 +42,7 @@ public final class AgentStore implements AutoCloseable {
     private AgentStore(AgentSessionRepository sessions, AgentMessageRepository messages,
                        IncidentRepository incidents, AgentTaskRepository tasks,
                        AgentCheckpointRepository checkpoints, AgentActionRepository actions,
+                       GatewayConfigActionRepository gatewayConfigActions,
                        ActionCommandRepository actionCommands, AlertLifecycleRepository alertLifecycles,
                        AutoExecutionPolicyRepository autoExecutionPolicies,
                        ActionCertificationRepository actionCertifications,
@@ -51,6 +54,7 @@ public final class AgentStore implements AutoCloseable {
         this.tasks = tasks;
         this.checkpoints = checkpoints;
         this.actions = actions;
+        this.gatewayConfigActions = gatewayConfigActions;
         this.alertLifecycles = alertLifecycles;
         this.autoExecutionPolicies = autoExecutionPolicies;
         this.actionCertifications = actionCertifications;
@@ -69,7 +73,8 @@ public final class AgentStore implements AutoCloseable {
                 new InMemoryAgentMessageRepository(messageCapacity),
                 new InMemoryIncidentRepository(incidentCapacity),
                 new InMemoryAgentTaskRepository(taskCapacity), new InMemoryAgentCheckpointRepository(),
-                new InMemoryAgentActionRepository(actionCapacity), new InMemoryActionCommandRepository(1000),
+                new InMemoryAgentActionRepository(actionCapacity), new InMemoryGatewayConfigActionRepository(actionCapacity),
+                new InMemoryActionCommandRepository(1000),
                 new InMemoryAlertLifecycleRepository(),
                 new InMemoryAutoExecutionPolicyRepository(),
                 new InMemoryActionCertificationRepository(),
@@ -89,7 +94,7 @@ public final class AgentStore implements AutoCloseable {
             if (lock == null) { throw new IllegalStateException("当前 H2 已被另一 Admin Agent 使用；当前阶段只允许一个执行进程"); }
             JdbcAgentStore store = new JdbcAgentStore(path);
             AgentStore result = new AgentStore(store.sessions(), store.messages(), store.incidents(), store.tasks(),
-                    store.checkpoints(), store.actions(), store.actionCommands(), store.alertLifecycles(), store.autoExecutionPolicies(),
+                    store.checkpoints(), store.actions(), store.gatewayConfigActions(), store.actionCommands(), store.alertLifecycles(), store.autoExecutionPolicies(),
                     store.actionCertifications(),
                     store.autonomousActionBudget(),
                     OpsJournal.of(store), store);
@@ -126,6 +131,8 @@ public final class AgentStore implements AutoCloseable {
     public AgentActionRepository actions() {
         return actions;
     }
+
+    public GatewayConfigActionRepository gatewayConfigActions() { return gatewayConfigActions; }
 
     public ActionCommandRepository actionCommands() { return actionCommands; }
 

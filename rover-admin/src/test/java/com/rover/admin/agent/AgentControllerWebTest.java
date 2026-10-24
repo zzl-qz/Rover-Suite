@@ -87,6 +87,7 @@ class AgentControllerWebTest {
 
     @Autowired private com.rover.admin.security.AdminUserStore users;
     @Autowired private com.rover.agent.core.port.RouteControlPort control;
+    @MockitoBean private com.rover.admin.client.ManageHttpClient manageHttpClient;
 
     @org.junit.jupiter.api.BeforeEach
     void accountExistsInLivePolicy() {
@@ -127,6 +128,15 @@ class AgentControllerWebTest {
                 .andExpect(status().isUnauthorized());
 
         verify(agent, never()).startSession(any(), any());
+    }
+
+    @Test
+    void rejectsUnsupportedGatewayConfigProposalAsBadRequest() throws Exception {
+        mockMvc.perform(post("/api/agent/config-actions").with(user("alice")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sessionId\":\"missing-session\",\"desiredValue\":\"0.5\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
     }
 
     @Test

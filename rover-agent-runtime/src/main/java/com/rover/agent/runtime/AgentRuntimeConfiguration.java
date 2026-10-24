@@ -10,6 +10,8 @@ import com.rover.agent.core.planning.PlanValidator;
 import com.rover.agent.core.planning.PlanningLimits;
 import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
+import com.rover.agent.core.port.GatewayConfigActionPort;
+import com.rover.agent.core.repository.GatewayConfigActionRepository;
 import com.rover.agent.core.port.AgentAccess;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
@@ -32,6 +34,8 @@ import com.rover.agent.runtime.action.ActionExecutor;
 import com.rover.agent.runtime.action.ActionExecutorRegistry;
 import com.rover.agent.runtime.action.ActionCommandRunner;
 import com.rover.agent.runtime.action.AgentActionService;
+import com.rover.agent.runtime.action.GatewayConfigActionService;
+import com.rover.agent.runtime.action.GatewayConfigActionCommandRunner;
 import com.rover.agent.runtime.action.RouteWeightActionExecutor;
 import com.rover.agent.runtime.action.RiskBasedApprovalPolicy;
 import com.rover.agent.runtime.journal.OpsJournal;
@@ -124,6 +128,11 @@ public class AgentRuntimeConfiguration {
     }
 
     @Bean
+    public GatewayConfigActionRepository gatewayConfigActionRepository(AgentStore agentStore) {
+        return agentStore.gatewayConfigActions();
+    }
+
+    @Bean
     public AlertLifecycleRepository agentAlertLifecycleRepository(AgentStore agentStore) {
         return agentStore.alertLifecycles();
     }
@@ -180,9 +189,11 @@ public class AgentRuntimeConfiguration {
                                                       IncidentRepository agentIncidentRepository,
                                                       AgentMessageRepository agentMessageRepository,
                                                       AgentActionRepository agentActionRepository,
+                                                      GatewayConfigActionRepository gatewayConfigActionRepository,
                                                       InvestigationTaskRegistry agentTaskRegistry) {
         return new WorkspaceRetention(agentSessionRepository, agentIncidentRepository, agentMessageRepository,
-                agentTaskRegistry, agentActionRepository, SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY);
+                agentTaskRegistry, agentActionRepository, gatewayConfigActionRepository,
+                SESSION_CAPACITY, INCIDENT_CAPACITY, MESSAGE_CAPACITY);
     }
 
     @Bean
@@ -386,6 +397,7 @@ public class AgentRuntimeConfiguration {
                                                ObjectProvider<ChatModelGateway> chatModelGateways,
                                                ObjectProvider<ConversationModel> conversationModels,
                                                AgentActionService agentActionService,
+                                               GatewayConfigActionService gatewayConfigActionService,
                                                AgentMetrics agentMetrics) {
         // 模型侧留一个可替换的入口：端到端测试用它注入脚本，从而在不依赖真实模型的前提下
         // 验证「工具真的取数、证据真的落库」这条链路——这是单测替代不了的部分。
@@ -393,7 +405,7 @@ public class AgentRuntimeConfiguration {
         ChatModelGateway gateway = chatModelGateways.getIfAvailable(NoopChatModelGateway::new);
         return new ToolLoopService(agentCapabilityExecutor, gateway,
                 conversationModels.getIfAvailable(() -> new SpringAiConversationModel(gateway, agentMetrics)),
-                agentActionService);
+                agentActionService, gatewayConfigActionService);
     }
 
     /** 装配依赖路由控制端口和变更仓储的权重执行器。 */
@@ -454,6 +466,23 @@ public class AgentRuntimeConfiguration {
                                                         @Value("${rover.agent.actions.poll-millis:250}") long pollMillis) {
         return new ActionCommandRunner(actionCommandRepository, agentActionService, workerThreads,
                 queueCapacity, pollMillis);
+    }
+
+    @Bean
+    public GatewayConfigActionService gatewayConfigActionService(GatewayConfigActionRepository actions,
+            AgentSessionRepository sessions, ConfigReadPort configs, RouteControlPort control,
+            ObjectProvider<AgentAccess> access, AgentStore store) {
+        return new GatewayConfigActionService(actions, sessions, configs, control,
+                access.getIfAvailable(AgentAccess::local), true,
+                () -> store.persistent() && store.durable().healthy());
+    }
+
+    @Bean(destroyMethod = "close")
+    public GatewayConfigActionCommandRunner gatewayConfigActionCommandRunner(GatewayConfigActionRepository actions,
+            GatewayConfigActionPort gateway, RouteControlPort control,
+            ObjectProvider<AgentAccess> access, AgentStore store) {
+        return new GatewayConfigActionCommandRunner(actions, gateway, access.getIfAvailable(AgentAccess::local),
+                control, () -> store.persistent() && store.durable().healthy());
     }
 
     @Bean(destroyMethod = "close")

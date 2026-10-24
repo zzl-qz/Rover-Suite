@@ -6,6 +6,7 @@ import com.rover.agent.core.model.Session;
 import com.rover.agent.core.repository.AgentActionRepository;
 import com.rover.agent.core.repository.AgentMessageRepository;
 import com.rover.agent.core.repository.AgentSessionRepository;
+import com.rover.agent.core.repository.GatewayConfigActionRepository;
 import com.rover.agent.core.repository.IncidentRepository;
 import java.util.Comparator;
 import java.util.List;
@@ -26,6 +27,7 @@ public final class WorkspaceRetention {
     private final AgentMessageRepository messages;
     private final TaskRetirement tasks;
     private final AgentActionRepository actions;
+    private final GatewayConfigActionRepository configActions;
     private final int sessionCapacity;
     private final int incidentCapacity;
     private final int messageCapacity;
@@ -44,11 +46,19 @@ public final class WorkspaceRetention {
     public WorkspaceRetention(AgentSessionRepository sessions, IncidentRepository incidents,
                               AgentMessageRepository messages, TaskRetirement tasks, AgentActionRepository actions,
                               int sessionCapacity, int incidentCapacity, int messageCapacity) {
+        this(sessions, incidents, messages, tasks, actions, null, sessionCapacity, incidentCapacity, messageCapacity);
+    }
+
+    public WorkspaceRetention(AgentSessionRepository sessions, IncidentRepository incidents,
+                              AgentMessageRepository messages, TaskRetirement tasks, AgentActionRepository actions,
+                              GatewayConfigActionRepository configActions, int sessionCapacity, int incidentCapacity,
+                              int messageCapacity) {
         this.sessions = sessions;
         this.incidents = incidents;
         this.messages = messages;
         this.tasks = tasks;
         this.actions = actions;
+        this.configActions = configActions;
         this.sessionCapacity = sessionCapacity;
         this.incidentCapacity = incidentCapacity;
         this.messageCapacity = messageCapacity;
@@ -103,6 +113,9 @@ public final class WorkspaceRetention {
         if (session == null) {
             return null;
         }
+        if (configActions != null && configActions.hasNonTerminalForSession(sessionId)) {
+            throw new IllegalStateException("会话存在未决 Gateway 配置动作，必须先完成或对账后才能清理");
+        }
         int incidentCount = incidents.removeBySession(sessionId);
         int messageCount = messages.removeBySession(sessionId);
         int taskCount = tasks.retireBySession(sessionId);
@@ -136,6 +149,7 @@ public final class WorkspaceRetention {
         return sessions.listAll().stream()
                 .sorted(Comparator.comparingLong(Session::lastActiveAtMillis))
                 .filter(session -> !tasks.hasActiveTasksInSession(session.sessionId()))
+                .filter(session -> configActions == null || !configActions.hasNonTerminalForSession(session.sessionId()))
                 .toList();
     }
 

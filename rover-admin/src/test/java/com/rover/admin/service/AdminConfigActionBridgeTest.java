@@ -48,6 +48,7 @@ class AdminConfigActionBridgeTest {
         ManageHttpClient http = mock(ManageHttpClient.class);
         AdminConfigService service = new AdminConfigService(http, properties());
         when(http.getJson(eq(GATEWAY), anyString())).thenThrow(new ManageApiCallException(404, "not found"));
+        assertEquals(Boolean.TRUE, service.gatewayConfigAction("missing-op").get("notFound"));
         assertEquals("UNKNOWN", service.gatewayConfigAction("missing-op").get("status"));
 
         reset(http);

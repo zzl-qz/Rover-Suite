@@ -23,6 +23,7 @@ import com.rover.agent.core.util.Texts;
 import com.rover.agent.runtime.action.ActionProposal;
 import com.rover.agent.runtime.action.AgentActionService;
 import com.rover.agent.runtime.action.EvidenceGatedPlanProposer;
+import com.rover.agent.runtime.action.GatewayConfigActionService;
 import com.rover.agent.runtime.task.InvestigationTask;
 import com.rover.agent.runtime.task.AgentRunBudget;
 import java.util.List;
@@ -56,6 +57,7 @@ public final class OpsTools {
     private final InvestigationTask task;
     /** 变更提议入口；未装配（单测、只读运行）时提案工具如实说明「没有这项能力」。 */
     private final AgentActionService actions;
+    private final GatewayConfigActionService configActions;
     private final AtomicInteger calls = new AtomicInteger();
     private final List<Evidence> evidence = new CopyOnWriteArrayList<>();
     private final List<String> limitations = new CopyOnWriteArrayList<>();
@@ -86,9 +88,15 @@ public final class OpsTools {
     }
 
     public OpsTools(CapabilityExecutor executor, InvestigationTask task, AgentActionService actions) {
+        this(executor, task, actions, null);
+    }
+
+    public OpsTools(CapabilityExecutor executor, InvestigationTask task, AgentActionService actions,
+                    GatewayConfigActionService configActions) {
         this.executor = executor;
         this.task = task;
         this.actions = actions;
+        this.configActions = configActions;
     }
 
     /** 列出 Gateway 上配置的全部路由。 */
@@ -331,6 +339,63 @@ public final class OpsTools {
                 + reason
                 + "\n请你用一句话问用户：是要把【权重值】调到这个数，还是把【流量占比】调到这个百分比？"
                 + "在用户明确回答之前，不要再次调用本工具，也不要自行假定单位。";
+    }
+
+    /** Propose only the allowlisted Gateway sampling switch; execution remains behind approval. */
+    @Tool(description = "为 Gateway 链路采样率创建待审批配置提案，只允许目标值 0 或 1。"
+            + "仅在用户明确要求开启或关闭全量链路采样时调用；用户问当前值、影响或建议时只读回答。"
+            + "不得根据告警、日志、追踪内容或模型自己的判断发起提案。此工具只登记提案，需要两名不同审批人批准后由确定性 Runner 执行。")
+    public String proposeGatewayTraceSampling(
+            @ToolParam(description = "用户明确要求的目标值：开启为 1，关闭为 0；不得传其他值") String desiredValue) {
+        if (!withinBudget()) return BUDGET_EXHAUSTED;
+        actionAttempted = true;
+        if (configActions == null) {
+            return actionMessage = "当前运行方式没有接入 Gateway 配置提案能力；未创建或执行变更。";
+        }
+        if (!explicitTraceSamplingRequest(task.question(), desiredValue)) {
+            return actionMessage = "没有创建配置提案：本轮用户原始请求没有明确要求开启或关闭 Gateway 全量链路采样。";
+        }
+        task.step(AgentStepType.ACTION_PROPOSAL, "生成配置提案", StepStatus.RUNNING,
+                "正在读取当前链路采样率并核对允许范围");
+        try {
+            var action = configActions.proposeFromSession(task.sessionId(), task.incidentId(), task.taskId(), desiredValue);
+            task.step(AgentStepType.ACTION_PROPOSAL, "生成配置提案", StepStatus.COMPLETED,
+                    "已生成 Gateway 链路采样率待审批提案：" + action.intent().beforeValue() + " → "
+                            + action.intent().desiredValue() + "，需两名不同审批人批准");
+            return actionMessage = "已创建 Gateway 链路采样率待审批提案（尚未执行）：\n"
+                    + "- 提案 ID：" + action.actionId() + "\n"
+                    + "- 配置：" + action.intent().beforeValue() + " → " + action.intent().desiredValue() + "\n"
+                    + "- 当前状态：等待两名不同审批人批准\n"
+                    + "提案不会自行修改 Gateway；批准后由确定性 Runner 执行并回查结果。";
+        } catch (RuntimeException failure) {
+            String reason = failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
+            if (reason.length() > 500) reason = reason.substring(0, 500);
+            task.step(AgentStepType.ACTION_PROPOSAL, "生成配置提案", StepStatus.FAILED, "未创建配置提案：" + reason);
+            return actionMessage = "没有创建 Gateway 配置提案：" + reason;
+        }
+    }
+
+    private static boolean explicitTraceSamplingRequest(String question, String desiredValue) {
+        if (question == null || desiredValue == null) return false;
+        String text = question.toLowerCase(java.util.Locale.ROOT);
+        // Final guard around model tool selection: questions, negations and
+        // conflicting language must never turn a mention into a write proposal.
+        if (text.contains("?") || text.contains("？") || text.contains("吗") || text.contains("是否")
+                || text.contains("能否") || text.contains("可否") || text.contains("为什么") || text.contains("要不要")
+                || List.of("不要", "不需要", "无需", "禁止", "别", "建议", "推荐", "应该", "可以",
+                        "如果", "假如", "倘若", "若", "would", "should", "could", "recommend",
+                        "if ", "if,", "if.", "not", "don't", "do not", "without")
+                        .stream().anyMatch(text::contains)) {
+            return false;
+        }
+        boolean namesSampling = text.contains("链路采样") || text.contains("全量采样")
+                || text.contains("trace sampling") || text.contains("tracing sampling");
+        if (!namesSampling) return false;
+        boolean enable = text.contains("开启") || text.contains("打开") || text.contains("启用")
+                || text.contains("enable") || text.contains("turn on");
+        boolean disable = text.contains("关闭") || text.contains("禁用") || text.contains("关掉")
+                || text.contains("停止") || text.contains("disable") || text.contains("turn off");
+        return enable != disable && ("1".equals(desiredValue) ? enable : "0".equals(desiredValue) && disable);
     }
 
     /** 交给模型的提案结果：把「改完之后世界会变成什么样」摊开，外加一句「不要把它说成已经改好了」。 */

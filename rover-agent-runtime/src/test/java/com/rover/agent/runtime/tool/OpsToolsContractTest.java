@@ -56,7 +56,7 @@ class OpsToolsContractTest {
      */
     @Test
     void toolCountMatchesTheDocumentedSet() {
-        assertEquals(14, toolMethods().size(),
+        assertEquals(15, toolMethods().size(),
                 "对外宣称的工具数量与实际不符：模型看到的工具集变了，文档与能力清单应同步");
     }
 

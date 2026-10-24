@@ -1017,14 +1017,46 @@
                                 <h2>变更与处置</h2>
                                 <span v-if="wbPendingActions" class="badge warn ml-auto">{{ wbPendingActions }} 条待处置</span>
                             </div>
-                            <div v-if="!wbActions.length" class="empty slim">
+                            <div v-if="!wbActions.length && !wbConfigActions.length" class="empty slim">
                                 还没有变更记录。
                                 <div class="empty-hint">
-                                    Agent 可以在调查后给出「调整某个灰度版本权重」的待审批计划；
-                                    批准之后才会真正执行，执行结果会被回读确认，出问题还能补偿回滚。
+                                    Agent 可以提出路由权重或 Gateway 链路采样配置计划；
+                                    配置动作必须由两名审批人确认，未知结果只允许按原操作号对账。
                                 </div>
                             </div>
-                            <div v-else class="wb-actions">
+                            <div v-if="wbCanPropose && wbSession && (wbSession.scope || wbSession.targetNamespace)" class="wb-action-foot">
+                                <span class="muted">运维提案：Gateway 链路采样率</span>
+                                <button class="btn mini" :disabled="wbActionBusy.configProposal" @click="wbProposeConfigAction('0')">设为 0（只记慢请求）</button>
+                                <button class="btn mini primary" :disabled="wbActionBusy.configProposal" @click="wbProposeConfigAction('1')">设为 1（记录全部请求）</button>
+                            </div>
+                            <div v-if="wbActionError.configProposal" class="banner warn slim">{{ wbActionError.configProposal }}</div>
+                            <div v-if="wbConfigActions.length" class="wb-actions">
+                                <div v-for="action in wbConfigActions" :key="action.actionId" class="wb-action">
+                                    <div class="wb-action-head">
+                                        <strong>Gateway 链路采样配置</strong>
+                                        <span class="badge ml-auto" :class="wbActionBadge(action.status)">{{ wbActionStatusLabel(action.status) }}</span>
+                                    </div>
+                                    <div class="wb-action-subject"><code>{{ action.intent.configKey }}</code>
+                                        <span>值 {{ action.intent.beforeValue }} → {{ action.intent.desiredValue }}</span></div>
+                                    <div class="muted">计划摘要 {{ action.intentHash.slice(0, 16) }} · 审批 {{ action.approvals.length }}/2 · 有效至 {{ fmtTime(action.expiresAtMillis) }}</div>
+                                    <div v-if="action.approvals.length" class="muted">审批人：{{ action.approvals.map(item => item.approver).join('、') }}</div>
+                                    <div class="muted">控制面配置回执只证明目标值写入，不代表业务指标已恢复；补偿会创建独立反向提案，并重新经过双人审批。</div>
+                                    <div v-if="action.errorMessage" class="banner warn slim">{{ action.errorMessage }}</div>
+                                    <div class="wb-action-foot">
+                                        <template v-if="action.status === 'PENDING_APPROVAL' && wbActionIdle(action)">
+                                            <button class="btn mini" @click="wbConfigActionCommand(action, 'reject')">拒绝</button>
+                                            <button class="btn mini primary" @click="wbConfigActionCommand(action, 'approve')">{{ action.approvals.length ? '第二人批准并执行' : '批准（需第二人）' }}</button>
+                                        </template>
+                                        <button v-if="action.status === 'UNKNOWN' && wbActionIdle(action)" class="btn mini"
+                                                @click="wbConfigActionCommand(action, 'reconcile')">用原操作号对账</button>
+                                        <button v-if="action.status === 'APPLIED' && !action.compensatesActionId && wbActionIdle(action)" class="btn mini warn"
+                                                @click="wbConfigActionCommand(action, 'compensate')">创建反向补偿提案</button>
+                                        <span v-if="action.compensatesActionId" class="muted">本提案补偿动作 {{ action.compensatesActionId }}</span>
+                                        <span class="muted">操作号 {{ action.operationId }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div v-if="wbActions.length" class="wb-actions">
                                 <div v-for="action in wbActions" :key="action.actionId" class="wb-action">
                                     <div class="wb-action-head">
                                         <strong>{{ wbActionTypeLabel(action.type) }}</strong>

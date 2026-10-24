@@ -7,5 +7,5 @@ public interface GatewayConfigActionPort {
     GatewayConfigActionReceipt execute(String operationId, String configKey, String expectedValue, String desiredValue);
 
     /** Read the durable receipt for an existing operation; this method must never submit a write. */
-    GatewayConfigActionReceipt query(String operationId);
+    GatewayConfigActionReceipt query(String operationId, String configKey, String expectedValue, String desiredValue);
 }

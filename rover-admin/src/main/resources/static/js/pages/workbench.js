@@ -87,6 +87,7 @@ window.RoverAdminPages.workbench = {
             wbAtBottom: true,
             /** 当前会话的变更记录（新的在前）：待审批、执行结果与回滚都从服务端读回来。 */
             wbActions: [],
+            wbConfigActions: [],
             wbEffectVerifications: {},
             wbOperatorPermissions: [],
             wbAutoPolicies: [],
@@ -246,7 +247,8 @@ window.RoverAdminPages.workbench = {
          */
         wbPendingActions() {
             return this.wbActions.filter(action => ['PENDING_APPROVAL', 'UNCERTAIN', 'SUCCESS']
-                .includes(action.status)).length;
+                .includes(action.status)).length + this.wbConfigActions.filter(action =>
+                    ['PENDING_APPROVAL', 'UNKNOWN', 'FAILED', 'PRECONDITION_FAILED', 'EXPIRED'].includes(action.status)).length;
         },
 
         wbLatestResultTask() {
@@ -321,6 +323,7 @@ window.RoverAdminPages.workbench = {
             return this.wbOperatorPermissions.includes('MANAGE_SYSTEM');
         },
 
+        wbCanPropose() { return this.wbOperatorPermissions.includes('PROPOSE'); },
         wbCanManagePolicies() { return this.wbOperatorPermissions.includes('POLICY_ADMIN'); },
 
         wbAutoTargets() {
@@ -601,6 +604,7 @@ window.RoverAdminPages.workbench = {
             this.wbPending = [];
             // 变更记录属于会话：切会话先把上一场的卡片清掉，再拉新会话自己的记录
             this.wbActions = [];
+            this.wbConfigActions = [];
             this.wbEffectVerifications = {};
             this.wbActionBusy = {};
             this.wbActionError = {};
@@ -790,6 +794,7 @@ window.RoverAdminPages.workbench = {
         async wbLoadActions(sessionId) {
             if (!sessionId) {
                 this.wbActions = [];
+                this.wbConfigActions = [];
                 this.wbEffectVerifications = {};
                 this.wbApprovalProgress = {};
                 this.wbScheduleActionRefresh('', false);
@@ -797,23 +802,28 @@ window.RoverAdminPages.workbench = {
             }
             try {
                 const base = '/api/agent/actions/sessions/' + encodeURIComponent(sessionId);
-                const [list, progress, verifications] = await Promise.all([
+                const [list, progress, verifications, configActions] = await Promise.all([
                     RoverAdminApi.api(base),
                     RoverAdminApi.api(base + '/approval-progress').catch(() => []),
                     RoverAdminApi.api(base + '/effect-verifications').catch(() => []),
+                    RoverAdminApi.api('/api/agent/config-actions/sessions/' + encodeURIComponent(sessionId)).catch(() => null),
                 ]);
                 if (this.wbActiveSessionId !== sessionId) return;
                 this.wbActions = Array.isArray(list) ? list : [];
+                // A transient read failure must not erase the last known queued action or stop its polling.
+                if (Array.isArray(configActions)) this.wbConfigActions = configActions;
                 this.wbEffectVerifications = Object.fromEntries((Array.isArray(verifications) ? verifications : [])
                     .map(item => [item.actionId + ':' + item.phase, item]));
                 this.wbApprovalProgress = this.wbApprovalProgressMap(progress);
                 this.wbScheduleActionRefresh(sessionId, this.wbActions.some(action => this.wbActionInFlight(action))
-                    || Object.values(this.wbEffectVerifications).some(item => ['PREPARED', 'OBSERVING'].includes(item.state)));
+                    || Object.values(this.wbEffectVerifications).some(item => ['PREPARED', 'OBSERVING'].includes(item.state))
+                    || this.wbConfigActions.some(action => ['QUEUED', 'EXECUTING', 'RECONCILE_QUEUED', 'RECONCILING'].includes(action.status)));
             } catch (e) {
                 if (this.wbActiveSessionId === sessionId) {
-                    this.wbActions = [];
-                    this.wbApprovalProgress = {};
-                    this.wbScheduleActionRefresh(sessionId, false);
+                    // Keep current state and retry while a durable action is still in flight.
+                    this.wbScheduleActionRefresh(sessionId, this.wbActions.some(action => this.wbActionInFlight(action))
+                        || this.wbEffectInFlight()
+                        || this.wbConfigActions.some(action => ['QUEUED', 'EXECUTING', 'RECONCILE_QUEUED', 'RECONCILING'].includes(action.status)));
                 }
             }
         },
@@ -969,13 +979,17 @@ window.RoverAdminPages.workbench = {
             return {
                 PENDING_APPROVAL: '待审批',
                 QUEUED: '已排队',
+                APPLIED: '已生效（配置回执）',
+                RECONCILE_QUEUED: '对账已排队',
                 EXECUTING: '执行中',
                 VERIFYING: '验证中',
                 SUCCESS: '已完成',
                 FAILED: '失败',
                 PRECONDITION_FAILED: '预检未通过',
                 UNCERTAIN: '结果未知',
-                RECONCILING: '确认中',
+                RECONCILING: '对账中',
+                UNKNOWN: '结果未知，待对账',
+                EXPIRED: '已过期',
                 REJECTED: '已拒绝',
                 SUPERSEDED: '已有新版本',
                 ROLLING_BACK: '回滚中',
@@ -983,6 +997,51 @@ window.RoverAdminPages.workbench = {
                 ROLLED_BACK: '已回滚',
                 ROLLBACK_PRECONDITION_FAILED: '回滚预检未通过',
             }[status] || status || '';
+        },
+
+        async wbConfigActionCommand(action, command) {
+            if (!action || this.wbActionBusy[action.actionId]) return;
+            const sessionId = this.wbActiveSessionId;
+            this.wbActionBusy = Object.assign({}, this.wbActionBusy, { [action.actionId]: command });
+            try {
+                const options = { method: 'POST' };
+                if (command === 'approve') {
+                    options.headers = { 'Content-Type': 'application/json' };
+                    options.body = JSON.stringify({ intentHash: action.intentHash });
+                }
+                const updated = await RoverAdminApi.api('/api/agent/config-actions/' + encodeURIComponent(action.actionId) + '/' + command, options);
+                this.wbConfigActions = this.wbConfigActions.map(item => item.actionId === updated.actionId ? updated : item);
+                // Approval only queues the durable runner; keep polling until it reports a terminal state.
+                await this.wbLoadActions(sessionId);
+            } catch (e) {
+                this.wbActionError = Object.assign({}, this.wbActionError, { [action.actionId]: e.message || '操作失败' });
+                await this.wbLoadActions(sessionId);
+            } finally {
+                const busy = Object.assign({}, this.wbActionBusy); delete busy[action.actionId]; this.wbActionBusy = busy;
+            }
+        },
+
+        async wbProposeConfigAction(desiredValue) {
+            if (!this.wbActiveSessionId || !this.wbCanPropose || this.wbActionBusy.configProposal) return;
+            const sessionId = this.wbActiveSessionId;
+            const incident = this.wbActiveIncident;
+            const task = this.wbLatestResultTask;
+            this.wbActionBusy = Object.assign({}, this.wbActionBusy, { configProposal: true });
+            this.wbActionError = Object.assign({}, this.wbActionError, { configProposal: '' });
+            try {
+                const created = await RoverAdminApi.api('/api/agent/config-actions/sessions/' + encodeURIComponent(sessionId) + '/config-actions', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ incidentId: incident ? incident.incidentId : null,
+                        taskId: task ? task.taskId : null, desiredValue: String(desiredValue) }),
+                });
+                this.wbConfigActions = [created, ...this.wbConfigActions.filter(item => item.actionId !== created.actionId)];
+                await this.wbLoadActions(sessionId);
+            } catch (e) {
+                this.wbActionError = Object.assign({}, this.wbActionError,
+                    { configProposal: e && e.message ? e.message : '配置提案失败' });
+            } finally {
+                const busy = Object.assign({}, this.wbActionBusy); delete busy.configProposal; this.wbActionBusy = busy;
+            }
         },
 
         /** 状态徽标色：绿=确认生效/已补偿，红=确认失败，黄=等你决定，灰=已拒绝，其余为进行中。 */
@@ -996,8 +1055,11 @@ window.RoverAdminPages.workbench = {
                 UNCERTAIN: 'warn',
                 PENDING_APPROVAL: 'warn',
                 QUEUED: 'warn',
+                EXECUTING: 'warn',
+                RECONCILE_QUEUED: 'warn',
                 ROLLBACK_QUEUED: 'warn',
                 RECONCILING: 'warn',
+                UNKNOWN: 'warn',
                 REJECTED: 'comp',
                 SUPERSEDED: 'comp',
             }[status] || 'comp';

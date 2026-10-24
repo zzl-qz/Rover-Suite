@@ -12,6 +12,13 @@ import com.rover.agent.core.model.ResourceTarget;
 import com.rover.agent.core.model.Session;
 import com.rover.agent.core.model.SessionStatus;
 import com.rover.agent.core.model.TimeRange;
+import com.rover.agent.core.model.ResourceScope;
+import com.rover.agent.core.model.ConfigActionIntent;
+import com.rover.agent.core.snapshot.ConfigEntrySnapshot;
+import com.rover.agent.core.port.ConfigReadPort;
+import com.rover.agent.core.port.AgentAccess;
+import com.rover.agent.runtime.action.GatewayConfigActionService;
+import com.rover.agent.runtime.repository.InMemoryGatewayConfigActionRepository;
 import com.rover.agent.core.port.MetricReadPort;
 import com.rover.agent.core.port.RouteChangePreview;
 import com.rover.agent.core.port.RouteChangeResult;
@@ -43,6 +50,80 @@ import org.junit.jupiter.api.Test;
 class OpsToolsProposalTest {
 
     private static final String SESSION = "s-proposal";
+
+    @Test
+    void gatewayTraceSamplingProposalUsesTrustedSessionOwnerAndOnlyCreatesPendingIntent() {
+        ResourceScope scope = new ResourceScope("org", "ops", "test");
+        InMemoryAgentSessionRepository sessions = new InMemoryAgentSessionRepository(10);
+        sessions.save(new Session(SESSION, "alice", "链路采样", null, SessionStatus.ACTIVE, 1L, 1L, List.of(), scope, "default"));
+        RouteControlPort control = org.mockito.Mockito.mock(RouteControlPort.class);
+        org.mockito.Mockito.when(control.resourceScope()).thenReturn(scope);
+        org.mockito.Mockito.when(control.controlTargetId()).thenReturn("gateway-test");
+        org.mockito.Mockito.when(control.resourceNamespace()).thenReturn("default");
+        ConfigReadPort configs = () -> List.of(new ConfigEntrySnapshot("gateway", ConfigActionIntent.ALLOWED_KEY,
+                "链路采样率", "0.0", "0", "HOT_RELOAD", true, false));
+        var repository = new InMemoryGatewayConfigActionRepository(10);
+        var service = new GatewayConfigActionService(repository, sessions, configs, control, AgentAccess.local(), true, () -> true);
+        InvestigationTask task = new InvestigationTaskRegistry().register(SESSION, "开启全量链路采样");
+        task.bind(null, "", ResourceTarget.unknown());
+        OpsTools tools = new OpsTools(executor(), task, null, service);
+        String answer = tools.proposeGatewayTraceSampling("1");
+        assertTrue(answer.contains("尚未执行"), answer);
+        assertTrue(answer.contains("两名不同审批人"), answer);
+        var saved = repository.bySession(SESSION);
+        assertEquals(1, saved.size());
+        assertEquals("alice", saved.get(0).requestedBy(), "发起人只能来自持久会话身份，工具无 actor 参数");
+        assertEquals(com.rover.agent.core.model.ConfigActionStatus.PENDING_APPROVAL, saved.get(0).status());
+        assertEquals("0.0", saved.get(0).intent().beforeValue());
+        assertEquals("1", saved.get(0).intent().desiredValue());
+    }
+
+    @Test
+    void gatewayTraceSamplingCannotBeProposedFromModelInferenceAlone() {
+        ResourceScope scope = new ResourceScope("org", "ops", "test");
+        InMemoryAgentSessionRepository sessions = new InMemoryAgentSessionRepository(10);
+        sessions.save(new Session(SESSION, "alice", "链路采样", null, SessionStatus.ACTIVE, 1L, 1L, List.of(), scope, "default"));
+        RouteControlPort control = org.mockito.Mockito.mock(RouteControlPort.class);
+        org.mockito.Mockito.when(control.resourceScope()).thenReturn(scope);
+        org.mockito.Mockito.when(control.controlTargetId()).thenReturn("gateway-test");
+        org.mockito.Mockito.when(control.resourceNamespace()).thenReturn("default");
+        ConfigReadPort configs = () -> List.of(new ConfigEntrySnapshot("gateway", ConfigActionIntent.ALLOWED_KEY,
+                "链路采样率", "0.0", "0", "HOT_RELOAD", true, false));
+        var repository = new InMemoryGatewayConfigActionRepository(10);
+        var service = new GatewayConfigActionService(repository, sessions, configs, control, AgentAccess.local(), true, () -> true);
+        InvestigationTask task = new InvestigationTaskRegistry().register(SESSION, "为什么没有追踪记录？");
+        OpsTools tools = new OpsTools(executor(), task, null, service);
+        String answer = tools.proposeGatewayTraceSampling("1");
+        assertTrue(answer.contains("没有明确要求"), answer);
+        assertTrue(repository.bySession(SESSION).isEmpty());
+    }
+
+    @Test
+    void gatewayTraceSamplingRejectsQuestionsNegationAndConflictingIntent() {
+        for (String question : List.of("要不要开启全量链路采样", "不要开启链路采样", "开启又关闭链路采样",
+                "如果错误率高就开启全量链路采样", "建议开启全量链路采样", "能否开启全量链路采样",
+                "If errors rise, enable trace sampling", "We should enable trace sampling")) {
+            ResourceScope scope = new ResourceScope("org", "ops", "test");
+            InMemoryAgentSessionRepository sessions = new InMemoryAgentSessionRepository(10);
+            sessions.save(new Session(SESSION, "alice", question, null, SessionStatus.ACTIVE, 1L, 1L,
+                    List.of(), scope, "default"));
+            RouteControlPort control = org.mockito.Mockito.mock(RouteControlPort.class);
+            org.mockito.Mockito.when(control.resourceScope()).thenReturn(scope);
+            org.mockito.Mockito.when(control.controlTargetId()).thenReturn("gateway-test");
+            org.mockito.Mockito.when(control.resourceNamespace()).thenReturn("default");
+            ConfigReadPort configs = () -> List.of(new ConfigEntrySnapshot("gateway", ConfigActionIntent.ALLOWED_KEY,
+                    "链路采样率", "0.0", "0", "HOT_RELOAD", true, false));
+            var repository = new InMemoryGatewayConfigActionRepository(10);
+            var service = new GatewayConfigActionService(repository, sessions, configs, control,
+                    AgentAccess.local(), true, () -> true);
+            InvestigationTask task = new InvestigationTaskRegistry().register(SESSION, question);
+            OpsTools tools = new OpsTools(executor(), task, null, service);
+
+            tools.proposeGatewayTraceSampling("1");
+
+            assertTrue(repository.bySession(SESSION).isEmpty(), question);
+        }
+    }
 
     @Test
     void proposalRegistersAnActionWithoutAnyWritePath() {

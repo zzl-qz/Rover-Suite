@@ -238,7 +238,7 @@ public class AdminConfigService {
             return JsonCodec.parseObjectMap(node.toString());
         } catch (ManageApiCallException ex) {
             if (ex.statusCode() == 404) {
-                return Map.of(ManageApiPaths.PARAM_OPERATION_ID, operationId, "status", "UNKNOWN");
+                return Map.of(ManageApiPaths.PARAM_OPERATION_ID, operationId, "status", "UNKNOWN", "notFound", true);
             }
             throw ex;
         } catch (Exception ex) {

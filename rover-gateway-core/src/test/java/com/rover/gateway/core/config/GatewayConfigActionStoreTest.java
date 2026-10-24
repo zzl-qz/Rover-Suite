@@ -53,6 +53,19 @@ class GatewayConfigActionStoreTest {
     }
 
     @Test
+    void defaultDecimalSampleRateCanBeUsedAsExactCompareAndSetValue() {
+        Path routePath = directory.resolve("decimal-routes.json");
+        Path overlay = directory.resolve("decimal-config.json");
+        var config = new GatewayRuntimeConfigManager(new GatewayRuntimeConfigApplier(), new RuntimeConfigOverlayStore(overlay));
+        assertEquals("0.0", value(config));
+        var store = new GatewayConfigActionStore(routePath, config);
+        var applied = store.execute("decimal-op", GatewayConfigActionStore.TRACE_SAMPLE_RATE, "0.0", "1", "operator");
+        assertEquals("APPLIED", applied.status());
+        assertEquals("1", value(config));
+        assertEquals("0.0", applied.expectedValue());
+    }
+
+    @Test
     void queryNeverReplaysAWriteAfterCrashAndReturnsUnknownUntilObserved() throws Exception {
         Path routePath = directory.resolve("crash-routes.json");
         var config = configs(directory.resolve("crash-config.json"));

@@ -1,10 +1,11 @@
 package com.rover.agent.core.model;
 
-/** Agent 可提议且已实现确定性执行器的变更类型，目前支持灰度权重调整。 */
+/** Agent 可提议且已实现确定性执行器的变更类型。 */
 public enum ActionType {
 
     /** 调整某条路由下某个版本（service@group）的流量权重。 */
-    ADJUST_ROUTE_TARGET_WEIGHT("灰度权重调整");
+    ADJUST_ROUTE_TARGET_WEIGHT("灰度权重调整"),
+    SET_GATEWAY_TRACE_SAMPLE_RATE("调整 Gateway 链路采样");
 
     private final String label;
 

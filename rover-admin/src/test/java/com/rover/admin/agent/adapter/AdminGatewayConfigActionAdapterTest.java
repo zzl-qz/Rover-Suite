@@ -31,13 +31,70 @@ class AdminGatewayConfigActionAdapterTest {
     void queryReturnsUnknownWithoutResubmittingWrite() {
         AdminConfigService admin = mock(AdminConfigService.class);
         when(admin.gatewayConfigAction("agent-op-unknown"))
-                .thenReturn(Map.of("operationId", "agent-op-unknown", "status", "UNKNOWN"));
+                .thenReturn(Map.of("operationId", "agent-op-unknown", "status", "UNKNOWN", "notFound", true));
 
-        var result = new AdminGatewayConfigActionAdapter(admin).query("agent-op-unknown");
+        var result = new AdminGatewayConfigActionAdapter(admin).query("agent-op-unknown", CONFIG_KEY, "0", "1");
 
         assertEquals(GatewayConfigActionReceipt.Status.UNKNOWN, result.status());
         verify(admin).gatewayConfigAction("agent-op-unknown");
         verify(admin, never()).executeGatewayConfigAction(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void explicitNotFoundMarkerMustStillMatchOperationAndUnknownStatus() {
+        AdminConfigService admin = mock(AdminConfigService.class);
+        when(admin.gatewayConfigAction("missing-op"))
+                .thenReturn(Map.of("operationId", "other-op", "status", "UNKNOWN", "notFound", true));
+        var adapter = new AdminGatewayConfigActionAdapter(admin);
+        GatewayConfigActionException wrongOperation = assertThrows(GatewayConfigActionException.class,
+                () -> adapter.query("missing-op", CONFIG_KEY, "0", "1"));
+        assertTrue(wrongOperation.outcomeUnknown());
+
+        when(admin.gatewayConfigAction("wrong-status-op"))
+                .thenReturn(Map.of("operationId", "wrong-status-op", "status", "APPLIED", "notFound", true));
+        GatewayConfigActionException wrongStatus = assertThrows(GatewayConfigActionException.class,
+                () -> adapter.query("wrong-status-op", CONFIG_KEY, "0", "1"));
+        assertTrue(wrongStatus.outcomeUnknown());
+    }
+
+    @Test
+    void queryRejectsIncompleteUnknownReceiptInsteadOfInventingMissingIntent() {
+        AdminConfigService admin = mock(AdminConfigService.class);
+        when(admin.gatewayConfigAction("agent-op-unknown"))
+                .thenReturn(Map.of("operationId", "agent-op-unknown", "status", "UNKNOWN", "receiptFound", true));
+        var exception = assertThrows(GatewayConfigActionException.class,
+                () -> new AdminGatewayConfigActionAdapter(admin).query("agent-op-unknown", CONFIG_KEY, "0.0", "1"));
+        assertTrue(exception.outcomeUnknown());
+        verify(admin, never()).executeGatewayConfigAction(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void receiptFoundFalseDoesNotMakeIncompleteUnknownReceiptSafe() {
+        AdminConfigService admin = mock(AdminConfigService.class);
+        when(admin.gatewayConfigAction("ambiguous-op"))
+                .thenReturn(Map.of("operationId", "ambiguous-op", "status", "UNKNOWN", "receiptFound", false));
+        assertThrows(GatewayConfigActionException.class,
+                () -> new AdminGatewayConfigActionAdapter(admin).query("ambiguous-op", CONFIG_KEY, "0", "1"));
+    }
+
+    @Test
+    void queryRejectsPartialUnknownIntent() {
+        AdminConfigService admin = mock(AdminConfigService.class);
+        when(admin.gatewayConfigAction("partial-op"))
+                .thenReturn(Map.of("operationId", "partial-op", "status", "UNKNOWN", "key", CONFIG_KEY));
+        var error = assertThrows(GatewayConfigActionException.class,
+                () -> new AdminGatewayConfigActionAdapter(admin).query("partial-op", CONFIG_KEY, "0", "1"));
+        assertTrue(error.outcomeUnknown());
+    }
+
+    @Test
+    void executeRejectsIncompleteAppliedReceipt() {
+        AdminConfigService admin = mock(AdminConfigService.class);
+        when(admin.executeGatewayConfigAction(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(Map.of("operationId", "op", "status", "APPLIED"));
+        var error = assertThrows(GatewayConfigActionException.class,
+                () -> new AdminGatewayConfigActionAdapter(admin).execute("op", CONFIG_KEY, "0", "1"));
+        assertTrue(error.outcomeUnknown());
     }
 
     @Test
@@ -68,6 +125,17 @@ class AdminGatewayConfigActionAdapterTest {
                 () -> new AdminGatewayConfigActionAdapter(admin).execute("expected-op", CONFIG_KEY, "0", "1"));
 
         assertTrue(error.outcomeUnknown());
+    }
+
+    @Test
+    void queryRejectsReceiptForAnotherIntent() {
+        AdminConfigService admin = mock(AdminConfigService.class);
+        when(admin.gatewayConfigAction("same-op"))
+                .thenReturn(receipt("same-op", "APPLIED", "1", "0"));
+        GatewayConfigActionException error = assertThrows(GatewayConfigActionException.class,
+                () -> new AdminGatewayConfigActionAdapter(admin).query("same-op", CONFIG_KEY, "0", "1"));
+        assertTrue(error.outcomeUnknown());
+        verify(admin, never()).executeGatewayConfigAction(anyString(), anyString(), anyString(), anyString());
     }
 
     private static Map<String, Object> receipt(String operationId, String status,

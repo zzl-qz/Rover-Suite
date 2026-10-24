@@ -7,7 +7,7 @@ const vm = require('node:vm');
 
 const source = readFileSync(join(__dirname, '../../main/resources/static/js/pages/workbench.js'), 'utf8');
 function workbench(api) {
-    const context = { window: {}, document: { hidden: false }, RoverAdminApi: { api } };
+    const context = { window: {}, document: { hidden: false }, RoverAdminApi: { api }, setTimeout, clearTimeout };
     vm.runInNewContext(source, context);
     const page = context.window.RoverAdminPages.workbench;
     const state = page.data();
@@ -126,4 +126,47 @@ test('autonomy status fails closed to approval mode when health cannot be read',
     assert.ok(urls.some(url => url.endsWith('/health')));
     assert.equal(state.wbAutonomyHealth, null);
     assert.match(state.wbAutoPolicyError, /health unavailable/);
+});
+
+test('config action approval reloads its queued state and keeps polling the runner', async () => {
+    const calls = [];
+    const queued = { actionId: 'config-1', status: 'QUEUED', intentHash: 'hash', approvals: [] };
+    const state = workbench(async (url, options = {}) => {
+        calls.push({ url, options });
+        if (url.endsWith('/config-1/approve')) return queued;
+        if (url === '/api/agent/actions/sessions/s1') return [];
+        if (url.endsWith('/approval-progress') || url.endsWith('/effect-verifications')) return [];
+        if (url === '/api/agent/config-actions/sessions/s1') return [{ actionId: 'config-1', status: 'QUEUED', intentHash: 'hash', approvals: [] }];
+        throw new Error('unexpected request: ' + url);
+    });
+    state.wbActiveSessionId = 's1';
+    state.wbConfigActions = [{ actionId: 'config-1', status: 'PENDING_APPROVAL', intentHash: 'hash', approvals: [] }];
+
+    try {
+        await state.wbConfigActionCommand(state.wbConfigActions[0], 'approve');
+        assert.equal(state.wbConfigActions[0] && state.wbConfigActions[0].status, 'QUEUED', JSON.stringify({ active: state.wbActiveSessionId, actions: state.wbConfigActions, calls }));
+        assert.ok(calls.some(call => call.url === '/api/agent/config-actions/sessions/s1'));
+        assert.notEqual(state._wbActionTimer, null, 'queued config action must schedule a status refresh');
+    } finally {
+        if (state._wbActionTimer) clearTimeout(state._wbActionTimer);
+    }
+});
+
+test('config action list read failure preserves current state and schedules a retry', async () => {
+    const state = workbench(async url => {
+        if (url === '/api/agent/actions/sessions/s1' || url.endsWith('/approval-progress') || url.endsWith('/effect-verifications')) return [];
+        if (url === '/api/agent/config-actions/sessions/s1') throw new Error('temporary database error');
+        throw new Error('unexpected request: ' + url);
+    });
+    state.wbActiveSessionId = 's1';
+    const pending = { actionId: 'config-1', status: 'QUEUED', approvals: [] };
+    state.wbConfigActions = [pending];
+
+    try {
+        await state.wbLoadActions('s1');
+        assert.equal(state.wbConfigActions[0], pending, 'temporary read failure must not erase the queued action');
+        assert.notEqual(state._wbActionTimer, null, 'queued action must get a retry');
+    } finally {
+        if (state._wbActionTimer) clearTimeout(state._wbActionTimer);
+    }
 });

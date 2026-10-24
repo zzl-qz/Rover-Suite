@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.rover.agent.core.model.AgentMessage;
+import com.rover.agent.core.model.ConfigActionIntent;
+import com.rover.agent.core.model.ConfigActionStatus;
+import com.rover.agent.core.model.GatewayConfigAction;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
 import com.rover.agent.core.model.IncidentStatus;
@@ -18,6 +21,7 @@ import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.runtime.repository.InMemoryAgentMessageRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import com.rover.agent.runtime.repository.InMemoryIncidentRepository;
+import com.rover.agent.runtime.repository.InMemoryGatewayConfigActionRepository;
 import com.rover.agent.runtime.repository.StoreCapacityExceededException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -65,6 +69,26 @@ class WorkspaceRetentionTest {
     }
 
     @Test
+    void sessionWithUnresolvedConfigActionIsKeptAndAdmissionFailsVisibly() {
+        Fixture fixture = new Fixture(1, 10, 10);
+        fixture.sessions.save(session("s1", 1L));
+        var intent = new ConfigActionIntent(ConfigActionIntent.ALLOWED_KEY, "0.0", "1",
+                new com.rover.agent.core.model.ResourceScope("org", "team", "test"), "gateway-1", "default");
+        long now = System.currentTimeMillis();
+        GatewayConfigAction action = new GatewayConfigAction("config-action-1", "s1", null, null, "alice",
+                intent, intent.intentHash(), "policy-v1", List.of(), "operation-1", ConfigActionStatus.UNKNOWN,
+                "回执待对账", now, now, now + 60_000, 0);
+        fixture.configActions.save(action);
+
+        assertThrows(IllegalStateException.class, () -> fixture.retention.deleteSessionCascade("s1"));
+        assertTrue(fixture.configActions.find(action.actionId()).isPresent(), "显式级联删除也不能丢失原 operationId");
+        assertThrows(StoreCapacityExceededException.class, () -> fixture.retention.admitSession(session("s2", 2L)));
+
+        assertEquals(List.of("s1"), fixture.sessions.listAll().stream().map(Session::sessionId).toList());
+        assertTrue(fixture.configActions.find(action.actionId()).isPresent(), "未决操作及其 operationId 必须保留以便对账");
+    }
+
+    @Test
     void incidentAdmissionCleansOldestIncidentAndDetachesItFromSession() {
         Fixture fixture = new Fixture(10, 1, 10);
         fixture.sessions.save(new Session("s1", "alice", "标题", "inc-1", SessionStatus.ACTIVE, 1L, 1L,
@@ -101,6 +125,7 @@ class WorkspaceRetentionTest {
         private final InMemoryAgentSessionRepository sessions;
         private final InMemoryIncidentRepository incidents;
         private final InMemoryAgentMessageRepository messages;
+        private final InMemoryGatewayConfigActionRepository configActions = new InMemoryGatewayConfigActionRepository(20);
         private final FakeRetirement retirement = new FakeRetirement();
         private final WorkspaceRetention retention;
 
@@ -108,7 +133,7 @@ class WorkspaceRetentionTest {
             this.sessions = new InMemoryAgentSessionRepository(sessionCapacity);
             this.incidents = new InMemoryIncidentRepository(incidentCapacity);
             this.messages = new InMemoryAgentMessageRepository(messageCapacity);
-            this.retention = new WorkspaceRetention(sessions, incidents, messages, retirement,
+            this.retention = new WorkspaceRetention(sessions, incidents, messages, retirement, null, configActions,
                     sessionCapacity, incidentCapacity, messageCapacity);
         }
     }

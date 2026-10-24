@@ -68,7 +68,7 @@ class DefaultConversationMetricsTest {
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
         ToolLoopService service = new AgentRuntimeConfiguration().agentToolLoopService(
                 mock(CapabilityExecutor.class), beans.getBeanProvider(ChatModelGateway.class),
-                beans.getBeanProvider(ConversationModel.class), null, new MicrometerAgentMetrics(meters));
+                beans.getBeanProvider(ConversationModel.class), null, null, new MicrometerAgentMetrics(meters));
         InvestigationTaskRegistry tasks = new InvestigationTaskRegistry();
         try {
             var task = tasks.register("metrics-session", "你好");

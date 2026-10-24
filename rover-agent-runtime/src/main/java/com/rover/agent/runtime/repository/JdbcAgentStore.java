@@ -11,6 +11,10 @@ import com.rover.agent.core.model.AlertDelivery;
 import com.rover.agent.core.model.AlertEventState;
 import com.rover.agent.core.model.AlertLifecycle;
 import com.rover.agent.core.model.AgentAction;
+import com.rover.agent.core.model.ConfigActionApproval;
+import com.rover.agent.core.model.ConfigActionIntent;
+import com.rover.agent.core.model.ConfigActionStatus;
+import com.rover.agent.core.model.GatewayConfigAction;
 import com.rover.agent.core.model.ActionApproval;
 import com.rover.agent.core.model.ActionExecutionCommand;
 import com.rover.agent.core.model.ActionEffectVerification;
@@ -47,6 +51,7 @@ import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentActionRepository;
+import com.rover.agent.core.repository.GatewayConfigActionRepository;
 import com.rover.agent.core.repository.ActionCommandRepository;
 import com.rover.agent.core.repository.AutoExecutionPolicyRepository;
 import com.rover.agent.core.repository.ActionEffectVerificationRepository;
@@ -114,6 +119,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final Checkpoints checkpoints = new Checkpoints();
     private final Actions actions = new Actions();
     private final ActionCommands actionCommands = new ActionCommands();
+    private final GatewayConfigActions gatewayConfigActions = new GatewayConfigActions();
     private final EffectVerifications effectVerifications = new EffectVerifications();
     private final Certifications certifications = new Certifications();
     private final AlertLifecycles alertLifecycles = new AlertLifecycles();
@@ -168,6 +174,7 @@ public final class JdbcAgentStore implements AutoCloseable {
     }
 
     public ActionCommandRepository actionCommands() { return actionCommands; }
+    public GatewayConfigActionRepository gatewayConfigActions() { return gatewayConfigActions; }
 
     public ActionEffectVerificationRepository effectVerifications() { return effectVerifications; }
 
@@ -696,6 +703,9 @@ public final class JdbcAgentStore implements AutoCloseable {
         @Override
         public void remove(String sessionId) {
             synchronized (JdbcAgentStore.this) {
+                if (gatewayConfigActions.hasNonTerminalForSession(sessionId)) {
+                    throw new IllegalStateException("会话存在未决 Gateway 配置动作，不能删除其原操作号");
+                }
                 // 外键级联：会话下的事件、消息与任务一并清掉，不留孤儿。
                 run("DELETE FROM agent_session WHERE session_id = ?", sessionId);
             }
@@ -1186,6 +1196,115 @@ public final class JdbcAgentStore implements AutoCloseable {
                 return run("DELETE FROM agent_action WHERE session_id = ?", sessionId);
             }
         }
+    }
+
+    /** Separate typed aggregate: configuration values do not fit the legacy route-weight row. */
+    private final class GatewayConfigActions implements GatewayConfigActionRepository {
+        @Override public GatewayConfigAction save(GatewayConfigAction action) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    GatewayConfigAction current = find(action.actionId()).orElse(null);
+                    if (current == null ? action.version() != 0 : current.version() != action.version())
+                        throw new ActionUpdateConflictException(action.actionId());
+                    if (current != null) action.requireSameIntent(current);
+                    else if (action.version() != 0) throw new ActionUpdateConflictException(action.actionId());
+                    Object[] values = {action.sessionId(), blankToNull(action.incidentId()), blankToNull(action.taskId()),
+                            blankToNull(action.requestedBy()), toJson(action.intent()), action.intentHash(), action.policyVersion(),
+                            toJson(action.approvals()), action.operationId(), blankToNull(action.compensatesActionId()),
+                            action.status().name(), blankToNull(action.errorMessage()),
+                            action.createdAtMillis(), action.updatedAtMillis(), action.expiresAtMillis()};
+                    if (current == null) {
+                        run("INSERT INTO agent_gateway_config_action(session_id,incident_id,task_id,requested_by,intent_json,"
+                                        + "intent_hash,policy_version,approvals_json,operation_id,compensates_action_id,status,error_message,created_at,updated_at,expires_at,version,action_id) "
+                                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)", append(values, action.actionId()));
+                    } else {
+                        int changed = run("UPDATE agent_gateway_config_action SET session_id=?,incident_id=?,task_id=?,requested_by=?,"
+                                        + "intent_json=?,intent_hash=?,policy_version=?,approvals_json=?,operation_id=?,compensates_action_id=?,status=?,error_message=?,"
+                                        + "created_at=?,updated_at=?,expires_at=?,version=version+1 WHERE action_id=? AND version=?",
+                                append(append(values, action.actionId()), action.version()));
+                        if (changed != 1) throw new ActionUpdateConflictException(action.actionId());
+                    }
+                    appendAudit("GATEWAY_CONFIG_ACTION_" + action.status().name(), action.actionId(),
+                            com.rover.agent.core.util.AuditActor.current(action.approvals().isEmpty()
+                                    ? action.requestedBy() : action.approvals().get(action.approvals().size()-1).approver()),
+                            action.intent().targetNamespace(), action);
+                    return action.withVersion(action.version()+1);
+                });
+            }
+        }
+        @Override public Optional<GatewayConfigAction> find(String id) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT * FROM agent_gateway_config_action WHERE action_id=?",
+                        JdbcAgentStore::readGatewayConfigAction, id);
+            }
+        }
+        @Override public Optional<GatewayConfigAction> findCompensation(String id) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT * FROM agent_gateway_config_action WHERE compensates_action_id=? ORDER BY created_at,action_id LIMIT 1",
+                        JdbcAgentStore::readGatewayConfigAction, id);
+            }
+        }
+        @Override public List<GatewayConfigAction> bySession(String sessionId) {
+            synchronized (JdbcAgentStore.this) {
+                return query("SELECT * FROM agent_gateway_config_action WHERE session_id=? ORDER BY created_at DESC,action_id",
+                        JdbcAgentStore::readGatewayConfigAction, sessionId);
+            }
+        }
+        @Override public boolean hasNonTerminalForSession(String sessionId) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT 1 FROM agent_gateway_config_action WHERE session_id=? AND status NOT IN (?,?,?,?,?) LIMIT 1",
+                        row -> row.getInt(1), sessionId, ConfigActionStatus.APPLIED.name(),
+                        ConfigActionStatus.PRECONDITION_FAILED.name(), ConfigActionStatus.FAILED.name(),
+                        ConfigActionStatus.REJECTED.name(), ConfigActionStatus.EXPIRED.name()).isPresent();
+            }
+        }
+        @Override public List<GatewayConfigAction> byStatus(java.util.Set<ConfigActionStatus> statuses, int limit) {
+            if (statuses == null || statuses.isEmpty() || limit < 1 || limit > 1000)
+                throw new IllegalArgumentException("config action status query is invalid");
+            synchronized (JdbcAgentStore.this) {
+                String marks = String.join(",", java.util.Collections.nCopies(statuses.size(), "?"));
+                Object[] args = new Object[statuses.size()+1]; int i=0;
+                for (ConfigActionStatus status : statuses) args[i++]=status.name(); args[i]=limit;
+                return query("SELECT * FROM agent_gateway_config_action WHERE status IN ("+marks+") ORDER BY updated_at DESC,action_id LIMIT ?",
+                        JdbcAgentStore::readGatewayConfigAction, args);
+            }
+        }
+        @Override public Optional<GatewayConfigAction> transition(String id, ConfigActionStatus expected,
+                java.util.function.UnaryOperator<GatewayConfigAction> mutation) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    GatewayConfigAction current = find(id).orElse(null);
+                    if (current == null || current.status()!=expected) return Optional.empty();
+                    GatewayConfigAction next = mutation.apply(current);
+                    if (!id.equals(next.actionId())) throw new IllegalArgumentException("配置动作 ID 不可更改");
+                    next.requireSameIntent(current);
+                    Object[] values = {blankToNull(next.incidentId()), blankToNull(next.taskId()), blankToNull(next.requestedBy()),
+                            toJson(next.intent()), next.intentHash(), next.policyVersion(), toJson(next.approvals()), next.operationId(),
+                            blankToNull(next.compensatesActionId()),
+                            next.status().name(), blankToNull(next.errorMessage()), next.updatedAtMillis(), next.expiresAtMillis(), id, current.version(), expected.name()};
+                    int changed = run("UPDATE agent_gateway_config_action SET incident_id=?,task_id=?,requested_by=?,intent_json=?,"
+                                    + "intent_hash=?,policy_version=?,approvals_json=?,operation_id=?,compensates_action_id=?,status=?,error_message=?,updated_at=?,expires_at=?,"
+                                    + "version=version+1 WHERE action_id=? AND version=? AND status=?", values);
+                    if (changed != 1) return Optional.empty();
+                    appendAudit("GATEWAY_CONFIG_ACTION_" + next.status().name(), id,
+                            com.rover.agent.core.util.AuditActor.current(next.approvals().isEmpty()
+                                    ? next.requestedBy() : next.approvals().get(next.approvals().size()-1).approver()),
+                            next.intent().targetNamespace(), next.withVersion(current.version()+1));
+                    return Optional.of(next.withVersion(current.version()+1));
+                });
+            }
+        }
+    }
+
+    private static GatewayConfigAction readGatewayConfigAction(ResultSet rows) throws SQLException {
+        return new GatewayConfigAction(rows.getString("action_id"), rows.getString("session_id"),
+                rows.getString("incident_id"), rows.getString("task_id"), rows.getString("requested_by"),
+                fromJson(rows.getString("intent_json"), ConfigActionIntent.class), rows.getString("intent_hash"),
+                rows.getString("policy_version"), fromJson(rows.getString("approvals_json"),
+                new TypeReference<List<ConfigActionApproval>>() { }), rows.getString("operation_id"),
+                rows.getString("compensates_action_id"),
+                ConfigActionStatus.valueOf(rows.getString("status")), rows.getString("error_message"),
+                rows.getLong("created_at"), rows.getLong("updated_at"), rows.getLong("expires_at"), rows.getLong("version"));
     }
 
     private final class ActionCommands implements ActionCommandRepository {
@@ -1979,6 +2098,20 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "subject_hash VARCHAR(64) NOT NULL, certification_version BIGINT NOT NULL, scope_key VARCHAR(512) NOT NULL, "
                                         + "updated_at BIGINT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(subject_hash,certification_version))",
                                 "CREATE INDEX IF NOT EXISTS idx_action_cert_scope ON agent_action_certification(scope_key,subject_hash,certification_version)"),
+                        List.of(), List.of()),
+                new Migration(19, "durable typed Gateway config action intents and approval state",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_gateway_config_action ("
+                                        + "action_id VARCHAR(64) PRIMARY KEY, session_id VARCHAR(64) NOT NULL, incident_id VARCHAR(64), task_id VARCHAR(64), "
+                                        + "requested_by VARCHAR(128), intent_json TEXT NOT NULL, intent_hash VARCHAR(64) NOT NULL, policy_version VARCHAR(128) NOT NULL, "
+                                        + "approvals_json TEXT NOT NULL, operation_id VARCHAR(128) NOT NULL UNIQUE, status VARCHAR(32) NOT NULL, error_message VARCHAR(1000), "
+                                        + "created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, version BIGINT NOT NULL, "
+                                        + "FOREIGN KEY(session_id) REFERENCES agent_session(session_id) ON DELETE CASCADE)",
+                                "CREATE INDEX IF NOT EXISTS idx_gateway_config_action_session ON agent_gateway_config_action(session_id,created_at)",
+                                "CREATE INDEX IF NOT EXISTS idx_gateway_config_action_status ON agent_gateway_config_action(status,updated_at)"),
+                        List.of(), List.of()),
+                new Migration(20, "approved Gateway config compensation linkage",
+                        List.of("ALTER TABLE agent_gateway_config_action ADD COLUMN IF NOT EXISTS compensates_action_id VARCHAR(64)",
+                                "CREATE UNIQUE INDEX IF NOT EXISTS idx_gateway_config_action_compensates ON agent_gateway_config_action(compensates_action_id)"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {

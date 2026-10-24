@@ -121,6 +121,14 @@ final class AgentSecurityFilters {
         if (path.startsWith("/api/agent/actions/sessions/") && path.endsWith("/approval-progress")) { return Permission.READ; }
         if (path.startsWith("/api/agent/actions/") && path.endsWith("/approval-progress")) { return Permission.APPROVE; }
         if (path.startsWith("/api/agent/actions/") && path.endsWith("/reconcile")) { return Permission.MANAGE_SYSTEM; }
+        if (path.equals("/api/agent/config-actions")) return Permission.PROPOSE;
+        if (path.startsWith("/api/agent/config-actions/")) {
+            if (read) return Permission.READ;
+            if (path.matches("/api/agent/config-actions/sessions/[^/]+/config-actions")) return Permission.PROPOSE;
+            if (path.endsWith("/reconcile")) return Permission.APPROVE;
+            if (path.endsWith("/approve") || path.endsWith("/reject")) return Permission.APPROVE;
+            return Permission.PROPOSE;
+        }
         if (read) { return Permission.READ; }
         if (path.startsWith("/api/agent/actions/")) {
             return path.endsWith("/resolve") ? Permission.READ : Permission.APPROVE;

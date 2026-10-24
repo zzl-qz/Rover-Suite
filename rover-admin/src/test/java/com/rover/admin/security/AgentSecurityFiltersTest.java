@@ -13,4 +13,17 @@ class AgentSecurityFiltersTest {
         assertEquals(Permission.MANAGE_SYSTEM, AgentSecurityFilters.permission("/api/agent/routes/instances/isolations", "GET"));
         assertEquals(Permission.MANAGE_SYSTEM, AgentSecurityFilters.permission("/api/agent/routes/instances/isolations", "POST"));
     }
+
+    @Test
+    void gatewayConfigProposalAndApprovalHaveSeparatePermissions() {
+        assertEquals(Permission.PROPOSE, AgentSecurityFilters.permission("/api/agent/config-actions", "POST"));
+        assertEquals(Permission.PROPOSE, AgentSecurityFilters.permission(
+                "/api/agent/config-actions/sessions/s1/config-actions", "POST"));
+        assertEquals(Permission.APPROVE, AgentSecurityFilters.permission(
+                "/api/agent/config-actions/a1/approve", "POST"));
+        assertEquals(Permission.APPROVE, AgentSecurityFilters.permission(
+                "/api/agent/config-actions/a1/reconcile", "POST"));
+        assertEquals(Permission.READ, AgentSecurityFilters.permission(
+                "/api/agent/config-actions/sessions/s1", "GET"));
+    }
 }
