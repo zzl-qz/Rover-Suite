@@ -210,6 +210,42 @@ public class AdminConfigService {
         }
     }
 
+    /** Submit one allowlisted Gateway config action. The caller must persist operationId before calling. */
+    public Map<String, Object> executeGatewayConfigAction(String operationId, String key,
+                                                           String expectedValue, String desiredValue) {
+        if (operationId == null || operationId.isBlank()) { throw new IllegalArgumentException("需要 operationId"); }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put(ManageApiPaths.PARAM_OPERATION_ID, operationId);
+        body.put("key", key);
+        body.put("expectedValue", expectedValue);
+        body.put("desiredValue", desiredValue);
+        try {
+            return httpClient.postJson(properties.getGatewayUrl(), ManageApiPaths.CONFIG_ACTIONS, body);
+        } catch (ManageApiCallException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            // A timeout may happen after Gateway persisted intent or changed the config. Preserve unknown outcome.
+            throw new ManageApiCallException(0, "调用 Gateway 配置动作失败；请使用原 operationId 回查", ex);
+        }
+    }
+
+    /** Read a config action receipt without retrying or replaying the write. */
+    public Map<String, Object> gatewayConfigAction(String operationId) {
+        if (operationId == null || operationId.isBlank()) { throw new IllegalArgumentException("需要 operationId"); }
+        try {
+            JsonNode node = httpClient.getJson(properties.getGatewayUrl(),
+                    ManageApiPaths.CONFIG_ACTIONS + "/" + URLEncoder.encode(operationId, StandardCharsets.UTF_8));
+            return JsonCodec.parseObjectMap(node.toString());
+        } catch (ManageApiCallException ex) {
+            if (ex.statusCode() == 404) {
+                return Map.of(ManageApiPaths.PARAM_OPERATION_ID, operationId, "status", "UNKNOWN");
+            }
+            throw ex;
+        } catch (Exception ex) {
+            throw new ManageApiCallException(0, "读取 Gateway 配置动作回执失败", ex);
+        }
+    }
+
     /**
      * 调整单个版本目标的权重，通过整表提交和 revision 乐观锁更新。
      * @param body routeId、serviceName、group、weight 和 revision
