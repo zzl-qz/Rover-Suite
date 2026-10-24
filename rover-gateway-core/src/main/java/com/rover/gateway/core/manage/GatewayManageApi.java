@@ -38,6 +38,8 @@ public class GatewayManageApi extends AbstractManageApi {
 
     /** 整表提交里承载路由列表的字段名。 */
     private static final String ROUTES_FIELD = "routes";
+    /** Gateway authenticates the Admin service token; human approval identity lives in Admin audit. */
+    private static final String CONFIG_ACTION_PRINCIPAL = "rover-admin";
 
     /** 网关运行时，路由/配置热更新的实际操作对象。 */
     private final GatewayRuntime runtime;
@@ -151,7 +153,7 @@ public class GatewayManageApi extends AbstractManageApi {
             try {
                 receipt = runtime.getConfigActionStore().execute(text(body.get("operationId")),
                         text(body.get("key")), text(body.get("expectedValue")),
-                        text(body.get("desiredValue")), text(body.get("actor")));
+                        text(body.get("desiredValue")), CONFIG_ACTION_PRINCIPAL);
             } catch (com.rover.gateway.core.config.GatewayConfigActionStore.IdempotencyConflictException ex) {
                 throw new ManageApiException(HttpResponseStatus.CONFLICT, ex.getMessage());
             }
@@ -172,8 +174,9 @@ public class GatewayManageApi extends AbstractManageApi {
     private static Map<String,Object> configActionReceipt(com.rover.gateway.core.config.GatewayConfigActionStore.Receipt receipt) {
         Map<String,Object> body = new LinkedHashMap<>(receipt.result());
         body.put("operationId", receipt.operationId()); body.put("key", receipt.configKey());
-        body.put("status", receipt.status()); body.put("replayed", receipt.replayed());
-        body.put("actor", receipt.actor()); body.put("expectedValue", receipt.expectedValue());
+        body.put("actor", receipt.actor()); body.put("status", receipt.status());
+        body.put("replayed", receipt.replayed());
+        body.put("expectedValue", receipt.expectedValue());
         body.put("desiredValue", receipt.desiredValue()); body.put("createdAtMillis", receipt.createdAtMillis());
         body.put("updatedAtMillis", receipt.updatedAtMillis());
         // The current shared Admin token authenticates the caller, not this caller-supplied name.

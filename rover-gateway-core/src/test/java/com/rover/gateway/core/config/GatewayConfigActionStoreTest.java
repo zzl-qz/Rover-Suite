@@ -129,9 +129,17 @@ class GatewayConfigActionStoreTest {
         var applied = call(api, HttpMethod.POST, ManageApiPaths.CONFIG_ACTIONS, body, true);
         assertEquals(200, applied.status(), applied.body());
         assertTrue(applied.body().contains("\"status\":\"APPLIED\""), applied.body());
+        assertTrue(applied.body().contains("\"actor\":\"rover-admin\""), applied.body());
+        assertFalse(applied.body().contains("agent-admin"), "Gateway must not trust a caller-supplied human identity");
         var replayed = call(api, HttpMethod.POST, ManageApiPaths.CONFIG_ACTIONS, body, true);
         assertTrue(replayed.body().contains("\"replayed\":true"), replayed.body());
-        String conflictBody = body.replace("agent-admin", "different-actor");
+        String replayWithDifferentClaimedActor = body.replace("agent-admin", "different-actor");
+        var replayedWithDifferentClaimedActor = call(api, HttpMethod.POST, ManageApiPaths.CONFIG_ACTIONS, replayWithDifferentClaimedActor, true);
+        assertEquals(200, replayedWithDifferentClaimedActor.status(), replayedWithDifferentClaimedActor.body());
+        assertTrue(replayedWithDifferentClaimedActor.body().contains("\"replayed\":true"), replayedWithDifferentClaimedActor.body());
+        assertTrue(replayedWithDifferentClaimedActor.body().contains("\"actor\":\"rover-admin\""), replayedWithDifferentClaimedActor.body());
+        String conflictBody = body.replace("\"expectedValue\":\"1\",\"desiredValue\":\"0\"",
+                "\"expectedValue\":\"0\",\"desiredValue\":\"1\"");
         var conflict = call(api, HttpMethod.POST, ManageApiPaths.CONFIG_ACTIONS, conflictBody, true);
         assertEquals(409, conflict.status(), conflict.body());
         assertEquals("0", value(config), "an operation ID conflict must not mutate configuration");
