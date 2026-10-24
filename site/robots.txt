@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+# 公网域名确定后再补上 Sitemap 绝对地址。

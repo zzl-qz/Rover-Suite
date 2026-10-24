@@ -1,5 +1,5 @@
 :root {
-  --bg: #0a0a0b;
+  --bg: #050508;
   --card: #1c1c1f;
   --line: #2a2a2e;
   --fg: #ededed;
@@ -13,15 +13,21 @@
 
 * { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
 
 body {
   margin: 0;
-  background: var(--bg);
+  background-color: #050508;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
   color: var(--fg);
   font-family: var(--font);
   font-size: 16px;
-  line-height: 1.65;
+  font-weight: 400;
+  line-height: 1.7;
+  padding-top: 68px;
 }
 
 a { color: var(--fg); }
@@ -40,19 +46,32 @@ img { max-width: 100%; }
 .skip:focus { top: 12px; }
 
 .bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 80;
+  width: 100%;
+  margin: 0;
+  padding: 0 20px;
+  background: rgba(5, 5, 8, 0.78);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px);
+}
+
+.bar-inner {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  width: min(1000px, calc(100% - 40px));
+  width: min(1000px, 100%);
   margin: 0 auto;
-  padding: 18px 0;
-  border-bottom: 1px solid var(--line);
+  min-height: 64px;
 }
 
 .brand {
   color: var(--fg);
-  font-weight: 600;
+  font-weight: 800;
   text-decoration: none;
   letter-spacing: 0;
 }
@@ -91,21 +110,48 @@ main {
 }
 
 .hero {
+  position: relative;
   display: grid;
   gap: 28px;
   padding: 36px 0 8px;
   align-items: center;
 }
 
+.hero::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: -40px;
+  z-index: 0;
+  width: min(860px, 100%);
+  height: 460px;
+  transform: translateX(-50%);
+  background: radial-gradient(circle, rgba(249, 115, 22, 0.16), transparent 68%);
+  pointer-events: none;
+}
+
+.hero > * { position: relative; z-index: 1; }
+
 .hero-copy { display: flex; flex-direction: column; gap: 16px; }
 
-h1, h2, h3 { font-weight: 600; line-height: 1.3; margin: 0; }
+h1, h2, h3 { line-height: 1.25; margin: 0; }
 
-h1 { font-size: clamp(32px, 4vw, 44px); max-width: 12em; }
+h1 { font-size: clamp(36px, 4.4vw, 52px); font-weight: 800; max-width: 12em; }
 
-h2 { font-size: 22px; }
+h2 { font-size: 28px; font-weight: 700; }
 
-h3 { font-size: 18px; letter-spacing: 0; }
+h3 { font-size: 18px; font-weight: 700; letter-spacing: 0; }
+
+.manifesto {
+  margin: 4px 0 0;
+  max-width: 18em;
+  font-size: clamp(18px, 2vw, 24px);
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.manifesto .em { color: var(--accent); font-weight: 700; }
 
 .sub, .head p, .card p, .prose p, .term-note, .bounds li, .path p {
   color: var(--muted);
@@ -137,10 +183,11 @@ h3 { font-size: 18px; letter-spacing: 0; }
 
 .term {
   margin: 0;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: rgba(28, 28, 31, 0.6);
+  border: 1px solid rgba(249, 115, 22, 0.35);
   border-radius: 8px;
-  box-shadow: 0 12px 32px rgb(10 10 11 / 35%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 30px rgba(249, 115, 22, 0.1);
+  backdrop-filter: blur(12px);
 }
 
 .term-bar {
@@ -214,11 +261,8 @@ code, .path code {
 
 .shot {
   margin: 0;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 16px 40px rgb(10 10 11 / 45%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 16px 40px rgba(5, 5, 8, 0.45);
 }
 
 .shot figcaption {
@@ -245,10 +289,22 @@ code, .path code {
 
 .bento { display: grid; gap: 12px; align-items: stretch; }
 
-.card, .compare article, .path {
-  background: var(--card);
-  border: 1px solid var(--line);
+.card, .compare article, .path, .steps li, .extend, .shot {
+  background: rgba(28, 28, 31, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.card, .path, .steps li {
+  transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card:hover, .path:hover, .steps li:hover {
+  border-color: #f97316;
+  transform: translateY(-2px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 12px 28px rgba(5, 5, 8, 0.45);
 }
 
 .card {
@@ -310,11 +366,14 @@ code, .path code {
 .compare article { padding: 18px 18px 10px; }
 
 .compare-old {
-  background: #1a1414;
-  border-color: #4a3030;
+  background: rgba(120, 32, 32, 0.16);
+  border-color: rgba(248, 113, 113, 0.28);
 }
 
-.compare-new { border-color: var(--accent); }
+.compare-new {
+  background: rgba(249, 115, 22, 0.1);
+  border-color: rgba(249, 115, 22, 0.45);
+}
 
 .compare ul { margin: 12px 0 8px; padding: 0; list-style: none; }
 
@@ -331,9 +390,6 @@ code, .path code {
 .extend {
   margin: 12px 0 0;
   padding: 14px 16px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
   color: var(--muted);
 }
 
@@ -349,12 +405,7 @@ code, .path code {
   counter-reset: step;
 }
 
-.steps li {
-  padding: 16px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
+.steps li { padding: 16px; }
 
 .steps h3::before {
   counter-increment: step;
@@ -390,11 +441,12 @@ code, .path code {
   text-decoration: none;
 }
 
-.path-k { margin: 0; color: var(--fg); font-weight: 600; }
+.path-k { margin: 0; color: var(--fg); font-size: 18px; font-weight: 700; }
 
 .path-go {
-  color: var(--fg);
+  color: #f97316;
   font-size: 14px;
+  font-weight: 500;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -455,7 +507,7 @@ code, .path code {
     position: absolute;
     left: 20px;
     right: 20px;
-    top: 62px;
+    top: calc(100% + 8px);
     flex-direction: column;
     padding: 12px;
     background: var(--card);
@@ -463,7 +515,6 @@ code, .path code {
     border-radius: 8px;
   }
   .nav.is-open { display: flex; }
-  .bar { position: relative; }
   .rover-bot { right: 16px; bottom: 16px; width: 72px; }
 }
 
@@ -520,6 +571,9 @@ code, .path code {
 
 .rover-bot:hover .rover-svg,
 .rover-bot:focus-within .rover-svg { transform: scale(1.1); }
+
+.rover-bot.is-drag { animation: none; cursor: grabbing; }
+.rover-bot.is-drag .rover-toggle { cursor: grabbing; }
 
 .rover-bot.is-hit .rover-svg { animation: hop 0.45s ease-out; }
 

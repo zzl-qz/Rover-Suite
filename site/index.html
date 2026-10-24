@@ -20,24 +20,51 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Rover-Suite · 轻量微服务基础设施</title>
-  <meta name="description" content="自带注册中心与网关路由。小团队无需在每个 Nginx 或前端配置中硬编码后端地址。">
+  <meta name="description" content="Rover-Suite 是自带 Nameserver 与 Gateway 的轻量微服务基础设施。服务自行注册，Gateway 只将请求转发到健康实例。">
+  <meta name="robots" content="index,follow">
+  <meta name="author" content="Rover-Suite">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:site_name" content="Rover-Suite">
+  <meta property="og:title" content="Rover-Suite · 轻量微服务基础设施">
+  <meta property="og:description" content="自带注册中心与网关路由。服务向 Nameserver 注册，Gateway 只路由到健康实例。">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Rover-Suite · 轻量微服务基础设施">
+  <meta name="twitter:description" content="自带注册中心与网关路由。服务向 Nameserver 注册，Gateway 只路由到健康实例。">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "Rover-Suite",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows",
+    "softwareVersion": "1.0.0-SNAPSHOT",
+    "description": "自带 Nameserver 与 Gateway 的轻量微服务基础设施。服务自行注册，Gateway 只将请求转发到健康实例。",
+    "codeRepository": "https://github.com/zzl-qz/Rover-Suite",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
   <link rel="stylesheet" href="styles.css">
   <script>document.documentElement.classList.add("js")</script>
 </head>
 <body id="top">
   <a class="skip" href="#content">跳到正文</a>
   <header class="bar">
-    <a class="brand" href="#top">Rover-Suite</a>
-    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">菜单</button>
-    <nav id="site-nav" class="nav" aria-label="页内">
-      <a href="#highlights">核心能力</a>
-      <a href="#flow">请求路径</a>
-      <a href="#paths">接入方式</a>
-      <a href="#docs">文档</a>
-      <a href="#boundaries">运行边界</a>
-      <a href="https://github.com/zzl-qz/Rover-Suite" target="_blank" rel="noopener">GitHub</a>
-    </nav>
+    <div class="bar-inner">
+      <a class="brand" href="#top">Rover-Suite</a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">菜单</button>
+      <nav id="site-nav" class="nav" aria-label="页内">
+        <a href="#highlights">核心能力</a>
+        <a href="#flow">请求路径</a>
+        <a href="#paths">接入方式</a>
+        <a href="#docs">文档</a>
+        <a href="#boundaries">运行边界</a>
+      <a href="#contact">反馈</a>
+        <a href="https://github.com/zzl-qz/Rover-Suite" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
   </header>
 
   <main id="content">
@@ -45,6 +72,7 @@
       <div class="hero-copy">
         <h1 id="hero-title">轻量微服务基础设施</h1>
         <p class="sub">自带注册中心与网关路由。<br>小团队无需在每个 Nginx 或前端配置中硬编码后端地址。</p>
+        <p class="manifesto"><span>Rover-Suite</span> 是一套让微服务在网络中<span class="em">自由漫游</span>的基础设施。</p>
         <div class="actions">
           <a class="btn btn-ghost" href="https://github.com/zzl-qz/Rover-Suite" target="_blank" rel="noopener">GitHub</a>
         </div>
@@ -273,6 +301,27 @@ curl -i http://127.0.0.1:8080/api/hello</code></pre>
         <li>SDK 产物尚未发布至 Maven Central，需从源码构建。</li>
       </ul>
     </section>
+
+    <section class="block reveal" id="contact" aria-labelledby="contact-title">
+      <div class="head">
+        <h2 id="contact-title">反馈</h2>
+        <p>如果页面或产品有需要调整的地方，欢迎通过下面任一方式说明。</p>
+      </div>
+      <div class="paths">
+        <a class="path" href="https://github.com/zzl-qz/Rover-Suite/issues" target="_blank" rel="noopener">
+          <span class="path-k">GitHub Issue</span>
+          <span class="path-go">提交问题或建议 →</span>
+        </a>
+        <a class="path" href="https://wpa.qq.com/msgrd?v=3&amp;uin=2080879934&amp;site=qq&amp;menu=yes" target="_blank" rel="noopener">
+          <span class="path-k">QQ</span>
+          <span class="path-go">2080879934 →</span>
+        </a>
+        <a class="path" href="mailto:zl20040922@qq.com">
+          <span class="path-k">邮箱</span>
+          <span class="path-go">zl20040922@qq.com →</span>
+        </a>
+      </div>
+    </section>
   </main>
 
   <footer class="foot">
@@ -282,6 +331,7 @@ curl -i http://127.0.0.1:8080/api/hello</code></pre>
       <a href="https://github.com/zzl-qz/Rover-Suite" target="_blank" rel="noopener">GitHub</a>
       <a href="https://github.com/zzl-qz/Rover-Suite/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
     </nav>
+    <p>页面或产品需要调整时，可通过 <a href="https://github.com/zzl-qz/Rover-Suite/issues" target="_blank" rel="noopener">GitHub Issue</a>、QQ 2080879934，或邮件 <a href="mailto:zl20040922@qq.com">zl20040922@qq.com</a> 说明。</p>
     <p>Rover-Suite is licensed under the Apache License 2.0.</p>
   </footer>
   <div class="rover-bot" id="rover-bot">
