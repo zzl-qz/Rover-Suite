@@ -1346,9 +1346,9 @@ public final class JdbcAgentStore implements AutoCloseable {
         @Override public List<KnowledgeDocumentVersion> approved(com.rover.agent.core.model.ResourceScope scope, long at, int limit) {
             if (limit < 1 || limit > 1000) throw new IllegalArgumentException("limit must be 1..1000");
             synchronized (JdbcAgentStore.this) {
-                return query("SELECT d.payload_json FROM agent_knowledge_document d WHERE d.organization_id=? AND d.team_id=? AND d.environment_id=? AND d.status='APPROVED' AND d.expires_at>? AND NOT EXISTS (SELECT 1 FROM agent_knowledge_document newer WHERE newer.document_id=d.document_id AND newer.document_version>d.document_version AND (newer.status='APPROVED' OR newer.status='REVOKED')) ORDER BY d.document_id,d.document_version DESC LIMIT ?",
+                return query("SELECT d.payload_json FROM agent_knowledge_document d WHERE d.organization_id=? AND d.team_id=? AND d.environment_id=? AND d.status='APPROVED' AND d.expires_at>? AND NOT EXISTS (SELECT 1 FROM agent_knowledge_document newer WHERE newer.document_id=d.document_id AND newer.document_version>d.document_version AND newer.status IN ('APPROVED','REVOKED') AND newer.created_at<=?) ORDER BY d.document_id,d.document_version DESC LIMIT ?",
                         row -> fromJson(row.getString(1), KnowledgeDocumentVersion.class),
-                        scope.organizationId(), scope.teamId(), scope.environmentId(), at, limit);
+                        scope.organizationId(), scope.teamId(), scope.environmentId(), at, at, limit);
             }
         }
         @Override public Optional<KnowledgeDocumentVersion> transition(String id, int version,

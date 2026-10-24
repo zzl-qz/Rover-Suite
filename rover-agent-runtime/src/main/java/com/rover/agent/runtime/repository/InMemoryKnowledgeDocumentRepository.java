@@ -45,7 +45,7 @@ public final class InMemoryKnowledgeDocumentRepository implements KnowledgeDocum
         return scoped.stream().filter(v -> v.status() == KnowledgeDocumentVersion.Status.APPROVED && v.expiresAtMillis() > at)
                 .filter(v -> scoped.stream().noneMatch(newer -> newer.documentId().equals(v.documentId())
                         && newer.version() > v.version() && (newer.status() == KnowledgeDocumentVersion.Status.APPROVED
-                        || newer.status() == KnowledgeDocumentVersion.Status.REVOKED)))
+                        || newer.status() == KnowledgeDocumentVersion.Status.REVOKED) && newer.createdAtMillis() <= at))
                 .sorted(Comparator.comparing(KnowledgeDocumentVersion::documentId).thenComparingInt(KnowledgeDocumentVersion::version).reversed())
                 .limit(limit).toList();
     }

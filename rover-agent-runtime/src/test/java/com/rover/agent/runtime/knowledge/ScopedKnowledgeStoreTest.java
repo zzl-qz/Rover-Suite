@@ -11,7 +11,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 class ScopedKnowledgeStoreTest {
     @TempDir Path temp;
-    @Test void onlyApprovedUnexpiredDocumentsInExactScopeAreSearchableAcrossRestartAndRevoke() {
+    @Test void onlyApprovedUnexpiredDocumentsInExactScopeAreSearchableAcrossRestartAndRevoke() throws Exception {
         var scope = new ResourceScope("org", "ops", "dev");
         var otherScope = new ResourceScope("org", "ops", "prod");
         var memory = new com.rover.agent.runtime.repository.InMemoryKnowledgeDocumentRepository();
@@ -55,35 +55,38 @@ class ScopedKnowledgeStoreTest {
                     && hit.version() == 1 && hit.sourceVersion().equals("git:abc123")));
             assertTrue(reader.search("生产路由", 5).stream().noneMatch(hit -> hit.id().equals("rb-prod")));
             var v2 = drafts.createDraft("rb-routing", scope, "订单路由排查 v2", "新的处理办法",
-                    List.of("订单"), "git:next", "writer", System.currentTimeMillis()+2_000);
+                    List.of("订单"), "git:next", "writer", System.currentTimeMillis()+1_000);
             assertTrue(reader.search("订单路由", 5).stream().anyMatch(hit -> hit.id().equals("rb-routing") && hit.version() == 1),
                     "a draft must not hide the currently published version");
+            Thread.sleep(1_100);
             assertEquals(List.of(1), drafts.approved(scope, v2.expiresAtMillis()+1, 10).stream()
                     .filter(value -> value.documentId().equals("rb-routing"))
                     .map(KnowledgeDocumentVersion::version).toList(),
                     "an expired, never-published draft must not hide the current approved version");
-            var approvedV2 = drafts.transition(v2.documentId(), v2.version(), KnowledgeDocumentVersion.Status.DRAFT,
+            var v3 = drafts.createDraft("rb-routing", scope, "订单路由排查 v3", "新的处理办法 v3",
+                    List.of("订单"), "git:next-v3", "writer", System.currentTimeMillis()+60_000);
+            var approvedV2 = drafts.transition(v3.documentId(), v3.version(), KnowledgeDocumentVersion.Status.DRAFT,
                     value -> value.approve("reviewer", System.currentTimeMillis())).orElseThrow();
-            assertTrue(reader.search("订单路由", 5).stream().anyMatch(hit -> hit.id().equals("rb-routing") && hit.version() == 2));
+            assertTrue(reader.search("订单路由", 5).stream().anyMatch(hit -> hit.id().equals("rb-routing") && hit.version() == 3));
             assertTrue(reader.search("订单路由", 5).stream().noneMatch(hit -> hit.id().equals("rb-routing") && hit.version() == 1),
                     "approval of a replacement supersedes the previous version");
-            assertEquals(List.of(2), drafts.approved(scope, v2.createdAtMillis(), 10).stream()
+            assertEquals(List.of(3), drafts.approved(scope, v3.createdAtMillis(), 10).stream()
                     .map(KnowledgeDocumentVersion::version).toList());
-            assertTrue(drafts.approved(scope, v2.expiresAtMillis(), 10).isEmpty());
+            assertTrue(drafts.approved(scope, v3.expiresAtMillis(), 10).isEmpty());
             assertEquals(approved, drafts.find("rb-routing", 1).orElseThrow());
         }
         try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
             assertTrue(new ScopedKnowledgeStore(reopened.knowledgeDocuments(), scope).search("订单路由", 5)
                     .stream().anyMatch(hit -> hit.id().equals("rb-routing")));
             var old = reopened.knowledgeDocuments().find("rb-routing", 1).orElseThrow();
-            reopened.knowledgeDocuments().transition("rb-routing", 2, KnowledgeDocumentVersion.Status.APPROVED,
+            reopened.knowledgeDocuments().transition("rb-routing", 3, KnowledgeDocumentVersion.Status.APPROVED,
                     value -> value.revoke("security-admin", System.currentTimeMillis())).orElseThrow();
             assertTrue(new ScopedKnowledgeStore(reopened.knowledgeDocuments(), scope).search("订单路由", 5)
                     .stream().noneMatch(hit -> hit.id().equals("rb-routing")));
             assertEquals(old.content(), reopened.knowledgeDocuments().find("rb-routing", 1).orElseThrow().content());
             var v3 = reopened.knowledgeDocuments().createDraft("rb-routing", scope, "新版", "更新的路由处理办法",
                     List.of("订单"), "git:next", "writer", System.currentTimeMillis()+60_000);
-            assertEquals(3, v3.version());
+            assertEquals(4, v3.version());
         }
     }
 }
