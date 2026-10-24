@@ -400,17 +400,57 @@ public final class JdbcAgentStore implements AutoCloseable {
         return queryOne("SELECT * FROM resource_note WHERE resource_key = ?", rows -> new ResourceNote(
                 rows.getString("resource_key"), rows.getString("symptom"), rows.getString("root_cause"),
                 rows.getString("useful_steps"), rows.getString("pitfalls"), rows.getString("source_session_id"),
-                rows.getString("source_task_id"), rows.getLong("updated_at")), resourceKey);
+                rows.getString("source_task_id"), rows.getLong("updated_at"),
+                ResourceNote.ReviewStatus.valueOf(rows.getString("review_status")), rows.getString("correction"),
+                rows.getString("reviewed_by"), rows.getLong("reviewed_at"), rows.getLong("version")), resourceKey);
     }
 
     public synchronized void saveNote(ResourceNote note) {
+        ResourceNote current = findNote(note.resourceKey()).orElse(null);
+        if (current != null && current.reviewStatus() != ResourceNote.ReviewStatus.AUTOMATIC) {
+            return; // 人工纠正或撤回是明确的知识管理决定，后续自动调查不得静默覆盖。
+        }
+        long version = current == null ? 1L : current.version() + 1;
         Object[] values = {note.symptom(), note.rootCause(), note.usefulSteps(), note.pitfalls(),
-                note.sourceSessionId(), note.sourceTaskId(), note.updatedAtMillis(), note.resourceKey()};
+                note.sourceSessionId(), note.sourceTaskId(), note.updatedAtMillis(), ResourceNote.ReviewStatus.AUTOMATIC.name(),
+                null, null, 0L, version, note.resourceKey()};
         upsert("UPDATE resource_note SET symptom = ?, root_cause = ?, useful_steps = ?, pitfalls = ?, "
-                        + "source_session_id = ?, source_task_id = ?, updated_at = ? WHERE resource_key = ?",
+                        + "source_session_id = ?, source_task_id = ?, updated_at = ?, review_status = ?, correction = ?, "
+                        + "reviewed_by = ?, reviewed_at = ?, version = ? WHERE resource_key = ?",
                 "INSERT INTO resource_note (symptom, root_cause, useful_steps, pitfalls, source_session_id, "
-                        + "source_task_id, updated_at, resource_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        + "source_task_id, updated_at, review_status, correction, reviewed_by, reviewed_at, version, resource_key) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values, values);
+    }
+
+    public synchronized Optional<ResourceNote> reviewNote(String resourceKey, String namespace, long expectedVersion, String actor,
+                                                            ResourceNote.ReviewStatus status, String correction, long now) {
+        if (resourceKey == null || resourceKey.isBlank() || actor == null || actor.isBlank() || status == null
+                || status == ResourceNote.ReviewStatus.AUTOMATIC
+                || status == ResourceNote.ReviewStatus.CORRECTED && (correction == null || correction.isBlank())) {
+            throw new IllegalArgumentException("人工纠正或撤回信息无效");
+        }
+        synchronized (this) {
+            return inTransaction(() -> {
+                ResourceNote current = findNote(resourceKey).orElse(null);
+                if (current == null || current.version() != expectedVersion
+                        || current.reviewStatus() == ResourceNote.ReviewStatus.RETRACTED) { return Optional.empty(); }
+                String note = correction == null ? null : correction.strip();
+                int updated = run("UPDATE resource_note SET review_status=?,correction=?,reviewed_by=?,reviewed_at=?,updated_at=?,version=version+1 "
+                                + "WHERE resource_key=? AND version=? AND review_status<>?",
+                        status.name(), note, actor, now, now, resourceKey, expectedVersion, ResourceNote.ReviewStatus.RETRACTED.name());
+                if (updated != 1) { return Optional.empty(); }
+                appendAudit(status == ResourceNote.ReviewStatus.RETRACTED ? "RESOURCE_NOTE_RETRACTED" : "RESOURCE_NOTE_CORRECTED",
+                        resourceKey, actor, namespace,
+                        Map.of("expectedVersion", expectedVersion, "status", status.name(),
+                                "previousStatus", current.reviewStatus().name(),
+                                "previousRootCause", current.rootCause() == null ? "" : current.rootCause(),
+                                "correction", note == null ? "" : note,
+                                "sourceSessionId", current.sourceSessionId() == null ? "" : current.sourceSessionId(),
+                                "sourceTaskId", current.sourceTaskId() == null ? "" : current.sourceTaskId()));
+                return findNote(resourceKey);
+            });
+        }
     }
 
     /** 当前 schema 版本；迁移只前进不回退，启动日志与诊断都看它。 */
@@ -2201,6 +2241,13 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "status VARCHAR(16) NOT NULL, created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, payload_json TEXT NOT NULL, "
                                         + "PRIMARY KEY(document_id,document_version))",
                                 "CREATE INDEX IF NOT EXISTS idx_knowledge_scope_status ON agent_knowledge_document(organization_id,team_id,environment_id,status,expires_at)"),
+                        List.of(), List.of()),
+                new Migration(22, "auditable human corrections and retraction of resource notes",
+                        List.of("ALTER TABLE resource_note ADD COLUMN IF NOT EXISTS review_status VARCHAR(16) DEFAULT 'AUTOMATIC' NOT NULL",
+                                "ALTER TABLE resource_note ADD COLUMN IF NOT EXISTS correction VARCHAR(1000)",
+                                "ALTER TABLE resource_note ADD COLUMN IF NOT EXISTS reviewed_by VARCHAR(128)",
+                                "ALTER TABLE resource_note ADD COLUMN IF NOT EXISTS reviewed_at BIGINT DEFAULT 0 NOT NULL",
+                                "ALTER TABLE resource_note ADD COLUMN IF NOT EXISTS version BIGINT DEFAULT 1 NOT NULL"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {

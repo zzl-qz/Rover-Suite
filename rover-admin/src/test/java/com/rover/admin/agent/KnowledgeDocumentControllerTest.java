@@ -3,6 +3,8 @@ package com.rover.admin.agent;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import com.rover.admin.security.AgentSecurityService;
+import com.rover.admin.agent.ResourceNoteReviewController;
+import com.rover.agent.core.journal.ResourceNote;
 import com.rover.agent.core.model.KnowledgeDocumentVersion;
 import com.rover.agent.core.model.ResourceScope;
 import com.rover.agent.core.port.AgentAccess.Permission;
@@ -73,6 +75,42 @@ class KnowledgeDocumentControllerTest {
                     .find(document.documentId(),1).orElseThrow().status());
             assertEquals(KnowledgeDocumentVersion.Status.APPROVED, reopened.knowledgeDocuments()
                     .find(document.documentId(),2).orElseThrow().status());
+        }
+    }
+
+    @Test void resourceNoteCanBeCorrectedOrRetractedOnlyForTheCurrentManagedRoute() throws Exception {
+        var scope = new ResourceScope("org", "team", "dev");
+        RouteControlPort control = mock(RouteControlPort.class);
+        when(control.resourceScope()).thenReturn(scope);
+        when(control.resourceNamespace()).thenReturn("dev");
+        when(control.requiresResourceIdentity()).thenReturn(true);
+        when(control.state()).thenReturn(new com.rover.agent.core.port.RouteControlState(1, "", java.util.List.of(
+                new com.rover.agent.core.port.RouteControlRoute("r1", "/orders", "", java.util.List.of(),
+                        new com.rover.agent.core.model.ResourceRef(scope, "gateway", "route", "r1", "uid-1", 1)))));
+        AgentSecurityService security = mock(AgentSecurityService.class);
+        try (AgentStore store = AgentStore.file(temp.resolve("notes").toString())) {
+            store.durable().saveNote(new ResourceNote("dev:uid-1:1", "5xx", "incorrect old cause",
+                    "logs", "", "s1", "t1", 1L));
+            var controller = new ResourceNoteReviewController(store, security, control);
+            var reviewer = new UsernamePasswordAuthenticationToken("reviewer", "n/a");
+            assertEquals(200, controller.get("r1", reviewer).getStatusCode().value());
+            var corrected = controller.review("r1", new ResourceNoteReviewController.ReviewRequest(
+                    1L, "dev:uid-1:1", "correct", "release v2 changed the upstream timeout"), reviewer);
+            assertEquals(200, corrected.getStatusCode().value());
+            assertTrue(store.journal().scoped("dev").identified(key -> "uid-1:1")
+                    .recall("/orders", null).contains("人工纠正"));
+            assertTrue(store.journal().scoped("dev").identified(key -> "uid-1:1")
+                    .recall("/orders", null).contains("release v2 changed the upstream timeout"));
+            assertEquals(409, controller.review("r1", new ResourceNoteReviewController.ReviewRequest(
+                    1L, "dev:uid-1:1", "retract", null), reviewer).getStatusCode().value());
+            var retracted = controller.review("r1", new ResourceNoteReviewController.ReviewRequest(
+                    2L, "dev:uid-1:1", "retract", null), reviewer);
+            assertEquals(200, retracted.getStatusCode().value());
+            assertEquals("", store.journal().scoped("dev").identified(key -> "uid-1:1").recall("/orders", null));
+            assertEquals(404, controller.get("unmanaged", reviewer).getStatusCode().value());
+            assertEquals(409, controller.review("r1", new ResourceNoteReviewController.ReviewRequest(
+                    2L, "dev:old-uid:1", "retract", null), reviewer).getStatusCode().value());
+            verify(security, times(6)).require("reviewer", Permission.POLICY_ADMIN);
         }
     }
 }

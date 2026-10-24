@@ -53,7 +53,15 @@ public final class ResourceNotes {
 
     /** 给模型看的一段历史。当前现网仍以本次工具为准。 */
     public static String prompt(ResourceNote note) {
-        if (note == null || note.rootCause() == null || note.rootCause().isBlank()) {
+        if (note == null || note.reviewStatus() == ResourceNote.ReviewStatus.RETRACTED) {
+            return "";
+        }
+        if (note.reviewStatus() == ResourceNote.ReviewStatus.CORRECTED) {
+            if (note.correction() == null || note.correction().isBlank()) { return ""; }
+            return "该资源的历史记录已由" + value(note.reviewedBy(), "运维人员")
+                    + "人工纠正：" + note.correction() + "。这是历史记录，当前状态以这次工具读到的数据为准。";
+        }
+        if (note.rootCause() == null || note.rootCause().isBlank()) {
             return "";
         }
         StringBuilder text = new StringBuilder();
@@ -66,6 +74,10 @@ public final class ResourceNotes {
         }
         text.append("这是历史结论，当前状态以这次工具读到的数据为准。");
         return text.toString();
+    }
+
+    private static String value(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private static String confirmedCause(InvestigationReport report) {

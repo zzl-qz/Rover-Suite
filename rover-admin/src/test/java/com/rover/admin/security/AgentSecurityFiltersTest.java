@@ -29,6 +29,8 @@ class AgentSecurityFiltersTest {
                 "/api/agent/config-actions/sessions/s1/compensation-eligibility", "GET"));
         assertEquals(Permission.POLICY_ADMIN, AgentSecurityFilters.permission("/api/agent/knowledge/documents", "GET"));
         assertEquals(Permission.POLICY_ADMIN, AgentSecurityFilters.permission("/api/agent/knowledge/documents", "POST"));
+        assertEquals(Permission.POLICY_ADMIN, AgentSecurityFilters.permission(
+                "/api/agent/knowledge/resource-notes/orders/review", "POST"));
         assertEquals(Permission.READ, AgentSecurityFilters.permission(
                 "/api/agent/config-actions/sessions/s1", "GET"));
     }

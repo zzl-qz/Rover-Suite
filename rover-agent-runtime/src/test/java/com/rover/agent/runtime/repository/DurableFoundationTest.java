@@ -123,4 +123,71 @@ class DurableFoundationTest {
             assertEquals("", com.rover.agent.runtime.journal.OpsJournal.of(store).scoped("staging").identified(key -> "uid-1").recall("/orders", null));
         }
     }
+
+    @Test void resourceNoteCorrectionAndRetractionAreVersionedAuditedAndSurviveRestart() {
+        String path = root.resolve("reviewed-notes/agent").toString();
+        var original = new com.rover.agent.core.journal.ResourceNote("prod:uid-1", "5xx on /orders",
+                "old confirmed cause", "read logs", "partial telemetry", "s1", "t1", 1L);
+        try (var store = new JdbcAgentStore(path)) {
+            store.saveNote(original);
+            var corrected = store.reviewNote("prod:uid-1", "prod", 1L, "reviewer",
+                    com.rover.agent.core.journal.ResourceNote.ReviewStatus.CORRECTED, "the release changed the upstream timeout", 2L)
+                    .orElseThrow();
+            assertEquals(2L, corrected.version());
+            assertEquals("reviewer", corrected.reviewedBy());
+            assertTrue(com.rover.agent.core.journal.ResourceNotes.prompt(corrected).contains("人工纠正"));
+            assertFalse(com.rover.agent.core.journal.ResourceNotes.prompt(corrected).contains("old confirmed cause"));
+            store.saveNote(new com.rover.agent.core.journal.ResourceNote("prod:uid-1", "later", "new automatic cause",
+                    "new evidence", "", "s2", "t2", 3L));
+            assertEquals("the release changed the upstream timeout",
+                    store.findNote("prod:uid-1").orElseThrow().correction(),
+                    "later automation must not silently overwrite a human correction");
+            assertTrue(store.reviewNote("prod:uid-1", "prod", 1L, "other",
+                    com.rover.agent.core.journal.ResourceNote.ReviewStatus.RETRACTED, null, 4L).isEmpty(),
+                    "stale version review must conflict");
+            assertTrue(store.audit("prod", 0, 10).stream().anyMatch(event -> event.kind().equals("RESOURCE_NOTE_CORRECTED")
+                    && event.actor().equals("reviewer") && event.payloadJson().contains("old confirmed cause")));
+        }
+        try (var reopened = new JdbcAgentStore(path)) {
+            var corrected = reopened.findNote("prod:uid-1").orElseThrow();
+            assertEquals("reviewer", corrected.reviewedBy());
+            assertTrue(reopened.reviewNote("prod:uid-1", "prod", corrected.version(), "reviewer",
+                    com.rover.agent.core.journal.ResourceNote.ReviewStatus.RETRACTED, null, 5L).isPresent());
+            assertEquals("", com.rover.agent.core.journal.ResourceNotes.prompt(
+                    reopened.findNote("prod:uid-1").orElseThrow()));
+        }
+    }
+
+    @Test void schema21ResourceNotesUpgradeWithAutomaticStatusAndAuditFailureRollsBackCorrection() throws Exception {
+        String path = root.resolve("legacy-notes/agent").toString();
+        try (var store = new JdbcAgentStore(path)) {
+            store.saveNote(new com.rover.agent.core.journal.ResourceNote("prod:uid-2", "timeout",
+                    "old cause", "metrics", "", "s1", "t1", 1L));
+        }
+        try (var connection = DriverManager.getConnection("jdbc:h2:file:" + path + ";AUTO_SERVER=TRUE", "sa", "");
+             var statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE resource_note DROP COLUMN review_status");
+            statement.execute("ALTER TABLE resource_note DROP COLUMN correction");
+            statement.execute("ALTER TABLE resource_note DROP COLUMN reviewed_by");
+            statement.execute("ALTER TABLE resource_note DROP COLUMN reviewed_at");
+            statement.execute("ALTER TABLE resource_note DROP COLUMN version");
+            statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version=22");
+        }
+        try (var upgraded = new JdbcAgentStore(path)) {
+            var note = upgraded.findNote("prod:uid-2").orElseThrow();
+            assertEquals(22, upgraded.schemaVersion());
+            assertEquals(com.rover.agent.core.journal.ResourceNote.ReviewStatus.AUTOMATIC, note.reviewStatus());
+            assertEquals(1, note.version());
+            try (var connection = DriverManager.getConnection("jdbc:h2:file:" + path + ";AUTO_SERVER=TRUE", "sa", "");
+                 var statement = connection.createStatement()) {
+                statement.execute("ALTER TABLE agent_audit ADD CONSTRAINT reject_note_correction CHECK(event_kind<>'RESOURCE_NOTE_CORRECTED')");
+                assertThrows(IllegalStateException.class, () -> upgraded.reviewNote("prod:uid-2", "prod", 1L,
+                        "reviewer", com.rover.agent.core.journal.ResourceNote.ReviewStatus.CORRECTED, "correction", 2L));
+            }
+            var unchanged = upgraded.findNote("prod:uid-2").orElseThrow();
+            assertEquals(com.rover.agent.core.journal.ResourceNote.ReviewStatus.AUTOMATIC, unchanged.reviewStatus());
+            assertNull(unchanged.correction());
+            assertEquals(1, unchanged.version());
+        }
+    }
 }

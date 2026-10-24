@@ -338,7 +338,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(21, store.schemaVersion(),
+            assertEquals(22, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
                             + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
                             + "v13 保存按管理目标绑定的持久动作命令");
@@ -352,7 +352,7 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-            assertEquals(21, store.schemaVersion());
+            assertEquals(22, store.schemaVersion());
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -554,7 +554,7 @@ class JdbcAgentStoreTest {
     void schemaV17UpgradesToV18AndCertificationAuditIsAtomicWithRecord() throws Exception {
         String path = tempPath("rover-shadow-v17-upgrade");
         try (JdbcAgentStore first = new JdbcAgentStore(path)) {
-            assertEquals(21, first.schemaVersion());
+            assertEquals(22, first.schemaVersion());
         }
         try (Connection connection = DriverManager.getConnection(
                 "jdbc:h2:file:" + path + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE", "sa", "");
@@ -562,7 +562,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version=18");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(21, upgraded.schemaVersion());
+            assertEquals(22, upgraded.schemaVersion());
             assertTrue(upgraded.healthy());
             var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "staging");
             var subject = new com.rover.agent.core.model.ActionCertificationSubject(scope,
@@ -591,7 +591,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(21, upgraded.schemaVersion());
+            assertEquals(22, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }
