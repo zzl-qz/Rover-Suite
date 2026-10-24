@@ -19,6 +19,7 @@ window.RoverAdminPages.model = {
             modelSaving: false,
             modelTesting: false,
             modelVerifying: false,
+            modelConfigRequest: 0,
             modelTestResult: null,
             modelVerifyResult: null,
         };
@@ -92,13 +93,17 @@ window.RoverAdminPages.model = {
 
     methods: {
         async fetchModelConfig() {
+            const request = ++this.modelConfigRequest;
             this.modelError = null;
             try {
                 const config = await RoverAdminApi.api('/api/model/config');
+                if (request !== this.modelConfigRequest) return;
+                // Refresh status without discarding a form the operator is currently editing.
+                const preserveEdits = this.modelDirty;
                 this.modelConfig = config;
-                this.syncModelForm(config);
+                if (!preserveEdits) this.syncModelForm(config);
             } catch (e) {
-                this.modelError = e.message;
+                if (request === this.modelConfigRequest) this.modelError = e.message;
             }
         },
         /** 用服务端状态重置表单：密钥永远留空，避免把掩码当成真密钥发回去。 */

@@ -5,6 +5,7 @@ window.RoverAdminPages.instances = {
         return {
             instances: [],
             instancesError: null,
+            instancesLoading: false,
         };
     },
 
@@ -12,11 +13,15 @@ window.RoverAdminPages.instances = {
 
     methods: {
         async fetchInstances() {
+            if (this.instancesLoading) return;
+            this.instancesLoading = true;
             this.instancesError = null;
             try {
                 this.instances = await RoverAdminApi.api('/api/instances');
             } catch (e) {
                 this.instancesError = e.message;
+            } finally {
+                this.instancesLoading = false;
             }
         },
     },

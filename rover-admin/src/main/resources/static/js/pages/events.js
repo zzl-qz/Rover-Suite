@@ -5,6 +5,7 @@ window.RoverAdminPages.events = {
         return {
             events: [],
             eventsError: null,
+            eventsLoading: false,
             knownEventKeys: new Set(),
             eventFilter: { type: '', service: '' },
             eventPage: 1,
@@ -25,9 +26,11 @@ window.RoverAdminPages.events = {
         eventTotalPages() {
             return Math.max(1, Math.ceil(this.filteredEvents.length / this.eventPageSize));
         },
+        safeEventPage() {
+            return Math.min(this.eventPage, this.eventTotalPages);
+        },
         pagedEvents() {
-            const page = Math.min(this.eventPage, this.eventTotalPages);
-            const start = (page - 1) * this.eventPageSize;
+            const start = (this.safeEventPage - 1) * this.eventPageSize;
             return this.filteredEvents.slice(start, start + this.eventPageSize);
         },
         eventTypeOptions() {
@@ -38,6 +41,8 @@ window.RoverAdminPages.events = {
 
     methods: {
         async fetchEvents() {
+            if (this.eventsLoading) return;
+            this.eventsLoading = true;
             this.eventsError = null;
             try {
                 const rows = await RoverAdminApi.api('/api/events');
@@ -54,6 +59,8 @@ window.RoverAdminPages.events = {
                 }
             } catch (e) {
                 this.eventsError = e.message;
+            } finally {
+                this.eventsLoading = false;
             }
         },
         resetEventPage() {
