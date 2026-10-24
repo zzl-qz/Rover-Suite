@@ -2,9 +2,14 @@ package com.rover.common.config;
 
 import com.rover.common.json.JsonCodec;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -62,11 +67,12 @@ public class RuntimeConfigOverlayStore {
 
     /** 全量覆盖写入。 */
     public void save(Map<String, String> values) {
+        Path target = path.toAbsolutePath();
+        Path parent = target.getParent();
+        Path temporary = null;
         try {
             // 父目录可能不存在，先补建，避免直接落盘失败
-            if (path.getParent() != null) {
-                Files.createDirectories(path.getParent());
-            }
+            if (parent != null) { Files.createDirectories(parent); }
             List<Map<String, Object>> rows = new ArrayList<>();
             for (Map.Entry<String, String> entry : values.entrySet()) {
                 Map<String, Object> row = new LinkedHashMap<>();
@@ -74,11 +80,31 @@ public class RuntimeConfigOverlayStore {
                 row.put("value", entry.getValue() == null ? "" : entry.getValue());
                 rows.add(row);
             }
-            // 落盘用缩进 JSON，方便人眼看；解析不挑格式
-            Files.writeString(path, JsonCodec.toPrettyJson(rows), StandardCharsets.UTF_8);
+            // Write a complete sibling file and force it before replacing the live overlay.
+            // A crash during serialization therefore leaves the previous valid file intact.
+            byte[] bytes = JsonCodec.toPrettyJson(rows).getBytes(StandardCharsets.UTF_8);
+            temporary = Files.createTempFile(parent, target.getFileName().toString() + ".", ".tmp");
+            try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
+                ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                while (buffer.hasRemaining()) { channel.write(buffer); }
+                channel.force(true);
+            }
+            try {
+                Files.move(temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException unsupported) {
+                // Some filesystems do not support atomic rename. Keep the old fallback behavior
+                // there rather than failing every runtime config update.
+                Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+            }
             log.info("运行时配置已写入覆盖文件: {}", path.toAbsolutePath());
         } catch (IOException ex) {
             throw new IllegalStateException("写入配置覆盖文件失败: " + path.toAbsolutePath(), ex);
+        } finally {
+            if (temporary != null) {
+                try { Files.deleteIfExists(temporary); } catch (IOException cleanupError) {
+                    log.warn("清理配置临时文件失败: {}", temporary, cleanupError);
+                }
+            }
         }
     }
 }
