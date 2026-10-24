@@ -152,7 +152,9 @@ class GatewayConfigActionServiceTest {
                 "链路采样率", "1", "1", "HOT_RELOAD", true, false));
         long now = System.currentTimeMillis();
         ConfigActionIntent intent = new ConfigActionIntent(ConfigActionIntent.ALLOWED_KEY, "0", "1", scope, "gateway-a", "target-a");
-        try (JdbcAgentStore store = new JdbcAgentStore(tempDir.resolve("actions").toString())) {
+        String dbPath = tempDir.resolve("actions").toString();
+        try (JdbcAgentStore store = new JdbcAgentStore(dbPath);
+                JdbcAgentStore competingStore = new JdbcAgentStore(dbPath)) {
             store.sessions().save(new Session("session-1", "operator", "incident", null, SessionStatus.ACTIVE,
                     1, 1, List.of(), scope, "target-a"));
             GatewayConfigAction original = new GatewayConfigAction("applied-action", "session-1", null, null, "operator",
@@ -172,7 +174,9 @@ class GatewayConfigActionServiceTest {
                 }
                 return found;
             });
-            when(racingRepository.save(any())).thenAnswer(call -> store.gatewayConfigActions().save(call.getArgument(0)));
+            AtomicInteger writers = new AtomicInteger();
+            when(racingRepository.save(any())).thenAnswer(call -> (writers.getAndIncrement() % 2 == 0
+                    ? store.gatewayConfigActions() : competingStore.gatewayConfigActions()).save(call.getArgument(0)));
             var service = new GatewayConfigActionService(racingRepository, store.sessions(), store.incidents(), store.tasks(),
                     config, control, AgentAccess.local(), true, () -> true);
             var pool = Executors.newFixedThreadPool(2);
@@ -192,7 +196,7 @@ class GatewayConfigActionServiceTest {
                 assertEquals(1, outcomes.stream().filter(ActionRequestException.Code.CONFLICT.name()::equals).count());
                 assertEquals(2, store.gatewayConfigActions().bySession("session-1").size());
                 assertEquals("applied-action", store.gatewayConfigActions().findCompensation("applied-action").orElseThrow().compensatesActionId());
-                assertThrows(IllegalStateException.class, () -> store.gatewayConfigActions().save(
+                assertThrows(IllegalStateException.class, () -> competingStore.gatewayConfigActions().save(
                         new GatewayConfigAction("direct-duplicate", "session-1", null, null, "operator", intent,
                                 intent.intentHash(), GatewayConfigActionService.POLICY_VERSION, List.of(),
                                 "direct-duplicate-operation", "applied-action", ConfigActionStatus.PENDING_APPROVAL,
