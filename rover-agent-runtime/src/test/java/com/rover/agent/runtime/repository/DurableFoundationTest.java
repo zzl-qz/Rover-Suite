@@ -213,4 +213,36 @@ class DurableFoundationTest {
             assertEquals(1, unchanged.version());
         }
     }
+
+    @Test void backupAfterLegacySchemaUpgradeRestoresCurrentSchemaAndExistingData() throws Exception {
+        String path = root.resolve("legacy-backup/agent").toString();
+        try (var store = new JdbcAgentStore(path)) {
+            store.saveNote(new com.rover.agent.core.journal.ResourceNote("prod:uid-legacy", "timeout",
+                    "legacy confirmed cause", "metrics", "", "s1", "t1", 1L));
+        }
+        try (var connection = DriverManager.getConnection("jdbc:h2:file:" + path + ";AUTO_SERVER=TRUE", "sa", "");
+             var statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE resource_note DROP COLUMN review_status");
+            statement.execute("ALTER TABLE resource_note DROP COLUMN correction");
+            statement.execute("ALTER TABLE resource_note DROP COLUMN reviewed_by");
+            statement.execute("ALTER TABLE resource_note DROP COLUMN reviewed_at");
+            statement.execute("ALTER TABLE resource_note DROP COLUMN version");
+            statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version>=22");
+        }
+
+        Path backup = root.resolve("legacy-upgraded.zip");
+        try (var upgraded = new JdbcAgentStore(path)) {
+            assertEquals(26, upgraded.schemaVersion());
+            upgraded.backup(backup);
+        }
+        Path destination = root.resolve("legacy-restored");
+        org.h2.tools.Restore.execute(backup.toString(), destination.toString(), "agent");
+        try (var restored = new JdbcAgentStore(destination.resolve("agent").toString())) {
+            var note = restored.findNote("prod:uid-legacy").orElseThrow();
+            assertEquals(26, restored.schemaVersion());
+            assertEquals("legacy confirmed cause", note.rootCause());
+            assertEquals(com.rover.agent.core.journal.ResourceNote.ReviewStatus.AUTOMATIC, note.reviewStatus());
+            assertTrue(restored.healthy());
+        }
+    }
 }
