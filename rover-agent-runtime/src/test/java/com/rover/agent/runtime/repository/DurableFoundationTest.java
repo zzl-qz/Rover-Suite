@@ -245,4 +245,28 @@ class DurableFoundationTest {
             assertTrue(restored.healthy());
         }
     }
+
+    @Test void restoredApprovalIsAuditOnlyAndDoesNotQueueThePendingAction() throws Exception {
+        String path = root.resolve("approved-backup/agent").toString();
+        Path backup = root.resolve("approved.zip");
+        var approval = new ActionApproval("a1", ActionApproval.Stage.APPLY,
+                ActionApproval.LEGACY_PLAN_VERSION, ActionApproval.LEGACY_PLAN_HASH,
+                "legacy-policy", "reviewer", 1_000L);
+        try (var source = new JdbcAgentStore(path)) {
+            source.sessions().save(session());
+            source.actions().save(action());
+            assertTrue(source.actions().recordApproval(approval));
+            source.backup(backup);
+        }
+
+        Path destination = root.resolve("approved-restored");
+        org.h2.tools.Restore.execute(backup.toString(), destination.toString(), "agent");
+        try (var restored = new JdbcAgentStore(destination.resolve("agent").toString())) {
+            assertEquals(ActionStatus.PENDING_APPROVAL, restored.actions().find("a1").orElseThrow().status());
+            assertEquals(List.of(approval), restored.actions().approvals("a1", ActionApproval.Stage.APPLY,
+                    ActionApproval.LEGACY_PLAN_VERSION, ActionApproval.LEGACY_PLAN_HASH, "legacy-policy"));
+            assertTrue(restored.actionCommands().pending(System.currentTimeMillis(), 10).isEmpty());
+            assertTrue(restored.healthy());
+        }
+    }
 }
