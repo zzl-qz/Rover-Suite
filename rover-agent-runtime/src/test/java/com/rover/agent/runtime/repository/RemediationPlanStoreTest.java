@@ -33,7 +33,7 @@ class RemediationPlanStoreTest {
         try (JdbcAgentStore store = store(path)) {
             first = store.actions().save(planned("a1", "p1", 1, 20));
             second = store.actions().save(planned("a2", "p1", 2, 40));
-            assertEquals(20, store.schemaVersion());
+            assertEquals(26, store.schemaVersion());
             assertEquals(2, store.actions().find("a1").orElseThrow().version());
             assertTrue(store.audit("", 0, 100).stream().anyMatch(a -> a.kind().equals("ACTION_SUPERSEDED")));
         }
@@ -187,7 +187,7 @@ class RemediationPlanStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             AgentAction legacy = store.actions().find("legacy").orElseThrow();
             assertNull(legacy.plan());
-            assertEquals(20, store.schemaVersion());
+            assertEquals(26, store.schemaVersion());
             assertTrue(store.actions().planVersions("legacy").isEmpty());
             assertNull(store.actions().transition("legacy", ActionStatus.PENDING_APPROVAL,
                     a -> move(a, ActionStatus.REJECTED)).orElseThrow().plan());

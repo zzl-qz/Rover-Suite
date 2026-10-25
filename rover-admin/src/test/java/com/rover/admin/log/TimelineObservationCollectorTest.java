@@ -36,6 +36,7 @@ class TimelineObservationCollectorTest {
             long from = System.currentTimeMillis() - 1000;
             collector.collect();
             route.put("targets", List.of(Map.of("serviceName", "orders", "group", "v1", "weight", 90), Map.of("serviceName", "orders", "group", "v2", "weight", 50)));
+            route.put("generation", 4);
             instance.put("weight", 20);
             collector.collect();
             route.put("targets", List.of(Map.of("serviceName", "orders", "group", "v2", "weight", 50), Map.of("serviceName", "orders", "group", "v1", "weight", 90)));
@@ -47,7 +48,14 @@ class TimelineObservationCollectorTest {
             var range = new TimeRange(from, System.currentTimeMillis() + 1000);
             var context = new InvestigationContext(null, null, scope, "gateway", "timeline", null, range, Map.of(), "RBAC");
             var result = timeline.query(new TimelineQuery(context, ResourceTarget.route("/orders/checkout"), range, 100));
-            assertTrue(result.events().stream().anyMatch(e -> e.kind().equals("ROUTE_CHANGED") && e.subject().routeUid().equals("route-uid") && e.subject().generation() == 3));
+            assertTrue(result.events().stream().anyMatch(e -> e.kind().equals("ROUTE_CHANGED")
+                    && e.subject().routeUid().equals("route-uid") && e.subject().generation() == 4
+                    && e.facts().get("before") instanceof Map<?, ?> before
+                    && ((Number) before.get("generation")).intValue() == 3
+                    && e.facts().get("after") instanceof Map<?, ?> after
+                    && ((Number) after.get("generation")).intValue() == 4));
+            assertFalse(result.events().stream().anyMatch(e -> e.kind().equals("ROUTE_REMOVED")
+                    || e.kind().equals("ROUTE_APPEARED")), "Generation changes must remain changes to the same UID");
             assertTrue(result.events().stream().anyMatch(e -> e.kind().equals("CONFIG_CHANGED")));
             assertTrue(result.events().stream().anyMatch(e -> e.kind().equals("ROUTE_CHANGED") && e.facts().get("after") instanceof Map<?, ?> after
                     && "X-New-Sticky-Key".equals(after.get("stickyHeader")) && after.get("targets") instanceof List<?> targets

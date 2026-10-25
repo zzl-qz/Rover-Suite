@@ -565,15 +565,18 @@ class Replay:
             now = time.time_ns() // 1_000_000
             result = self.timeline_query(since, now)
             evidence.update(result)
-            for event in result.get("events", []):
-                after = event.get("facts", {}).get("after") or {}
-                if event["kind"] == "ROUTE_CHANGED" and event["subject"].get("routeId") == self.fixture["routeId"] \
-                        and event["observedAtMillis"] >= since \
-                        and any(t.get("group") == "v2" and t.get("weight") == 0 for t in after.get("targets", [])):
-                    return True
-            return False
+            return self.route_mitigation_observed(result.get("events", []), self.fixture["routeId"], since)
         self.wait("admin", observed)
         save(directory / "timeline-after-mitigation.json", evidence)
+
+    @staticmethod
+    def route_mitigation_observed(events, route_id, since):
+        return any(event.get("kind") == "ROUTE_CHANGED"
+                   and event.get("subject", {}).get("routeId") == route_id
+                   and event.get("observedAtMillis", 0) >= since
+                   and any(target.get("group") == "v2" and target.get("weight") == 0
+                           for target in (event.get("facts", {}).get("after") or {}).get("targets", []))
+                   for event in events)
 
     def model_metrics(self, directory, label):
         scrape = self.admin.request(self.urls["admin"] + "/actuator/prometheus")[1]
@@ -589,6 +592,12 @@ class Replay:
                 key = labels.get("scene", "") + ":" + labels.get("outcome", "")
                 counts[key] = counts.get(key, 0) + float(match[2])
         return counts
+
+    @staticmethod
+    def task_view_response(status_code, payload, task_id):
+        if status_code == 200 and isinstance(payload, dict) and payload.get("taskId") == task_id and "status" in payload:
+            return payload
+        return None
 
     def wait_task(self, task, seconds, label):
         deadline, next_progress = time.monotonic() + seconds, time.monotonic() + 15
@@ -918,12 +927,19 @@ class Replay:
         alert_request = {"path": self.fixture["path"], "message": "fixture machine alert",
                          "alertKey": "fixture-machine-alert", "state": "FIRING"}
         alert_headers = {**bearer, "Idempotency-Key": uuid.uuid4().hex}
-        task = machine.request(base + "/api/agent/events/ingest", alert_request, alert_headers, allowed=(202,))[1]
+        accepted = machine.request(base + "/api/agent/events/ingest", alert_request, alert_headers, allowed=(202,))[1]
+        task_id = accepted.get("taskId") if isinstance(accepted, dict) else None
+        require(task_id and accepted.get("sessionId"), "Fixture machine alert did not return durable session/task identity")
+        task = None
         deadline = time.monotonic() + 45
-        while task["status"] in ("PENDING", "RUNNING") and time.monotonic() < deadline:
+        while time.monotonic() < deadline:
+            status, payload, _ = self.admin.request(base + "/api/agent/tasks/" + task_id, allowed=(200, 404))
+            task = self.task_view_response(status, payload, task_id)
+            if task is not None and task["status"] not in ("PENDING", "RUNNING"):
+                break
             time.sleep(.2)
-            task = self.admin.request(base + "/api/agent/tasks/" + task["taskId"])[1]
-        require(task["status"] == "COMPLETED", "Fixture machine alert did not complete")
+        require(task is not None and task.get("status") == "COMPLETED",
+                "Fixture machine alert task was not visible/completed before timeout")
         workspace = self.admin.request(base + "/api/agent/sessions/" + task["sessionId"] + "/workspace")[1]
         checks["machineSourceSeparateFromHandler"] = (workspace["session"]["userId"] == "admin"
             and workspace["activeIncident"]["triggeredBy"] == "connector:fixture-monitor")

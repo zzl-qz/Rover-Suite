@@ -16,6 +16,19 @@ SPEC.loader.exec_module(replay)
 
 
 class ReplayTest(unittest.TestCase):
+    def test_mitigation_timeline_requires_same_route_change_and_zero_weight(self):
+        event = {"kind": "ROUTE_CHANGED", "subject": {"routeId": "replay-orders"},
+                 "observedAtMillis": 1200, "facts": {"after": {"targets": [
+                     {"group": "v1", "weight": 100}, {"group": "v2", "weight": 0}]}}}
+        self.assertTrue(replay.Replay.route_mitigation_observed([event], "replay-orders", 1100))
+        event["facts"]["after"]["targets"][1]["weight"] = 50
+        self.assertFalse(replay.Replay.route_mitigation_observed([event], "replay-orders", 1100))
+        event["facts"]["after"]["targets"][1]["weight"] = 0
+        self.assertFalse(replay.Replay.route_mitigation_observed([event], "another-route", 1100))
+        self.assertFalse(replay.Replay.route_mitigation_observed([event], "replay-orders", 1201))
+        event["kind"] = "ROUTE_APPEARED"
+        self.assertFalse(replay.Replay.route_mitigation_observed([event], "replay-orders", 1100))
+
     def test_conversation_does_not_require_traces_but_cannot_mislabel_gateway_failures(self):
         task = {"result": {"summary": "根因尚未确认。最终请求 35，最终 5xx 35；后端原始 5xx=0，网关生成 5xx=35 [evidenceId=e] 尚未执行修复或验证业务恢复",
                 "evidence": [{"evidenceId": "e", "envelope": {"sourceId": "gateway.final-responses", "facts": {

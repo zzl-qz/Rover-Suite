@@ -64,13 +64,15 @@ final class TimelineObservationCollector {
             }
             Map<String, Object> values = new LinkedHashMap<>();
             values.put("services", List.copyOf(services)); values.put("targets", targets);
+            values.put("resourceUid", text(route.get("resourceUid")));
+            values.put("generation", number(route.get("generation")));
             // Target order affects sticky traffic assignment; preserve source order instead of sorting it away.
             values.put("stripPrefix", route.get("stripPrefix")); values.put("stickyHeader", route.get("stickyHeader"));
             if (route.containsKey("timeoutMillis")) { values.put("timeoutMillis", route.get("timeoutMillis")); }
             values.put("targetUrl", safeUrl(route.get("targetUrl"))); values.put("targetUrls", safeUrls(route.get("targetUrls")));
             Subject subject = new Subject(id, prefix, text(route.get("resourceUid")), number(route.get("generation")), List.copyOf(services), null, null, null, null);
             String revision = state.get("revision") == null ? null : String.valueOf(state.get("revision"));
-            String identity = com.rover.common.json.JsonCodec.toJson(List.of(id, prefix, subject.routeUid(), subject.generation()));
+            String identity = com.rover.common.json.JsonCodec.toJson(List.of(id, prefix, subject.routeUid()));
             if (result.put(identity, new Observation(subject, values, revision)) != null) { throw new IllegalArgumentException("重复路由身份"); }
         }
         return result;
