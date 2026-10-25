@@ -39,6 +39,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     private final TaskEventBus events;
     private final AgentMetrics metrics;
     private final Map<String, InvestigationTask> executing = new ConcurrentHashMap<>();
+    private final Object queueMetricLock = new Object();
 
     /** 会话并发检查与登记必须原子：否则两个并发请求都能通过「当前无执行中任务」的检查。 */
     private final Object registrationLock = new Object();
@@ -79,7 +80,7 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     private void schedule(com.rover.agent.runtime.repository.JdbcAgentStore.Job pending) {
         if (!handlers.containsKey(pending.kind()) || !scheduled.add(pending.taskId())) { return; }
         try {
-            workers.execute(() -> {
+            executeWorker(() -> {
                 try {
                     var job = durable.claimJob(pending.taskId(), pending.attempt()).orElse(null);
                     if (job == null) { return; }
@@ -217,12 +218,25 @@ public final class InvestigationTaskRegistry implements TaskRetirement {
     /** 提交执行；队列满时抛 {@link RejectedExecutionException}，并计入拒绝指标。 */
     public void execute(Runnable runnable) {
         try {
-            workers.execute(runnable);
+            executeWorker(runnable);
         } catch (RejectedExecutionException ex) {
             metrics.taskRejected(REJECT_QUEUE);
             throw ex;
         }
-        metrics.taskQueued(workers.getQueue().size());
+    }
+
+    private void executeWorker(Runnable runnable) {
+        workers.execute(() -> {
+            queueDepthChanged();
+            runnable.run();
+        });
+        queueDepthChanged();
+    }
+
+    private void queueDepthChanged() {
+        synchronized (queueMetricLock) {
+            metrics.taskQueued(workers.getQueue().size());
+        }
     }
 
     /** 任务执行提交失败时回滚登记，避免留下永远 PENDING 的任务。 */

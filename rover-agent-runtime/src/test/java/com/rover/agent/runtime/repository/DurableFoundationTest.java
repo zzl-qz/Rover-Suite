@@ -83,6 +83,29 @@ class DurableFoundationTest {
         }
     }
 
+    @Test void newerTaskSnapshotReplacesOlderOutboxSnapshotsWithoutDroppingLifecycleEvents() {
+        String path = root.resolve("coalesced-events/agent").toString();
+        try (var store = new JdbcAgentStore(path)) {
+            store.sessions().save(session());
+            TaskView running = task(TaskStatus.RUNNING);
+            store.tasks().saveEvent(running, new TaskEvent(1, "t1", TaskEventType.TASK_STARTED, 1, Map.of()));
+            store.tasks().saveEvent(running, new TaskEvent(2, "t1", TaskEventType.SNAPSHOT, 2,
+                    new TaskSnapshot(running, "", 2, "")));
+            store.tasks().saveEvent(running, new TaskEvent(3, "t1", TaskEventType.SNAPSHOT, 3,
+                    new TaskSnapshot(running, "latest", 3, "")));
+            store.tasks().saveEvent(task(TaskStatus.COMPLETED),
+                    new TaskEvent(4, "t1", TaskEventType.TASK_COMPLETED, 4, Map.of()));
+
+            var replay = store.tasks().eventsAfter("t1", 0, 10);
+            assertEquals(List.of(TaskEventType.TASK_STARTED, TaskEventType.SNAPSHOT, TaskEventType.TASK_COMPLETED),
+                    replay.stream().map(TaskEvent::type).toList());
+            assertEquals(List.of(1L, 3L, 4L), replay.stream().map(TaskEvent::eventId).toList());
+            assertEquals("latest", ((Map<?, ?>) replay.get(1).payload()).get("analysis"));
+            assertEquals(List.of(TaskEventType.TASK_COMPLETED), store.tasks().eventsAfter("t1", 3, 10)
+                    .stream().map(TaskEvent::type).toList());
+        }
+    }
+
     @Test void onlineBackupRestoresConsistentSessionsIdentityAuditAndEventCursor() throws Exception {
         Path backup = root.resolve("backup.zip");
         try (var source = new JdbcAgentStore(root.resolve("source/agent").toString())) {

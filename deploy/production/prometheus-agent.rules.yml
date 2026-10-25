@@ -1,0 +1,48 @@
+# Load after replacing the labels/routing target with the site's production conventions.
+groups:
+  - name: rover-agent
+    rules:
+      - alert: RoverAgentTaskQueueHigh
+        expr: rover_agent_task_queue_size > 12
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rover Agent investigation queue is near capacity
+          description: The bounded queue has stayed above 12 tasks for five minutes; check worker latency and telemetry dependencies.
+
+      - alert: RoverAgentTaskFailures
+        expr: increase(rover_agent_task_failed_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rover Agent investigation task failed
+          description: At least one task failed in the last ten minutes; review task and storage logs before resubmitting.
+
+      - alert: RoverAgentTaskSubmissionsRejected
+        expr: increase(rover_agent_task_rejected_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rover Agent rejected investigation work
+          description: The single-process capacity or session guard rejected submissions in the last five minutes.
+
+      - alert: RoverAgentModelCallsFailing
+        expr: increase(rover_agent_model_calls_total{outcome=~"error|unavailable|timeout|client_error|server_error|not_configured"}[10m]) > 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Rover Agent model calls are failing
+          description: Model planning or explanation may be degraded; verify evidence-based rule fallback and provider health.
+
+      - alert: RoverAgentNoTaskWorkerActivity
+        expr: rover_agent_task_active == 0 and rover_agent_task_queue_size > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Rover Agent queue is not draining
+          description: Tasks remain queued while no worker is active; inspect Admin health, scheduler recovery and H2 availability.

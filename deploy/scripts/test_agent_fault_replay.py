@@ -9,6 +9,7 @@ import socket
 import tempfile
 import threading
 import unittest
+import unittest.mock
 
 SPEC = importlib.util.spec_from_file_location("replay", Path(__file__).with_name("agent-fault-replay.py"))
 replay = importlib.util.module_from_spec(SPEC)
@@ -153,6 +154,59 @@ class ReplayTest(unittest.TestCase):
         summary = replay.summarize(rows)
         self.assertEqual((2, 1, .5), (summary["requests"], summary["failures"], summary["errorRate"]))
         self.assertEqual({"v1": 1, "unknown": 1}, summary["responseVersions"])
+
+    def test_capacity_summary_separates_admission_from_task_completion(self):
+        rows = [
+            {"status": 202, "latencyMillis": 10, "taskStatus": "COMPLETED", "error": None},
+            {"status": 202, "latencyMillis": 20, "taskStatus": "FAILED", "error": "db unavailable"},
+            {"status": 0, "latencyMillis": 30, "taskStatus": "TIMEOUT", "error": "deadline"},
+        ]
+        result = replay.summarize_burst(rows, 2.0, 123.4)
+        self.assertEqual((3, 2, 1, 2), (result["submitted"], result["accepted"],
+                                         result["completed"], result["failedOrUnknown"]))
+        self.assertEqual({"p50": 20, "p95": 30, "p99": 30, "max": 30},
+                         result["admissionLatencyMillis"])
+        self.assertFalse(result["allAcceptedAndCompleted"])
+        self.assertEqual(123.4, result["peakAdminWorkingSetMiB"])
+
+    def test_prometheus_monitoring_requires_loopback_scrape_and_agent_metric(self):
+        class Probe:
+            def __init__(self, status, body): self.status, self.body = status, body
+            def request(self, url, **kwargs):
+                if url == "http://127.0.0.1:19185/actuator/prometheus":
+                    return 404, {}, {}
+                return self.status, self.body, getattr(self, "response_headers", {})
+        run = replay.Replay.__new__(replay.Replay)
+        run.args = argparse.Namespace(base_port=19180, enable_prometheus=True)
+        run.management_url = "http://127.0.0.1:19186"
+        run.urls = {"admin": "http://127.0.0.1:19185"}
+        run.http = Probe(200, "# HELP rover_agent_task_submitted_total Tasks")
+        run.http.response_headers = {"Content-Type": "text/plain; version=0.0.4"}
+        run.report = {}
+        with tempfile.TemporaryDirectory() as temporary:
+            run.http = Probe(200, "# HELP rover_agent_task_submitted_total Tasks")
+            run.http.response_headers = {"Content-Type": "text/plain; version=0.0.4"}
+            run.prometheus_probe(Path(temporary))
+            self.assertTrue(run.report["prometheusGatePassed"])
+            self.assertEqual(19186, run.report["prometheusProbe"]["managementPort"])
+        run.http = Probe(200, "unrelated_metric 1")
+        run.http.response_headers = {"Content-Type": "text/plain; version=0.0.4"}
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(RuntimeError, "missing Agent task metrics"):
+                run.prometheus_probe(Path(temporary))
+
+    def test_prometheus_production_template_uses_a_separate_loopback_port(self):
+        template = (replay.ROOT / "deploy/production/admin-application.example.yml").read_text(encoding="utf-8")
+        self.assertIn("address: 127.0.0.1", template)
+        self.assertIn("port: ${ROVER_ADMIN_MANAGEMENT_PORT:9091}", template)
+
+    def test_soak_summary_tracks_a_bounded_database_growth_budget(self):
+        rows = [{"status": 202, "admissionLatencyMillis": 25, "taskStatus": "COMPLETED"}]
+        result = replay.summarize_soak(rows, 10, 11, 100, 1024, 2048, 0)
+        self.assertTrue(result["databaseGrowthWithinLimit"])
+        self.assertTrue(result["allAlertsAcceptedAndCompleted"])
+        result = replay.summarize_soak(rows, 10, 11, 100, 4096, 2048, 0)
+        self.assertFalse(result["databaseGrowthWithinLimit"])
 
     def test_repeatability_compares_per_user_outcomes_not_completion_order(self):
         rows = [dict(key="a", status=200, responseVersion="v1"), dict(key="b", status=503, responseVersion="v2")]

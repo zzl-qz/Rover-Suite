@@ -9,6 +9,10 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 Set-Location $root
+# On Windows some JDK 17 builds derive Unix-domain socket paths from long Maven temp dirs.
+# Keep the existing repository-local test socket directory short for Maven and Surefire forks.
+$socketDirectory = Join-Path $root '.tmp/nio'
+New-Item -ItemType Directory -Force -Path $socketDirectory | Out-Null
 $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
 $output = Join-Path $OutputDirectory $stamp
 New-Item -ItemType Directory -Force -Path $output | Out-Null
@@ -51,12 +55,25 @@ function Invoke-Gate([string]$Name, [string]$File, [string]$Program, [string[]]$
     $log = Join-Path $output $File
     $start = Get-Date
     $executionError = $null
+    $previousPreference = $ErrorActionPreference
+    $previousJavaToolOptions = $env:JAVA_TOOL_OPTIONS
+    # Windows PowerShell 5 turns a tool's stderr (including harmless test progress) into errors.
+    # Preserve it in the gate log and determine success from the actual process exit code.
+    $ErrorActionPreference = 'Continue'
+    if ($Name -eq 'unit-and-integration-tests') {
+        $socketOption = '-Djdk.net.unixdomain.tmpdir=' + $socketDirectory
+        $env:JAVA_TOOL_OPTIONS = (($previousJavaToolOptions, $socketOption | Where-Object { $_ }) -join ' ')
+    }
     try {
         & $Program @Arguments *> $log
         $code = $LASTEXITCODE
     } catch {
         $executionError = $_.Exception.Message
         $code = 1
+    } finally {
+        $ErrorActionPreference = $previousPreference
+        if ($null -eq $previousJavaToolOptions) { Remove-Item Env:JAVA_TOOL_OPTIONS -ErrorAction SilentlyContinue }
+        else { $env:JAVA_TOOL_OPTIONS = $previousJavaToolOptions }
     }
     $status = if ($code -eq 0) { 'PASSED' } else { 'FAILED' }
     $summary.Add([pscustomobject]@{name=$Name;status=$status;exitCode=$code;startedAt=$start.ToString('o');durationSeconds=[math]::Round(((Get-Date)-$start).TotalSeconds,2);log=$File;error=$executionError})

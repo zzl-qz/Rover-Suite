@@ -1019,11 +1019,40 @@ public final class JdbcAgentStore implements AutoCloseable {
         @Override public void saveEvent(TaskView task, com.rover.agent.core.event.TaskEvent event) {
             synchronized (JdbcAgentStore.this) {
                 inTransaction(() -> {
-                    if (event.type() != com.rover.agent.core.event.TaskEventType.ANALYSIS_DELTA
-                            && event.type() != com.rover.agent.core.event.TaskEventType.THINKING_DELTA) {
-                        writeTask(task);
-                        writeSteps(task);
-                        writeEvidence(task.taskId(), task.evidence());
+                    switch (event.type()) {
+                        case ANALYSIS_DELTA, THINKING_DELTA -> { }
+                        case TASK_CREATED, TASK_STARTED -> {
+                            writeTask(task);
+                            writeSteps(task);
+                            writeEvidence(task.taskId(), task.evidence());
+                        }
+                        case SNAPSHOT -> {
+                            writeTask(task);
+                            writeSteps(task);
+                            writeEvidence(task.taskId(), task.evidence());
+                        }
+                        case STEP_STARTED, STEP_COMPLETED, STEP_FAILED -> {
+                            writeTask(task);
+                            Object step = event.payload() instanceof Map<?, ?> payload ? payload.get("step") : null;
+                            int order = task.steps().indexOf(step);
+                            if (step instanceof Step current && order >= 0) {
+                                writeStep(task.taskId(), order, current);
+                            } else {
+                                // Keep compatibility with repository clients that only provide a progress envelope.
+                                writeSteps(task);
+                            }
+                        }
+                        case EVIDENCE_ADDED -> {
+                            writeTask(task);
+                            writeEvidence(task.taskId(), task.evidence());
+                        }
+                        default -> writeTask(task);
+                    }
+                    if (event.type() == com.rover.agent.core.event.TaskEventType.SNAPSHOT) {
+                        // A newer full snapshot supersedes older snapshots for the same task. Keep lifecycle events
+                        // for replay, but avoid storing the same growing task/step/evidence payload on every update.
+                        run("DELETE FROM agent_task_outbox WHERE task_id=? AND event_type=?",
+                                task.taskId(), com.rover.agent.core.event.TaskEventType.SNAPSHOT.name());
                     }
                     run("INSERT INTO agent_task_outbox (task_id,event_id,event_type,event_json,created_at) VALUES(?,?,?,?,?)",
                             task.taskId(), event.eventId(), event.type().name(), toJson(event), event.timestampMillis());
@@ -1901,19 +1930,23 @@ public final class JdbcAgentStore implements AutoCloseable {
         for (Step step : steps) {
             int order = sequence++;
             kept.add(step.stepId());
-            Object[] values = {task.taskId(), step.type().name(), order, step.status().name(), step.name(),
-                    step.inputSummary(), step.outputSummary(), step.error(), step.startedAtMillis(),
-                    step.finishedAtMillis(), step.stepId()};
-            // 步骤会被就地改状态（同一个 stepId 从 RUNNING 变 COMPLETED），因此按 ID 更新而不是删了重插。
-            upsert("UPDATE agent_step SET task_id = ?, step_type = ?, sequence_no = ?, status = ?, title = ?, "
-                            + "input_summary = ?, output_summary = ?, error_message = ?, started_at = ?, "
-                            + "completed_at = ? WHERE step_id = ?",
-                    "INSERT INTO agent_step (task_id, step_type, sequence_no, status, title, input_summary, "
-                            + "output_summary, error_message, started_at, completed_at, step_id) "
-                            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    values, values);
+            writeStep(task.taskId(), order, step);
         }
         prune("agent_step", "step_id", task.taskId(), kept);
+    }
+
+    private void writeStep(String taskId, int sequence, Step step) {
+        Object[] values = {taskId, step.type().name(), sequence, step.status().name(), step.name(),
+                step.inputSummary(), step.outputSummary(), step.error(), step.startedAtMillis(),
+                step.finishedAtMillis(), step.stepId()};
+        // A step moves from RUNNING to its final status under the same ID. Update just that row on progress events.
+        upsert("UPDATE agent_step SET task_id = ?, step_type = ?, sequence_no = ?, status = ?, title = ?, "
+                        + "input_summary = ?, output_summary = ?, error_message = ?, started_at = ?, "
+                        + "completed_at = ? WHERE step_id = ?",
+                "INSERT INTO agent_step (task_id, step_type, sequence_no, status, title, input_summary, "
+                        + "output_summary, error_message, started_at, completed_at, step_id) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values, values);
     }
 
     private void writeEvidence(String taskId, List<Evidence> reported) {

@@ -17,7 +17,7 @@ public interface AgentMetrics {
     default void taskStarted() {
     }
 
-    /** 登记那一刻的等待队列深度：队列入队后采样一次，不做后台轮询。 */
+    /** 调查工作池当前的等待队列深度快照。 */
     default void taskQueued(int queueSize) {
     }
 

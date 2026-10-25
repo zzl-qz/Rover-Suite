@@ -58,6 +58,12 @@ class AdminSecurityWebTest {
     }
 
     @Test
+    void doesNotExposeActuatorOnThePrimaryConsoleListener() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
     void acceptsDefaultAccount() throws Exception {
         mockMvc.perform(post("/login").with(csrf())
                         .param("username", AdminUserStore.DEFAULT_USERNAME)

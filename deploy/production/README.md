@@ -31,9 +31,12 @@ export ROVER_STRICT_SECURITY=true
 
 5. Nameserver 先起，再起 Gateway；Admin 只放运维网段。
 
+6. 生产 Admin 配置示例启用 Prometheus 指标，并将 Actuator 管理端口绑定到 `127.0.0.1`。该独立端口不经过控制台登录会话认证，仅供同机 Prometheus/受控代理抓取；远程抓取应使用认证代理或安全隧道，不要把 `/actuator/prometheus` 管理端口发布到公网或业务网卡。加载 `prometheus-agent.rules.yml` 前，按本机队列配置和监控平台的标签/路由规范调整阈值与通知目标。
+
 相关：
 
 - 探活：`GET /_manage/health`（需管理 token）
 - systemd 示例：[`../systemd/README.md`](../systemd/README.md)
 - 备份：`../scripts/backup-overlays.sh` 只包含 overlay；Admin 的 `log-store-path` 目录、模型配置和主密钥需另行备份，记录库复制前停 Admin。
 - 冒烟：`../scripts/smoke-compose.sh`
+- Agent 告警规则模板：[`prometheus-agent.rules.yml`](prometheus-agent.rules.yml)；覆盖队列接近上限、任务失败/拒绝、模型故障与队列停滞，不替代值班响应人和处置手册。

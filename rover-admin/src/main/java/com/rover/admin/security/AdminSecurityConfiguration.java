@@ -60,6 +60,8 @@ public class AdminSecurityConfiguration {
 
         http.authorizeHttpRequests(auth -> auth
                 .requestMatchers(PUBLIC_PATHS).permitAll()
+                // Production exposes Actuator only on a separately bound loopback management listener.
+                .requestMatchers("/actuator/**").permitAll()
                 .anyRequest().authenticated());
 
         http.formLogin(form -> form

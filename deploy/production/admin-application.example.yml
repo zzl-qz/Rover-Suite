@@ -15,3 +15,16 @@ rover:
     log-store-path: "${ROVER_ADMIN_LOG_STORE_PATH:./rover-logs/rover}"
     # 当前 Admin 只有一个管理 token，需与所管理的两端一致。
     admin-token: "REPLACE_WITH_LONG_GATEWAY_ADMIN_TOKEN"
+
+management:
+  server:
+    address: 127.0.0.1
+    port: ${ROVER_ADMIN_MANAGEMENT_PORT:9091}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true

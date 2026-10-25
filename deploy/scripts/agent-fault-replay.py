@@ -27,6 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS = ROOT / "rover-gateway-test/replay/scenarios.json"
@@ -249,6 +250,62 @@ def signature(rows):
     return sorted((row["key"], row["status"], row["responseVersion"]) for row in rows)
 
 
+def summarize_burst(rows, elapsed_seconds, peak_memory_mib):
+    """Keep admission, task completion, and the measured envelope separate."""
+    latencies = sorted(row["latencyMillis"] for row in rows)
+    terminal = [row for row in rows if row.get("taskStatus") == "COMPLETED"]
+    completed = [row for row in terminal if row.get("status") == 202]
+    percentile = lambda p: latencies[min(len(latencies) - 1, math.ceil(p * len(latencies)) - 1)] if latencies else None
+    return {"submitted": len(rows), "accepted": sum(row.get("status") == 202 for row in rows),
+            "completed": len(completed), "failedOrUnknown": len(rows) - len(completed),
+            "elapsedSeconds": round(elapsed_seconds, 3),
+            "completedTasksPerSecond": round(len(completed) / elapsed_seconds, 3) if elapsed_seconds > 0 else 0,
+            "admissionLatencyMillis": {"p50": percentile(.50), "p95": percentile(.95), "p99": percentile(.99),
+                                          "max": latencies[-1] if latencies else None},
+            "peakAdminWorkingSetMiB": round(peak_memory_mib, 1) if peak_memory_mib is not None else None,
+            "allAcceptedAndCompleted": len(rows) > 0 and len(completed) == len(rows)
+                and all(row.get("status") == 202 and row.get("error") is None for row in rows)}
+
+
+def summarize_soak(rows, requested_seconds, elapsed_seconds, peak_memory_mib, database_growth_bytes,
+                  database_growth_limit_bytes, admin_restarts):
+    completed = [row for row in rows if row.get("taskStatus") == "COMPLETED"]
+    latencies = sorted(row["admissionLatencyMillis"] for row in rows)
+    percentile = lambda p: latencies[min(len(latencies) - 1, math.ceil(p * len(latencies)) - 1)] if latencies else None
+    return {"requestedSeconds": requested_seconds, "elapsedSeconds": round(elapsed_seconds, 2),
+            "alertsSubmitted": len(rows), "alertsAccepted": sum(row.get("status") == 202 for row in rows),
+            "tasksCompleted": len(completed), "taskFailuresOrUnknown": len(rows) - len(completed),
+            "admissionLatencyMillis": {"p50": percentile(.50), "p95": percentile(.95),
+                                          "p99": percentile(.99), "max": latencies[-1] if latencies else None},
+            "peakAdminWorkingSetMiB": round(peak_memory_mib, 1) if peak_memory_mib is not None else None,
+            "databaseGrowthBytes": database_growth_bytes, "databaseGrowthLimitBytes": database_growth_limit_bytes,
+            "databaseGrowthWithinLimit": database_growth_bytes <= database_growth_limit_bytes,
+            "plannedAdminRestarts": admin_restarts,
+            "allAlertsAcceptedAndCompleted": len(rows) > 0 and len(rows) == len(completed)
+                and all(row.get("status") == 202 for row in rows),
+            "durationReached": elapsed_seconds >= requested_seconds}
+
+
+def compact_h2_snapshot(java, admin_jar, database_file):
+    """Compact a closed, disposable H2 copy to show live payload size separately from file allocation."""
+    require(database_file.name.endswith(".mv.db"), "H2 snapshot must retain its .mv.db suffix")
+    with zipfile.ZipFile(admin_jar) as archive:
+        h2_entry = next((name for name in archive.namelist()
+                         if name.startswith("BOOT-INF/lib/h2-") and name.endswith(".jar")), None)
+        require(h2_entry is not None, "Packaged Admin JAR does not contain the H2 tool runtime")
+        h2_jar = database_file.with_name("h2-tools.jar")
+        h2_jar.write_bytes(archive.read(h2_entry))
+    database_base = Path(str(database_file)[:-len(".mv.db")])
+    url_path = database_base.resolve().as_posix()
+    result = subprocess.run([java, "-cp", str(h2_jar), "org.h2.tools.Shell",
+                             "-url", f"jdbc:h2:file:{url_path};IFEXISTS=TRUE",
+                             "-user", "sa", "-password", "", "-sql", "SHUTDOWN COMPACT"],
+                            cwd=database_file.parent, capture_output=True, text=True, timeout=90)
+    require(database_file.is_file() and "already closed" in (result.stdout + result.stderr).lower(),
+            "Could not compact disposable H2 snapshot")
+    return database_file.stat().st_size
+
+
 def validate_fixture(fixture):
     require(fixture.get("schemaVersion") == 1, "Unsupported replay schema")
     require(fixture.get("path") == "/api/replay/order" and fixture.get("routeId") == "replay-orders",
@@ -330,9 +387,12 @@ class Replay:
         self.fault_headers = {"X-Rover-Replay-Token": self.token}
         self.urls = {name: f"http://127.0.0.1:{args.base_port + offset}" for name, offset in
                      (("nameserver", 1), ("gateway", 2), ("v1", 3), ("v2", 4), ("admin", 5))}
+        self.management_url = f"http://127.0.0.1:{args.base_port + 6}"
         rng = random.Random(fixture["seed"])
         self.keys = [f"user-{rng.getrandbits(128):032x}" for _ in range(fixture["samplesPerPhase"])]
-        self.report = {"schemaVersion": 1, "stage": "S0-06", "faultReplayPassed": False,
+        stage = ("S6-03" if getattr(args, "enable_prometheus", False) else
+                 "S6-02" if getattr(args, "capacity_probe", False) else "S0-06")
+        self.report = {"schemaVersion": 1, "stage": stage, "faultReplayPassed": False,
                        "receiptProductionGatePassed": False, "cases": [], "processes": [],
                        "modelMode": "live" if self.live_model else "none",
                        "mitigationActor": "test-harness", "error": None}
@@ -354,18 +414,24 @@ class Replay:
             with socket.socket() as probe:
                 # On Windows SO_REUSEADDR could hide a port collision; never set it.
                 probe.bind(("127.0.0.1", port))
+        if getattr(self.args, "enable_prometheus", False):
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", self.args.base_port + 6))
         for name, relative in JARS.items():
-            require((ROOT / relative).is_file(), f"Build {name} JAR first: {relative}")
+            require((self.args.jar_root / relative).is_file(), f"Build {name} JAR first: {relative}")
         manifest = {"fixture": self.fixture, "urls": self.urls, "keys": self.keys,
                     "python": sys.version, "jars": {}}
         for name, relative in JARS.items():
-            manifest["jars"][name] = {"path": relative, "sha256": hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()}
+            manifest["jars"][name] = {"path": relative, "sha256": hashlib.sha256((self.args.jar_root / relative).read_bytes()).hexdigest()}
         git = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True)
         manifest["sourceCommit"] = git.stdout.strip() if git.returncode == 0 else "unavailable"
         dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True)
         manifest["sourceDirty"] = bool(dirty.stdout.strip()) if dirty.returncode == 0 else None
         manifest["runnerSha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         manifest["fixtureSha256"] = hashlib.sha256(self.args.fixture.read_bytes()).hexdigest()
+        if getattr(self.args, "admin_config", None):
+            require(self.args.admin_config.is_file(), "Production Admin config file does not exist")
+            manifest["adminConfigSha256"] = hashlib.sha256(self.args.admin_config.read_bytes()).hexdigest()
         save(self.output / "manifest.json", manifest)
         ns = {"port": self.args.base_port, "managePort": self.args.base_port + 1,
               "bindHost": "127.0.0.1", "manageBindHost": "127.0.0.1", "adminToken": self.token,
@@ -416,7 +482,7 @@ class Replay:
         socket_dir.mkdir(parents=True, exist_ok=True)
         args = [self.args.java, "-XX:ActiveProcessorCount=2", "-Xms32m", f"-Xmx{getattr(self.args, 'heap_mb', 384)}m",
                 f"-Djava.io.tmpdir={tmp}", f"-Djdk.net.unixdomain.tmpdir={socket_dir}", "-jar",
-                str(ROOT / JARS["backend" if name in ("v1", "v2") else name])]
+                str(self.args.jar_root / JARS["backend" if name in ("v1", "v2") else name])]
         if name == "admin":
             args += [f"--server.port={self.args.base_port + 5}", "--server.address=127.0.0.1",
                      f"--rover.admin.gateway-url={self.urls['gateway']}",
@@ -427,6 +493,16 @@ class Replay:
                      f"--rover.admin.model.master-key-file={directory / 'config/master.key'}",
                      "--rover.admin.model.master-key=", "--rover.agent.alerts.owner-user-id=admin",
                      "--rover.admin.log-collect-interval-seconds=5", "--spring.ai.model.chat=none"]
+            if getattr(self.args, "admin_config", None):
+                args.append("--spring.config.additional-location=file:" + str(self.args.admin_config.resolve()))
+            if getattr(self.args, "enable_prometheus", False):
+                args += ["--management.server.address=127.0.0.1",
+                         f"--management.server.port={self.args.base_port + 6}",
+                         "--management.endpoints.web.exposure.include=health,info,prometheus",
+                         "--management.metrics.export.prometheus.enabled=true"]
+            elif getattr(self.args, "management_port", None):
+                args += ["--management.server.address=127.0.0.1",
+                         f"--management.server.port={self.args.management_port}"]
             if self.live_model:
                 # ModelConfigStore reads the explicit encrypted FILE config; none disables auto-configuration only.
                 args += ["--management.metrics.export.prometheus.enabled=true",
@@ -437,6 +513,8 @@ class Replay:
         process = subprocess.Popen(args, cwd=directory, stdout=log, stderr=subprocess.STDOUT, env=env,
                                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         self.processes[name] = process
+        if name == "admin":
+            self.admin = Http(cookies=True)
         self.report["processes"].append({"name": name, "pid": process.pid, "log": str(log_path.relative_to(self.output))})
         self.event(f"started {name}, pid={process.pid}")
 
@@ -449,6 +527,239 @@ class Replay:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+        if name == "gateway":
+            # A reused urllib connection can remain bound to the old socket after Gateway restart.
+            self.http = Http()
+
+    def burst_load(self, directory, count, concurrency, connector):
+        keys = [f"s6-burst-{uuid.uuid4().hex}" for _ in range(count)]
+        def send(key):
+            started = time.perf_counter()
+            try:
+                status, body, _ = self.http.request(self.urls["admin"] + "/api/agent/events/ingest",
+                    {"path": self.fixture["path"], "message": "S6 bounded alert burst",
+                     "alertKey": key, "state": "FIRING"},
+                    {"Authorization": "Bearer " + connector["token"],
+                     "Idempotency-Key": uuid.uuid4().hex}, allowed=(202,))
+                return {"status": status, "taskId": body.get("taskId"),
+                        "latencyMillis": round((time.perf_counter() - started) * 1000, 2), "error": None}
+            except Exception as error:
+                return {"status": 0, "taskId": None,
+                        "latencyMillis": round((time.perf_counter() - started) * 1000, 2),
+                        "error": type(error).__name__ + ": " + str(error)[:200]}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
+            rows = list(pool.map(send, keys))
+        save(directory / "alert-burst.json", rows)
+        return rows
+
+    def soak_probe(self):
+        directory = self.output / "soak"
+        directory.mkdir(parents=True, exist_ok=True)
+        self.storage_probe_task_id = None
+        base = self.urls["admin"]
+        connector = self.admin.request(base + "/api/agent/security/connectors",
+            {"name": "s6-soak-probe"}, self.csrf)[1]
+        token_headers = {"Authorization": "Bearer " + connector["token"]}
+        database = self.component_dir("admin") / "records.mv.db"
+        heartbeat = directory / "heartbeat.json"
+        start = time.monotonic()
+        deadline = start + self.args.soak_hours * 3600
+        sequence, pending, rows = 0, {}, []
+        peak_memory, admin_restarts = 0.0, 0
+        last_restart = start
+        next_alert_at, next_heartbeat_at = start, start + 600
+        baseline_size = database.stat().st_size if database.is_file() else 0
+        while time.monotonic() < deadline or pending:
+            now = time.monotonic()
+            if now < deadline and now >= next_alert_at:
+                sequence += 1
+                key = f"s6-soak-{sequence}-{uuid.uuid4().hex}"
+                send_start = time.perf_counter()
+                status, accepted, _ = self.http.request(base + "/api/agent/events/ingest",
+                    {"path": self.fixture["path"], "message": "S6 single-process soak alert",
+                     "alertKey": key, "state": "FIRING"},
+                    {**token_headers, "Idempotency-Key": uuid.uuid4().hex}, allowed=(202,))
+                row = {"index": sequence, "status": status, "taskId": accepted.get("taskId"),
+                       "alertKey": key, "admissionLatencyMillis": round((time.perf_counter() - send_start) * 1000, 2),
+                       "acceptedAtSeconds": round(now - start, 2), "taskStatus": None, "error": None}
+                rows.append(row)
+                pending[row["taskId"]] = row
+                next_alert_at = now + self.args.soak_alert_interval_seconds
+            if self.processes["admin"].poll() is not None:
+                raise RuntimeError("Admin exited during S6 soak")
+            memory = self.process_memory_mib(self.processes["admin"].pid)
+            if memory is not None:
+                peak_memory = max(peak_memory, memory)
+            for task_id in list(pending):
+                code, task, _ = self.admin.request(base + "/api/agent/tasks/" + task_id, headers=self.csrf, allowed=(200, 404))
+                if code == 200 and task.get("status") not in ("PENDING", "RUNNING"):
+                    pending[task_id].update(taskStatus=task.get("status"), error=task.get("error"))
+                    del pending[task_id]
+            if (now < deadline and self.args.soak_restart_interval_seconds > 0
+                    and now - last_restart >= self.args.soak_restart_interval_seconds and not pending):
+                probe = next((row for row in rows if row.get("taskStatus") == "COMPLETED"), None)
+                if probe:
+                    self.stop("admin")
+                    self.start("admin")
+                    self.wait("admin", lambda: self.admin.request(base + "/api/auth/status"))
+                    self.login()
+                    restored = self.admin.request(base + "/api/agent/tasks/" + probe["taskId"])[1]
+                    require(restored.get("status") == "COMPLETED", "Soak restart lost a completed task")
+                    admin_restarts += 1
+                    last_restart = time.monotonic()
+            if now >= next_heartbeat_at:
+                save(heartbeat, {"elapsedSeconds": round(now - start, 2),
+                    "alertsSubmitted": len(rows), "pending": len(pending),
+                    "adminPid": self.processes["admin"].pid, "workingSetMiB": memory,
+                    "databaseBytes": database.stat().st_size if database.is_file() else None})
+                while next_heartbeat_at <= now:
+                    next_heartbeat_at += 600
+            if now >= deadline and not pending:
+                break
+            time.sleep(self.args.soak_interval_seconds)
+        elapsed = time.monotonic() - start
+        final_size = database.stat().st_size if database.is_file() else baseline_size
+        growth_limit = 16 * 1024 * 1024 + len(rows) * 512 * 1024
+        summary = summarize_soak(rows, self.args.soak_hours * 3600, elapsed,
+                                 peak_memory if peak_memory > 0 else None, final_size - baseline_size,
+                                 growth_limit, admin_restarts)
+        save(directory / "alerts.json", rows)
+        save(directory / "summary.json", summary)
+        save(heartbeat, {"elapsedSeconds": round(elapsed, 2), "alertsSubmitted": len(rows),
+                         "pending": len(pending), "adminPid": self.processes["admin"].pid,
+                         "workingSetMiB": self.process_memory_mib(self.processes["admin"].pid),
+                         "databaseBytes": final_size, "complete": True})
+        self.report["soakDatabaseGrowthGatePassed"] = summary["databaseGrowthWithinLimit"]
+        self.report["soakProbe"] = summary
+        self.report["soakGatePassed"] = (summary["durationReached"] and summary["allAlertsAcceptedAndCompleted"]
+            and summary["databaseGrowthWithinLimit"])
+        require(self.report["soakGatePassed"], "S6 soak duration or task completion gate failed")
+
+    @staticmethod
+    def process_memory_mib(pid):
+        try:
+            if os.name == "nt":
+                output = subprocess.check_output(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                                                 text=True, timeout=3, stderr=subprocess.DEVNULL)
+                match = re.search(r'"([0-9,]+) K"', output)
+                return int(match[1].replace(",", "")) / 1024 if match else None
+            output = subprocess.check_output(["ps", "-o", "rss=", "-p", str(pid)], text=True, timeout=3)
+            return int(output.strip()) / 1024
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+
+    def storage_failure_probe(self, directory):
+        """Block the existing H2 database file path and verify fail-closed startup/recovery."""
+        return self._storage_failure_probe(directory)
+
+    def _storage_failure_probe(self, directory):
+        base = self.urls["admin"]
+        probe_task_id = self.storage_probe_task_id
+        require(probe_task_id, "Storage failure probe requires a completed durable task id")
+        self.stop("admin")
+        database = self.component_dir("admin") / "records.mv.db"
+        preserved = database.with_name("records.mv.db.s6-preserved")
+        blocker = database
+        require(database.is_file() and not preserved.exists(), "S6 storage probe requires the fixture's closed H2 file")
+        database.replace(preserved)
+        blocker.mkdir()
+        self.start("admin")
+        process = self.processes["admin"]
+        deadline = time.monotonic() + self.args.startup_timeout
+        while time.monotonic() < deadline and process.poll() is None:
+            time.sleep(.1)
+        startup_rejected = process.poll() is not None
+        log_path = self.component_dir("admin") / f"process-{self.generation['admin']}.log"
+        detail = log_path.read_text(encoding="utf-8", errors="replace")[-20000:] if log_path.is_file() else ""
+        try:
+            require(startup_rejected and re.search(r"(records\.mv\.db|H2|Agent 库|打开日志库).*(fail|error|denied|locked|exception)|(?:fail|error|denied|locked|exception).*(records\.mv\.db|H2|Agent 库|打开日志库)", detail, re.I),
+                    "Admin did not fail startup against the blocked H2 file path")
+        finally:
+            self.stop("admin")
+            if blocker.is_dir():
+                blocker.rmdir()
+            if preserved.is_file():
+                preserved.replace(database)
+        self.start("admin")
+        self.wait("admin", lambda: self.admin.request(base + "/api/auth/status"))
+        self.login()
+        previous = self.admin.request(base + "/api/agent/tasks/" + probe_task_id)[1]
+        require(previous.get("taskId") == probe_task_id and previous.get("status") == "COMPLETED",
+                "Writable restart did not recover state after read-only storage injection")
+        result = {"blockedDatabasePathStartupRejected": startup_rejected,
+                  "writableRestartRestoresPriorTask": True}
+        save(directory / "storage-failure.json", result)
+        return result
+
+    def capacity_probe(self):
+        directory = self.output / "capacity"
+        directory.mkdir(parents=True, exist_ok=True)
+        connector = self.admin.request(self.urls["admin"] + "/api/agent/security/connectors",
+            {"name": "s6-capacity-probe"}, self.csrf)[1]
+        if getattr(self.args, "enable_prometheus", False):
+            self.prometheus_probe(directory)
+        burst_started = time.monotonic()
+        admitted = self.burst_load(directory, self.args.burst_count, self.args.burst_concurrency, connector)
+        task_rows = [row for row in admitted if row.get("taskId")]
+        pending = {row["taskId"]: row for row in task_rows}
+        max_memory = 0.0
+        deadline = time.monotonic() + self.args.capacity_timeout
+        while pending and time.monotonic() < deadline:
+            memory = self.process_memory_mib(self.processes["admin"].pid)
+            if memory is not None:
+                max_memory = max(max_memory, memory)
+            for task_id in list(pending):
+                status, task, _ = self.admin.request(self.urls["admin"] + "/api/agent/tasks/" + task_id,
+                                                      headers=self.csrf, allowed=(200, 404))
+                if status == 200 and task.get("status") not in ("PENDING", "RUNNING"):
+                    pending[task_id].update(taskStatus=task["status"], error=task.get("error"))
+                    del pending[task_id]
+            if pending:
+                time.sleep(.25)
+        for row in pending.values():
+            row.update(taskStatus="TIMEOUT", error="capacity probe deadline exceeded")
+        elapsed = time.monotonic() - burst_started
+        summary = summarize_burst(admitted, elapsed, max_memory if max_memory > 0 else None)
+        summary.update({"configuredConcurrency": self.args.burst_concurrency,
+                       "taskDeadlineSeconds": self.args.capacity_timeout,
+                       "adminPid": self.processes["admin"].pid,
+                       "adminStillAlive": self.processes["admin"].poll() is None})
+        self.storage_probe_task_id = next((row["taskId"] for row in admitted
+                                           if row.get("taskStatus") == "COMPLETED"), None)
+        require(self.storage_probe_task_id, "Capacity burst produced no completed durable task for the storage probe")
+        save(directory / "capacity-summary.json", summary)
+        require(summary["allAcceptedAndCompleted"] and summary["adminStillAlive"],
+                "Alert burst had rejected, incomplete, or non-completed work; inspect capacity artifacts")
+        storage = self.storage_failure_probe(directory)
+        self.admin.request(self.urls["admin"] + "/api/agent/security/connectors/" + connector["id"] + "/revoke",
+                           {}, self.csrf)
+        self.report["capacityProbe"] = summary
+        self.report["storageFailureProbe"] = storage
+        self.report["capacityGatePassed"] = summary["allAcceptedAndCompleted"] and summary["adminStillAlive"]
+        self.report["storageFailureGatePassed"] = (storage["blockedDatabasePathStartupRejected"]
+            and storage["writableRestartRestoresPriorTask"])
+        require(self.report["storageFailureGatePassed"], "Read-only storage failure was not safely rejected")
+
+    def prometheus_probe(self, directory):
+        """Verify a real scrape on the separate loopback-only management listener."""
+        url = self.management_url + "/actuator/prometheus"
+        status, body, headers = self.http.request(url, timeout=10)
+        text_body = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
+        require(status == 200 and "rover_agent_task_submitted_total" in text_body,
+                "Loopback Prometheus scrape is missing Agent task metrics")
+        require(headers.get("Content-Type", "").startswith("text/plain"),
+                "Prometheus endpoint did not return a text exposition")
+        primary_status, _, _ = self.http.request(self.urls["admin"] + "/actuator/prometheus",
+                                                  allowed=(404,))
+        require(primary_status == 404,
+                "Prometheus endpoint is exposed on the primary Admin listener")
+        result = {"scrapeStatus": status, "contentType": headers.get("Content-Type", ""),
+                  "agentTaskMetricPresent": True, "managementBindHost": "127.0.0.1",
+                  "managementPort": self.args.base_port + 6, "scrapeBytes": len(text_body),
+                  "primaryListenerDenied": True}
+        save(directory / "prometheus-probe.json", result)
+        self.report["prometheusProbe"] = result
+        self.report["prometheusGatePassed"] = True
 
     def wait(self, name, predicate):
         deadline = time.monotonic() + self.args.startup_timeout
@@ -866,6 +1177,14 @@ class Replay:
         self.start("admin")
         self.wait("admin", lambda: self.admin.request(self.urls["admin"] + "/api/auth/status"))
         self.login()
+        if getattr(self.args, "capacity_only", False):
+            self.event("running isolated single-Admin capacity, storage failure and restart probes")
+            self.capacity_probe()
+            if self.args.soak_hours > 0:
+                self.soak_probe()
+            if getattr(self.args, "require_single_admin_foundation", False):
+                self.single_admin_foundation()
+            return
         if getattr(self.args, "require_change_timeline", False):
             self.setup_change_timeline()
         if self.live_model:
@@ -896,6 +1215,12 @@ class Replay:
             self.report["liveModelGatePassed"] = counts.get("调查规划:ok", 0) > 0 and counts.get("解读:ok", 0) >= len(self.report["cases"])
             require(self.report["liveModelGatePassed"], "Live model planning/explanation gate failed")
         self.receipts()
+        if getattr(self.args, "capacity_probe", False):
+            self.event("running bounded single-Admin alert burst and H2 recovery probes")
+            self.capacity_probe()
+            if self.args.soak_hours > 0:
+                self.event(f"running {self.args.soak_hours:g}-hour single-Admin soak")
+                self.soak_probe()
         if self.live_model:
             self.model_failure_probe()
         if getattr(self.args, "require_single_admin_foundation", False):
@@ -990,6 +1315,17 @@ class Replay:
                     (self.component_dir("admin") / "config" / filename).unlink(missing_ok=True)
                 except OSError as error:
                     errors.append("credential-copy: " + type(error).__name__)
+        if self.report.get("soakProbe"):
+            snapshot = self.component_dir("admin") / "records.mv.db"
+            if snapshot.is_file():
+                analysis = self.output / "soak" / "records.analysis.mv.db"
+                try:
+                    shutil.copyfile(snapshot, analysis)
+                    compacted = compact_h2_snapshot(self.args.java, self.args.jar_root / JARS["admin"], analysis)
+                    self.report["soakProbe"]["databaseFinalFileBytes"] = snapshot.stat().st_size
+                    self.report["soakProbe"]["databaseCompactedBytes"] = compacted
+                except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                    errors.append("database-analysis: " + type(error).__name__ + ": " + str(error)[:160])
         self.report["cleanupPassed"] = not errors and all(p.poll() is not None for p in self.processes.values())
         self.report["cleanupErrors"] = errors
         save(self.output / "result.json", self.report)
@@ -1008,6 +1344,19 @@ class Replay:
                   "Raw evidence: cases/*/*-requests.jsonl, task.json, workspace.json, receipt-probe.json.",
                   "Metrics are rolling snapshots; phase error rates use actual client request outcomes.",
                   "This run does not certify capacity, general LLM quality, automatic remediation or production readiness."]
+        if "capacityProbe" in self.report:
+            lines += ["", "Capacity probe: " + json.dumps(self.report["capacityProbe"], ensure_ascii=False),
+                      "Storage failure probe: " + json.dumps(self.report["storageFailureProbe"], ensure_ascii=False),
+                      "Capacity gate: " + str(self.report["capacityGatePassed"]),
+                      "Storage failure gate: " + str(self.report["storageFailureGatePassed"]),
+                      "This bounded probe is not a 24-hour soak or production capacity certification."]
+        if "prometheusProbe" in self.report:
+            lines += ["", "Prometheus probe: " + json.dumps(self.report["prometheusProbe"], ensure_ascii=False),
+                      "Prometheus gate: " + str(self.report["prometheusGatePassed"])]
+        if "soakProbe" in self.report:
+            lines += ["", "Soak probe: " + json.dumps(self.report["soakProbe"], ensure_ascii=False),
+                      "Soak gate: " + str(self.report["soakGatePassed"]),
+                      "Soak evidence: soak/summary.json, soak/alerts.json and periodic soak/heartbeat.json snapshots."]
         if self.live_model:
             lines += ["", "Live model gate: " + str(self.report.get("liveModelGatePassed")),
                       "Model calls: " + json.dumps(self.report.get("modelCalls", {}), ensure_ascii=False),
@@ -1024,6 +1373,19 @@ def main():
     parser.add_argument("--base-port", type=int, default=19080, help="Six consecutive localhost ports")
     parser.add_argument("--startup-timeout", type=int, default=90)
     parser.add_argument("--heap-mb", type=int, default=384, help="Heap cap per fixture JVM (128..512)")
+    parser.add_argument("--capacity-probe", action="store_true", help="Run a bounded real HTTP single-Admin burst, H2 path failure and restart recovery probe")
+    parser.add_argument("--capacity-only", action="store_true", help="Start an isolated stack and run only the S6 capacity/storage probe")
+    parser.add_argument("--enable-prometheus", action="store_true", help="Enable an isolated loopback-only Actuator Prometheus endpoint and verify authenticated scraping; requires --capacity-probe")
+    parser.add_argument("--management-port", type=int, default=None, help="Also start an isolated loopback management listener on this port (e.g. when replaying the production configuration template)")
+    parser.add_argument("--admin-config", type=Path, help="Load an additional Admin YAML configuration in the isolated fixture")
+    parser.add_argument("--jar-root", type=Path, default=ROOT, help="Repository/build root containing the four replay JARs (defaults to this source tree)")
+    parser.add_argument("--soak-hours", type=float, default=0, help="Run an isolated single-Admin durable alert soak (0 disables; maximum 24 hours)")
+    parser.add_argument("--soak-interval-seconds", type=int, default=5, help="Delay between soak requests/task polls (1..60)")
+    parser.add_argument("--soak-alert-interval-seconds", type=int, default=900, help="Minimum time between soak alerts (1..3600)")
+    parser.add_argument("--soak-restart-interval-seconds", type=int, default=3600, help="Restart Admin every N seconds after task drain; 0 disables")
+    parser.add_argument("--burst-count", type=int, default=8, help="Number of independently delivered alert tasks (1..100)")
+    parser.add_argument("--burst-concurrency", type=int, default=4, help="Concurrent alert ingress requests (1..16)")
+    parser.add_argument("--capacity-timeout", type=int, default=240, help="Seconds to wait for every burst task to reach a terminal state")
     parser.add_argument("--require-durable-receipts", action="store_true", help="Fail if the S1-05 receipt production gate is not met")
     parser.add_argument("--require-single-admin-foundation", action="store_true", help="Also verify identity, roles, machine ingress, Admin restart, SSE and backup over real HTTP")
     parser.add_argument("--require-evidence-contract", action="store_true", help="Verify S2 captured identity, response origin, evidence quality and native historical windows")
@@ -1033,9 +1395,20 @@ def main():
     parser.add_argument("--model-config", type=Path, help="Opt in to actual paid model calls using this existing encrypted Rover model config")
     parser.add_argument("--model-master-key-file", type=Path, help="Existing master-key file; defaults to master.key next to --model-config")
     args = parser.parse_args()
+    args.jar_root = args.jar_root.resolve()
     parser.error("Java 17+ must be on PATH or supplied with --java") if not args.java else None
-    require(1024 <= args.base_port <= 65530 and 1 <= args.startup_timeout <= 300, "Invalid port/timeout")
+    require(1024 <= args.base_port <= (65529 if args.enable_prometheus else 65530)
+            and 1 <= args.startup_timeout <= 300, "Invalid port/timeout")
     require(128 <= args.heap_mb <= 512, "Invalid fixture heap cap")
+    require(1 <= args.burst_count <= 100 and 1 <= args.burst_concurrency <= 16
+            and 10 <= args.capacity_timeout <= 1800, "Invalid capacity probe limits")
+    require(not args.capacity_only or args.capacity_probe, "--capacity-only requires --capacity-probe")
+    require(not args.enable_prometheus or args.capacity_probe,
+            "--enable-prometheus requires --capacity-probe")
+    require(0 <= args.soak_hours <= 24 and 1 <= args.soak_interval_seconds <= 60
+            and 1 <= args.soak_alert_interval_seconds <= 3600 and 0 <= args.soak_restart_interval_seconds <= 86_400,
+            "Invalid soak probe limits")
+    require(args.soak_hours == 0 or args.capacity_probe, "--soak-hours requires --capacity-probe")
     require(not args.model_master_key_file or args.model_config, "--model-master-key-file requires --model-config")
     require(not args.require_grounded_report or args.model_config, "--require-grounded-report requires --model-config")
     fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
@@ -1044,6 +1417,12 @@ def main():
     code = 0
     try:
         replay.run()
+        if args.capacity_probe and not (replay.report.get("capacityGatePassed")
+                and replay.report.get("storageFailureGatePassed")
+                and replay.report.get("soakGatePassed", True)
+                and replay.report.get("prometheusGatePassed", True)
+                and replay.report.get("singleAdminGatePassed", True)):
+            code = 2
         if args.require_durable_receipts and not replay.report["receiptProductionGatePassed"]:
             code = 2
     except KeyboardInterrupt:
