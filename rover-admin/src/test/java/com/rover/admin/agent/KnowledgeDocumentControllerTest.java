@@ -78,6 +78,58 @@ class KnowledgeDocumentControllerTest {
         }
     }
 
+    @Test void caseRetrospectiveRequiresAnotherReviewerAndRejectedDraftNeverBecomesKnowledge() throws Exception {
+        var scope = new ResourceScope("org", "team", "dev");
+        RouteControlPort control = mock(RouteControlPort.class);
+        when(control.resourceScope()).thenReturn(scope);
+        when(control.resourceNamespace()).thenReturn("dev");
+        AgentSecurityService security = mock(AgentSecurityService.class);
+        String retrospectiveDocumentId;
+        try (AgentStore store = AgentStore.file(temp.resolve("retrospective").toString())) {
+            store.sessions().save(new com.rover.agent.core.model.Session("s1", "alice", "orders", null,
+                    com.rover.agent.core.model.SessionStatus.ACTIVE, 1, 9, java.util.List.of("i1"), scope, "dev"));
+            store.incidents().save(new com.rover.agent.core.model.Incident("i1", "s1",
+                    com.rover.agent.core.model.IncidentOrigin.ALERT, "/orders",
+                    com.rover.agent.core.model.IncidentStatus.RESOLVED,
+                    com.rover.agent.core.model.ResourceTarget.route("/orders"),
+                    com.rover.agent.core.model.TimeRange.unspecified(), "resolved", 1, 9, java.util.List.of()));
+            store.sessions().save(new com.rover.agent.core.model.Session("s1", "alice", "orders", "i1",
+                    com.rover.agent.core.model.SessionStatus.ACTIVE, 1, 9, java.util.List.of("i1"), scope, "dev"));
+            var controller = new KnowledgeDocumentController(store, control, security);
+            var author = new UsernamePasswordAuthenticationToken("alice", "n/a");
+            var created = controller.createRetrospective("i1", java.util.Map.of("summary", "5xx",
+                    "rootCause", "bad deploy", "resolution", "rollback", "outcome", "recovered",
+                    "failureModes", java.util.List.of("missing gate")), author);
+            assertEquals(201, created.getStatusCode().value());
+            var draft = (KnowledgeDocumentVersion) created.getBody();
+            retrospectiveDocumentId = draft.documentId();
+            assertEquals(KnowledgeDocumentVersion.Status.DRAFT, draft.status());
+            assertEquals("i1", draft.sourceIncidentId());
+            assertEquals(200, controller.sourceIncident(draft.documentId(), draft.version(),
+                    new UsernamePasswordAuthenticationToken("reviewer", "n/a")).getStatusCode().value());
+            assertEquals(403, ((org.springframework.http.ResponseEntity<?>) controller.approve(
+                    draft.documentId(), draft.version(), author)).getStatusCode().value());
+            var rejected = (org.springframework.http.ResponseEntity<?>) controller.approve(draft.documentId(), draft.version(),
+                    java.util.Map.of("decision", "REJECTED"), new UsernamePasswordAuthenticationToken("reviewer", "n/a"));
+            assertEquals(200, rejected.getStatusCode().value());
+            assertEquals(KnowledgeDocumentVersion.Status.REJECTED, ((KnowledgeDocumentVersion) rejected.getBody()).status());
+            var createdAgain = controller.createRetrospective("i1", java.util.Map.of("summary", "5xx",
+                    "rootCause", "bad deploy", "resolution", "rollback", "outcome", "recovered",
+                    "failureModes", java.util.List.of("missing gate")), author);
+            assertEquals(201, createdAgain.getStatusCode().value());
+            assertEquals(2, ((KnowledgeDocumentController.RetrospectiveList) controller.retrospectives("i1",
+                    new UsernamePasswordAuthenticationToken("reviewer", "n/a")).getBody()).records().size());
+            assertTrue(store.knowledgeDocuments().approved(scope, System.currentTimeMillis(), 20).stream()
+                    .noneMatch(document -> document.documentId().equals(draft.documentId())));
+            assertEquals("bad deploy", store.knowledgeDocuments().incidentDraft(draft.documentId()).orElseThrow().rootCause());
+        }
+        try (AgentStore reopened = AgentStore.file(temp.resolve("retrospective").toString())) {
+            assertEquals("bad deploy", reopened.knowledgeDocuments().incidentDraft(retrospectiveDocumentId).orElseThrow().rootCause());
+            assertEquals(KnowledgeDocumentVersion.Status.REJECTED, reopened.knowledgeDocuments()
+                    .find(retrospectiveDocumentId, 1).orElseThrow().status());
+        }
+    }
+
     @Test void resourceNoteCanBeCorrectedOrRetractedOnlyForTheCurrentManagedRoute() throws Exception {
         var scope = new ResourceScope("org", "team", "dev");
         RouteControlPort control = mock(RouteControlPort.class);

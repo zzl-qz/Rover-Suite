@@ -9,6 +9,12 @@ import java.util.Optional;
 public interface KnowledgeDocumentRepository {
     KnowledgeDocumentVersion createDraft(String documentId, ResourceScope scope, String title, String content,
             List<String> keywords, String sourceVersion, String actor, long expiresAtMillis);
+    default KnowledgeDocumentVersion createDraft(String documentId, ResourceScope scope, String title, String content,
+            List<String> keywords, String sourceVersion, String sourceIncidentId, String actor, long expiresAtMillis) {
+        return createDraft(documentId, scope, title, content, keywords, sourceVersion, actor, expiresAtMillis);
+    }
+    KnowledgeDocumentVersion createIncidentDraft(com.rover.agent.core.model.IncidentRetrospective retrospective);
+    Optional<com.rover.agent.core.model.IncidentRetrospective> incidentDraft(String documentId);
     Optional<KnowledgeDocumentVersion> find(String documentId, int version);
     List<KnowledgeDocumentVersion> list(ResourceScope scope);
     List<KnowledgeDocumentVersion> approved(ResourceScope scope, long asOfMillis, int limit);

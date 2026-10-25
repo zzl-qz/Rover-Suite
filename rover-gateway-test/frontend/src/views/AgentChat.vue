@@ -12,6 +12,56 @@
 
     <section class="chat-panel">
       <header class="chat-head"><div><span class="eyebrow">LIVE INVESTIGATION</span><h2>{{ activeSession?.title || '运维调查' }}</h2></div><span class="connection"><i></i>{{ isStreaming ? '正在生成' : isSubmitting ? '正在提交' : '就绪' }}</span><a class="exit-link" href="/">返回网关测试</a></header>
+      <section v-if="workspace?.incidents?.length" class="case-bar" aria-label="处置案例时间线">
+        <label for="case-incident">处置案例</label>
+        <select id="case-incident" v-model="selectedIncidentId" @change="caseRecord = null; caseError = ''">
+          <option v-for="incident in caseIncidents" :key="incident.incidentId" :value="incident.incidentId">
+            {{ incident.title || '未命名事件' }} · {{ formatTime(incident.createdAtMillis) }}
+          </option>
+        </select>
+        <button type="button" :disabled="!selectedIncidentId || isCaseLoading" @click="loadCase">{{ isCaseLoading ? '读取中…' : '查看时间线' }}</button>
+        <span v-if="caseError" class="case-error">{{ caseError }}</span>
+      </section>
+      <section v-if="caseRecord" class="case-timeline" aria-live="polite">
+        <div class="case-title"><b>{{ caseRecord.incident.title || '处置案例' }}</b><span>{{ caseRecord.incident.status === 'RESOLVED' ? '已得出结论' : caseRecord.incident.status === 'INVESTIGATING' ? '调查中' : '待调查' }}</span></div>
+        <p v-if="caseRecord.incident.summary" class="case-summary">{{ caseRecord.incident.summary }}</p>
+        <p v-if="caseRecord.truncated || caseRecord.retrospectives?.truncated" class="case-summary">为控制查询范围，仅展示最近 500 条记录；完整审计仍保存在持久记录中。</p>
+        <ol v-if="caseRecord.timeline.length" class="timeline-list">
+          <li v-for="event in caseRecord.timeline" :key="`${event.kind}-${event.auditId || event.actionId || event.taskId}`" class="timeline-item">
+            <time>{{ formatTime(event.lastUpdatedAtMillis || event.occurredAtMillis) }}<small v-if="event.lastUpdatedAtMillis && event.lastUpdatedAtMillis !== event.occurredAtMillis">创建于 {{ formatTime(event.occurredAtMillis) }}</small></time>
+            <div><b>{{ event.kind === 'INVESTIGATION' ? '调查' : event.kind === 'TASK_EVENT' ? '调查状态' : event.kind === 'CONFIG_ACTION' ? '配置动作' : event.kind === 'AUDIT' ? '状态记录' : '处置动作' }} · {{ event.kind === 'AUDIT' ? caseAuditStatus(event.status) : event.kind === 'TASK_EVENT' ? taskEventStatus(event.status) : caseStatus(event.status) }}</b><p>{{ event.summary || '无摘要' }}</p>
+              <small v-if="event.kind === 'ACTION' && caseActionFor(event)?.applyEffect">执行效果：{{ caseOutcome(caseActionFor(event).applyEffect.outcome) }}</small>
+              <small v-if="event.kind === 'ACTION' && caseActionFor(event)?.compensationEffect">回滚效果：{{ caseOutcome(caseActionFor(event).compensationEffect.outcome) }}</small>
+            <small v-if="event.kind === 'CONFIG_ACTION'">配置结果：{{ caseStatus(caseRecord.configActions.find((action: any) => action.actionId === event.actionId)?.status) }}</small>
+            </div>
+          </li>
+        </ol>
+        <p v-else class="empty-note">该事件还没有调查或处置记录。</p>
+      </section>
+      <section v-if="caseRecord" class="retrospective-panel" aria-label="处置复盘">
+        <div class="case-title"><b>处置复盘</b></div>
+        <p v-if="caseError" class="case-error">{{ caseError }}</p>
+        <button v-if="apiReady" type="button" :disabled="isCaseLoading" @click="loadRetrospectives">刷新审核状态</button>
+        <p v-if="!apiReady" class="empty-note">登录后可创建和审核复盘草稿</p>
+        <ul v-if="caseRecord.retrospectives?.records?.length" class="retrospective-list">
+          <li v-for="review in caseRecord.retrospectives.records" :key="review.document.documentId">
+            <b>{{ review.document.title }} · {{ caseReviewStatus(review.document.status) }}</b>
+            <p v-if="review.retrospective">{{ review.retrospective.summary }} · 根因：{{ review.retrospective.rootCause }}</p>
+            <a :href="`/api/agent/knowledge/documents/${encodeURIComponent(review.document.documentId)}/versions/${review.document.version}/source-incident`" target="_blank" rel="noreferrer">回看来源案例</a>
+            <button v-if="apiReady && review.document.status === 'DRAFT'" type="button" :disabled="isReviewingCase" @click="reviewCase(review.document, false)">批准</button>
+            <button v-if="apiReady && review.document.status === 'DRAFT'" type="button" :disabled="isReviewingCase" @click="reviewCase(review.document, true)">驳回</button>
+          </li>
+        </ul>
+        <template v-if="apiReady && (!caseRecord.retrospectives?.records?.length || caseRecord.retrospectives.records.every((review: any) => review.document.status === 'REJECTED' || review.document.status === 'REVOKED'))">
+          <p>审核通过后才会进入已批准知识；创建人不能审核自己的复盘。</p>
+          <label>现象摘要<input v-model="retrospectiveForm.summary" maxlength="1000"></label>
+          <label>根因<input v-model="retrospectiveForm.rootCause" maxlength="2000"></label>
+          <label>处置过程<input v-model="retrospectiveForm.resolution" maxlength="2000"></label>
+          <label>恢复效果<input v-model="retrospectiveForm.outcome" maxlength="1000"></label>
+          <label>失败经验（每行一项）<textarea v-model="retrospectiveForm.failureModes" maxlength="5000"></textarea></label>
+          <button type="button" :disabled="isReviewingCase" @click="createRetrospective">{{ isReviewingCase ? '保存中…' : '保存复盘草稿' }}</button>
+        </template>
+      </section>
       <div ref="scrollArea" class="message-list" @scroll="onScroll">
         <div v-if="!items.length" class="welcome"><span>R</span><h3>从一个运维问题开始</h3><p>描述异常现象、路由或服务，Agent 会整理调查线索。</p></div>
         <template v-for="item in items" :key="item.id">
@@ -42,6 +92,12 @@ type ApiError = Error & { status?: number; body?: any }
 const sessions = ref<Session[]>([])
 const activeSessionId = ref('')
 const workspace = ref<any>(null)
+const selectedIncidentId = ref('')
+const caseRecord = ref<any>(null)
+const caseError = ref('')
+const isCaseLoading = ref(false)
+const isReviewingCase = ref(false)
+const retrospectiveForm = ref({ summary: '', rootCause: '', resolution: '', outcome: '', failureModes: '' })
 const draft = ref('')
 const items = ref<TimelineItem[]>([])
 const loadError = ref('')
@@ -59,6 +115,7 @@ let scrollFrame = 0
 let destroyed = false
 
 const activeSession = computed(() => sessions.value.find(session => session.sessionId === activeSessionId.value))
+const caseIncidents = computed(() => [...(workspace.value?.incidents || [])].sort((a: any, b: any) => b.createdAtMillis - a.createdAtMillis))
 
 function cookieCsrfHeaders() {
   const match = document.cookie.match(/(?:^|;\s*)XSRF-TOKEN=([^;]*)/)
@@ -137,6 +194,9 @@ async function loadSession(sessionId: string, initial = false) {
     const result = await request(`/sessions/${encodeURIComponent(sessionId)}/workspace?limit=50`)
     if (activeSessionId.value !== sessionId || destroyed) return
     workspace.value = result
+    caseRecord.value = null
+    caseError.value = ''
+    selectedIncidentId.value = result.activeIncident?.incidentId || caseIncidents.value[0]?.incidentId || ''
     const localItems = currentItems.filter((item): item is Extract<TimelineItem, { kind: 'stream' }> => item.kind === 'stream' && item.id.startsWith('stream-'))
     const localTaskItems = localItems
     const timeline = sortedMessages(result.messages, result.tasks)
@@ -154,6 +214,91 @@ async function loadSession(sessionId: string, initial = false) {
   } catch (error) {
     if (activeSessionId.value === sessionId) loadError.value = `会话加载失败：${(error as Error).message}`
   }
+}
+
+async function loadCase() {
+  if (!selectedIncidentId.value || isCaseLoading.value) return
+  isCaseLoading.value = true
+  caseError.value = ''
+  try { await refreshSelectedCase() }
+  catch (error) { caseError.value = `案例读取失败：${(error as Error).message}` }
+  finally { isCaseLoading.value = false }
+}
+
+function caseActionFor(event: any) { return caseRecord.value?.actions?.find((record: any) => record.action.actionId === event.actionId) }
+function caseStatus(value?: string) {
+  const labels: Record<string, string> = { OPEN: '待调查', INVESTIGATING: '调查中', RESOLVED: '已得出结论', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消', INTERRUPTED: '已中断', PENDING: '待处理', PENDING_APPROVAL: '待审批', QUEUED: '已排队', EXECUTING: '执行中', VERIFYING: '验证中', SUCCESS: '已完成', ROLLED_BACK: '已回滚', PRECONDITION_FAILED: '前置条件失败', ROLLBACK_PRECONDITION_FAILED: '回滚前置条件失败', UNCERTAIN: '结果待确认', RECONCILING: '对账中', ROLLBACK_QUEUED: '回滚已排队', ROLLING_BACK: '回滚中', REJECTED: '已拒绝', SUPERSEDED: '已被新计划替代', APPLIED: '已应用', UNKNOWN: '结果未知', RECONCILE_QUEUED: '等待对账', EXPIRED: '已过期' }
+  return value ? labels[value] || value : '无结果'
+}
+function caseOutcome(value?: string) {
+  const labels: Record<string, string> = { RECOVERED: '已恢复', IMPROVED: '有改善', NOT_RECOVERED: '未恢复', WORSENED: '情况恶化', BASELINE_ALREADY_HEALTHY: '执行前已健康', INSUFFICIENT_SAMPLE: '样本不足', MISSING_DATA: '缺少数据', CONTAMINATED: '观测受其他变更影响', NOT_APPLIED: '动作未生效', PENDING: '等待观测' }
+  return value ? labels[value] || value : '无结果'
+}
+function caseAuditStatus(value?: string) {
+  return value?.startsWith('ACTION_') ? `处置动作${caseStatus(value.slice('ACTION_'.length))}`
+    : value?.startsWith('GATEWAY_CONFIG_ACTION_') ? `配置动作${caseStatus(value.slice('GATEWAY_CONFIG_ACTION_'.length))}`
+    : value || '状态变更'
+}
+function taskEventStatus(value?: string) {
+  const labels: Record<string, string> = { TASK_CREATED: '调查已登记', TASK_STARTED: '调查开始', STEP_STARTED: '调查步骤开始', STEP_COMPLETED: '调查步骤完成', STEP_FAILED: '调查步骤失败', EVIDENCE_ADDED: '证据已整理', CLARIFICATION_REQUIRED: '等待补充信息', TASK_COMPLETED: '调查完成', TASK_FAILED: '调查失败', TASK_CANCELLED: '调查已取消' }
+  return value ? labels[value] || value : '调查状态变化'
+}
+function caseReviewStatus(value?: string) {
+  return ({ DRAFT: '待审核', APPROVED: '已批准', REJECTED: '已驳回', REVOKED: '已撤回' } as Record<string, string>)[value || ''] || value || ''
+}
+
+async function refreshSelectedCase(includeRetrospectives = false) {
+  caseRecord.value = await request(`/incidents/${encodeURIComponent(selectedIncidentId.value)}/case`)
+  if (includeRetrospectives) {
+    try { caseRecord.value.retrospectives = await request(`/knowledge/documents/incidents/${encodeURIComponent(selectedIncidentId.value)}/retrospectives`) }
+    catch { caseRecord.value.retrospectives = { records: [], truncated: false } }
+  }
+}
+async function loadRetrospectives() {
+  if (!apiReady.value || !selectedIncidentId.value) return
+  try {
+    const records = await request(`/knowledge/documents/incidents/${encodeURIComponent(selectedIncidentId.value)}/retrospectives`)
+    if (caseRecord.value) caseRecord.value.retrospectives = records
+  } catch { if (caseRecord.value) caseRecord.value.retrospectives = { records: [], truncated: false } }
+}
+async function createRetrospective() {
+  if (!selectedIncidentId.value || isReviewingCase.value) return
+  const form = retrospectiveForm.value
+  if (![form.summary, form.rootCause, form.resolution, form.outcome].every(value => value.trim())) {
+    caseError.value = '请填写现象、根因、处置过程和恢复效果'
+    return
+  }
+  isReviewingCase.value = true
+  caseError.value = ''
+  try {
+    await fetch(`/api/agent/knowledge/documents/incidents/${encodeURIComponent(selectedIncidentId.value)}/retrospectives`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...await csrfHeaders() },
+      body: JSON.stringify({ summary: form.summary, rootCause: form.rootCause, resolution: form.resolution, outcome: form.outcome,
+        failureModes: form.failureModes.split(/\r?\n/).map(value => value.trim()).filter(Boolean) })
+    }).then(async response => {
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `HTTP ${response.status}`)
+      return response.json()
+    })
+    await refreshSelectedCase(true)
+    retrospectiveForm.value = { summary: '', rootCause: '', resolution: '', outcome: '', failureModes: '' }
+  } catch (error) { caseError.value = `复盘草稿保存失败：${(error as Error).message}` }
+  finally { isReviewingCase.value = false }
+}
+async function reviewCase(review: any, reject: boolean) {
+  if (!review || isReviewingCase.value) return
+  isReviewingCase.value = true
+  caseError.value = ''
+  try {
+    await fetch(`/api/agent/knowledge/documents/${encodeURIComponent(review.documentId)}/versions/${review.version}/approve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', ...await csrfHeaders() },
+      body: JSON.stringify({ decision: reject ? 'REJECTED' : 'APPROVED' })
+    }).then(async response => {
+      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `HTTP ${response.status}`)
+      return response.json()
+    })
+    await refreshSelectedCase(true)
+  } catch (error) { caseError.value = `复盘审核失败：${(error as Error).message}` }
+  finally { isReviewingCase.value = false }
 }
 
 async function switchSession(sessionId: string) {
@@ -359,6 +504,25 @@ button, textarea { font: inherit; }
 .session-row small, .empty-note { color: #879087; font-size: 11px; }
 .chat-panel { display: flex; min-width: 0; min-height: 0; flex-direction: column; background: #fff; }
 .chat-head { display: flex; height: 69px; flex: 0 0 auto; align-items: center; justify-content: space-between; padding: 0 24px; border-bottom: 1px solid #e6e9e5; }
+.case-bar { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; padding: 9px 24px; border-bottom: 1px solid #edf0ec; background: #fafbf9; color: #566257; font-size: 11px; }
+.case-bar select { max-width: min(430px, 55vw); min-width: 120px; padding: 6px 8px; border: 1px solid #d8ded6; border-radius: 4px; background: #fff; color: #364138; font: inherit; }
+.case-bar button { padding: 6px 10px; border: 1px solid #647c67; border-radius: 4px; background: #647c67; color: white; font: inherit; cursor: pointer; }
+.case-bar button:disabled { opacity: .55; cursor: wait; }
+.case-error { color: #b45353; }
+.case-timeline { max-height: 260px; flex: 0 0 auto; overflow: auto; padding: 13px 24px 10px; border-bottom: 1px solid #e6e9e5; background: #fbfcfa; }
+.retrospective-panel { display: grid; gap: 8px; padding: 12px 24px; border-bottom: 1px solid #e6e9e5; background: #fff; color: #667168; font-size: 11px; }
+.retrospective-panel label { display: grid; gap: 4px; }
+.retrospective-panel input, .retrospective-panel textarea { width: 100%; padding: 6px 8px; border: 1px solid #d8ded6; border-radius: 4px; font: inherit; }
+.retrospective-panel button { justify-self: start; padding: 6px 10px; border: 1px solid #647c67; border-radius: 4px; background: #647c67; color: white; font: inherit; cursor: pointer; }
+.retrospective-panel button:disabled { opacity: .55; cursor: wait; }
+.case-title { display: flex; justify-content: space-between; gap: 12px; color: #354039; font-size: 12px; }
+.case-title span, .timeline-item small { color: #788178; font-size: 10px; }
+.case-summary { margin: 6px 0; color: #667168; font-size: 11px; }
+.timeline-list { display: grid; gap: 7px; margin: 9px 0 0; padding: 0 0 0 8px; list-style: none; }
+.timeline-item { display: grid; grid-template-columns: 105px minmax(0, 1fr); gap: 10px; padding-left: 9px; border-left: 2px solid #d4ded2; color: #566257; font-size: 11px; }
+.timeline-item time { color: #899288; font-size: 10px; }
+.timeline-item p { margin: 3px 0; white-space: pre-wrap; }
+.timeline-item small { display: block; line-height: 1.5; }
 .chat-head h2 { margin: 3px 0 0; font-size: 15px; font-weight: 620; }
 .exit-link { margin-left: 18px; color: #647c67; font-size: 11px; text-decoration: none; }
 .connection { display: flex; align-items: center; gap: 7px; color: #788178; font-size: 11px; }
@@ -374,5 +538,5 @@ button, textarea { font: inherit; }
 .error-line { color: #b45353; font-size: 12px; line-height: 1.6; }
 .auth-line { color: #805b32; font-size: 11px; line-height: 1.6; }
 .auth-line a { color: #536b57; }
-@media (max-width: 760px) { .workspace { grid-template-columns: 1fr; width: 100%; height: 100dvh; min-height: 0; margin: 0; border: 0; } .sessions { display: flex; align-items: center; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 8px 12px; border-right: 0; border-bottom: 1px solid #e2e5e0; } .sessions-head { flex: 0 0 auto; gap: 8px; margin: 0 8px 0 0; } .sessions-head small { display: none; } .sessions-head h1 { font-size: 13px; } .sessions-head button { width: 28px; height: 28px; } .session-row { width: 150px; flex: 0 0 auto; padding: 8px; } .session-row small { display: none; } .chat-head { height: 58px; padding: 0 16px; } .message-list { padding: 20px 16px; } .composer-wrap { padding: 8px 12px 12px; } }
+@media (max-width: 760px) { .workspace { grid-template-columns: 1fr; width: 100%; height: 100dvh; min-height: 0; margin: 0; border: 0; } .sessions { display: flex; align-items: center; gap: 8px; overflow-x: auto; overflow-y: hidden; padding: 8px 12px; border-right: 0; border-bottom: 1px solid #e2e5e0; } .sessions-head { flex: 0 0 auto; gap: 8px; margin: 0 8px 0 0; } .sessions-head small { display: none; } .sessions-head h1 { font-size: 13px; } .sessions-head button { width: 28px; height: 28px; } .session-row { width: 150px; flex: 0 0 auto; padding: 8px; } .session-row small { display: none; } .chat-head { height: 58px; padding: 0 16px; } .case-bar { flex-wrap: wrap; padding: 8px 12px; } .case-bar select { flex: 1; max-width: none; } .case-timeline { max-height: 220px; padding: 10px 12px; } .retrospective-panel { padding: 10px 12px; } .timeline-item { grid-template-columns: 78px minmax(0, 1fr); gap: 6px; } .message-list { padding: 20px 16px; } .composer-wrap { padding: 8px 12px 12px; } }
 </style>

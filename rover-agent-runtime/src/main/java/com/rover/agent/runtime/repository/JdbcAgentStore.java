@@ -33,6 +33,7 @@ import com.rover.agent.core.model.Evidence;
 import com.rover.agent.core.model.EvidenceType;
 import com.rover.agent.core.model.Hypothesis;
 import com.rover.agent.core.model.Incident;
+import com.rover.agent.core.model.IncidentRetrospective;
 import com.rover.agent.core.model.IncidentOrigin;
 import com.rover.agent.core.model.IncidentStatus;
 import com.rover.agent.core.model.InvestigationReport;
@@ -476,6 +477,100 @@ public final class JdbcAgentStore implements AutoCloseable {
                 row -> new Audit(row.getLong("audit_id"), row.getString("event_kind"), row.getString("aggregate_id"),
                         row.getString("actor"), row.getString("resource_namespace"), row.getString("payload_json"), row.getLong("created_at")),
                 namespace, after, Math.max(1, Math.min(1000, limit)));
+    }
+
+    /** Bounded audit history for case actions and scoped retrospective review decisions. */
+    public synchronized List<Audit> caseAudit(String incidentId, String sessionId, String namespace,
+                                               com.rover.agent.core.model.ResourceScope scope, int limit) {
+        if (incidentId == null || incidentId.isBlank() || sessionId == null || sessionId.isBlank()
+                || namespace == null || namespace.isBlank() || scope == null || limit < 1 || limit > 1000) {
+            throw new IllegalArgumentException("case audit query is invalid");
+        }
+        return query("SELECT a.* FROM agent_audit a WHERE ((a.resource_namespace=? AND ("
+                        + "a.aggregate_id IN (SELECT action_id FROM agent_action WHERE session_id=? AND incident_id=?) "
+                        + "OR a.aggregate_id IN (SELECT action_id FROM agent_gateway_config_action WHERE session_id=? AND incident_id=?))) "
+                        + "OR EXISTS (SELECT 1 FROM agent_incident_retrospective r JOIN agent_knowledge_document k ON k.document_id=r.document_id "
+                        + "WHERE r.incident_id=? AND k.organization_id=? AND k.team_id=? AND k.environment_id=? "
+                        + "AND a.resource_namespace=k.environment_id AND ("
+                        + "(a.aggregate_id=r.incident_id AND a.event_kind='INCIDENT_RETROSPECTIVE_DRAFT_CREATED') OR "
+                        + "(a.aggregate_id LIKE CONCAT(r.document_id, ':%') AND a.event_kind IN ('KNOWLEDGE_APPROVED','KNOWLEDGE_REJECTED','KNOWLEDGE_REVOKED'))))) "
+                        + "ORDER BY a.audit_id DESC LIMIT ?",
+                row -> new Audit(row.getLong("audit_id"), row.getString("event_kind"), row.getString("aggregate_id"),
+                        row.getString("actor"), row.getString("resource_namespace"), row.getString("payload_json"), row.getLong("created_at")),
+                namespace, sessionId, incidentId, sessionId, incidentId, incidentId, scope.organizationId(),
+                scope.teamId(), scope.environmentId(), limit).stream()
+                .sorted(java.util.Comparator.comparingLong(Audit::createdAtMillis).thenComparingLong(Audit::id)).toList();
+    }
+
+    public synchronized List<com.rover.agent.core.event.TaskEvent> caseTaskEvents(String incidentId, String sessionId, int limit) {
+        if (incidentId == null || incidentId.isBlank() || sessionId == null || sessionId.isBlank()
+                || limit < 1 || limit > 1000) { throw new IllegalArgumentException("case task event query is invalid"); }
+        List<com.rover.agent.core.event.TaskEventType> lifecycleTypes = java.util.Arrays.stream(com.rover.agent.core.event.TaskEventType.values())
+                .filter(type -> type != com.rover.agent.core.event.TaskEventType.SNAPSHOT
+                        && type != com.rover.agent.core.event.TaskEventType.ANALYSIS_DELTA
+                        && type != com.rover.agent.core.event.TaskEventType.THINKING_DELTA).toList();
+        String filter = lifecycleTypes.stream().map(type -> "?").collect(java.util.stream.Collectors.joining(","));
+        Object[] args = new Object[lifecycleTypes.size() + 3];
+        args[0] = incidentId;
+        args[1] = sessionId;
+        for (int i = 0; i < lifecycleTypes.size(); i++) { args[i + 2] = lifecycleTypes.get(i).name(); }
+        args[args.length - 1] = limit;
+        return query("SELECT o.event_json FROM agent_task_outbox o JOIN agent_task t ON t.task_id=o.task_id "
+                        + "WHERE t.incident_id=? AND t.session_id=? AND o.event_type IN (" + filter + " ) "
+                        + "ORDER BY o.created_at DESC,o.task_id DESC,o.event_id DESC LIMIT ?",
+                row -> fromJson(row.getString(1), com.rover.agent.core.event.TaskEvent.class), args)
+                .stream().sorted(java.util.Comparator.comparingLong(com.rover.agent.core.event.TaskEvent::timestampMillis)
+                        .thenComparingLong(com.rover.agent.core.event.TaskEvent::eventId)).toList();
+    }
+
+    public synchronized List<TaskView> caseTasks(String incidentId, String sessionId, int limit) {
+        if (incidentId == null || incidentId.isBlank() || sessionId == null || sessionId.isBlank()
+                || limit < 1 || limit > 1000) { throw new IllegalArgumentException("case task query is invalid"); }
+        return assembleAll(query("SELECT * FROM agent_task WHERE incident_id=? AND session_id=? "
+                        + "ORDER BY created_at DESC,task_id DESC LIMIT ?", JdbcAgentStore::readTaskRow,
+                incidentId, sessionId, limit)).stream()
+                .sorted(java.util.Comparator.comparingLong(TaskView::createdAtMillis).thenComparing(TaskView::taskId)).toList();
+    }
+
+    public synchronized List<AgentAction> caseActions(String incidentId, String sessionId, int limit) {
+        if (incidentId == null || incidentId.isBlank() || sessionId == null || sessionId.isBlank()
+                || limit < 1 || limit > 1000) { throw new IllegalArgumentException("case action query is invalid"); }
+        return query("SELECT * FROM agent_action WHERE incident_id=? AND session_id=? "
+                        + "ORDER BY created_at DESC,action_id DESC LIMIT ?", this::readActionRow, incidentId, sessionId, limit)
+                .stream().sorted(java.util.Comparator.comparingLong(AgentAction::createdAtMillis).thenComparing(AgentAction::actionId)).toList();
+    }
+
+    public synchronized List<GatewayConfigAction> caseConfigActions(String incidentId, String sessionId, int limit) {
+        if (incidentId == null || incidentId.isBlank() || sessionId == null || sessionId.isBlank()
+                || limit < 1 || limit > 1000) { throw new IllegalArgumentException("case config action query is invalid"); }
+        return query("SELECT * FROM agent_gateway_config_action WHERE incident_id=? AND session_id=? "
+                        + "ORDER BY created_at DESC,action_id DESC LIMIT ?", JdbcAgentStore::readGatewayConfigAction, incidentId, sessionId, limit)
+                .stream().sorted(java.util.Comparator.comparingLong(GatewayConfigAction::createdAtMillis)
+                        .thenComparing(GatewayConfigAction::actionId)).toList();
+    }
+
+    public synchronized List<KnowledgeDocumentVersion> caseRetrospectives(
+            com.rover.agent.core.model.ResourceScope scope, String incidentId, int limit) {
+        if (scope == null || incidentId == null || incidentId.isBlank() || limit < 1 || limit > 1000) {
+            throw new IllegalArgumentException("case retrospective query is invalid");
+        }
+        return query("SELECT k.payload_json FROM agent_knowledge_document k JOIN agent_incident_retrospective r "
+                        + "ON r.document_id=k.document_id WHERE r.incident_id=? AND k.organization_id=? "
+                        + "AND k.team_id=? AND k.environment_id=? ORDER BY k.created_at DESC,k.document_id,k.document_version DESC LIMIT ?",
+                row -> fromJson(row.getString(1), KnowledgeDocumentVersion.class), incidentId, scope.organizationId(),
+                scope.teamId(), scope.environmentId(), limit);
+    }
+
+    public synchronized List<IncidentRetrospective> caseRetrospectiveDrafts(
+            com.rover.agent.core.model.ResourceScope scope, String incidentId, int limit) {
+        if (scope == null || incidentId == null || incidentId.isBlank() || limit < 1 || limit > 1000) {
+            throw new IllegalArgumentException("case retrospective query is invalid");
+        }
+        return query("SELECT r.payload_json FROM agent_incident_retrospective r JOIN agent_knowledge_document k "
+                        + "ON k.document_id=r.document_id WHERE r.incident_id=? AND k.organization_id=? "
+                        + "AND k.team_id=? AND k.environment_id=? ORDER BY r.created_at DESC,r.document_id LIMIT ?",
+                row -> fromJson(row.getString(1), IncidentRetrospective.class), incidentId, scope.organizationId(),
+                scope.teamId(), scope.environmentId(), limit);
     }
 
     /** H2 的在线一致性备份；调用者只能传服务端配置的备份路径。 */
@@ -930,8 +1025,8 @@ public final class JdbcAgentStore implements AutoCloseable {
                         writeSteps(task);
                         writeEvidence(task.taskId(), task.evidence());
                     }
-                    run("INSERT INTO agent_task_outbox (task_id,event_id,event_json,created_at) VALUES(?,?,?,?)",
-                            task.taskId(), event.eventId(), toJson(event), event.timestampMillis());
+                    run("INSERT INTO agent_task_outbox (task_id,event_id,event_type,event_json,created_at) VALUES(?,?,?,?,?)",
+                            task.taskId(), event.eventId(), event.type().name(), toJson(event), event.timestampMillis());
                     var previous = streamSnapshot(task.taskId()).orElse(new com.rover.agent.core.event.TaskSnapshot(task, "", 0, ""));
                     String text = event.payload() instanceof Map<?,?> map ? String.valueOf(map.getOrDefault("text", null)) : "";
                     String analysis = previous.analysis() + (event.type() == com.rover.agent.core.event.TaskEventType.ANALYSIS_DELTA ? text : "");
@@ -1343,6 +1438,11 @@ public final class JdbcAgentStore implements AutoCloseable {
     private final class KnowledgeDocuments implements KnowledgeDocumentRepository {
         @Override public KnowledgeDocumentVersion createDraft(String id, com.rover.agent.core.model.ResourceScope scope,
                 String title, String content, List<String> keywords, String sourceVersion, String actor, long expiresAtMillis) {
+            return createDraft(id, scope, title, content, keywords, sourceVersion, null, actor, expiresAtMillis);
+        }
+        @Override public KnowledgeDocumentVersion createDraft(String id, com.rover.agent.core.model.ResourceScope scope,
+                String title, String content, List<String> keywords, String sourceVersion, String sourceIncidentId,
+                String actor, long expiresAtMillis) {
             synchronized (JdbcAgentStore.this) {
                 return inTransaction(() -> {
                     var history = queryOne("SELECT payload_json FROM agent_knowledge_document WHERE document_id=? ORDER BY document_version DESC LIMIT 1",
@@ -1358,15 +1458,50 @@ public final class JdbcAgentStore implements AutoCloseable {
                     }
                     int version = history == null ? 1 : history.version() + 1;
                     var draft = new KnowledgeDocumentVersion(id, version, scope, title, content, keywords, sourceVersion,
-                            actor, now, expiresAtMillis, KnowledgeDocumentVersion.Status.DRAFT, null, 0, null, 0);
+                            actor, now, expiresAtMillis, KnowledgeDocumentVersion.Status.DRAFT, sourceIncidentId, null, 0, null, 0);
                     run("INSERT INTO agent_knowledge_document(document_id,document_version,organization_id,team_id,environment_id,status,created_at,expires_at,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",
                             id, version, scope.organizationId(), scope.teamId(), scope.environmentId(), draft.status().name(),
                             now, expiresAtMillis, toJson(draft));
                     appendAudit("KNOWLEDGE_DRAFT_CREATED", id + ":" + version, actor, scope.environmentId(),
                             Map.of("title", title, "sourceVersion", sourceVersion, "status", draft.status().name(),
-                                    "expiresAtMillis", expiresAtMillis));
+                                    "expiresAtMillis", expiresAtMillis,
+                                    "sourceIncidentId", sourceIncidentId == null ? "" : sourceIncidentId));
                     return draft;
                 });
+            }
+        }
+        @Override public KnowledgeDocumentVersion createIncidentDraft(IncidentRetrospective retrospective) {
+            synchronized (JdbcAgentStore.this) {
+                return inTransaction(() -> {
+                    if (queryOne("SELECT document_id FROM agent_incident_retrospective WHERE document_id=?",
+                            row -> row.getString(1), retrospective.documentId()).isPresent()) {
+                        throw new IllegalStateException("案例复盘标识重复，请重新提交");
+                    }
+                    KnowledgeDocumentVersion draft = new KnowledgeDocumentVersion(retrospective.documentId(), 1,
+                            retrospective.scope(), retrospective.title(), retrospective.summary() + "\n\n根因："
+                                    + retrospective.rootCause() + "\n\n处置：" + retrospective.resolution()
+                                    + "\n\n效果：" + retrospective.outcome() + "\n\n失败经验："
+                                    + String.join("；", retrospective.failureModes()), retrospective.failureModes(),
+                            "incident:" + retrospective.incidentId(), retrospective.createdBy(),
+                            retrospective.createdAtMillis(), retrospective.expiresAtMillis(),
+                            KnowledgeDocumentVersion.Status.DRAFT, retrospective.incidentId(), null, 0, null, 0);
+                    run("INSERT INTO agent_knowledge_document(document_id,document_version,organization_id,team_id,environment_id,status,created_at,expires_at,payload_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                            draft.documentId(), draft.version(), draft.scope().organizationId(), draft.scope().teamId(),
+                            draft.scope().environmentId(), draft.status().name(), draft.createdAtMillis(),
+                            draft.expiresAtMillis(), toJson(draft));
+                    run("INSERT INTO agent_incident_retrospective(document_id,incident_id,created_by,created_at,payload_json) VALUES(?,?,?,?,?)",
+                            retrospective.documentId(), retrospective.incidentId(), retrospective.createdBy(),
+                            retrospective.createdAtMillis(), toJson(retrospective));
+                    appendAudit("INCIDENT_RETROSPECTIVE_DRAFT_CREATED", retrospective.incidentId(),
+                            retrospective.createdBy(), retrospective.scope().environmentId(), retrospective);
+                    return draft;
+                });
+            }
+        }
+        @Override public Optional<IncidentRetrospective> incidentDraft(String documentId) {
+            synchronized (JdbcAgentStore.this) {
+                return queryOne("SELECT payload_json FROM agent_incident_retrospective WHERE document_id=?",
+                        row -> fromJson(row.getString(1), IncidentRetrospective.class), documentId);
             }
         }
 
@@ -1404,12 +1539,21 @@ public final class JdbcAgentStore implements AutoCloseable {
                     if (!updated.documentId().equals(id) || updated.version() != version || !updated.scope().equals(current.scope())
                             || !updated.title().equals(current.title()) || !updated.content().equals(current.content())
                             || !updated.keywords().equals(current.keywords()) || !updated.sourceVersion().equals(current.sourceVersion())
+                            || !Objects.equals(updated.sourceIncidentId(), current.sourceIncidentId())
                             || !updated.createdBy().equals(current.createdBy()) || updated.createdAtMillis() != current.createdAtMillis()
                             || updated.expiresAtMillis() != current.expiresAtMillis()) throw new IllegalArgumentException("knowledge version is immutable");
+                    if (updated.status() == KnowledgeDocumentVersion.Status.APPROVED
+                            && updated.sourceIncidentId() != null
+                            && queryOne("SELECT document_id FROM agent_incident_retrospective WHERE document_id=? AND incident_id=?",
+                                    row -> row.getString(1), id, updated.sourceIncidentId()).isEmpty()) {
+                        throw new IllegalStateException("案例复盘来源记录缺失，不能批准");
+                    }
                     int changed = run("UPDATE agent_knowledge_document SET status=?,payload_json=? WHERE document_id=? AND document_version=? AND status=?",
                             updated.status().name(), toJson(updated), id, version, expected.name());
                     if (changed != 1) return Optional.empty();
-                    String actor = updated.status() == KnowledgeDocumentVersion.Status.APPROVED ? updated.reviewedBy() : updated.revokedBy();
+                    String actor = updated.status() == KnowledgeDocumentVersion.Status.APPROVED
+                            || updated.status() == KnowledgeDocumentVersion.Status.REJECTED
+                            ? updated.reviewedBy() : updated.revokedBy();
                     appendAudit("KNOWLEDGE_" + updated.status().name(), id + ":" + version, actor,
                             updated.scope().environmentId(), Map.of("title", updated.title(), "sourceVersion", updated.sourceVersion(), "status", updated.status().name()));
                     return Optional.of(updated);
@@ -2106,7 +2250,7 @@ public final class JdbcAgentStore implements AutoCloseable {
                                         + "resource_namespace TEXT, payload_json TEXT NOT NULL, created_at BIGINT NOT NULL)",
                                 "CREATE INDEX IF NOT EXISTS idx_agent_audit_aggregate ON agent_audit(aggregate_id,audit_id)",
                                 "CREATE TABLE IF NOT EXISTS agent_task_outbox (task_id VARCHAR(64) NOT NULL, event_id BIGINT NOT NULL, "
-                                        + "event_json TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(task_id,event_id))",
+                                        + "event_type VARCHAR(64) DEFAULT 'SNAPSHOT' NOT NULL, event_json TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(task_id,event_id))",
                                 "CREATE TABLE IF NOT EXISTS agent_task_stream (task_id VARCHAR(64) PRIMARY KEY, event_id BIGINT NOT NULL, analysis_text TEXT NOT NULL, thinking_text TEXT NOT NULL)"),
                         List.of(), List.of()),
                 new Migration(9, "single Admin durable read jobs and execution budget",
@@ -2248,6 +2392,22 @@ public final class JdbcAgentStore implements AutoCloseable {
                                 "ALTER TABLE resource_note ADD COLUMN IF NOT EXISTS reviewed_by VARCHAR(128)",
                                 "ALTER TABLE resource_note ADD COLUMN IF NOT EXISTS reviewed_at BIGINT DEFAULT 0 NOT NULL",
                                 "ALTER TABLE resource_note ADD COLUMN IF NOT EXISTS version BIGINT DEFAULT 1 NOT NULL"),
+                        List.of(), List.of()),
+                new Migration(23, "incident-linked reviewed retrospective drafts",
+                        List.of("CREATE TABLE IF NOT EXISTS agent_incident_retrospective (document_id VARCHAR(64) PRIMARY KEY, incident_id VARCHAR(64) NOT NULL, created_by VARCHAR(128) NOT NULL, created_at BIGINT NOT NULL, payload_json TEXT NOT NULL)",
+                                "CREATE UNIQUE INDEX IF NOT EXISTS idx_incident_retrospective_source ON agent_incident_retrospective(incident_id)"),
+                        List.of(), List.of()),
+                new Migration(24, "allow reviewed retrospective revisions per incident",
+                        List.of("DROP INDEX IF EXISTS idx_incident_retrospective_source",
+                                "CREATE INDEX IF NOT EXISTS idx_incident_retrospective_source ON agent_incident_retrospective(incident_id,created_at)"),
+                        List.of(), List.of()),
+                new Migration(25, "add retrospective review queue index",
+                        List.of("CREATE INDEX IF NOT EXISTS idx_knowledge_review_queue ON agent_knowledge_document(organization_id,team_id,environment_id,status,created_at)"),
+                        List.of(), List.of()),
+                new Migration(26, "store task event type for case projection",
+                        List.of("ALTER TABLE agent_task_outbox ADD COLUMN IF NOT EXISTS event_type VARCHAR(64) DEFAULT 'SNAPSHOT' NOT NULL",
+                                taskEventTypeBackfillSql(),
+                                "CREATE INDEX IF NOT EXISTS idx_agent_task_outbox_case ON agent_task_outbox(task_id,event_type,created_at,event_id)"),
                         List.of(), List.of()));
 
     private void migrate() throws SQLException {
@@ -2263,6 +2423,17 @@ public final class JdbcAgentStore implements AutoCloseable {
                 applyMigration(migration);
             }
         }
+    }
+
+    private static String taskEventTypeBackfillSql() {
+        StringBuilder sql = new StringBuilder("UPDATE agent_task_outbox SET event_type=CASE " );
+        for (com.rover.agent.core.event.TaskEventType type : com.rover.agent.core.event.TaskEventType.values()) {
+            if (type != com.rover.agent.core.event.TaskEventType.SNAPSHOT) {
+                sql.append("WHEN event_json LIKE '%\"type\":\"").append(type.name())
+                        .append("\"%' THEN '").append(type.name()).append("'");
+            }
+        }
+        return sql.append("ELSE event_type END WHERE event_type='SNAPSHOT'").toString();
     }
 
     private int currentVersion() throws SQLException {

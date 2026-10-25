@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.rover.agent.core.capability.AgentCapability;
 import com.rover.agent.core.journal.ResourceNotes;
 import com.rover.agent.core.model.AgentMessage;
+import com.rover.agent.core.model.ActionStatus;
+import com.rover.agent.core.model.ActionType;
 import com.rover.agent.core.model.ConfigActionIntent;
 import com.rover.agent.core.model.ConfigActionApproval;
 import com.rover.agent.core.model.ConfigActionStatus;
@@ -26,6 +28,7 @@ import com.rover.agent.core.model.EvidenceType;
 import com.rover.agent.core.model.Hypothesis;
 import com.rover.agent.core.model.Incident;
 import com.rover.agent.core.model.IncidentOrigin;
+import com.rover.agent.core.model.IncidentRetrospective;
 import com.rover.agent.core.model.IncidentStatus;
 import com.rover.agent.core.model.InvestigationReport;
 import com.rover.agent.core.model.MessageRole;
@@ -39,6 +42,7 @@ import com.rover.agent.core.model.TargetType;
 import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskType;
 import com.rover.agent.core.model.TaskView;
+import com.rover.agent.core.model.WeightRequestUnit;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.model.Verdict;
 import com.rover.agent.core.planning.InvestigationPlan;
@@ -62,6 +66,76 @@ import org.junit.jupiter.api.Test;
  * 重启中断只改状态、迁移可重跑。
  */
 class JdbcAgentStoreTest {
+
+    @Test
+    void incidentRetrospectiveDraftAndKnowledgeApprovalRemainBoundAndDurable() throws Exception {
+        String path = tempPath("rover-incident-retrospective");
+        ResourceScope scope = new ResourceScope("org", "team", "test");
+        long now = System.currentTimeMillis();
+        var review = new IncidentRetrospective("case-i1", "i1", scope, "Order 5xx",
+                "upstream 5xx", "bad release", "rolled back", "error rate recovered",
+                List.of("health checks were missing"), "alice", now, now + 90_000);
+        try (JdbcAgentStore store = new JdbcAgentStore(path)) {
+            openSession(store, session("s1"), incident("i1", "s1"));
+            assertEquals(26, store.schemaVersion());
+            var draft = store.knowledgeDocuments().createIncidentDraft(review);
+            assertEquals(KnowledgeDocumentVersion.Status.DRAFT, draft.status());
+            assertEquals("i1", draft.sourceIncidentId());
+            assertEquals(review, store.knowledgeDocuments().incidentDraft("case-i1").orElseThrow());
+            assertEquals(List.of(), store.knowledgeDocuments().approved(scope, now, 10));
+            assertThrows(IllegalStateException.class, () -> store.knowledgeDocuments().createIncidentDraft(review));
+            var revision = new IncidentRetrospective("case-i1-revision", "i1", scope, "Order 5xx follow-up",
+                    "upstream 5xx", "bad release", "rolled back", "error rate recovered",
+                    List.of("health checks were missing"), "alice", now + 1, now + 90_001);
+            assertEquals(KnowledgeDocumentVersion.Status.DRAFT, store.knowledgeDocuments()
+                    .createIncidentDraft(revision).status());
+            var approved = store.knowledgeDocuments().transition(draft.documentId(), draft.version(),
+                    KnowledgeDocumentVersion.Status.DRAFT, current -> current.approve("reviewer", System.currentTimeMillis())).orElseThrow();
+            assertEquals(KnowledgeDocumentVersion.Status.APPROVED, approved.status());
+            assertEquals(1, store.knowledgeDocuments().approved(scope, System.currentTimeMillis(), 10).size());
+            assertTrue(store.audit("test", 0, 100).stream().anyMatch(event -> event.kind().equals("INCIDENT_RETROSPECTIVE_DRAFT_CREATED")));
+        }
+        try (JdbcAgentStore reopened = new JdbcAgentStore(path)) {
+            assertEquals(review, reopened.knowledgeDocuments().incidentDraft("case-i1").orElseThrow());
+            assertEquals("i1", reopened.knowledgeDocuments().find("case-i1-revision", 1).orElseThrow().sourceIncidentId());
+            var draft = reopened.knowledgeDocuments().find("case-i1", 1).orElseThrow();
+            assertEquals("i1", draft.sourceIncidentId());
+            assertEquals(KnowledgeDocumentVersion.Status.APPROVED, draft.status());
+        }
+    }
+
+    @Test
+    void caseProjectionQueriesReturnBoundedTaskLifecycleAndReviewAudit() throws Exception {
+        String path = tempPath("rover-case-projection");
+        ResourceScope scope = new ResourceScope("org", "team", "test");
+        long now = System.currentTimeMillis();
+        try (JdbcAgentStore store = new JdbcAgentStore(path)) {
+            openSession(store, session("s1"), incident("i1", "s1"));
+            TaskView task = completedTask();
+            store.tasks().saveEvent(task, new com.rover.agent.core.event.TaskEvent(1, task.taskId(),
+                    com.rover.agent.core.event.TaskEventType.TASK_STARTED, now, Map.of("status", "RUNNING")));
+            store.tasks().saveEvent(task, new com.rover.agent.core.event.TaskEvent(2, task.taskId(),
+                    com.rover.agent.core.event.TaskEventType.ANALYSIS_DELTA, now + 1, Map.of("text", "流式正文")));
+            store.tasks().saveEvent(task, new com.rover.agent.core.event.TaskEvent(3, task.taskId(),
+                    com.rover.agent.core.event.TaskEventType.TASK_COMPLETED, now + 2, Map.of("summary", "调查完成")));
+            var events = store.caseTaskEvents("i1", "s1", 20);
+            assertEquals(List.of(com.rover.agent.core.event.TaskEventType.TASK_STARTED,
+                    com.rover.agent.core.event.TaskEventType.TASK_COMPLETED), events.stream()
+                    .map(com.rover.agent.core.event.TaskEvent::type).toList());
+            assertEquals(List.of(task), store.caseTasks("i1", "s1", 10));
+
+            var retrospective = new IncidentRetrospective("case-projection", "i1", scope, "复盘",
+                    "现象", "根因", "处置", "恢复", List.of(), "alice", now, now + 90_000);
+            var draft = store.knowledgeDocuments().createIncidentDraft(retrospective);
+            store.knowledgeDocuments().transition(draft.documentId(), draft.version(), KnowledgeDocumentVersion.Status.DRAFT,
+                    current -> current.reject("reviewer", now + 3)).orElseThrow();
+            var audit = store.caseAudit("i1", "s1", "test", scope, 20);
+            assertTrue(audit.stream().anyMatch(item -> item.kind().equals("INCIDENT_RETROSPECTIVE_DRAFT_CREATED")));
+            assertTrue(audit.stream().anyMatch(item -> item.kind().equals("KNOWLEDGE_REJECTED")
+                    && item.aggregateId().equals(draft.documentId() + ":1")));
+            assertEquals(1, store.caseRetrospectives(scope, "i1", 10).size());
+        }
+    }
 
     @Test
     void configActionIntentAndUnknownStateSurviveRestartAndCannotBeReplayedAsPending() throws Exception {
@@ -338,7 +412,7 @@ class JdbcAgentStoreTest {
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
             openSession(store, session("s1"), incident("i1", "s1"));
             store.tasks().save(task);
-            assertEquals(22, store.schemaVersion(),
+            assertEquals(26, store.schemaVersion(),
                     "v1 建聚合表，v2 清理旧 JSON 快照表，v3 加安全恢复点，v4 加受控变更记录，"
                             + "v5 保存请求数值与单位，v6 独立保存告警来源主体，v12 保存双人审批凭证，"
                             + "v13 保存按管理目标绑定的持久动作命令");
@@ -352,7 +426,8 @@ class JdbcAgentStoreTest {
         }
 
         try (JdbcAgentStore store = new JdbcAgentStore(path)) {
-            assertEquals(22, store.schemaVersion());
+            assertEquals(26, store.schemaVersion(),
+                    "v1-v26 preserve durable state, case retrospectives, review revisions and lifecycle event lookup");
             assertEquals(task, store.tasks().find("t1").orElseThrow(), "重跑迁移不能动已有数据");
         }
     }
@@ -554,7 +629,7 @@ class JdbcAgentStoreTest {
     void schemaV17UpgradesToV18AndCertificationAuditIsAtomicWithRecord() throws Exception {
         String path = tempPath("rover-shadow-v17-upgrade");
         try (JdbcAgentStore first = new JdbcAgentStore(path)) {
-            assertEquals(22, first.schemaVersion());
+            assertEquals(26, first.schemaVersion());
         }
         try (Connection connection = DriverManager.getConnection(
                 "jdbc:h2:file:" + path + ";DB_CLOSE_DELAY=0;AUTO_SERVER=TRUE", "sa", "");
@@ -562,7 +637,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version=18");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(22, upgraded.schemaVersion());
+            assertEquals(26, upgraded.schemaVersion());
             assertTrue(upgraded.healthy());
             var scope = new com.rover.agent.core.model.ResourceScope("org", "ops", "staging");
             var subject = new com.rover.agent.core.model.ActionCertificationSubject(scope,
@@ -591,7 +666,7 @@ class JdbcAgentStoreTest {
             statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version >= 6");
         }
         try (JdbcAgentStore upgraded = new JdbcAgentStore(path)) {
-            assertEquals(22, upgraded.schemaVersion());
+            assertEquals(26, upgraded.schemaVersion());
             assertNull(upgraded.incidents().find("i1").orElseThrow().triggeredBy());
             assertEquals("alice", upgraded.sessions().find("s1").orElseThrow().userId());
         }
@@ -613,6 +688,59 @@ class JdbcAgentStoreTest {
 
     private static Session session(String sessionId) {
         return new Session(sessionId, "alice", "标题", null, SessionStatus.ACTIVE, 10L, 20L, List.of());
+    }
+
+    @Test
+    void caseAuditReturnsOnlyScopedHistoryForActionsAndTasksBoundToIncident() throws Exception {
+        String path = tempPath("rover-case-audit");
+        try (JdbcAgentStore store = new JdbcAgentStore(path)) {
+            Session current = new Session("s1", "alice", "case", null, SessionStatus.ACTIVE, 1, 1, List.of(),
+                    new ResourceScope("org", "team", "dev"), "dev");
+            store.sessions().save(current);
+            store.incidents().save(new Incident("i1", "s1", IncidentOrigin.ALERT, "/orders", IncidentStatus.RESOLVED,
+                    ResourceTarget.route("/orders"), TimeRange.unspecified(), "cause", 1, 3, List.of()));
+            store.sessions().save(new Session("s1", "alice", "case", "i1", SessionStatus.ACTIVE, 1, 3, List.of("i1"),
+                    new ResourceScope("org", "team", "dev"), "dev"));
+            store.tasks().save(task("t1", "i1", TaskStatus.COMPLETED, 2));
+            store.tasks().save(task("t2", null, TaskStatus.COMPLETED, 2));
+            store.actions().save(new com.rover.agent.core.model.AgentAction("a1", "s1", "i1", "t1",
+                    ActionType.ADJUST_ROUTE_TARGET_WEIGHT, ActionStatus.SUCCESS, "r1", "/orders", "orders", "v2",
+                    5, 10, 10, WeightRequestUnit.RAW_WEIGHT, 5, 10, 1, "op1", 2, null,
+                    "alice", "approver", 2, List.of("5 → 10"), "test action", null, 1, 2, 0));
+            store.appendAudit("ACTION_SUCCESS", "a1", "approver", "dev", Map.of("action", "a1"));
+            store.appendAudit("ACTION_SUCCESS", "a2", "other", "dev", Map.of("action", "a2"));
+            store.appendAudit("ACTION_SUCCESS", "a3", "elsewhere", "prod", Map.of("action", "a3"));
+
+            var scope = new ResourceScope("org", "team", "dev");
+            var result = store.caseAudit("i1", "s1", "dev", scope, 10);
+            assertEquals(2, result.size());
+            assertEquals(2, result.stream().filter(item -> item.aggregateId().equals("a1")).count());
+            assertFalse(result.stream().anyMatch(item -> item.aggregateId().equals("a2") || item.aggregateId().equals("a3")));
+            assertThrows(IllegalArgumentException.class, () -> store.caseAudit("i1", "s1", "dev", scope, 1001));
+        }
+    }
+
+    @Test
+    void caseAuditIncludesRetrospectiveReviewsWhenControlNamespaceDiffersFromEnvironment() throws Exception {
+        String path = tempPath("rover-case-retrospective-audit");
+        try (JdbcAgentStore store = new JdbcAgentStore(path)) {
+            var scope = new ResourceScope("org", "team", "dev");
+            store.sessions().save(new Session("s1", "alice", "case", null, SessionStatus.ACTIVE, 1, 1, List.of(), scope, "hashed-control-target"));
+            store.incidents().save(new Incident("i1", "s1", IncidentOrigin.ALERT, "/orders", IncidentStatus.RESOLVED,
+                    ResourceTarget.route("/orders"), TimeRange.unspecified(), "cause", 1, 3, List.of()));
+            store.sessions().save(new Session("s1", "alice", "case", "i1", SessionStatus.ACTIVE, 1, 3, List.of("i1"), scope, "hashed-control-target"));
+            long now = System.currentTimeMillis();
+            var draft = store.knowledgeDocuments().createIncidentDraft(new com.rover.agent.core.model.IncidentRetrospective(
+                    "case-i1", "i1", scope, "复盘", "现象", "根因", "处置", "恢复", List.of(), "alice", now, now + 90_000));
+            store.knowledgeDocuments().transition(draft.documentId(), 1, KnowledgeDocumentVersion.Status.DRAFT,
+                    current -> current.reject("reviewer", now + 1)).orElseThrow();
+
+            var audit = store.caseAudit("i1", "s1", "hashed-control-target", scope, 10);
+            assertTrue(audit.stream().anyMatch(item -> item.kind().equals("INCIDENT_RETROSPECTIVE_DRAFT_CREATED")));
+            assertTrue(audit.stream().anyMatch(item -> item.kind().equals("KNOWLEDGE_REJECTED")));
+            assertEquals("dev", audit.stream().filter(item -> item.kind().equals("KNOWLEDGE_REJECTED"))
+                    .findFirst().orElseThrow().namespace());
+        }
     }
 
     private static Incident incident(String incidentId, String sessionId) {

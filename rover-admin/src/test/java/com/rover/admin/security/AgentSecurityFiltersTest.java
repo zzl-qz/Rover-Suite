@@ -27,8 +27,11 @@ class AgentSecurityFiltersTest {
                 "/api/agent/config-actions/a1/compensate", "POST"));
         assertEquals(Permission.READ, AgentSecurityFilters.permission(
                 "/api/agent/config-actions/sessions/s1/compensation-eligibility", "GET"));
+        assertEquals(Permission.READ, AgentSecurityFilters.permission("/api/agent/incidents/i1/case", "GET"));
+        assertEquals(Permission.INVESTIGATE, AgentSecurityFilters.permission("/api/agent/incidents/i1/case", "POST"));
         assertEquals(Permission.POLICY_ADMIN, AgentSecurityFilters.permission("/api/agent/knowledge/documents", "GET"));
         assertEquals(Permission.POLICY_ADMIN, AgentSecurityFilters.permission("/api/agent/knowledge/documents", "POST"));
+        assertEquals(Permission.POLICY_ADMIN, AgentSecurityFilters.permission("/api/agent/knowledge/documents/incidents/i1/retrospectives", "POST"));
         assertEquals(Permission.POLICY_ADMIN, AgentSecurityFilters.permission(
                 "/api/agent/knowledge/resource-notes/orders/review", "POST"));
         assertEquals(Permission.READ, AgentSecurityFilters.permission(

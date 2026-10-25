@@ -158,7 +158,7 @@ class DurableFoundationTest {
         }
     }
 
-    @Test void schema21ResourceNotesUpgradeWithAutomaticStatusAndAuditFailureRollsBackCorrection() throws Exception {
+    @Test void schema21ResourceNotesUpgradeToCurrentSchemaWithAutomaticStatusAndAuditFailureRollsBackCorrection() throws Exception {
         String path = root.resolve("legacy-notes/agent").toString();
         try (var store = new JdbcAgentStore(path)) {
             store.saveNote(new com.rover.agent.core.journal.ResourceNote("prod:uid-2", "timeout",
@@ -171,11 +171,11 @@ class DurableFoundationTest {
             statement.execute("ALTER TABLE resource_note DROP COLUMN reviewed_by");
             statement.execute("ALTER TABLE resource_note DROP COLUMN reviewed_at");
             statement.execute("ALTER TABLE resource_note DROP COLUMN version");
-            statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version=22");
+            statement.executeUpdate("DELETE FROM agent_schema_migrations WHERE version>=22");
         }
         try (var upgraded = new JdbcAgentStore(path)) {
             var note = upgraded.findNote("prod:uid-2").orElseThrow();
-            assertEquals(22, upgraded.schemaVersion());
+            assertEquals(26, upgraded.schemaVersion());
             assertEquals(com.rover.agent.core.journal.ResourceNote.ReviewStatus.AUTOMATIC, note.reviewStatus());
             assertEquals(1, note.version());
             try (var connection = DriverManager.getConnection("jdbc:h2:file:" + path + ";AUTO_SERVER=TRUE", "sa", "");

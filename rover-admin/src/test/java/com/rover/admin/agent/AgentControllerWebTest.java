@@ -148,6 +148,12 @@ class AgentControllerWebTest {
                 .andExpect(jsonPath("$[0].sessionId").value("s1"));
     }
 
+    @Test
+    void incidentCaseEndpointUsesReadPermissionAndHidesUnknownCases() throws Exception {
+        mockMvc.perform(get("/api/agent/incidents/missing/case").with(user("alice")))
+                .andExpect(status().isNotFound());
+    }
+
     /** 提问只登记任务：202 返回任务句柄，进度靠任务快照与事件流观察。 */
     @Test
     void sendsNaturalLanguageMessageWithoutAdvancedContext() throws Exception {
