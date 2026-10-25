@@ -57,6 +57,40 @@ class AgentOperationsWebTest {
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.writesStopped").value(true));
     }
 
+    @Test void backupEndpointRequiresManagerAndProducesRestorableAuditArchive() throws Exception {
+        http.perform(post("/api/agent/operations/backups").with(user("ops-viewer")).with(csrf()))
+                .andExpect(status().isForbidden());
+
+        String marker = "backup-check-" + java.util.UUID.randomUUID();
+        store.durable().appendAudit("BACKUP_TEST", marker, "ops-admin", control.resourceNamespace(),
+                java.util.Map.of("marker", marker));
+        var response = http.perform(post("/api/agent/operations/backups").with(user("ops-admin")).with(csrf()))
+                .andExpect(status().isOk()).andReturn().getResponse();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(response.getContentAsString());
+        java.nio.file.Path archive = java.nio.file.Path.of(json.get("path").asText());
+        org.junit.jupiter.api.Assertions.assertTrue(java.nio.file.Files.isRegularFile(archive));
+        org.junit.jupiter.api.Assertions.assertTrue(archive.toString().endsWith(".zip"));
+
+        java.nio.file.Path restored = java.nio.file.Files.createTempDirectory("agent-admin-backup-restore");
+        try {
+            org.h2.tools.Restore.execute(archive.toString(), restored.toString(), "rover");
+            String database = restored.resolve("rover").toString();
+            try (var recovered = new com.rover.agent.runtime.repository.JdbcAgentStore(database)) {
+                org.junit.jupiter.api.Assertions.assertTrue(recovered.audit(control.resourceNamespace(), 0, 1000).stream()
+                        .anyMatch(row -> row.aggregateId().equals(marker)));
+                org.junit.jupiter.api.Assertions.assertTrue(recovered.healthy());
+            }
+        } finally {
+            try (var paths = java.nio.file.Files.walk(restored)) {
+                paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                    try { java.nio.file.Files.deleteIfExists(path); }
+                    catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+                });
+            }
+            java.nio.file.Files.deleteIfExists(archive);
+        }
+    }
+
     @Test void writeResumeRequiresTwoDifferentCurrentSystemManagers() throws Exception {
         security.stopWrites("ops-admin", true);
         http.perform(post("/api/agent/operations/resume-approval").with(user("ops-viewer")).with(csrf()))
@@ -90,7 +124,7 @@ class AgentOperationsWebTest {
         long now = System.currentTimeMillis();
         var resource = new ResourceRef(control.resourceScope(), "gateway-health", "GATEWAY_ROUTE",
                 "orders-health", "uid-health", 1);
-        var draft = AutoExecutionPolicy.create("health-policy", control.resourceNamespace(), resource,
+        var draft = AutoExecutionPolicy.create("health-policy-" + java.util.UUID.randomUUID(), control.resourceNamespace(), resource,
                 "orders-v2", "canary", 5, 5, 10, java.time.Duration.ofMinutes(15).toMillis(),
                 now + 86_400_000, "ops-admin", now);
         store.autoExecutionPolicies().save(draft, 0);
