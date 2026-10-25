@@ -269,4 +269,31 @@ class DurableFoundationTest {
             assertTrue(restored.healthy());
         }
     }
+
+    @Test void backupRestorePreservesUnknownExternalOperationForReconciliation() throws Exception {
+        String path = root.resolve("unknown-backup/agent").toString();
+        Path backup = root.resolve("unknown-action.zip");
+        long now = System.currentTimeMillis();
+        var intent = new ConfigActionIntent(ConfigActionIntent.ALLOWED_KEY, "0.0", "1",
+                session().scope(), "gateway-a", "namespace");
+        var action = new GatewayConfigAction("cfg-unknown", "s1", null, null, "alice", intent,
+                intent.intentHash(), "gateway-config-approval-v1", List.of(), "operation-original-123",
+                ConfigActionStatus.UNKNOWN, "Gateway timed out; result needs reconciliation",
+                now - 10, now, now + 60_000, 0);
+        try (var source = new JdbcAgentStore(path)) {
+            source.sessions().save(session());
+            source.gatewayConfigActions().save(action);
+            source.backup(backup);
+        }
+
+        Path destination = root.resolve("unknown-restored");
+        org.h2.tools.Restore.execute(backup.toString(), destination.toString(), "agent");
+        try (var restored = new JdbcAgentStore(destination.resolve("agent").toString())) {
+            var actionAfterRestore = restored.gatewayConfigActions().find("cfg-unknown").orElseThrow();
+            assertEquals(ConfigActionStatus.UNKNOWN, actionAfterRestore.status());
+            assertEquals("operation-original-123", actionAfterRestore.operationId());
+            assertEquals(intent.intentHash(), actionAfterRestore.intentHash());
+            assertTrue(restored.gatewayConfigActions().hasNonTerminalForSession("s1"));
+        }
+    }
 }
