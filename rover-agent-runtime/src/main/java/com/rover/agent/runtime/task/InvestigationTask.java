@@ -22,7 +22,6 @@ import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.TimeRange;
 import com.rover.agent.core.planning.InvestigationPlan;
 import com.rover.agent.core.repository.AgentCheckpointRepository;
-import com.rover.agent.runtime.graph.InvestigationReporter;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,7 +37,7 @@ import java.util.function.Consumer;
  * 执行线程解析并绑定目标，无法解析时进入 WAITING_INPUT。
  * 事件发布不执行网络 IO，慢订阅者不阻塞任务。
  */
-public final class InvestigationTask implements InvestigationReporter {
+public final class InvestigationTask {
 
     private final String taskId;
     private final String sessionId;
@@ -135,10 +134,10 @@ public final class InvestigationTask implements InvestigationReporter {
         if (mark != null) { checkpointSeq = mark.sequenceNo(); lastRoundNo = mark.roundNo(); lastToolCallCount = mark.toolCallCount(); }
     }
 
-    @Override public synchronized int resumeRounds() { return lastRoundNo; }
-    @Override public synchronized int resumeToolCalls() { return lastToolCallCount; }
-    @Override public synchronized InvestigationPlan resumePlan() { return plan; }
-    @Override public synchronized List<Evidence> resumeEvidence() { return List.copyOf(evidence); }
+    public synchronized int resumeRounds() { return lastRoundNo; }
+    public synchronized int resumeToolCalls() { return lastToolCallCount; }
+    public synchronized InvestigationPlan resumePlan() { return plan; }
+    public synchronized List<Evidence> resumeEvidence() { return List.copyOf(evidence); }
 
     public String taskId() {
         return taskId;
@@ -216,7 +215,6 @@ public final class InvestigationTask implements InvestigationReporter {
      *
      * 计划随快照暴露（不是过程日志），因此这里与状态变更走同一条持久化路径。
      */
-    @Override
     public synchronized void reportPlan(InvestigationPlan reported) {
         this.plan = reported == null ? InvestigationPlan.empty() : reported;
         persist();
@@ -224,7 +222,6 @@ public final class InvestigationTask implements InvestigationReporter {
     }
 
     /** 某个能力已被执行或按事实跳过：重复出现只记一次，顺序按首次使用。 */
-    @Override
     public synchronized void reportCapabilityExecuted(AgentCapability capability) {
         if (capability != null && !executedCapabilities.contains(capability)) {
             executedCapabilities.add(capability);
@@ -239,7 +236,6 @@ public final class InvestigationTask implements InvestigationReporter {
      * 证据随下一个安全恢复点落库，因此工具一返回、恢复点一推进，事实就已经在库里了；
      * 结论合成阶段不再"补写历史"。
      */
-    @Override
     public synchronized void recordEvidence(List<Evidence> collected) {
         if (cancelled) { return; }
         if (collected == null || collected.isEmpty()) {
@@ -250,7 +246,6 @@ public final class InvestigationTask implements InvestigationReporter {
     }
 
     /** 步骤完成、证据交付后推进恢复点，与任务快照和证据一起保存。 */
-    @Override
     public synchronized void checkpoint(CheckpointStage stage, int roundNo, int toolCallCount, String runtimeNode) {
         if (cancelled && status == TaskStatus.PENDING) { return; }
         if (stage == null) {
@@ -407,7 +402,6 @@ public final class InvestigationTask implements InvestigationReporter {
      * {@code detail} 的含义随状态而定：执行中作为输入说明，终态作为结果说明；失败时作为失败原因。
      * 就地更新时沿用首次上报的时刻作为开始时间，不伪造时间戳。
      */
-    @Override
     public synchronized void step(AgentStepType type, String name, StepStatus status, String detail) {
         if (this.status.terminal()) {
             return;

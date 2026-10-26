@@ -210,8 +210,6 @@ class TelemetryConnectorsTest {
             assertEquals(1, authorized.get()); assertEquals(1, tools.evidence().size()); assertEquals(1, task.resumeEvidence().size());
             assertEquals(SCOPE, tools.evidence().get(0).envelope().context().scope());
             tools.getApplicationLogs(); assertEquals(1, calls.get(), "同窗口重复工具请求不能再次读取");
-            var planner = new RuleBasedPlanner(capabilities); var request = new PlanningRequest("查故障", context().target(), "/orders/42", List.of(), List.of());
-            assertTrue(planner.requiredCapabilities(request).contains(AgentCapability.APPLICATION_LOG_QUERY));
             assertFalse(CapabilityRegistry.withTelemetry(Set.of()).selectable(AgentCapability.APPLICATION_LOG_QUERY));
         } finally { registry.stop(); }
     }

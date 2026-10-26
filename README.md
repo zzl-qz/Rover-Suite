@@ -128,7 +128,7 @@ See [docs-public/README.md](docs-public/README.md) for the complete English/Chin
 | `rover-gateway-*` | Gateway core, process, and optional Nacos adapter |
 | `rover-admin` | Optional runtime management console |
 | `rover-agent-core` | Ops Agent domain and rules layer (domain objects, read-only ports, neutral snapshots); no Spring / Jackson |
-| `rover-agent-runtime` | Ops Agent runtime: Spring AI + StateGraph orchestration, task lifecycle, model interpretation |
+| `rover-agent-runtime` | Ops Agent runtime: Spring AI ReAct tool loop, task lifecycle, model interpretation |
 | `rover-gateway-test` | Demo backend and test frontend; verification only |
 | `docs-public` | Public English/Chinese documentation shipped with the source |
 

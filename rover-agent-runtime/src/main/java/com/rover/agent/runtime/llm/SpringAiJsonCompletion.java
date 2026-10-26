@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory;
 /**
  * 调用已配置模型获取结构化输出；不可用、失败或空结果返回空。
  * 每次调用记录结局与含重试耗时，日志和指标不包含提示词或输出。
- * 轻量调用超时可重试一次；独立调查规划使用主模型且不重做整轮推理。
+ * 轻量调用超时可重试一次；结构化输出按场景标记验证和模型用量。
  */
 public final class SpringAiJsonCompletion implements JsonCompletion {
 
@@ -24,8 +24,6 @@ public final class SpringAiJsonCompletion implements JsonCompletion {
     private final String scene;
     private final int timeoutSeconds;
     private final Integer maxOutputTokens;
-    private final boolean planning;
-    private final boolean thinkingEnabled;
 
     /**
      * @param timeoutSeconds 场景超时上限（秒）；0 表示用模型配置里的超时
@@ -36,25 +34,11 @@ public final class SpringAiJsonCompletion implements JsonCompletion {
 
     public SpringAiJsonCompletion(ChatModelGateway gateway, AgentMetrics metrics, String scene, int timeoutSeconds,
                                    Integer maxOutputTokens) {
-        this(gateway, metrics, scene, timeoutSeconds, maxOutputTokens, false, false);
-    }
-
-    /** 较长的调查规划只调用一次主模型；超时不重新从头购买同一轮推理。 */
-    public static SpringAiJsonCompletion investigation(ChatModelGateway gateway, AgentMetrics metrics, int timeoutSeconds,
-                                                       int maxOutputTokens, boolean thinkingEnabled) {
-        if (timeoutSeconds <= 0 || maxOutputTokens <= 0) { throw new IllegalArgumentException("规划时间和输出预算必须为正数"); }
-        return new SpringAiJsonCompletion(gateway, metrics, "调查规划", timeoutSeconds, maxOutputTokens, true, thinkingEnabled);
-    }
-
-    private SpringAiJsonCompletion(ChatModelGateway gateway, AgentMetrics metrics, String scene, int timeoutSeconds,
-                                   Integer maxOutputTokens, boolean planning, boolean thinkingEnabled) {
         this.gateway = gateway == null ? new NoopChatModelGateway() : gateway;
         this.metrics = metrics == null ? AgentMetrics.NOOP : metrics;
         this.scene = scene == null || scene.isBlank() ? "结构化输出" : scene.trim();
         this.timeoutSeconds = Math.max(0, timeoutSeconds);
         this.maxOutputTokens = maxOutputTokens;
-        this.planning = planning;
-        this.thinkingEnabled = thinkingEnabled;
     }
 
     @Override
@@ -80,10 +64,7 @@ public final class SpringAiJsonCompletion implements JsonCompletion {
                         }
                         return content(request.call().chatResponse());
                     };
-            String content = planning
-                    ? call.apply(AgentBudgetAdvisor.client(gateway.select(ChatModelGateway.Purpose.PLANNING,timeoutSeconds,thinkingEnabled),
-                            AgentRunBudget.current(), gateway::reasoningDelta,scene,ModelContracts.PLANNING))
-                    : QuickModelCall.content(gateway, timeoutSeconds, scene, call);
+            String content = QuickModelCall.content(gateway, timeoutSeconds, scene, call);
             if (content == null || content.isBlank()) {
                 if (AgentRunBudget.current()!=null) { AgentRunBudget.current().validation(scene,false); }
                 outcome = ModelCallOutcome.EMPTY;

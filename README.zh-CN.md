@@ -128,7 +128,7 @@ Rover-Suite 面向多单体、旁路服务和混合语言服务逐渐变多的�
 | `rover-gateway-*` | Gateway 核心、进程和可选 Nacos 适配器 |
 | `rover-admin` | 可选运行时管理控制台 |
 | `rover-agent-core` | Ops Agent 领域与规则层（领域对象、只读端口、中立快照），不依赖 Spring / Jackson |
-| `rover-agent-runtime` | Ops Agent 运行层：Spring AI + StateGraph 编排、任务生命周期、模型解读 |
+| `rover-agent-runtime` | Ops Agent 运行层：Spring AI ReAct 工具循环、任务生命周期、模型解读 |
 | `rover-gateway-test` | Demo 后端与测试前端，仅用于验证 |
 | `docs-public` | 随源码发布的中英文公开文档 |
 

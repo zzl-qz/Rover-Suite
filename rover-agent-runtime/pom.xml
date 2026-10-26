@@ -13,7 +13,7 @@
 
     <artifactId>rover-agent-runtime</artifactId>
     <name>rover-agent-runtime</name>
-    <description>Ops Agent 运行层：Spring AI 模型解读 + Spring AI Alibaba Graph 调查编排 + 任务生命周期</description>
+    <description>Ops Agent 运行层：共享 ReAct 调查 + 任务生命周期</description>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -24,7 +24,6 @@
              运行层与 rover-admin 同处 Spring AI 2.0.x 线，因此在本模块内覆盖版本边界。 -->
         <agent.spring-boot.version>4.1.1</agent.spring-boot.version>
         <spring-ai.version>2.0.1</spring-ai.version>
-        <spring-ai-alibaba.version>2.0.0-M1.1</spring-ai-alibaba.version>
         <!-- 父工程为 Gateway / Nameserver 声明了 JUnit 5.10.1 与 SLF4J 2.0.9，
              这里覆盖这两个属性：运行层的测试与日志版本必须与 rover-admin 同处 Boot 4.1.1 线。 -->
         <junit.version>6.0.3</junit.version>
@@ -81,14 +80,13 @@
             <artifactId>spring-ai-client-chat</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-deepseek</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-        </dependency>
-        <!-- StateGraph 调查编排。 -->
-        <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-graph-core</artifactId>
-            <version>${spring-ai-alibaba.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

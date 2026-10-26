@@ -5,3 +5,4 @@ rover:
     gateway-url: http://gateway:80
     nameserver-manage-url: http://nameserver:8889
     admin-token: rover-compose-gateway-admin-token
+    log-store-path: ${ROVER_ADMIN_LOG_STORE_PATH:./rover-logs/rover}

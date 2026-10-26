@@ -8,7 +8,6 @@ import java.util.HexFormat;
 public final class ModelContracts {
     public static final String POLICY = "model-policy-v2";
     public static final String TARGET = "target-v1";
-    public static final String PLANNING = "investigation-planning-v3";
     public static final String REPORT = "diagnostic-facts-v2";
     public static final String CONVERSATION = "conversation-tools-v2";
     private ModelContracts() { }
@@ -23,3 +22,4 @@ public final class ModelContracts {
         } catch (java.security.NoSuchAlgorithmException ex) { throw new IllegalStateException(ex); }
     }
 }
+

@@ -28,9 +28,6 @@ import com.rover.agent.core.model.TaskStatus;
 import com.rover.agent.core.model.TaskView;
 import com.rover.agent.core.model.IncidentOrigin;
 import com.rover.agent.core.model.TimeRange;
-import com.rover.agent.core.planning.PlanValidator;
-import com.rover.agent.core.planning.PlanningLimits;
-import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.EventReadPort;
 import com.rover.agent.core.port.InstanceReadPort;
@@ -43,9 +40,7 @@ import com.rover.agent.core.port.TraceReadPort;
 import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
-import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.journal.OpsJournal;
-import com.rover.agent.runtime.llm.NoopChatModelGateway;
 import com.rover.agent.runtime.repository.InMemoryAgentMessageRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
@@ -495,14 +490,15 @@ class AgentOrchestratorTest {
                 instancePort, 8);
         CapabilityExecutor executor = new CapabilityExecutor(routes, instancePort, metricPort, tracePort,
                 configPort, eventPort, logPort, knowledgePort, CapabilityRegistry.standard());
-        PlanningLimits limits = PlanningLimits.defaults();
-        InvestigationService investigations = new InvestigationService(registry, tasks,
-                new ModelExplainer(new NoopChatModelGateway()), new RuleBasedPlanner(CapabilityRegistry.standard()),
-                new PlanValidator(CapabilityRegistry.standard(), limits), executor, limits, OpsJournal.none(), alertOwner,
-                null, alertLifecycles);
+        var toolLoop = ScriptedConversationModel.service(executor, tools -> {
+            tools.listInstances("demo-service");
+            return "已按问题作答。";
+        });
+        InvestigationService investigations = new InvestigationService(registry, tasks, toolLoop,
+                OpsJournal.none(), alertOwner, alertLifecycles);
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instancePort, TargetInterpreter.none()), investigations, retention,
-                ScriptedConversationModel.service(executor, tools -> "已按问题作答。"), OpsJournal.none());
+                toolLoop, OpsJournal.none());
     }
 
     private TaskView submit(Session session, String userId, String message) {

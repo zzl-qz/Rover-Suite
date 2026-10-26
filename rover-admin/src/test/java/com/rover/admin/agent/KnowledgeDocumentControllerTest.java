@@ -17,6 +17,45 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 
 class KnowledgeDocumentControllerTest {
     @TempDir Path temp;
+    @Test void batchImportCreatesIndependentReviewableDraftsAndReportsPartialRejections() throws Exception {
+        var scope = new ResourceScope("org", "team", "dev");
+        RouteControlPort control = mock(RouteControlPort.class); when(control.resourceScope()).thenReturn(scope);
+        AgentSecurityService security = mock(AgentSecurityService.class);
+        try (AgentStore store = AgentStore.file(temp.resolve("batch-import").toString())) {
+            var controller = new KnowledgeDocumentController(store, control, security);
+            var actor = new UsernamePasswordAuthenticationToken("importer", "n/a");
+            var response = controller.importDrafts(new KnowledgeDocumentController.BatchImportRequest(java.util.List.of(
+                    new KnowledgeDocumentController.BatchImportItem("runbook-1", "Restart check",
+                            "verify health first", java.util.List.of("restart"), "git:abc123", null),
+                    new KnowledgeDocumentController.BatchImportItem("runbook-2", "Queue recovery",
+                            "check backlog", java.util.List.of(), "git:def456", null),
+                    new KnowledgeDocumentController.BatchImportItem("runbook-3", "",
+                            "invalid title", java.util.List.of(), "git:bad", null))), actor);
+            assertEquals(200, response.getStatusCode().value());
+            var result = (KnowledgeDocumentController.BatchImportResponse) response.getBody();
+            assertEquals(2, result.created());
+            assertEquals(1, result.rejected());
+            assertEquals(3, result.results().size());
+            var first = store.knowledgeDocuments().find("runbook-1", 1).orElseThrow();
+            var second = store.knowledgeDocuments().find("runbook-2", 1).orElseThrow();
+            assertEquals(KnowledgeDocumentVersion.Status.DRAFT, first.status());
+            assertEquals(KnowledgeDocumentVersion.Status.DRAFT, second.status());
+            assertEquals("git:abc123", first.sourceVersion());
+            assertEquals("git:def456", second.sourceVersion());
+            assertEquals("importer", first.createdBy());
+            assertEquals(0, store.knowledgeDocuments().approved(scope, System.currentTimeMillis(), 10).size());
+            verify(security, times(4)).require("importer", Permission.POLICY_ADMIN);
+            assertEquals(400, controller.importDrafts(new KnowledgeDocumentController.BatchImportRequest(
+                    java.util.Collections.nCopies(101, new KnowledgeDocumentController.BatchImportItem("x",
+                            "title", "content", java.util.List.of(), "git:abc", null))), actor)
+                    .getStatusCode().value());
+            var oversized = controller.importDrafts(new KnowledgeDocumentController.BatchImportRequest(
+                    java.util.List.of(new KnowledgeDocumentController.BatchImportItem("huge", "title",
+                            "x".repeat(1_000_001), java.util.List.of(), "git:large", null))), actor);
+            assertEquals(400, oversized.getStatusCode().value());
+        }
+    }
+
     @Test void persistentKnowledgeRequiresPolicyAdminAndKeepsReviewAndScopeBoundariesAcrossRestart() throws Exception {
         var scope = new ResourceScope("org", "team", "dev");
         RouteControlPort control = mock(RouteControlPort.class); when(control.resourceScope()).thenReturn(scope);

@@ -28,8 +28,6 @@ import com.rover.agent.core.snapshot.DiscoveryMode;
 import com.rover.agent.core.snapshot.GatewayMetricSnapshot;
 import com.rover.agent.core.snapshot.InstanceSnapshot;
 import com.rover.agent.core.snapshot.RouteSnapshot;
-import com.rover.agent.runtime.llm.ModelExplainer;
-import com.rover.agent.runtime.llm.NoopChatModelGateway;
 import com.rover.agent.runtime.repository.InMemoryAgentMessageRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentSessionRepository;
 import com.rover.agent.runtime.repository.InMemoryAgentTaskRepository;
@@ -185,7 +183,7 @@ class ConversationFlowTest {
     void modelUnavailableIsReportedHonestly() throws Exception {
         preparePorts();
         CapabilityExecutor executor = newExecutor();
-        AgentOrchestrator agent = assemble(executor, new ToolLoopService(executor, new NoopChatModelGateway(),
+        AgentOrchestrator agent = assemble(executor, new ToolLoopService(executor, new com.rover.agent.runtime.llm.NoopChatModelGateway(),
                 ScriptedConversationModel.answering(tools -> "不该被调用")));
         Session session = agent.startSession("admin");
 
@@ -286,9 +284,8 @@ class ConversationFlowTest {
         IncidentRegistry registry = new IncidentRegistry(sessions, incidents, retention);
         AgentContextManager contexts = new AgentContextManager(sessions, incidents, messages, records, routes,
                 instances, 8);
-        InvestigationService investigations = new InvestigationService(routes, instances, metrics, traces, configs,
-                events, r -> List.of(), (q, limit) -> List.of(), registry, tasks,
-                new ModelExplainer(new NoopChatModelGateway()));
+        InvestigationService investigations = new InvestigationService(registry, tasks, toolLoop,
+                com.rover.agent.runtime.journal.OpsJournal.none(), null, null);
         return new AgentOrchestrator(sessions, incidents, messages, records, registry, contexts,
                 new TargetResolver(routes, instances, TargetInterpreter.none()), investigations, retention,
                 toolLoop, com.rover.agent.runtime.journal.OpsJournal.none());

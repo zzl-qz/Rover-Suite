@@ -2,7 +2,7 @@
 
 > **历史文档，已不代表当前架构。** 本报告记录的 Intent 分流（`com.rover.agent.core.intent`、`IntentDecision`、
 > `QueryStateService` / `ExplainService` / `ActionPlanService` 与 `ActionPlan`）后来被整体移除：人工会话主路径
-> 改为模型自主 Tool Calling，不再做任何预意图分类；告警调查仍走 `DynamicInvestigationGraph`。
+> 改为模型自主 Tool Calling，不再做任何预意图分类；后续整理又移除了 `DynamicInvestigationGraph`，当前告警与对话共用 ReAct 工具循环。
 > 阅读本报告时请把它当作当轮决策的存档，不要据此理解现在的代码——当前实现以 `ops-agent` 与 `admin-api` 为准。
 >
 > 本报告只描述本轮改造实际落地的内容，与代码一致；测试结果取自 `rover-agent-runtime/target/p2-full-test.log`。

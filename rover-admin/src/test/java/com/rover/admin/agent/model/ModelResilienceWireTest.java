@@ -24,7 +24,7 @@ class ModelResilienceWireTest {
             e.getResponseHeaders().set("Content-Type","application/json");e.sendResponseHeaders(code,body.length);e.getResponseBody().write(body);e.close();});server.start();
         try {
             var gateway=gateway();gateway.apply(settings(server,"main",FastModel.none()));var first=new AgentRunBudget(AgentRunLimits.defaults());
-            assertThrows(RuntimeException.class,()->call(gateway,ChatModelGateway.Purpose.PLANNING,first));
+            assertThrows(RuntimeException.class,()->call(gateway,ChatModelGateway.Purpose.CONVERSATION,first));
             String expected=switch(code){case 400->"INVALID_REQUEST";case 401->"AUTHENTICATION";case 429->"RATE_LIMITED";default->"SERVER_ERROR";};
             assertEquals(expected,first.modelInvocations().get(0).status());assertFalse(new ObjectMapper().writeValueAsString(first.snapshot()).contains("provider-secret"));
             var second=new AgentRunBudget(AgentRunLimits.defaults());assertThrows(RuntimeException.class,()->call(gateway,ChatModelGateway.Purpose.LIGHTWEIGHT,second));
@@ -41,11 +41,11 @@ class ModelResilienceWireTest {
             e.getResponseHeaders().set("Content-Type","application/json");e.sendResponseHeaders(200,bytes.length);e.getResponseBody().write(bytes);e.close();});server.start();
         try {
             var gateway=gateway();var fast=new FastModel("http://127.0.0.1:"+server.getAddress().getPort()+"/v1","fixture","fast");
-            gateway.apply(settings(server,"main",fast));var old=gateway.select(ChatModelGateway.Purpose.PLANNING,15,false);
+            gateway.apply(settings(server,"main",fast));var old=gateway.select(ChatModelGateway.Purpose.CONVERSATION,15,false);
             var lightweight=new AgentRunBudget(AgentRunLimits.defaults());call(gateway,ChatModelGateway.Purpose.LIGHTWEIGHT,lightweight);
             assertEquals("fast",lightweight.modelInvocations().get(0).identity().requestedModel());assertEquals("fast-resolved",lightweight.modelInvocations().get(0).returnedModel());
             gateway.apply(settings(server,"main-new",fast));var budget=new AgentRunBudget(AgentRunLimits.defaults());
-            AgentBudgetAdvisor.client(old,budget,gateway::reasoningDelta,"planning",ModelContracts.PLANNING).prompt().user("fixture").call().content();
+            AgentBudgetAdvisor.client(old,budget,gateway::reasoningDelta,"对话",ModelContracts.CONVERSATION).prompt().user("fixture").call().content();
             assertEquals("main",budget.modelInvocations().get(0).identity().requestedModel());assertEquals("main-resolved",budget.modelInvocations().get(0).returnedModel());
             assertEquals(List.of("fast","main"),requested);
         } finally { server.stop(0); }
@@ -65,7 +65,7 @@ class ModelResilienceWireTest {
                 }
             };
             gateway.apply(new ModelSettings(true,"https://open.bigmodel.cn/api/paas/v4","fixture","glm-4.6",15,ModelSettings.Source.FILE,ModelSettings.KeyState.OK));
-            var budget=new AgentRunBudget(AgentRunLimits.defaults());assertThrows(RuntimeException.class,()->call(gateway,ChatModelGateway.Purpose.PLANNING,budget));
+            var budget=new AgentRunBudget(AgentRunLimits.defaults());assertThrows(RuntimeException.class,()->call(gateway,ChatModelGateway.Purpose.CONVERSATION,budget));
             assertEquals("RATE_LIMITED",budget.modelInvocations().get(0).status());assertFalse(new ObjectMapper().writeValueAsString(budget.snapshot()).contains("provider-secret"));
             assertThrows(RuntimeException.class,()->call(gateway,ChatModelGateway.Purpose.LIGHTWEIGHT,new AgentRunBudget(AgentRunLimits.defaults())));assertEquals(1,requests.get());
             gateway.apply(new ModelSettings(true,"https://open.bigmodel.cn/api/paas/v4","fixture","glm-4.6",15,ModelSettings.Source.FILE,ModelSettings.KeyState.OK));
@@ -79,6 +79,6 @@ class ModelResilienceWireTest {
     }
     private static ModelSettings settings(HttpServer server,String model,FastModel fast) { return new ModelSettings(true,"http://127.0.0.1:"+server.getAddress().getPort()+"/v1","fixture",model,15,ModelSettings.Source.FILE,ModelSettings.KeyState.OK,fast); }
     private static void call(AdminChatModelGateway gateway,ChatModelGateway.Purpose purpose,AgentRunBudget budget) {
-        AgentBudgetAdvisor.client(gateway.select(purpose,15,false),budget,gateway::reasoningDelta,"wire",ModelContracts.PLANNING).prompt().user("fixture").call().content();
+        AgentBudgetAdvisor.client(gateway.select(purpose,15,false),budget,gateway::reasoningDelta,"wire",ModelContracts.CONVERSATION).prompt().user("fixture").call().content();
     }
 }

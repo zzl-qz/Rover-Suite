@@ -33,7 +33,7 @@ class ModelCallLedgerTest {
         });
         return new ModelClient(client,IDENTITY,isolation,"provider-key");
     }
-    static ChatClient guarded(ModelClient client,AgentRunBudget budget) { return AgentBudgetAdvisor.client(client,budget,r->"","planning",ModelContracts.PLANNING); }
+    static ChatClient guarded(ModelClient client,AgentRunBudget budget) { return AgentBudgetAdvisor.client(client,budget,r->"","结构化输出",ModelContracts.POLICY); }
     static ChatResponse answer(String text) { return new ChatResponse(List.of(new Generation(new AssistantMessage(text))),ChatResponseMetadata.builder().model("resolved-model-v2").build()); }
 
     @Test void recordsFrozenClientIdentityAndReturnedModelWithoutPromptContent() throws Exception {
@@ -71,7 +71,7 @@ class ModelCallLedgerTest {
         var registry=new InvestigationTaskRegistry();var task=registry.register("s","test");task.start();task.markRunning();
         try {
             ChatModelGateway gateway=new Gateway(model);
-            var completion=SpringAiJsonCompletion.investigation(gateway,AgentMetrics.NOOP,15,64,false);
+            var completion=new SpringAiJsonCompletion(gateway,AgentMetrics.NOOP,"结构化输出",15,64);
             assertTrue(completion.complete("system","question",raw->Optional.empty()).isEmpty());
             var invocation=task.budget().modelInvocations().get(0);assertEquals("SUCCEEDED",invocation.status());assertEquals("REJECTED",invocation.validation());
             assertTrue(completion.complete("system","question",Optional::of).isPresent());
@@ -85,7 +85,7 @@ class ModelCallLedgerTest {
             store.sessions().save(new Session("s","alice","test",null,SessionStatus.ACTIVE,1,1,List.of()));
             store.tasks().save(new TaskView("t","s",null,TaskStatus.RUNNING,null,"/p",ResourceTarget.route("/p"),"why",1,0,List.of(),null,null,null));
             store.enqueueJob("t","TEST",Map.of());var job=store.claimJob("t",0).orElseThrow();var budget=budget();budget.persistTo(s->store.saveBudget("t",job.attempt(),s));
-            int output=budget.beginModelCall(10,64);budget.invocationStarted("planning",IDENTITY,ModelContracts.PLANNING,"hash","tools",10,output);budget.consume(5);saved=budget.snapshot();
+            int output=budget.beginModelCall(10,64);budget.invocationStarted("结构化输出",IDENTITY,ModelContracts.POLICY,"hash","tools",10,output);budget.consume(5);saved=budget.snapshot();
         }
         try(var store=new JdbcAgentStore(path)) {
             var job=store.claimJob("t",1).orElseThrow();var state=new ObjectMapper().readValue(job.budgetJson(),AgentRunBudget.State.class);
@@ -104,7 +104,6 @@ class ModelCallLedgerTest {
     private record Gateway(ModelClient selected) implements ChatModelGateway {
         public boolean configured(){return true;}public boolean available(){return true;}
         public ChatClient chatClient(){return selected.client();}public ChatClient chatClient(int timeout){return selected.client();}
-        public ChatClient planningClient(int timeout,boolean thinking){return selected.client();}
         public ModelClient select(Purpose purpose,int timeout,boolean thinking){return selected;}
         public String description(){return "fixture";}public String reasoningDelta(ChatResponse response){return "";}
     }

@@ -22,7 +22,6 @@
         <maven.compiler.target>17</maven.compiler.target>
         <admin.spring-boot.version>4.1.1</admin.spring-boot.version>
         <spring-ai.version>2.0.1</spring-ai.version>
-        <spring-ai-alibaba.version>2.0.0-M1.1</spring-ai-alibaba.version>
         <junit.version>6.0.3</junit.version>
         <netty.version>4.2.17.Final</netty.version>
         <slf4j.version>2.0.18</slf4j.version>
@@ -96,11 +95,6 @@
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.alibaba.cloud.ai</groupId>
-            <artifactId>spring-ai-alibaba-graph-core</artifactId>
-            <version>${spring-ai-alibaba.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

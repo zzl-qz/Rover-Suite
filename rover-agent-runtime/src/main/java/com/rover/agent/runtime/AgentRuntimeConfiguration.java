@@ -5,10 +5,6 @@ import com.rover.agent.core.capability.CapabilityRegistry;
 import com.rover.agent.core.context.AgentContextManager;
 import com.rover.agent.core.context.TargetInterpreter;
 import com.rover.agent.core.context.TargetResolver;
-import com.rover.agent.core.planning.InvestigationPlanner;
-import com.rover.agent.core.planning.PlanValidator;
-import com.rover.agent.core.planning.PlanningLimits;
-import com.rover.agent.core.planning.RuleBasedPlanner;
 import com.rover.agent.core.port.ConfigReadPort;
 import com.rover.agent.core.port.GatewayConfigActionPort;
 import com.rover.agent.core.repository.GatewayConfigActionRepository;
@@ -46,10 +42,8 @@ import com.rover.agent.runtime.llm.SpringAiConversationModel;
 import com.rover.agent.runtime.llm.ModelExplainer;
 import com.rover.agent.runtime.llm.ModelTargetInterpreter;
 import com.rover.agent.runtime.llm.NoopChatModelGateway;
-import com.rover.agent.runtime.llm.SpringAiJsonCompletion;
 import com.rover.agent.runtime.metrics.AgentMetrics;
 import com.rover.agent.runtime.metrics.MicrometerAgentMetrics;
-import com.rover.agent.runtime.planning.LlmInvestigationPlanner;
 import com.rover.agent.runtime.repository.AgentStore;
 import com.rover.agent.runtime.task.AgentExecutionSettings;
 import com.rover.agent.runtime.task.AgentRunLimits;
@@ -323,37 +317,6 @@ public class AgentRuntimeConfiguration {
         return new com.rover.agent.runtime.timeline.ChangeTimelineService(store, control, Math.max(5, collectSeconds) * 1000);
     }
 
-    /**
-     * 规划限制：动态调查的硬边界，由代码执行而不是提示词。
-     *
-     * 参数越界时装配直接失败（{@link PlanningLimits} 构造器校验），配置错误必须早暴露。
-     */
-    @Bean
-    public PlanningLimits agentPlanningLimits(@Value("${rover.agent.planning.max-rounds:3}") int maxRounds,
-                                             @Value("${rover.agent.planning.max-tool-calls:10}") int maxToolCalls,
-                                             @Value("${rover.agent.planning.max-plan-steps:6}") int maxPlanSteps) {
-        return new PlanningLimits(maxRounds, maxToolCalls, maxPlanSteps);
-    }
-
-    /** 调查规划器：确定性规则打底，模型只提出候选，越界步骤由 {@link PlanValidator} 丢弃。 */
-    @Bean
-    public InvestigationPlanner agentInvestigationPlanner(CapabilityRegistry agentCapabilityRegistry,
-                                                         ObjectProvider<ChatModelGateway> chatModelGateways,
-                                                         AgentMetrics agentMetrics,
-                                                         @Value("${rover.agent.llm.planning-timeout-seconds:60}") int timeoutSeconds,
-                                                         @Value("${rover.agent.llm.planning-max-output-tokens:2048}") int outputTokens,
-                                                         @Value("${rover.agent.llm.planning-thinking-enabled:false}") boolean thinkingEnabled,
-                                                         @Value("${rover.agent.llm.planning-evidence-context-chars:24000}") int contextChars) {
-        return new LlmInvestigationPlanner(new RuleBasedPlanner(agentCapabilityRegistry),
-                SpringAiJsonCompletion.investigation(chatModelGateways.getIfAvailable(NoopChatModelGateway::new), agentMetrics,
-                        timeoutSeconds, outputTokens, thinkingEnabled), agentCapabilityRegistry, contextChars);
-    }
-
-    @Bean
-    public PlanValidator agentPlanValidator(CapabilityRegistry agentCapabilityRegistry, PlanningLimits planningLimits) {
-        return new PlanValidator(agentCapabilityRegistry, planningLimits);
-    }
-
     @Bean
     public AgentContextManager agentContextManager(AgentSessionRepository agentSessionRepository,
                                                    IncidentRepository agentIncidentRepository,
@@ -371,18 +334,12 @@ public class AgentRuntimeConfiguration {
     public InvestigationService agentInvestigationService(IncidentRegistry agentIncidentRegistry,
                                                           InvestigationTaskRegistry agentTaskRegistry,
                                                           AlertLifecycleRepository alertLifecycleRepository,
-                                                          ModelExplainer agentModelExplainer,
-                                                          InvestigationPlanner agentInvestigationPlanner,
-                                                          PlanValidator agentPlanValidator,
-                                                          CapabilityExecutor agentCapabilityExecutor,
-                                                          PlanningLimits agentPlanningLimits,
+                                                          ToolLoopService agentToolLoopService,
                                                           OpsJournal opsJournal,
-                                                          AgentActionService agentActionService,
                                                           @Value("${rover.agent.alerts.owner-user-id:}")
                                                           String alertOwnerUserId, ObjectProvider<AgentAccess> access) {
-        var service = new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentModelExplainer,
-                agentInvestigationPlanner, agentPlanValidator, agentCapabilityExecutor, agentPlanningLimits,
-                opsJournal, alertOwnerUserId, agentActionService, alertLifecycleRepository);
+        var service = new InvestigationService(agentIncidentRegistry, agentTaskRegistry, agentToolLoopService,
+                opsJournal, alertOwnerUserId, alertLifecycleRepository);
         service.access(access.getIfAvailable(AgentAccess::local));
         return service;
     }

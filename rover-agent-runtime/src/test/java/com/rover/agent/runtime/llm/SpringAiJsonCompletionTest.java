@@ -35,31 +35,29 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
  */
 class SpringAiJsonCompletionTest {
 
-    @Test void investigationUsesItsOwnMainModelBudgetAndDoesNotRestartTimedOutReasoning() {
+    @Test void usesScenarioTimeoutAndRetriesOnlyTimeouts() {
         ChatModel model = mock(ChatModel.class);
         when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
-        when(model.call(any(Prompt.class))).thenThrow(new RuntimeException(new HttpTimeoutException("slow investigation")));
+        when(model.call(any(Prompt.class))).thenThrow(new RuntimeException(new HttpTimeoutException("slow call")));
         var gateway = new RecordingGateway(model);
         var registry = new SimpleMeterRegistry();
-        assertTrue(SpringAiJsonCompletion.investigation(gateway, new MicrometerAgentMetrics(registry), 60, 2048, true)
+        assertTrue(new SpringAiJsonCompletion(gateway, new MicrometerAgentMetrics(registry), "目标解析", 10, 768)
                 .complete("system", "evidence", ACCEPT_ANY).isEmpty());
-        assertEquals(List.of(60), gateway.planningTimeouts);
-        assertTrue(gateway.planningThinking);
-        assertTrue(gateway.requestedTimeouts.isEmpty(), "规划不能走轻量模型入口");
-        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(1)).call(any(Prompt.class));
+        assertEquals(List.of(10, 10), gateway.requestedTimeouts);
+        org.mockito.Mockito.verify(model, org.mockito.Mockito.times(2)).call(any(Prompt.class));
         assertEquals(1.0, registry.get("rover.agent.model.calls").tag("outcome", "timeout").counter().count());
     }
 
-    @Test void investigationRejectsProviderTruncationEvenWhenThePrefixLooksLikeValidJson() {
+    @Test void rejectsProviderTruncationEvenWhenThePrefixLooksLikeValidJson() {
         ChatModel model = mock(ChatModel.class);
         when(model.getOptions()).thenReturn(ToolCallingChatOptions.builder().build());
         when(model.call(any(Prompt.class))).thenAnswer(call -> {
-            assertEquals(2048, ((Prompt) call.getArgument(0)).getOptions().getMaxTokens());
-            return new ChatResponse(List.of(new Generation(new AssistantMessage("{\"steps\":[]}"),
+            assertEquals(768, ((Prompt) call.getArgument(0)).getOptions().getMaxTokens());
+            return new ChatResponse(List.of(new Generation(new AssistantMessage("{}"),
                     ChatGenerationMetadata.builder().finishReason("length").build())));
         });
         var registry = new SimpleMeterRegistry();
-        assertTrue(SpringAiJsonCompletion.investigation(new RecordingGateway(model),new MicrometerAgentMetrics(registry),60,2048,false)
+        assertTrue(new SpringAiJsonCompletion(new RecordingGateway(model),new MicrometerAgentMetrics(registry),"结构化输出",10,768)
                 .complete("system","evidence", ACCEPT_ANY).isEmpty());
         assertEquals(1.0, registry.get("rover.agent.model.calls").tag("outcome","rejected").counter().count());
     }
@@ -201,8 +199,6 @@ class SpringAiJsonCompletionTest {
 
         private final ChatClient client;
         private final List<Integer> requestedTimeouts = new ArrayList<>();
-        private final List<Integer> planningTimeouts = new ArrayList<>();
-        private boolean planningThinking;
 
         private RecordingGateway(ChatModel model) {
             this.client = ChatClient.builder(model).build();
@@ -226,12 +222,6 @@ class SpringAiJsonCompletionTest {
         @Override
         public ChatClient chatClient(int timeoutSeconds) {
             requestedTimeouts.add(timeoutSeconds);
-            return client;
-        }
-
-        @Override public ChatClient planningClient(int timeoutSeconds, boolean thinkingEnabled) {
-            planningTimeouts.add(timeoutSeconds);
-            planningThinking = thinkingEnabled;
             return client;
         }
 

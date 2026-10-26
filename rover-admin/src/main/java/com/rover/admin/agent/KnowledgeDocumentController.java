@@ -71,6 +71,51 @@ public final class KnowledgeDocumentController {
     @PostMapping public ResponseEntity<?> create(@RequestBody Map<String,Object> body, Authentication actor) {
         return createVersion(UUID.randomUUID().toString(), body, actor);
     }
+    @PostMapping("/import") public ResponseEntity<?> importDrafts(@RequestBody BatchImportRequest request, Authentication actor) {
+        security.require(actor.getName(), Permission.POLICY_ADMIN);
+        if (!store.persistent() || !store.durable().healthy()) {
+            return ResponseEntity.status(503).body(Map.of("error", "持久知识库未就绪"));
+        }
+        if (request == null || request.documents() == null || request.documents().isEmpty()
+                || request.documents().size() > 100) {
+            return ResponseEntity.badRequest().body(Map.of("error", "一次须导入 1 至 100 篇知识文档"));
+        }
+        long batchCharacters = request.documents().stream().filter(Objects::nonNull)
+                .mapToLong(item -> length(item.title()) + length(item.content()) + length(item.sourceVersion())
+                        + (item.keywords() == null ? 0 : item.keywords().stream().mapToLong(KnowledgeDocumentController::length).sum()))
+                .sum();
+        if (batchCharacters > 1_000_000) {
+            return ResponseEntity.badRequest().body(Map.of("error", "批量文档总长度不能超过 100 万字符"));
+        }
+        var results = new java.util.ArrayList<BatchImportResult>();
+        int index = 0;
+        for (BatchImportItem item : request.documents()) {
+            index++;
+            if (item == null) {
+                results.add(new BatchImportResult(index, null, null, "REJECTED", "文档内容无效"));
+                continue;
+            }
+            String id = item.documentId() == null || item.documentId().isBlank()
+                    ? UUID.randomUUID().toString() : item.documentId();
+            var body = new java.util.HashMap<String, Object>();
+            body.put("title", item.title());
+            body.put("content", item.content());
+            body.put("keywords", item.keywords());
+            body.put("sourceVersion", item.sourceVersion());
+            body.put("ttlMillis", item.ttlMillis());
+            var response = createVersion(id, body, actor);
+            if (response.getStatusCode().is2xxSuccessful()) {
+                var draft = (KnowledgeDocumentVersion) response.getBody();
+                results.add(new BatchImportResult(index, draft.documentId(), draft.version(), "DRAFT_CREATED", null));
+            } else {
+                String error = response.getBody() instanceof Map<?, ?> value
+                        ? Objects.toString(value.get("error"), "文档未能导入") : "文档未能导入";
+                results.add(new BatchImportResult(index, id, null, "REJECTED", error));
+            }
+        }
+        long created = results.stream().filter(result -> result.status().equals("DRAFT_CREATED")).count();
+        return ResponseEntity.ok(new BatchImportResponse((int) created, results.size() - (int) created, results));
+    }
     @PostMapping("/{documentId}/versions") public ResponseEntity<?> createNextVersion(@PathVariable String documentId,
             @RequestBody Map<String,Object> body, Authentication actor) {
         security.require(actor.getName(), Permission.POLICY_ADMIN);
@@ -176,11 +221,19 @@ public final class KnowledgeDocumentController {
     private ResourceScope scope() { return control.resourceScope(); }
     public record RetrospectiveRecord(KnowledgeDocumentVersion document,
                                       com.rover.agent.core.model.IncidentRetrospective retrospective) { }
+    public record BatchImportRequest(List<BatchImportItem> documents) { }
+    public record BatchImportItem(String documentId, String title, String content, List<String> keywords,
+                                  String sourceVersion, Long ttlMillis) { }
+    public record BatchImportResult(int index, String documentId, Integer version, String status, String error) { }
+    public record BatchImportResponse(int created, int rejected, List<BatchImportResult> results) {
+        public BatchImportResponse { results = List.copyOf(results); }
+    }
     public record RetrospectiveList(List<RetrospectiveRecord> records, boolean truncated) {
         public RetrospectiveList { records = List.copyOf(records); }
     }
     private static String text(Object value,int max) { if (!(value instanceof String s) || s.isBlank() || s.length()>max) throw new IllegalArgumentException("文档字段无效"); return s.strip(); }
     private static long number(Object value,long fallback) { return value instanceof Number n ? n.longValue() : fallback; }
+    private static int length(String value) { return value == null ? 0 : value.length(); }
     private static String optionalText(Object value, int max) {
         if (value == null) { return null; }
         if (!(value instanceof String s) || s.isBlank() || s.length() > max) {

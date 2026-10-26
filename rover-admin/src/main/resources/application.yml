@@ -70,12 +70,8 @@ rover:
       task-timeout-seconds: 300
       max-repeated-tool-results: 3
     llm:
-      # 轻量目标识别沿用旧 quick 超时作为兼容值；规划不再共用短超时。
+      # 轻量目标识别使用单独超时上限。
       target-timeout-seconds: ${ROVER_AGENT_TARGET_TIMEOUT_SECONDS:${rover.agent.llm.quick-timeout-seconds:10}}
-      planning-timeout-seconds: ${ROVER_AGENT_PLANNING_TIMEOUT_SECONDS:60}
-      planning-max-output-tokens: ${ROVER_AGENT_PLANNING_OUTPUT_TOKENS:2048}
-      planning-thinking-enabled: ${ROVER_AGENT_PLANNING_THINKING:false}
-      planning-evidence-context-chars: ${ROVER_AGENT_PLANNING_CONTEXT_CHARS:24000}
       report-timeout-seconds: ${ROVER_AGENT_REPORT_TIMEOUT_SECONDS:30}
       isolation:
         failure-threshold: 3
